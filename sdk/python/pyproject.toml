@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "plugboard-sdk"
 version = "0.1.0"
-description = "Official Python SDK for Plugboard — OpenAI-compatible proxy"
+description = "Official Python SDK for Plugboard, the self-hosted LLM gateway for every provider"
 readme = "README.md"
 requires-python = ">=3.9"
 authors = [{ name = "Plugboard contributors" }]

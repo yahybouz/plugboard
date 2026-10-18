@@ -1,5 +1,5 @@
 """
-Plugboard -- OpenAI-compatible proxy server.
+Plugboard -- self-hosted LLM gateway: one API for every provider.
 
 Endpoints:
   POST /v1/chat/completions    -- proxy to configured provider (streaming supported)
@@ -446,7 +446,7 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
 
 app = FastAPI(
     title="Plugboard",
-    description="OpenAI-compatible LLM proxy -- route any model to any provider",
+    description="Self-hosted LLM gateway -- one standard chat API, every provider behind it",
     version=__version__,
     docs_url=None,  # disable default /docs — we serve it auth-protected below
     redoc_url=None,  # disable default /redoc

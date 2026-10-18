@@ -1,6 +1,6 @@
 # Notes for coding agents
 
-Plugboard is a self-hosted, OpenAI-compatible LLM gateway (Python 3.12, FastAPI).
+Plugboard is a self-hosted LLM gateway for every provider, behind one standard chat API (Python 3.12, FastAPI).
 Human documentation lives in `README.md` and `docs/guide/`; this file only lists
 what an agent needs to work safely in the repository.
 

@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>One gateway. Every model.</strong><br>
-  A self-hosted, OpenAI-compatible gateway that puts all your LLM providers and subscriptions behind one endpoint, with per-client keys, spending limits, caching, fallback, monitoring and an automatically updated pricing grid.
+  A self-hosted gateway that puts every LLM provider (Anthropic, OpenAI, Google, Mistral, DeepSeek, Ollama, OpenRouter, your Claude, ChatGPT and Antigravity subscriptions...) behind one endpoint, with per-client keys, spending limits, caching, fallback, monitoring and an automatically updated pricing grid.
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
   <img src="docs/assets/screenshots/showcase.jpg" alt="Live routing view: client keys, the Plugboard hub and every connected provider, with real requests shown as pulses" width="900">
 </p>
 
-Plugboard is a standalone service: it runs on its own host, independent of the applications that use it, and owns the provider credentials, the routing and the bills. Your providers live in one place: API keys (OpenAI, Anthropic, Google, GitHub Models), a local Ollama, any OpenAI-compatible server, or subscriptions you are already logged into through an official CLI. Each consumer (an application, a script, an agent, an MCP client) gets its own `pb_` key and talks to one endpoint, `http://<host>:8765/v1`, in the OpenAI format, so no consumer embeds a vendor key or vendor code. Every call is metered per key and checked against that consumer's limits.
+Plugboard is a standalone service: it runs on its own host, independent of the applications that use it, and owns the provider credentials, the routing and the bills. It is not tied to one vendor: your providers live in one place, whether API keys (Anthropic, OpenAI, Google, GitHub Models, Mistral, DeepSeek...), resellers such as OpenRouter, a local or cloud Ollama, your own model servers, or subscriptions you are already logged into through an official CLI. Each consumer (an application, a script, an agent, an MCP client) gets its own `pb_` key and talks to one endpoint, `http://<host>:8765/v1`. That endpoint speaks the de facto standard chat API that most SDKs already use, so a consumer switches from Claude to Gemini to a local model by changing a model name, never its code, and never embeds a vendor key. Every call is metered per key and checked against that consumer's limits.
 
 Python 3.12 · FastAPI · no external database (JSON files and SQLite under `data/`) · MIT licensed.
 
@@ -28,8 +28,8 @@ Python 3.12 · FastAPI · no external database (JSON files and SQLite under `dat
 
 ## Features
 
-- **One OpenAI-compatible API**: `POST /v1/chat/completions` (streaming over SSE), `GET /v1/models`, `GET /health`. Existing OpenAI SDKs, LangChain and curl work unchanged.
-- **Many providers, one model namespace**: models are addressed as `<provider>:<model>`. Built-in presets, every OpenAI-compatible provider of the [models.dev](https://models.dev) catalog (OpenRouter, OpenCode, Kimi, Groq, DeepSeek, Mistral...) in one click, custom endpoints, Ollama (auto-detected), and subscription access through the Claude Code, Codex and Antigravity (`agy`) CLIs or the GitHub CLI. Model lists refresh every 6 hours and changes are journaled and sent as webhooks.
+- **One API for every provider**: `POST /v1/chat/completions` (streaming over SSE), `GET /v1/models`, `GET /health`, in the standard chat format, whatever provider answers behind it. The OpenAI SDKs, LangChain, LlamaIndex and curl work unchanged.
+- **Many providers, one model namespace**: models are addressed as `<provider>:<model>`. Built-in presets (Anthropic, OpenAI, Google Gemini, GitHub Models), the providers of the [models.dev](https://models.dev) catalog (OpenRouter, OpenCode, Kimi, Groq, DeepSeek, Mistral...) in one click, custom endpoints, Ollama (auto-detected), and subscription access through the Claude Code, Codex and Antigravity (`agy`) CLIs or the GitHub CLI. Model lists refresh every 6 hours and changes are journaled and sent as webhooks.
 - **Per-client keys**: create `pb_` keys from the dashboard, each with a monthly USD budget, a requests-per-minute limit and an optional list of allowed models. Keys are stored as SHA-256 hashes and shown once.
 - **Usage and billing**: tokens and cost are recorded for every request, per client, per key and per month. Responses carry `X-Cost-USD`, `X-Prompt-Tokens` and `X-Completion-Tokens`. CSV export and a read-only client portal.
 - **Automatic pricing grid**: one grid per month (USD per million tokens), refreshed every 6 hours from several sources (your own JSON, OpenRouter, models.dev, LiteLLM), with the source of every price, reseller prices per provider, large changes held for your review, and manual prices that no source overwrites. Optionally, a model reads provider pricing pages and proposes prices for you to approve.
@@ -140,7 +140,7 @@ Both are good tools; pick the one that matches your constraints.
 |---|---|---|---|
 | Where it runs | Your machine or server | Your machine or server | Hosted service |
 | Who sees your prompts | Only the providers you configure | Only the providers you configure | OpenRouter and the upstream provider |
-| Provider coverage | Built-in presets plus the OpenAI-compatible providers of models.dev | Very broad (100+ providers) | Very broad catalog |
+| Provider coverage | Built-in presets, the models.dev catalog, Ollama, CLI subscriptions and custom endpoints | Very broad (100+ providers) | Very broad catalog |
 | Consumer subscriptions via CLIs | Yes, at your own risk | No | No |
 | Per-client keys with monthly USD limits and RPM limits | Yes, built in, with a dashboard | Yes (virtual keys, budgets) | Per-account credits and keys |
 | MCP server with an update registry for client projects | Yes | No | No |

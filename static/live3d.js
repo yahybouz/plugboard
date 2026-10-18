@@ -157,7 +157,7 @@ class LiveRouting {
     this.hubShell = shell;
     this.hubRing = ring;
     this.hub.add(core, shell, halo, ring);
-    const label = labelSprite("Plugboard", "OpenAI-compatible gateway", COLORS.hub);
+    const label = labelSprite("Plugboard", "LLM gateway · every provider", COLORS.hub);
     label.position.set(0, 2.9, 0);
     label.scale.set(5, 1.25, 1);
     this.hub.add(label);
