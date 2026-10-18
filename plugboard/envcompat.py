@@ -34,7 +34,7 @@ def apply(environ: Optional[MutableMapping[str, str]] = None) -> List[str]:
     for key in list(env):
         if not key.startswith(OLD_PREFIX):
             continue
-        new_key = NEW_PREFIX + key[len(OLD_PREFIX):]
+        new_key = NEW_PREFIX + key[len(OLD_PREFIX) :]
         if key[len(OLD_PREFIX) :] in _NOT_COPIED:
             if key not in _conflicts:
                 _conflicts.add(key)

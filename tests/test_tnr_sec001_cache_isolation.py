@@ -353,8 +353,7 @@ def test_tnr_039_canonical_var_wins(monkeypatch):
     monkeypatch.setenv("PLUGBOARD_EMBED_PROVIDER_ID", "new-provider")
     monkeypatch.setenv("EMBED_PROVIDER_ID", "legacy-provider")
     assert (
-        _env_embed("PLUGBOARD_EMBED_PROVIDER_ID", "EMBED_PROVIDER_ID")
-        == "new-provider"
+        _env_embed("PLUGBOARD_EMBED_PROVIDER_ID", "EMBED_PROVIDER_ID") == "new-provider"
     )
 
 
@@ -365,8 +364,7 @@ def test_tnr_039_legacy_fallback(monkeypatch):
     monkeypatch.delenv("PLUGBOARD_EMBED_PROVIDER_ID", raising=False)
     monkeypatch.setenv("EMBED_PROVIDER_ID", "legacy-only")
     assert (
-        _env_embed("PLUGBOARD_EMBED_PROVIDER_ID", "EMBED_PROVIDER_ID")
-        == "legacy-only"
+        _env_embed("PLUGBOARD_EMBED_PROVIDER_ID", "EMBED_PROVIDER_ID") == "legacy-only"
     )
 
 

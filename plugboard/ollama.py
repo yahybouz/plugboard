@@ -109,8 +109,16 @@ _CLOUD_CATALOG_URL = os.environ.get(
 # Mirrors the Ollama keyword whitelist in router._is_whitelisted_model — keep in
 # sync ("gemini" was missing here, present in the router).
 _DEFAULT_CLOUD_FAMILIES = (
-    "deepseek", "kimi", "qwen", "glm", "gemma", "nemotron", "minimax", "gpt-oss",
-    "gemini", "beam",
+    "deepseek",
+    "kimi",
+    "qwen",
+    "glm",
+    "gemma",
+    "nemotron",
+    "minimax",
+    "gpt-oss",
+    "gemini",
+    "beam",
 )
 
 
@@ -191,7 +199,9 @@ async def fetch_cloud_catalog(timeout: int = 10) -> List[str]:
                 # sits in the refresh path so its latency must be visible.
                 if names:
                     log.info(
-                        "ollama cloud catalog: %d models in %.0fms", len(names), elapsed_ms
+                        "ollama cloud catalog: %d models in %.0fms",
+                        len(names),
+                        elapsed_ms,
                     )
                 else:
                     log.warning(
@@ -348,7 +358,7 @@ async def _sync_models(provider: Dict[str, Any]) -> None:
         preserved: Dict[str, Dict[str, Any]] = {}
         try:
             current = get_provider(provider["id"]) or provider
-            for m in (current.get("models") or []):
+            for m in current.get("models") or []:
                 if not isinstance(m, dict):
                     continue
                 mid = m.get("id") or m.get("name")

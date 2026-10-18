@@ -408,7 +408,8 @@ class TestSecurityHeaders:
 
         # Accès admin avec le cookie (sans header Authorization)
         resp = await api.get(
-            "/admin/keys", cookies={"plugboard_admin_session": cookies["plugboard_admin_session"]}
+            "/admin/keys",
+            cookies={"plugboard_admin_session": cookies["plugboard_admin_session"]},
         )
         assert resp.status_code == 200
 

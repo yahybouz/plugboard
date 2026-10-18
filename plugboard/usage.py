@@ -73,7 +73,9 @@ def _get_conn() -> sqlite3.Connection:
         for column, decl in _ADDED_COLUMNS.items():
             if column not in existing:
                 try:
-                    conn.execute(f"ALTER TABLE usage_entries ADD COLUMN {column} {decl}")
+                    conn.execute(
+                        f"ALTER TABLE usage_entries ADD COLUMN {column} {decl}"
+                    )
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc).lower():
                         raise  # another process added it first: fine

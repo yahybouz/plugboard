@@ -102,9 +102,15 @@ def drift_threshold_pct() -> float:
 
 
 def drift_action() -> str:
-    value = os.environ.get("PLUGBOARD_PRICE_DRIFT_ACTION", "review").strip().lower() or "review"
+    value = (
+        os.environ.get("PLUGBOARD_PRICE_DRIFT_ACTION", "review").strip().lower()
+        or "review"
+    )
     if value not in ("review", "apply"):
-        _warn_once("action", "PLUGBOARD_PRICE_DRIFT_ACTION must be review or apply; using review")
+        _warn_once(
+            "action",
+            "PLUGBOARD_PRICE_DRIFT_ACTION must be review or apply; using review",
+        )
         return "review"
     return value
 
@@ -178,7 +184,9 @@ def change_pct(old: Mapping[str, Any], new: Mapping[str, Any]) -> float:
 class MergeResult:
     models: Dict[str, Dict[str, Any]]
     added: List[str] = field(default_factory=list)
-    updated: List[Dict[str, Any]] = field(default_factory=list)  # {model, source, old, new, pct}
+    updated: List[Dict[str, Any]] = field(
+        default_factory=list
+    )  # {model, source, old, new, pct}
     drifts: List[Dict[str, Any]] = field(default_factory=list)  # held for review
     rejected: List[Dict[str, Any]] = field(default_factory=list)  # out of bounds
 
@@ -212,12 +220,20 @@ def merge_sources(
         for model, entry in sources[name].items():
             price = validate_price(entry)
             if price is None:
-                result.rejected.append({"model": model, "source": name, "entry": dict(entry) if isinstance(entry, Mapping) else entry})
+                result.rejected.append(
+                    {
+                        "model": model,
+                        "source": name,
+                        "entry": dict(entry) if isinstance(entry, Mapping) else entry,
+                    }
+                )
             else:
                 valid[name][model] = price
 
     for model in sorted({m for prices in valid.values() for m in prices}):
-        candidates = [(name, valid[name][model]) for name in active if model in valid[name]]
+        candidates = [
+            (name, valid[name][model]) for name in active if model in valid[name]
+        ]
         best_name, best = candidates[0]
         current = models.get(model)
         if current is not None and _is_placeholder(current):
@@ -234,8 +250,14 @@ def merge_sources(
             )
             if disagreeing and action == "review" and best_name not in TRUSTED_SOURCES:
                 result.drifts.append(
-                    {"model": model, "source": best_name, "old": None, "new": best,
-                     "pct": change_pct(disagreeing[1], best), "reason": f"disagrees with {disagreeing[0]}"}
+                    {
+                        "model": model,
+                        "source": best_name,
+                        "old": None,
+                        "new": best,
+                        "pct": change_pct(disagreeing[1], best),
+                        "reason": f"disagrees with {disagreeing[0]}",
+                    }
                 )
                 continue
             if model in models and same_price(models[model], best):
@@ -243,7 +265,15 @@ def merge_sources(
             elif model in models:
                 old = {k: models[model].get(k) for k in ("input_price", "output_price")}
                 models[model] = {**models[model], **best, "source": best_name}
-                result.updated.append({"model": model, "source": best_name, "old": old, "new": best, "pct": 100.0})
+                result.updated.append(
+                    {
+                        "model": model,
+                        "source": best_name,
+                        "old": old,
+                        "new": best,
+                        "pct": 100.0,
+                    }
+                )
             else:
                 models[model] = {**best, "source": best_name}
                 result.added.append(model)
@@ -255,18 +285,37 @@ def merge_sources(
             if current.get("source") != best_name:
                 models[model] = {**current, "source": best_name}  # silent: same price
             continue
-        old = {"input_price": current.get("input_price"), "output_price": current.get("output_price")}
+        old = {
+            "input_price": current.get("input_price"),
+            "output_price": current.get("output_price"),
+        }
         baseline = reviewed.get(model) or old
         pct = max(change_pct(current, best), change_pct(baseline, best))
-        held = action == "review" and best_name not in TRUSTED_SOURCES and current.get("source") != "llm"
+        held = (
+            action == "review"
+            and best_name not in TRUSTED_SOURCES
+            and current.get("source") != "llm"
+        )
         if pct > drift_pct and held:
-            result.drifts.append({"model": model, "source": best_name, "old": old, "new": best, "pct": pct})
+            result.drifts.append(
+                {
+                    "model": model,
+                    "source": best_name,
+                    "old": old,
+                    "new": best,
+                    "pct": pct,
+                }
+            )
             continue
         models[model] = {**current, **best, "source": best_name}
-        result.updated.append({"model": model, "source": best_name, "old": old, "new": best, "pct": pct})
+        result.updated.append(
+            {"model": model, "source": best_name, "old": old, "new": best, "pct": pct}
+        )
         if pct > drift_pct or model not in reviewed:
             # Accepted beyond the threshold (trusted source or apply mode), or
             # first silent step: this becomes / stays the reference.
-            reference: Dict[str, Any] = dict(best) if pct > drift_pct else dict(baseline)
+            reference: Dict[str, Any] = (
+                dict(best) if pct > drift_pct else dict(baseline)
+            )
             reviewed[model] = reference
     return result

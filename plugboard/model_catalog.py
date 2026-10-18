@@ -300,7 +300,14 @@ _OFFLINE_PROVIDERS = frozenset({"ollama", "sovereign"})
 # "chatgpt-via-codex-cli", "google-gemini-via-gemini-cli") and bare model names
 # ("claude-opus-4-7", "gpt-5.5") are both covered.
 _WEB_VENDOR_TOKENS = (
-    "claude", "anthropic", "gpt", "codex", "openai", "chatgpt", "gemini", "google",
+    "claude",
+    "anthropic",
+    "gpt",
+    "codex",
+    "openai",
+    "chatgpt",
+    "gemini",
+    "google",
 )
 
 

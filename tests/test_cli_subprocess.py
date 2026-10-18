@@ -30,7 +30,9 @@ def _fake_cli_binaries(monkeypatch):
     "not installed" path set shutil.which to return None themselves.
     """
     monkeypatch.setattr(cli_subprocess, "_binary_path_cache", {})
-    monkeypatch.setattr(cli_subprocess.shutil, "which", lambda cmd: f"/usr/local/bin/{cmd}")
+    monkeypatch.setattr(
+        cli_subprocess.shutil, "which", lambda cmd: f"/usr/local/bin/{cmd}"
+    )
 
 
 # ── Pure helpers (no subprocess) ─────────────────────────────────────────────

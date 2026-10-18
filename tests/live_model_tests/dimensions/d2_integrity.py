@@ -87,8 +87,8 @@ _FENCE_PRESENT_RE = re.compile(r"```")
 # common cases. Granularity is diagnostic-only — both mojibake and
 # payload_mismatch are FAIL, so a marker false-positive never flips a verdict.
 _MOJIBAKE_MARKERS: Tuple[str, ...] = (
-    "Ã",        # Latin-1 2-byte lead (é→Ã©, à→Ã , ç→Ã§, ü→Ã¼)
-    "Â",        # Latin-1 2-byte lead (©, °, NBSP...)
+    "Ã",  # Latin-1 2-byte lead (é→Ã©, à→Ã , ç→Ã§, ü→Ã¼)
+    "Â",  # Latin-1 2-byte lead (©, °, NBSP...)
     "â€",  # em-dash / smart-punct mojibake lead (—→â€")
     "ðŸ",  # 4-byte emoji mojibake lead (🎯→ðŸŽ¯)
 )
@@ -114,6 +114,7 @@ _RETRY_ERROR_TYPES = {
 
 
 # ── Result dataclass ─────────────────────────────────────────────────────────
+
 
 @dataclass
 class IntegrityResult:
@@ -180,6 +181,7 @@ class IntegrityResult:
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
 
 def _strip_fence(content: str) -> Tuple[str, bool, bool]:
     """Return ``(candidate, fence_stripped, prose_with_fence)``.
@@ -265,6 +267,7 @@ def _build_prompt(nonce: str) -> List[Dict[str, str]]:
 
 # ── Pure verdict function ─────────────────────────────────────────────────────
 
+
 def _verdict_from_response(
     *,
     model_id: str,
@@ -320,7 +323,9 @@ def _verdict_from_response(
         nonce_in_reasoning = nonce in reasoning
         return IntegrityResult(
             passed=False,
-            error_type="echo_in_reasoning_only" if nonce_in_reasoning else "empty_response",
+            error_type="echo_in_reasoning_only"
+            if nonce_in_reasoning
+            else "empty_response",
             extra={
                 "is_thinking": is_thinking,
                 "reasoning_excerpt": reasoning[:200],
@@ -412,6 +417,7 @@ def _verdict_from_response(
 
 
 # ── Orchestrator ─────────────────────────────────────────────────────────────
+
 
 def run_d2_integrity(
     *,

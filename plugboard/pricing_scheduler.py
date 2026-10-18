@@ -290,7 +290,9 @@ class PricingScheduler:
             last = datetime.fromisoformat(self.started_at)
         else:
             last = datetime.fromisoformat(self.last_success_at)
-        return (self._now() - last).total_seconds() > stale_after_s(self.refresh_interval_h)
+        return (self._now() - last).total_seconds() > stale_after_s(
+            self.refresh_interval_h
+        )
 
     async def run_now(self, kind: str = "manual") -> None:
         """Run one update now; raises RuntimeError while another one runs."""
@@ -394,7 +396,12 @@ class PricingScheduler:
         # One run at a time: a scheduled tick that finds a manual run in
         # progress (or the reverse) is skipped rather than run alongside it.
         if self._run_lock.locked():
-            log.info("%s %s skipped: another run started at %s", type(self).__name__, kind, self.running_since)
+            log.info(
+                "%s %s skipped: another run started at %s",
+                type(self).__name__,
+                kind,
+                self.running_since,
+            )
             return
         async with self._run_lock:
             self.running_since = self._now().isoformat()
@@ -408,7 +415,9 @@ class PricingScheduler:
             # A catalog failure keeps the last good copy and never counts
             # against the pricing circuit breaker.
             try:
-                await asyncio.wait_for(self._catalog_fn(), timeout=self.update_timeout_s)
+                await asyncio.wait_for(
+                    self._catalog_fn(), timeout=self.update_timeout_s
+                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -422,11 +431,15 @@ class PricingScheduler:
                 # Prices read by a model are suggestions only; a failure here
                 # never counts against the pricing circuit breaker.
                 try:
-                    await asyncio.wait_for(self._llm_fn(), timeout=self.update_timeout_s)
+                    await asyncio.wait_for(
+                        self._llm_fn(), timeout=self.update_timeout_s
+                    )
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:  # noqa: BLE001
-                    log.warning("PricingScheduler %s LLM pricing pass failed: %s", kind, exc)
+                    log.warning(
+                        "PricingScheduler %s LLM pricing pass failed: %s", kind, exc
+                    )
         except asyncio.TimeoutError:
             log.error(
                 "PricingScheduler %s update timed out after %ss",
@@ -450,7 +463,11 @@ class PricingScheduler:
         # A pass that wrote nothing because the shrink guard refused it, or in
         # which no source answered, ran but did not refresh prices: it does
         # not count towards freshness.
-        if isinstance(result, dict) and not result.get("sentinel_refused") and result.get("sources", ["?"]):
+        if (
+            isinstance(result, dict)
+            and not result.get("sentinel_refused")
+            and result.get("sources", ["?"])
+        ):
             self.last_success_at = self._now().isoformat()
         if had_failures:
             self._persist_cb_state()  # ARCH-DEBT-033

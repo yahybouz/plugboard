@@ -48,7 +48,12 @@ def suggestion_id(kind: str, model: str, price: Dict[str, Any], space: str = "")
     The month is not part of it, so a rejected proposal stays rejected after
     the month rolls over and the same price is proposed again.
     """
-    parts = [kind, model, f"{float(price['input_price']):.6f}", f"{float(price['output_price']):.6f}"]
+    parts = [
+        kind,
+        model,
+        f"{float(price['input_price']):.6f}",
+        f"{float(price['output_price']):.6f}",
+    ]
     if space:
         parts.append(space)
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
@@ -152,12 +157,17 @@ def _record(kind: str, month: str, rows: List[Dict[str, Any]], fields) -> List[s
 
 def record_drifts(month: str, drifts: List[Dict[str, Any]]) -> List[str]:
     """Queue price changes held by pricing_merge; returns the new pending ids."""
-    return _record("drift", month, drifts, lambda d: {
-        "source": d.get("source", ""),
-        "current": d.get("old"),
-        "pct": d.get("pct"),
-        "reason": d.get("reason", ""),
-    })
+    return _record(
+        "drift",
+        month,
+        drifts,
+        lambda d: {
+            "source": d.get("source", ""),
+            "current": d.get("old"),
+            "pct": d.get("pct"),
+            "reason": d.get("reason", ""),
+        },
+    )
 
 
 def record_llm(month: str, items: List[Dict[str, Any]]) -> List[str]:
@@ -167,12 +177,17 @@ def record_llm(month: str, items: List[Dict[str, Any]]) -> List[str]:
     ``source`` (the page read) and ``catalog_sig`` (models.dev entry hash, so
     a rejection is remembered until that entry changes).
     """
-    return _record("llm", month, items, lambda i: {
-        "source": i.get("source", ""),
-        "catalog_sig": i.get("catalog_sig", ""),
-        "current": None,
-        "pct": None,
-    })
+    return _record(
+        "llm",
+        month,
+        items,
+        lambda i: {
+            "source": i.get("source", ""),
+            "catalog_sig": i.get("catalog_sig", ""),
+            "current": None,
+            "pct": None,
+        },
+    )
 
 
 def record_estimates(month: str, items: List[Dict[str, Any]]) -> List[str]:
@@ -181,12 +196,17 @@ def record_estimates(month: str, items: List[Dict[str, Any]]) -> List[str]:
     Each item: ``model``, ``space``, ``new`` price and ``source`` (the model
     whose price was borrowed).
     """
-    return _record("estimate", month, items, lambda i: {
-        "source": i.get("source", ""),
-        "current": None,
-        "pct": None,
-        "reason": f"no price found; nearest model is {i.get('source', '?')}",
-    })
+    return _record(
+        "estimate",
+        month,
+        items,
+        lambda i: {
+            "source": i.get("source", ""),
+            "current": None,
+            "pct": None,
+            "reason": f"no price found; nearest model is {i.get('source', '?')}",
+        },
+    )
 
 
 class SuggestionConflict(Exception):
@@ -239,30 +259,43 @@ def apply(sid: str) -> Dict[str, Any]:
             grid = billing.load_pricing(month, strict=True) or {"models": {}}
             space = item.get("space", "")
             table = (
-                grid.setdefault("models_by_provider", {}).setdefault(space, {}) if space
+                grid.setdefault("models_by_provider", {}).setdefault(space, {})
+                if space
                 else grid.setdefault("models", {})
             )
             entry = table.get(item["model"])
             current = item.get("current")
             if current is None:
                 changed = entry is not None and bool(
-                    entry.get("source") or entry.get("input_price") or entry.get("output_price")
+                    entry.get("source")
+                    or entry.get("input_price")
+                    or entry.get("output_price")
                 )
             else:
                 changed = entry is None or not same_price(entry, current)
             if changed:
                 _set_status(data, sid, "stale")
-                raise SuggestionConflict("the grid entry changed since this suggestion was made", entry)
+                raise SuggestionConflict(
+                    "the grid entry changed since this suggestion was made", entry
+                )
             if item["type"] == "drift":
                 source = item.get("source")
             elif item["type"] == "estimate":
                 source = "manual"  # an admin confirmed the borrowed price
             else:
                 source = "llm"
-            table[item["model"]] = {**(entry or {}), **item["proposed"], "source": source or "llm"}
+            table[item["model"]] = {
+                **(entry or {}),
+                **item["proposed"],
+                "source": source or "llm",
+            }
             if item["type"] == "llm" and item.get("source"):
-                table[item["model"]]["page"] = item["source"]  # where the price was read
+                table[item["model"]]["page"] = item[
+                    "source"
+                ]  # where the price was read
             # The applied price becomes the reference for later drift checks.
-            grid.setdefault("reviewed_prices", {}).setdefault(space, {})[item["model"]] = dict(item["proposed"])
+            grid.setdefault("reviewed_prices", {}).setdefault(space, {})[
+                item["model"]
+            ] = dict(item["proposed"])
             billing.save_pricing(month, grid)
         return _set_status(data, sid, "applied")

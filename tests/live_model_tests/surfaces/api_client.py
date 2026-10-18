@@ -116,7 +116,9 @@ class ApiSurfaceClient:
             return self._chat_stream(model, messages, timeout, max_tokens, temperature)
         return self._chat_no_stream(model, messages, timeout, max_tokens, temperature)
 
-    def _build_body(self, model, messages, stream, max_tokens, temperature) -> Dict[str, Any]:
+    def _build_body(
+        self, model, messages, stream, max_tokens, temperature
+    ) -> Dict[str, Any]:
         return {
             "model": model,
             "messages": list(messages),
@@ -134,12 +136,18 @@ class ApiSurfaceClient:
 
     # ── Non-streaming (used by D6) ───────────────────────────────────────────
 
-    def _chat_no_stream(self, model, messages, timeout, max_tokens, temperature) -> Dict[str, Any]:
+    def _chat_no_stream(
+        self, model, messages, timeout, max_tokens, temperature
+    ) -> Dict[str, Any]:
         body = self._build_body(model, messages, False, max_tokens, temperature)
         with httpx.Client(transport=self._transport) as client:
             try:
-                resp = client.post(self._base_url + _CHAT_PATH, json=body,
-                                   headers=self._headers(), timeout=timeout)
+                resp = client.post(
+                    self._base_url + _CHAT_PATH,
+                    json=body,
+                    headers=self._headers(),
+                    timeout=timeout,
+                )
             except httpx.TimeoutException as exc:
                 raise TimeoutError("request timed out") from exc
             except httpx.RequestError as exc:
@@ -153,7 +161,9 @@ class ApiSurfaceClient:
         try:
             data = resp.json()
         except (json.JSONDecodeError, ValueError) as exc:
-            raise MalformedResponseError(f"non-JSON body (200): {resp.text[:200]}") from exc
+            raise MalformedResponseError(
+                f"non-JSON body (200): {resp.text[:200]}"
+            ) from exc
 
         choices = data.get("choices") or []
         choice = choices[0] if choices else {}
@@ -179,7 +189,9 @@ class ApiSurfaceClient:
 
     # ── Streaming (used by D1-D5) ────────────────────────────────────────────
 
-    def _chat_stream(self, model, messages, timeout, max_tokens, temperature) -> Dict[str, Any]:
+    def _chat_stream(
+        self, model, messages, timeout, max_tokens, temperature
+    ) -> Dict[str, Any]:
         body = self._build_body(model, messages, True, max_tokens, temperature)
         content_parts: List[str] = []
         reasoning_parts: List[str] = []
@@ -194,9 +206,13 @@ class ApiSurfaceClient:
 
         try:
             with httpx.Client(transport=self._transport) as client:
-                with client.stream("POST", self._base_url + _CHAT_PATH, json=body,
-                                  headers=self._headers("text/event-stream"),
-                                  timeout=timeout) as resp:
+                with client.stream(
+                    "POST",
+                    self._base_url + _CHAT_PATH,
+                    json=body,
+                    headers=self._headers("text/event-stream"),
+                    timeout=timeout,
+                ) as resp:
                     request_id = resp.headers.get("X-Request-ID") or None
                     if resp.status_code != 200:
                         try:
@@ -213,7 +229,7 @@ class ApiSurfaceClient:
                         raw_sse_lines.append(line)  # raw wire line for D5
                         if not stripped.startswith("data:"):
                             continue
-                        payload = stripped[len("data:"):].strip()
+                        payload = stripped[len("data:") :].strip()
                         if payload == _DONE_SENTINEL:
                             done_received = True
                             continue
@@ -229,12 +245,16 @@ class ApiSurfaceClient:
                         choices = chunk.get("choices")
                         if not choices:
                             continue  # usage-only chunk — tolerated
-                        choice = choices[0] if isinstance(choices, list) and choices else {}
+                        choice = (
+                            choices[0] if isinstance(choices, list) and choices else {}
+                        )
                         delta = choice.get("delta") or {}
                         dc = delta.get("content") or ""
                         if dc:
                             if first_token_latency_ms is None:
-                                first_token_latency_ms = (time.monotonic() - t_start) * 1000.0
+                                first_token_latency_ms = (
+                                    time.monotonic() - t_start
+                                ) * 1000.0
                             content_parts.append(dc)
                         dr = delta.get("reasoning") or ""
                         if dr:

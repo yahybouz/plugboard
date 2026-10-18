@@ -282,7 +282,7 @@ def provider_spaces(provider: Any) -> List[str]:
     if preset:
         spaces.append(preset)
         if preset.startswith(CATALOG_PREFIX):
-            spaces.append(preset[len(CATALOG_PREFIX):])
+            spaces.append(preset[len(CATALOG_PREFIX) :])
     if provider.get("id"):
         spaces.append(str(provider["id"]))
     host_space = _space_for_host(str(provider.get("base_url") or ""))
@@ -320,7 +320,7 @@ def price_space(provider: Dict[str, Any]) -> str:
     """
     preset = str(provider.get("preset_key") or "")
     if preset.startswith(CATALOG_PREFIX):
-        return preset[len(CATALOG_PREFIX):]
+        return preset[len(CATALOG_PREFIX) :]
     return str(provider.get("id") or "")
 
 
@@ -463,7 +463,9 @@ def _ollama_price(
     ``gemma4:31b-cloud``). A local model runs on the gateway host: 0. A cloud
     model Ollama does not list returns None and goes through the usual lookup.
     """
-    bare = real_model.split(":", 1)[1] if real_model.startswith("ollama:") else real_model
+    bare = (
+        real_model.split(":", 1)[1] if real_model.startswith("ollama:") else real_model
+    )
     keys = [bare]
     if ":" in bare:
         keys.append(bare.split(":", 1)[0] + ":cloud")
@@ -626,12 +628,19 @@ def _notify_estimate(match: PriceMatch, month: str) -> None:
         from plugboard import change_events, pricing_suggestions
 
         space = "" if match.space == "models" else match.space
-        price = {"input_price": match.entry["input_price"], "output_price": match.entry["output_price"]}
+        price = {
+            "input_price": match.entry["input_price"],
+            "output_price": match.entry["output_price"],
+        }
         pricing_suggestions.record_estimates(
-            month, [{"model": match.key, "space": space, "new": price, "source": source}]
+            month,
+            [{"model": match.key, "space": space, "new": price, "source": source}],
         )
         batch = change_events.ChangeBatch()
-        batch.add("price.estimated", {"model": match.key, "space": space, "from": source, **price})
+        batch.add(
+            "price.estimated",
+            {"model": match.key, "space": space, "from": source, **price},
+        )
         batch.flush_in_background()
     except Exception as exc:  # noqa: BLE001 - billing never fails on a notification
         log.warning("estimate notification for %s failed: %s", match.key, exc)

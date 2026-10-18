@@ -27,7 +27,9 @@ def _hours(name: str, legacy: tuple, default: int, allow_daily: bool = True) -> 
     except ValueError:
         if name not in _warned:
             _warned.add(name)
-            log.warning("%s=%r is not a whole number of hours; using %d", name, raw, default)
+            log.warning(
+                "%s=%r is not a whole number of hours; using %d", name, raw, default
+            )
         return default
     if value == 0 and allow_daily:
         return 0
@@ -40,7 +42,9 @@ def _hours(name: str, legacy: tuple, default: int, allow_daily: bool = True) -> 
 
 def pricing_refresh_interval_h() -> int:
     return _hours(
-        "PLUGBOARD_PRICING_REFRESH_INTERVAL_H", ("PRICING_REFRESH_INTERVAL_H",), DEFAULT_INTERVAL_H
+        "PLUGBOARD_PRICING_REFRESH_INTERVAL_H",
+        ("PRICING_REFRESH_INTERVAL_H",),
+        DEFAULT_INTERVAL_H,
     )
 
 
@@ -54,7 +58,10 @@ def models_refresh_interval_h() -> int:
 
 def cli_refresh_interval_h() -> int:
     return _hours(
-        "PLUGBOARD_MODEL_AVAILABILITY_CLI_INTERVAL_H", (), DEFAULT_CLI_INTERVAL_H, allow_daily=False
+        "PLUGBOARD_MODEL_AVAILABILITY_CLI_INTERVAL_H",
+        (),
+        DEFAULT_CLI_INTERVAL_H,
+        allow_daily=False,
     )
 
 

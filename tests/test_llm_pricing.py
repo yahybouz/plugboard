@@ -25,21 +25,24 @@ def p(inp, out, **extra):
 # -- address checks --------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("address,public", [
-    ("8.8.8.8", True),
-    ("2606:4700:4700::1111", True),
-    ("127.0.0.1", False),
-    ("::1", False),
-    ("0.0.0.0", False),
-    ("10.1.2.3", False),
-    ("192.168.1.10", False),
-    ("100.64.0.7", False),          # carrier-grade NAT
-    ("169.254.169.254", False),     # cloud metadata
-    ("fe80::1", False),
-    ("::ffff:10.0.0.1", False),     # IPv4-mapped private
-    ("::ffff:127.0.0.1", False),
-    ("::ffff:8.8.8.8", True),
-])
+@pytest.mark.parametrize(
+    "address,public",
+    [
+        ("8.8.8.8", True),
+        ("2606:4700:4700::1111", True),
+        ("127.0.0.1", False),
+        ("::1", False),
+        ("0.0.0.0", False),
+        ("10.1.2.3", False),
+        ("192.168.1.10", False),
+        ("100.64.0.7", False),  # carrier-grade NAT
+        ("169.254.169.254", False),  # cloud metadata
+        ("fe80::1", False),
+        ("::ffff:10.0.0.1", False),  # IPv4-mapped private
+        ("::ffff:127.0.0.1", False),
+        ("::ffff:8.8.8.8", True),
+    ],
+)
 def test_ip_is_public(address, public):
     assert llm_pricing.ip_is_public(address) is public
 
@@ -63,10 +66,19 @@ async def test_a_name_with_one_private_answer_is_refused(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_connection_is_pinned_to_the_checked_address():
-    pinned = llm_pricing._PinnedResolver("prices.example", [
-        {"hostname": "prices.example", "host": "93.184.216.34", "port": 443, "family": socket.AF_INET,
-         "proto": 6, "flags": socket.AI_NUMERICHOST},
-    ])
+    pinned = llm_pricing._PinnedResolver(
+        "prices.example",
+        [
+            {
+                "hostname": "prices.example",
+                "host": "93.184.216.34",
+                "port": 443,
+                "family": socket.AF_INET,
+                "proto": 6,
+                "flags": socket.AI_NUMERICHOST,
+            },
+        ],
+    )
     [answer] = await pinned.resolve("prices.example", 443)
     assert answer["host"] == "93.184.216.34"
     with pytest.raises(OSError):
@@ -79,8 +91,16 @@ async def test_connection_is_pinned_to_the_checked_address():
 @pytest.fixture
 def public_dns(monkeypatch):
     async def fake(host, port):
-        return [{"hostname": host, "host": "93.184.216.34", "port": port, "family": socket.AF_INET,
-                 "proto": 6, "flags": socket.AI_NUMERICHOST}]
+        return [
+            {
+                "hostname": host,
+                "host": "93.184.216.34",
+                "port": port,
+                "family": socket.AF_INET,
+                "proto": 6,
+                "flags": socket.AI_NUMERICHOST,
+            }
+        ]
 
     monkeypatch.setattr(llm_pricing, "_resolve_public", fake)
 
@@ -96,7 +116,11 @@ async def test_only_https_and_no_credentials():
 @pytest.mark.asyncio
 async def test_redirect_to_another_host_is_refused(public_dns):
     with aioresponses() as mock:
-        mock.get("https://prices.example/pricing", status=302, headers={"Location": "https://evil.example/x"})
+        mock.get(
+            "https://prices.example/pricing",
+            status=302,
+            headers={"Location": "https://evil.example/x"},
+        )
         with pytest.raises(llm_pricing.UnsafeURL, match="not the configured host"):
             await llm_pricing.fetch_page("https://prices.example/pricing")
 
@@ -104,9 +128,16 @@ async def test_redirect_to_another_host_is_refused(public_dns):
 @pytest.mark.asyncio
 async def test_redirect_on_the_same_host_is_followed(public_dns):
     with aioresponses() as mock:
-        mock.get("https://prices.example/pricing", status=301, headers={"Location": "/v2/pricing"})
-        mock.get("https://prices.example/v2/pricing", body=(PAGES / "table.html").read_text(),
-                 content_type="text/html")
+        mock.get(
+            "https://prices.example/pricing",
+            status=301,
+            headers={"Location": "/v2/pricing"},
+        )
+        mock.get(
+            "https://prices.example/v2/pricing",
+            body=(PAGES / "table.html").read_text(),
+            content_type="text/html",
+        )
         text = await llm_pricing.fetch_page("https://prices.example/pricing")
     assert "alpha-large" in text
 
@@ -140,13 +171,19 @@ async def test_environment_proxy_is_ignored(public_dns, monkeypatch):
 # -- page text (eval on fixture pages) ----------------------------------------------
 
 
-@pytest.mark.parametrize("page,expected", [
-    ("table.html", ["alpha-large", "$2.00", "$8.00", "alpha-small", "$0.20"]),
-    ("cards.html", ["bravo-pro", "$1.25", "$5.00", "bravo-mini", "$0.10"]),
-    ("per_thousand.html", ["per 1K tokens", "charlie-7b", "$0.0002", "charlie-70b"]),
-    ("injection.html", ["delta-chat", "$3", "$15"]),
-    ("long_head.html", ["echo-1", "$0.50", "$1.50"]),
-])
+@pytest.mark.parametrize(
+    "page,expected",
+    [
+        ("table.html", ["alpha-large", "$2.00", "$8.00", "alpha-small", "$0.20"]),
+        ("cards.html", ["bravo-pro", "$1.25", "$5.00", "bravo-mini", "$0.10"]),
+        (
+            "per_thousand.html",
+            ["per 1K tokens", "charlie-7b", "$0.0002", "charlie-70b"],
+        ),
+        ("injection.html", ["delta-chat", "$3", "$15"]),
+        ("long_head.html", ["echo-1", "$0.50", "$1.50"]),
+    ],
+)
 def test_page_text_keeps_models_and_prices(page, expected):
     text = llm_pricing.html_to_text((PAGES / page).read_text())
     for fragment in expected:
@@ -155,7 +192,12 @@ def test_page_text_keeps_models_and_prices(page, expected):
 
 
 def test_long_page_is_truncated_to_the_context_share():
-    page = (PAGES / "long_head.html").read_text() + "<p>" + "Lorem ipsum dolor. " * 50_000 + "</p>"
+    page = (
+        (PAGES / "long_head.html").read_text()
+        + "<p>"
+        + "Lorem ipsum dolor. " * 50_000
+        + "</p>"
+    )
     text = llm_pricing.truncate_for(llm_pricing.html_to_text(page), 8_000)
     assert len(text) == int(8_000 * 0.6 * 3.5)
     assert text.startswith("echo-1")
@@ -166,8 +208,10 @@ def test_long_page_is_truncated_to_the_context_share():
 
 
 def test_parse_answer_keeps_requested_valid_prices():
-    answer = '```json\n{"a": {"input_price": 1, "output_price": 4}, "b": {"input_price": 0, "output_price": 1},' \
-             ' "c": {"input_price": 2000, "output_price": 1}, "zz": {"input_price": 1, "output_price": 1}}\n```'
+    answer = (
+        '```json\n{"a": {"input_price": 1, "output_price": 4}, "b": {"input_price": 0, "output_price": 1},'
+        ' "c": {"input_price": 2000, "output_price": 1}, "zz": {"input_price": 1, "output_price": 1}}\n```'
+    )
     prices, rejected = llm_pricing.parse_answer(answer, ["a", "b", "c"])
     assert prices == {"a": p(1.0, 4.0)}
     assert sorted(rejected) == ["b", "c"]
@@ -180,9 +224,14 @@ def test_refusals_and_invalid_json_are_rejected(answer):
 
 
 def test_pages_setting(monkeypatch, caplog):
-    monkeypatch.setenv("PLUGBOARD_LLM_PRICING_URLS", "acme=https://acme.example/pricing; bad=http://x ;junk")
+    monkeypatch.setenv(
+        "PLUGBOARD_LLM_PRICING_URLS",
+        "acme=https://acme.example/pricing; bad=http://x ;junk",
+    )
     pages = llm_pricing.configured_pages()
-    assert pages["acme"] == "https://acme.example/pricing" and pages["groq"].startswith("https://")
+    assert pages["acme"] == "https://acme.example/pricing" and pages["groq"].startswith(
+        "https://"
+    )
     assert "bad" not in pages and "ignoring" in caplog.text
 
 
@@ -198,16 +247,38 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(usage, "_DB_PATH", tmp_path / "usage.db")
     base = tmp_path / "llm"
     base.mkdir()
-    _setup_providers(base, monkeypatch, [
-        {"id": "pricer", "is_active": True, "base_url": "https://llm.example/v1", "default_model": "reader"},
-        {"id": "acme", "is_active": True, "base_url": "https://api.acme.example/v1", "preset_key": "catalog-acme"},
-    ])
+    _setup_providers(
+        base,
+        monkeypatch,
+        [
+            {
+                "id": "pricer",
+                "is_active": True,
+                "base_url": "https://llm.example/v1",
+                "default_model": "reader",
+            },
+            {
+                "id": "acme",
+                "is_active": True,
+                "base_url": "https://api.acme.example/v1",
+                "preset_key": "catalog-acme",
+            },
+        ],
+    )
     month = billing.current_pricing_month()
-    (pricing_dir / f"{month}.json").write_text(json.dumps({"models": {"reader": p(1.0, 2.0)}}))
+    (pricing_dir / f"{month}.json").write_text(
+        json.dumps({"models": {"reader": p(1.0, 2.0)}})
+    )
     monkeypatch.setenv("PLUGBOARD_LLM_PRICING", "1")
-    monkeypatch.setenv("PLUGBOARD_LLM_PRICING_URLS", "acme=https://acme.example/pricing")
-    for name in ("PLUGBOARD_LLM_PRICING_MAX_USD", "PLUGBOARD_LLM_PRICING_MAX_MODELS",
-                 "PLUGBOARD_LLM_PRICING_PROVIDER", "PLUGBOARD_LLM_PRICING_MODEL"):
+    monkeypatch.setenv(
+        "PLUGBOARD_LLM_PRICING_URLS", "acme=https://acme.example/pricing"
+    )
+    for name in (
+        "PLUGBOARD_LLM_PRICING_MAX_USD",
+        "PLUGBOARD_LLM_PRICING_MAX_MODELS",
+        "PLUGBOARD_LLM_PRICING_PROVIDER",
+        "PLUGBOARD_LLM_PRICING_MODEL",
+    ):
         monkeypatch.delenv(name, raising=False)
 
     pages = {}
@@ -222,12 +293,20 @@ def env(tmp_path, monkeypatch):
     def answer_with(content, usage_=None):
         async def fake_forward(body):
             calls.append(body)
-            return {"choices": [{"message": {"content": content}}],
-                    "usage": usage_ or {"prompt_tokens": 1000, "completion_tokens": 50}}
+            return {
+                "choices": [{"message": {"content": content}}],
+                "usage": usage_ or {"prompt_tokens": 1000, "completion_tokens": 50},
+            }
 
         monkeypatch.setattr("plugboard.router.forward", fake_forward)
 
-    return {"month": month, "calls": calls, "answer_with": answer_with, "pages": pages, "dir": pricing_dir}
+    return {
+        "month": month,
+        "calls": calls,
+        "answer_with": answer_with,
+        "pages": pages,
+        "dir": pricing_dir,
+    }
 
 
 MISSING = ["acme:alpha-large", "acme:alpha-small", "acme:unlisted"]
@@ -249,11 +328,17 @@ async def test_pass_queues_suggestions_and_bills_internal_client(env):
     assert env["pages"]["url"] == "https://acme.example/pricing"
     [call] = env["calls"]
     assert call["model"] == "pricer:reader" and call["max_tokens"] == 1024
-    assert call["messages"][0]["role"] == "system" and "untrusted" in call["messages"][1]["content"]
+    assert (
+        call["messages"][0]["role"] == "system"
+        and "untrusted" in call["messages"][1]["content"]
+    )
     assert report.reasons["acme:unlisted"] == "not found on the pricing page"
     items = {s["model"]: s for s in pricing_suggestions.list_suggestions()}
     assert set(items) == {"alpha-large", "alpha-small"}
-    assert items["alpha-large"]["type"] == "llm" and items["alpha-large"]["space"] == "acme"
+    assert (
+        items["alpha-large"]["type"] == "llm"
+        and items["alpha-large"]["space"] == "acme"
+    )
     # Nothing reaches the grid on its own.
     assert "models_by_provider" not in billing.load_pricing(env["month"])
     [row] = usage.get_usage(env["month"])
@@ -261,7 +346,9 @@ async def test_pass_queues_suggestions_and_bills_internal_client(env):
     assert row["cost_usd"] == pytest.approx(1000 * 1.0 / 1e6 + 50 * 2.0 / 1e6)
     # Applying writes the provider price with source llm.
     pricing_suggestions.apply(items["alpha-large"]["id"])
-    entry = billing.load_pricing(env["month"])["models_by_provider"]["acme"]["alpha-large"]
+    entry = billing.load_pricing(env["month"])["models_by_provider"]["acme"][
+        "alpha-large"
+    ]
     assert entry["source"] == "llm" and entry["input_price"] == 2
 
 
@@ -279,8 +366,14 @@ async def test_once_a_day_and_budget_survive_a_restart(env, monkeypatch):
 
 
 def test_spend_resets_the_next_day(env):
-    llm_pricing.write_state({"day": (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d"),
-                             "spent_usd": 9.0})
+    llm_pricing.write_state(
+        {
+            "day": (datetime.now(timezone.utc) - timedelta(days=1)).strftime(
+                "%Y-%m-%d"
+            ),
+            "spent_usd": 9.0,
+        }
+    )
     assert llm_pricing.read_state()["spent_usd"] == 0.0
 
 
@@ -335,25 +428,50 @@ async def test_no_page_known(env, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_suggestion_of_a_closed_month_expires(env):
-    [sid] = pricing_suggestions.record_llm("2020_01", [{"model": "old", "space": "acme", "new": p(1, 2)}])
+    [sid] = pricing_suggestions.record_llm(
+        "2020_01", [{"model": "old", "space": "acme", "new": p(1, 2)}]
+    )
     assert pricing_suggestions.list_suggestions() == []  # expired on read
     assert pricing_suggestions.get(sid)["status"] == "expired"
     with pytest.raises(pricing_suggestions.SuggestionConflict):
         pricing_suggestions.apply(sid)
     # Proposed again this month: the same id comes back as pending.
-    pricing_suggestions.record_llm(env["month"], [{"model": "old", "space": "acme", "new": p(1, 2)}])
+    pricing_suggestions.record_llm(
+        env["month"], [{"model": "old", "space": "acme", "new": p(1, 2)}]
+    )
     assert pricing_suggestions.get(sid)["status"] == "pending"
     assert pricing_suggestions.get(sid)["month"] == env["month"]
 
 
 def test_rejection_survives_the_month_rollover(env):
-    [sid] = pricing_suggestions.record_drifts(env["month"], [
-        {"model": "m", "new": p(4, 16), "old": p(2, 8), "pct": 100.0, "source": "models_dev"},
-    ])
+    [sid] = pricing_suggestions.record_drifts(
+        env["month"],
+        [
+            {
+                "model": "m",
+                "new": p(4, 16),
+                "old": p(2, 8),
+                "pct": 100.0,
+                "source": "models_dev",
+            },
+        ],
+    )
     pricing_suggestions.reject(sid)
-    assert pricing_suggestions.record_drifts("2099_01", [
-        {"model": "m", "new": p(4, 16), "old": p(2, 8), "pct": 100.0, "source": "models_dev"},
-    ]) == []
+    assert (
+        pricing_suggestions.record_drifts(
+            "2099_01",
+            [
+                {
+                    "model": "m",
+                    "new": p(4, 16),
+                    "old": p(2, 8),
+                    "pct": 100.0,
+                    "source": "models_dev",
+                },
+            ],
+        )
+        == []
+    )
 
 
 @pytest.mark.asyncio

@@ -493,9 +493,7 @@ class TestKeyPrefix:
         assert raw_key.startswith("pb_"), (
             f"Key should start with lle_, got: {raw_key[:10]}"
         )
-        assert prefix.startswith("pb_"), (
-            f"Prefix should start with lle_, got: {prefix}"
-        )
+        assert prefix.startswith("pb_"), f"Prefix should start with lle_, got: {prefix}"
         # Prefix is first 8 chars of key
         assert raw_key.startswith(prefix)
 

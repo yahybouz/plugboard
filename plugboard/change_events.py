@@ -69,7 +69,7 @@ def read_journal(limit: int = 100) -> List[Dict[str, Any]]:
     if not path.exists():
         return []
     out = []
-    for line in path.read_text(encoding="utf-8").splitlines()[-max(1, limit):]:
+    for line in path.read_text(encoding="utf-8").splitlines()[-max(1, limit) :]:
         try:
             out.append(json.loads(line))
         except ValueError:
@@ -118,7 +118,11 @@ class ChangeBatch:
                 log.warning("Webhook %s summary failed: %s", event, exc)
         journaled = len(self.events)
         self.events = []
-        return {"journaled": journaled, "sent": sent, "truncated": sum(truncated.values())}
+        return {
+            "journaled": journaled,
+            "sent": sent,
+            "truncated": sum(truncated.values()),
+        }
 
     def flush_in_background(self, deadline_s: float = 120.0) -> Dict[str, int]:
         """Journal now; send the webhooks in a background task.

@@ -20,10 +20,12 @@ from tests.live_model_tests.dimensions.d3_internet import (
 # 2026-05-31 is a Sunday / dimanche; yesterday = 2026-05-30.
 REF = _dt.datetime(2026, 5, 31, 12, 0, tzinfo=_dt.timezone.utc)
 
-_ONLINE_HIGH = "Today is 2026-05-31, dimanche. Hier: 2026-05-30. Source: https://time.gov"
-_ONLINE_LOW = "Aujourd'hui 2026-05-31, dimanche."          # date + weekday only
+_ONLINE_HIGH = (
+    "Today is 2026-05-31, dimanche. Hier: 2026-05-30. Source: https://time.gov"
+)
+_ONLINE_LOW = "Aujourd'hui 2026-05-31, dimanche."  # date + weekday only
 _OFFLINE = "NO-WEB-ACCESS"
-_DATE_ONLY = "2026-05-31"                                   # date, no safeguards
+_DATE_ONLY = "2026-05-31"  # date, no safeguards
 
 
 def _override_skip(monkeypatch):
@@ -132,7 +134,9 @@ def test_offline_expected_offline_ignores_reasoning_date():
     Here content has no date and no reasoning online-signal beyond it → the
     reasoning DOES carry the date, so it surfaces as signal_in_reasoning_only
     (excluded), never as a mismatch BLOCKER."""
-    r = _verdict(_OFFLINE, False, reasoning="il doit être 2026-05-31, dimanche, hier 2026-05-30")
+    r = _verdict(
+        _OFFLINE, False, reasoning="il doit être 2026-05-31, dimanche, hier 2026-05-30"
+    )
     assert r.error_type == "signal_in_reasoning_only"
     assert r.excluded_from_threshold is True
     # The crucial property: it is NOT a false expected_offline_got_online BLOCKER.
@@ -186,7 +190,11 @@ def test_surface_unsupported_skips(monkeypatch):
     r = run_d3_internet(
         model_id="m",
         surface_client=client,
-        catalog_entry={"timeout_s": 60, "expected_internet": True, "surfaces": ["mcp", "ui"]},
+        catalog_entry={
+            "timeout_s": 60,
+            "expected_internet": True,
+            "surfaces": ["mcp", "ui"],
+        },
         now=REF,
     )
     assert r.error_type == "skipped:surface_unsupported"
@@ -199,12 +207,16 @@ def test_unknown_ground_truth_observe_only(monkeypatch):
     r = run_d3_internet(
         model_id="gpt-oss:120b-cloud",
         surface_client=client,
-        catalog_entry={"timeout_s": 180, "expected_internet": "unknown", "surfaces": ["api"]},
+        catalog_entry={
+            "timeout_s": 180,
+            "expected_internet": "unknown",
+            "surfaces": ["api"],
+        },
         now=REF,
     )
     assert r.error_type == "skipped:unknown_ground_truth"
     assert r.excluded_from_threshold is True
-    assert r.observed_status == "online"          # still observed for the scorecard
+    assert r.observed_status == "online"  # still observed for the scorecard
     assert len(client.calls) == 1
 
 
@@ -214,7 +226,11 @@ def test_pass_first_attempt(monkeypatch):
     r = run_d3_internet(
         model_id="kimi-k2.6:cloud",
         surface_client=client,
-        catalog_entry={"timeout_s": 180, "expected_internet": False, "surfaces": ["api"]},
+        catalog_entry={
+            "timeout_s": 180,
+            "expected_internet": False,
+            "surfaces": ["api"],
+        },
         now=REF,
     )
     assert r.passed is True
@@ -257,7 +273,11 @@ def test_max_tokens_from_probe_body_thinking(monkeypatch):
     run_d3_internet(
         model_id="deepseek-v4-pro:cloud",
         surface_client=client,
-        catalog_entry={"timeout_s": 180, "expected_internet": False, "surfaces": ["api"]},
+        catalog_entry={
+            "timeout_s": 180,
+            "expected_internet": False,
+            "surfaces": ["api"],
+        },
         now=REF,
     )
     assert client.calls[0]["max_tokens"] == 2048

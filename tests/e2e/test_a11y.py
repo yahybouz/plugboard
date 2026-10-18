@@ -61,4 +61,6 @@ async def test_tab_has_no_blocking_a11y_violations(a11y_dashboard, axe_script, t
     await _settle(a11y_dashboard.page, tab)
     violations = await _audit(a11y_dashboard.page, axe_script)
     blocking = [v for v in violations if v.get("impact") in _BLOCKING]
-    assert not blocking, f"{tab}: {len(blocking)} blocking a11y violation(s):\n{_format(blocking)}"
+    assert not blocking, (
+        f"{tab}: {len(blocking)} blocking a11y violation(s):\n{_format(blocking)}"
+    )

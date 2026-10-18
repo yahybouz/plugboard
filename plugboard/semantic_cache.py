@@ -606,9 +606,7 @@ async def _embed(text: str) -> Optional[List[float]]:
     if not embed_is_enabled():
         return None
 
-    provider_id = _env_embed(
-        "PLUGBOARD_EMBED_PROVIDER_ID", "EMBED_PROVIDER_ID"
-    ).strip()
+    provider_id = _env_embed("PLUGBOARD_EMBED_PROVIDER_ID", "EMBED_PROVIDER_ID").strip()
     embed_model = _env_embed("PLUGBOARD_EMBED_MODEL", "EMBED_MODEL").strip()
 
     try:

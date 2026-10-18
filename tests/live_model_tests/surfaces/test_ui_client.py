@@ -33,21 +33,31 @@ from tests.live_model_tests.surfaces.ui_client import (
 
 # Real /v1/models option values observed live (provider-prefixed).
 _DROPDOWN = [
-    "Codex:gpt-5.5", "Codex:gpt-5.4", "Codex:gpt-5.4-mini",
-    "ollama:gpt-oss:120b-cloud", "ollama:qwen3.5:397b-cloud",
-    "claude-code:claude-opus-4-7", "Gemini:gemini-3-flash-preview",
+    "Codex:gpt-5.5",
+    "Codex:gpt-5.4",
+    "Codex:gpt-5.4-mini",
+    "ollama:gpt-oss:120b-cloud",
+    "ollama:qwen3.5:397b-cloud",
+    "claude-code:claude-opus-4-7",
+    "Gemini:gemini-3-flash-preview",
 ]
 
 
-@pytest.mark.parametrize("catalog_id,expected", [
-    ("gpt-5.4", "Codex:gpt-5.4"),                         # bare → prefixed
-    ("gpt-5.4-mini", "Codex:gpt-5.4-mini"),               # not confused with gpt-5.4
-    ("gpt-oss:120b-cloud", "ollama:gpt-oss:120b-cloud"),  # colon-in-id survives (split first only)
-    ("qwen3.5:397b-cloud", "ollama:qwen3.5:397b-cloud"),
-    ("claude-opus-4-7", "claude-code:claude-opus-4-7"),
-    ("gemini-3-flash-preview", "Gemini:gemini-3-flash-preview"),
-    ("Codex:gpt-5.4", "Codex:gpt-5.4"),                   # already-exact value wins
-])
+@pytest.mark.parametrize(
+    "catalog_id,expected",
+    [
+        ("gpt-5.4", "Codex:gpt-5.4"),  # bare → prefixed
+        ("gpt-5.4-mini", "Codex:gpt-5.4-mini"),  # not confused with gpt-5.4
+        (
+            "gpt-oss:120b-cloud",
+            "ollama:gpt-oss:120b-cloud",
+        ),  # colon-in-id survives (split first only)
+        ("qwen3.5:397b-cloud", "ollama:qwen3.5:397b-cloud"),
+        ("claude-opus-4-7", "claude-code:claude-opus-4-7"),
+        ("gemini-3-flash-preview", "Gemini:gemini-3-flash-preview"),
+        ("Codex:gpt-5.4", "Codex:gpt-5.4"),  # already-exact value wins
+    ],
+)
 def test_match_option_resolves_prefixed_dropdown_ids(catalog_id, expected):
     assert _match_option(catalog_id, _DROPDOWN) == expected
 
@@ -59,11 +69,14 @@ def test_match_option_absent_returns_none():
 
 # ── FakeUiDriver ──────────────────────────────────────────────────────────────
 
+
 class FakeUiDriver:
     """Scriptable UiDriver. run_turn() returns a pre-canned TurnRead or raises a
     pre-canned exception, and records every call for assertions."""
 
-    def __init__(self, result: Any = None, *, raises: Optional[Exception] = None) -> None:
+    def __init__(
+        self, result: Any = None, *, raises: Optional[Exception] = None
+    ) -> None:
         self._result = result
         self._raises = raises
         self.calls: List[Dict[str, Any]] = []
@@ -79,12 +92,19 @@ class FakeUiDriver:
         self.closed = True
 
 
-def _done(text: str, *, content_empty: bool = False, finish_reason: Optional[str] = None,
-          status_text: str = "1.2s | 10 tokens | $0.0001") -> TurnRead:
+def _done(
+    text: str,
+    *,
+    content_empty: bool = False,
+    finish_reason: Optional[str] = None,
+    status_text: str = "1.2s | 10 tokens | $0.0001",
+) -> TurnRead:
     return TurnRead(
         status_state="done",
         status_text=status_text,
-        bubble=BubbleRead(text=text, content_empty=content_empty, finish_reason=finish_reason),
+        bubble=BubbleRead(
+            text=text, content_empty=content_empty, finish_reason=finish_reason
+        ),
     )
 
 
@@ -97,16 +117,25 @@ MSGS = [{"role": "user", "content": "ping ALIVE:NONCE"}]
 
 
 def _chat(client, msgs=MSGS, *, stream=True):
-    return client.chat("claude-haiku-4-5", msgs, stream=stream, timeout=10.0,
-                       max_tokens=256, temperature=0.0)
+    return client.chat(
+        "claude-haiku-4-5",
+        msgs,
+        stream=stream,
+        timeout=10.0,
+        max_tokens=256,
+        temperature=0.0,
+    )
 
 
 # ── helpers (pure) ────────────────────────────────────────────────────────────
 
+
 def test_extract_user_message_last_user_wins():
-    msgs = [{"role": "user", "content": "first"},
-            {"role": "assistant", "content": "r"},
-            {"role": "user", "content": "second"}]
+    msgs = [
+        {"role": "user", "content": "first"},
+        {"role": "assistant", "content": "r"},
+        {"role": "user", "content": "second"},
+    ]
     assert _extract_user_message(msgs) == "second"
 
 
@@ -115,28 +144,38 @@ def test_extract_user_message_no_user_raises():
         _extract_user_message([{"role": "system", "content": "sys only"}])
 
 
-@pytest.mark.parametrize("status,expected", [
-    ("Error 401", "http_error:401"),
-    ("Error 500", "http_error:500"),
-    ("Error", "http_error:unknown"),
-    ("Connection error", "ui_connection_error"),
-    ("weird", "ui_error"),
-])
+@pytest.mark.parametrize(
+    "status,expected",
+    [
+        ("Error 401", "http_error:401"),
+        ("Error 500", "http_error:500"),
+        ("Error", "http_error:unknown"),
+        ("Connection error", "ui_connection_error"),
+        ("weird", "ui_error"),
+    ],
+)
 def test_classify_error(status, expected):
     assert _classify_error(status) == expected
 
 
 # ── empty-content fidelity (the BLOCKER-class reason this surface exists) ──────
 
+
 def test_empty_response_sentinel_maps_to_empty_via_attribute():
     """data-content-empty=1 → content '' even though the bubble shows a sentence."""
-    content, fr = _resolve_content(BubbleRead("(empty response)", content_empty=True, finish_reason=None))
+    content, fr = _resolve_content(
+        BubbleRead("(empty response)", content_empty=True, finish_reason=None)
+    )
     assert content == "" and fr is None
 
 
 def test_truncation_maps_to_empty_length_via_attribute():
     content, fr = _resolve_content(
-        BubbleRead("⚠️ Réponse tronquée avant le contenu …", content_empty=True, finish_reason="length")
+        BubbleRead(
+            "⚠️ Réponse tronquée avant le contenu …",
+            content_empty=True,
+            finish_reason="length",
+        )
     )
     assert content == "" and fr == "length"
 
@@ -153,39 +192,50 @@ def test_empty_with_stop_finish_reason_normalizes_to_none():
 
 def test_empty_sentinel_string_fallback_without_attribute():
     """Stale app.js (no hook): the known sentinel STRING still maps to empty."""
-    content, fr = _resolve_content(BubbleRead("(empty response)", content_empty=False, finish_reason=None))
+    content, fr = _resolve_content(
+        BubbleRead("(empty response)", content_empty=False, finish_reason=None)
+    )
     assert content == "" and fr is None
 
 
 def test_truncation_string_fallback_without_attribute():
     content, fr = _resolve_content(
-        BubbleRead("⚠️ Réponse tronquée avant le contenu — …", content_empty=False, finish_reason=None)
+        BubbleRead(
+            "⚠️ Réponse tronquée avant le contenu — …",
+            content_empty=False,
+            finish_reason=None,
+        )
     )
     assert content == "" and fr == "length"
 
 
 def test_real_content_passes_through_with_synthesized_stop():
-    content, fr = _resolve_content(BubbleRead('{"echo":"NONCE"}', content_empty=False, finish_reason=None))
+    content, fr = _resolve_content(
+        BubbleRead('{"echo":"NONCE"}', content_empty=False, finish_reason=None)
+    )
     assert content == '{"echo":"NONCE"}' and fr == "stop"
 
 
 def test_real_content_keeps_observed_finish_reason():
-    content, fr = _resolve_content(BubbleRead("hi", content_empty=False, finish_reason="stop"))
+    content, fr = _resolve_content(
+        BubbleRead("hi", content_empty=False, finish_reason="stop")
+    )
     assert content == "hi" and fr == "stop"
 
 
 # ── chat() integration through the fake driver ────────────────────────────────
+
 
 def test_chat_plain_content():
     expected = '{"echo": "ALIVE:NONCE", "payload": "éàçü"}'
     client, drv = _client(_done(expected))
     r = _chat(client)
     assert r["content"] == expected
-    assert r["reasoning"] == ""            # decision 3 — UI never scrapes reasoning
+    assert r["reasoning"] == ""  # decision 3 — UI never scrapes reasoning
     assert r["finish_reason"] == "stop"
     assert r["done_received"] is True
-    assert r["raw_sse_lines"] is None      # D5 skip
-    assert r["billing"] is None            # D6 skip
+    assert r["raw_sse_lines"] is None  # D5 skip
+    assert r["billing"] is None  # D6 skip
     assert r["first_token_latency_ms"] is None  # UI can't measure TTFT (contract)
     assert r["model_echoed"] is None and r["request_id"] is None
     # the driver received the human-typed text (last user message)
@@ -201,8 +251,11 @@ def test_chat_empty_response_not_a_false_alive():
 
 
 def test_chat_error_status_raises_with_classified_type():
-    err_turn = TurnRead(status_state="error", status_text="Error 429",
-                        bubble=BubbleRead("Error: rate limited", False, None))
+    err_turn = TurnRead(
+        status_state="error",
+        status_text="Error 429",
+        bubble=BubbleRead("Error: rate limited", False, None),
+    )
     client, _ = _client(err_turn)
     with pytest.raises(UiSurfaceError) as ei:
         _chat(client)
@@ -234,10 +287,15 @@ def test_chat_passes_stream_and_max_tokens_to_driver():
     client, drv = _client(_done("ok"))
     client.chat("m", MSGS, stream=False, timeout=5.0, max_tokens=4096, temperature=0.5)
     call = drv.calls[0]
-    assert call["stream"] is False and call["max_tokens"] == 4096 and call["temperature"] == 0.5
+    assert (
+        call["stream"] is False
+        and call["max_tokens"] == 4096
+        and call["temperature"] == 0.5
+    )
 
 
 # ── protocol conformance + skip discriminants ─────────────────────────────────
+
 
 def test_satisfies_surface_client_protocol():
     client, _ = _client(_done("x"))

@@ -27,7 +27,8 @@ async def test_monitoring_lists_seeded_provider(dashboard):
     await page.wait_for_selector("#monitoring-providers", timeout=10_000)
     # The seeded provider shows up in the monitoring table.
     assert (
-        await page.locator("#monitoring-providers", has_text="E2E Provider").count() >= 1
+        await page.locator("#monitoring-providers", has_text="E2E Provider").count()
+        >= 1
     )
 
 

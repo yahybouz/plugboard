@@ -281,7 +281,9 @@ def run_d1_liveness(
             )
 
         total_latency_ms = (clock() - t0) * 1000.0
-        ttfr_ms = total_latency_ms  # SSE: equal to total since we wait for finish_reason
+        ttfr_ms = (
+            total_latency_ms  # SSE: equal to total since we wait for finish_reason
+        )
 
         last_result = _verdict_from_response(
             model_id=model_id,

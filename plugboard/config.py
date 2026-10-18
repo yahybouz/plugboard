@@ -270,7 +270,9 @@ def load_providers() -> List[Dict[str, Any]]:
             oc_url = os.environ.get("OPENCLAW_URL", "").strip()
             oc_key = os.environ.get("OPENCLAW_KEY", "").strip()
             if oc_url and oc_key:
-                oc_model = (os.environ.get("OPENCLAW_MODEL") or "claude-sonnet-4-6").strip()
+                oc_model = (
+                    os.environ.get("OPENCLAW_MODEL") or "claude-sonnet-4-6"
+                ).strip()
                 oc_name = (
                     os.environ.get("OPENCLAW_NAME", "OpenClaw").strip() or "OpenClaw"
                 )

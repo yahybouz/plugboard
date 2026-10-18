@@ -148,7 +148,7 @@ def _classify_lines(raw_sse_lines: List[str]) -> Tuple[List[str], Optional[str]]
             continue  # SSE comment / heartbeat
         if not stripped.startswith("data:"):
             return payloads, "sse_malformed:bad_prefix"
-        payload = stripped[len("data:"):].strip()
+        payload = stripped[len("data:") :].strip()
         if not payload:
             continue  # empty `data:` heartbeat — tolerated (Council C5 MAJOR-2)
         payloads.append(payload)
@@ -251,10 +251,14 @@ def _verdict_from_stream(
         if fr is not None:
             if fr in _BAD_FINISH_REASONS:
                 base["finish_reason"] = fr
-                return StreamingResult(passed=False, error_type="bad_finish_reason", **base)
+                return StreamingResult(
+                    passed=False, error_type="bad_finish_reason", **base
+                )
             if fr not in _VALID_FINISH_REASONS:
                 base["finish_reason"] = fr
-                return StreamingResult(passed=False, error_type="bad_finish_reason", **base)
+                return StreamingResult(
+                    passed=False, error_type="bad_finish_reason", **base
+                )
             finish_reason = fr
 
         # ── I6: consecutive bit-exact duplicate of a non-empty content delta ─
@@ -263,7 +267,9 @@ def _verdict_from_stream(
         if delta_content.strip():
             if payload == prev_dup_key:
                 base["finish_reason"] = finish_reason
-                return StreamingResult(passed=False, error_type="chunk_duplicated", **base)
+                return StreamingResult(
+                    passed=False, error_type="chunk_duplicated", **base
+                )
             prev_dup_key = payload
         else:
             prev_dup_key = None  # empty-content deltas don't anchor duplication
@@ -420,7 +426,10 @@ def run_d5_streaming_integrity(
             first_attempt_latency_ms=first_attempt_latency_ms,
         )
 
-        if last_result.passed or last_result.error_type == "skipped:surface_non_streaming":
+        if (
+            last_result.passed
+            or last_result.error_type == "skipped:surface_non_streaming"
+        ):
             return last_result
         # Only transport errors are retried; structural fails are stable.
         if attempt == 1:

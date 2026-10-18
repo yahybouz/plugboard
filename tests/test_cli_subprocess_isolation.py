@@ -37,7 +37,7 @@ SERVER_SECRETS = {
     "ALERT_WEBHOOK_URL": "https://hooks.example/canary-webhook",
     "PLUGBOARD_DEV": "canary-dev-flag",
     # Pre-rename name, still accepted by envcompat.
-    "LLM_" "ENABLER_DATA": "canary-legacy-data-dir",
+    "LLM_ENABLER_DATA": "canary-legacy-data-dir",
     "GITHUB_TOKEN": "canary-github-token-0b0b",
     "AWS_SECRET_ACCESS_KEY": "canary-aws-secret-c0c0",
 }
@@ -658,9 +658,7 @@ async def test_real_gemini_request_carries_no_operator_tool_memory_or_dir(
     ):
         monkeypatch.delenv(proxy, raising=False)
     monkeypatch.setenv("GOOGLE_GEMINI_BASE_URL", base_url)
-    monkeypatch.setenv(
-        "PLUGBOARD_SUBPROCESS_ENV_PASSTHROUGH", "GOOGLE_GEMINI_BASE_URL"
-    )
+    monkeypatch.setenv("PLUGBOARD_SUBPROCESS_ENV_PASSTHROUGH", "GOOGLE_GEMINI_BASE_URL")
     monkeypatch.setattr(cli_subprocess, "_binary_path_cache", {})
     monkeypatch.delenv("PLUGBOARD_SUBPROCESS_CWD", raising=False)
     _fresh_spawn_root(tmp_path, monkeypatch)

@@ -46,13 +46,23 @@ class FakeTransport:
 
 
 def _init_resp(req_id=1):
-    return {"jsonrpc": "2.0", "id": req_id, "result": {"protocolVersion": "2024-11-05",
-            "capabilities": {}, "serverInfo": {"name": "lle", "version": "3.0.0"}}}
+    return {
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "result": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "serverInfo": {"name": "lle", "version": "3.0.0"},
+        },
+    }
 
 
 def _tool_resp(req_id, text, is_error=False):
-    return {"jsonrpc": "2.0", "id": req_id,
-            "result": {"content": [{"type": "text", "text": text}], "isError": is_error}}
+    return {
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "result": {"content": [{"type": "text", "text": text}], "isError": is_error},
+    }
 
 
 def _client(text, *, is_error=False):
@@ -64,7 +74,9 @@ MSGS = [{"role": "user", "content": "hello"}]
 
 
 def _chat(client):
-    return client.chat("m", MSGS, stream=True, timeout=10.0, max_tokens=256, temperature=0.0)
+    return client.chat(
+        "m", MSGS, stream=True, timeout=10.0, max_tokens=256, temperature=0.0
+    )
 
 
 # ── footer + args helpers ────────────────────────────────────────────────────
@@ -89,14 +101,20 @@ def test_strip_footer_does_not_eat_dashes_in_json():
 
 
 def test_extract_args_user_and_system():
-    args = _extract_mcp_args([{"role": "system", "content": "sys"}, {"role": "user", "content": "q"}])
+    args = _extract_mcp_args(
+        [{"role": "system", "content": "sys"}, {"role": "user", "content": "q"}]
+    )
     assert args["message"] == "q" and args["system_prompt"] == "sys"
 
 
 def test_extract_args_last_user_wins():
-    args = _extract_mcp_args([{"role": "user", "content": "first"},
-                             {"role": "assistant", "content": "r"},
-                             {"role": "user", "content": "second"}])
+    args = _extract_mcp_args(
+        [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "r"},
+            {"role": "user", "content": "second"},
+        ]
+    )
     assert args["message"] == "second"
 
 
@@ -117,7 +135,7 @@ def test_chat_plain_content(monkeypatch):
     assert r["reasoning"] == "" and r["finish_reason"] == "stop"
     assert r["done_received"] is True
     assert r["raw_sse_lines"] is None  # D5 skip
-    assert r["billing"] is None        # D6 skip
+    assert r["billing"] is None  # D6 skip
 
 
 def test_chat_footer_stripped_gives_pure_json(monkeypatch):
@@ -157,8 +175,16 @@ def test_chat_is_error_flag_raises(monkeypatch):
 
 def test_chat_jsonrpc_error_raises(monkeypatch):
     _override_skip(monkeypatch)
-    fake = FakeTransport([_init_resp(1),
-                          {"jsonrpc": "2.0", "id": 2, "error": {"code": -32601, "message": "no tool"}}])
+    fake = FakeTransport(
+        [
+            _init_resp(1),
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "error": {"code": -32601, "message": "no tool"},
+            },
+        ]
+    )
     client = McpSurfaceClient(transport=fake)
     with pytest.raises(McpToolError):
         _chat(client)
@@ -168,14 +194,21 @@ def test_chat_timeout_propagates(monkeypatch):
     _override_skip(monkeypatch)
 
     class TimeoutTransport:
-        def send(self, obj): pass
-        def recv(self, deadline=None): raise TimeoutError("t")
-        def close(self): pass
+        def send(self, obj):
+            pass
+
+        def recv(self, deadline=None):
+            raise TimeoutError("t")
+
+        def close(self):
+            pass
 
     client = McpSurfaceClient(transport=TimeoutTransport())
     client._handshake_done = True
     with pytest.raises(TimeoutError):
-        client.chat("m", MSGS, stream=True, timeout=0.01, max_tokens=64, temperature=0.0)
+        client.chat(
+            "m", MSGS, stream=True, timeout=0.01, max_tokens=64, temperature=0.0
+        )
 
 
 # ── protocol + handshake ─────────────────────────────────────────────────────
@@ -196,7 +229,9 @@ def test_supports_billing_false_value(monkeypatch):
 
 def test_handshake_sent_once_across_calls(monkeypatch):
     _override_skip(monkeypatch)
-    fake = FakeTransport([_init_resp(1), _tool_resp(2, '{"c": 1}'), _tool_resp(3, '{"c": 2}')])
+    fake = FakeTransport(
+        [_init_resp(1), _tool_resp(2, '{"c": 1}'), _tool_resp(3, '{"c": 2}')]
+    )
     client = McpSurfaceClient(transport=fake)
     r1 = _chat(client)
     r2 = _chat(client)
@@ -217,8 +252,14 @@ def test_tools_call_arguments_shape(monkeypatch):
     _override_skip(monkeypatch)
     fake = FakeTransport([_init_resp(1), _tool_resp(2, "ok")])
     client = McpSurfaceClient(transport=fake)
-    client.chat("my-model", [{"role": "system", "content": "S"}, {"role": "user", "content": "U"}],
-                stream=True, timeout=5.0, max_tokens=128, temperature=0.0)
+    client.chat(
+        "my-model",
+        [{"role": "system", "content": "S"}, {"role": "user", "content": "U"}],
+        stream=True,
+        timeout=5.0,
+        max_tokens=128,
+        temperature=0.0,
+    )
     call = [m for m in fake.sent if m.get("method") == "tools/call"][0]
     args = call["params"]["arguments"]
     assert call["params"]["name"] == "chat"

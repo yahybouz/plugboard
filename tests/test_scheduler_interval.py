@@ -1,5 +1,6 @@
 """Refresh interval of the pricing and model-availability schedulers
 (default 6 hours; 0 = daily at the configured hour)."""
+
 from __future__ import annotations
 
 from plugboard.model_availability import ModelAvailabilityScheduler

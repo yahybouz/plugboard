@@ -232,11 +232,14 @@ class TestRunJobNotFound:
         assert "not found" in result["error"]
 
 
-
-
 class _FakeScheduler:
     def __init__(self, **status):
-        self.status = {"disabled": False, "refresh_interval_h": 6, "running_since": None, **status}
+        self.status = {
+            "disabled": False,
+            "refresh_interval_h": 6,
+            "running_since": None,
+            **status,
+        }
         self.running_since = self.status["running_since"]
         self.runs = []
 
@@ -291,7 +294,9 @@ class TestInProcessJobs:
     @pytest.mark.anyio
     async def test_run_now_while_running_does_not_start_twice(self) -> None:
         state = _State()
-        state.model_availability_scheduler = _FakeScheduler(running_since="2026-10-18T10:00:00+00:00")
+        state.model_availability_scheduler = _FakeScheduler(
+            running_since="2026-10-18T10:00:00+00:00"
+        )
         result = await jobs.run_job("model_refresh", state)
         assert result["status"] == "running"
         assert state.model_availability_scheduler.runs == []

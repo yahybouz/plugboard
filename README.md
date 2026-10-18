@@ -20,7 +20,7 @@
   <img src="docs/assets/screenshots/showcase.jpg" alt="Live routing view: client keys, the Plugboard hub and every connected provider, with real requests shown as pulses" width="900">
 </p>
 
-Point any OpenAI-compatible client at `http://localhost:8765/v1`, give it a `pb_` key, and Plugboard routes the request to the provider behind the model you picked: an API key (OpenAI, Anthropic, Google, GitHub Models), a local Ollama, any OpenAI-compatible server, or a subscription you are already logged into through an official CLI. Every call is metered per client and checked against that client's limits.
+Plugboard is a standalone service: it runs on its own host, independent of the applications that use it, and owns the provider credentials, the routing and the bills. Your providers live in one place: API keys (OpenAI, Anthropic, Google, GitHub Models), a local Ollama, any OpenAI-compatible server, or subscriptions you are already logged into through an official CLI. Each consumer (an application, a script, an agent, an MCP client) gets its own `pb_` key and talks to one endpoint, `http://<host>:8765/v1`, in the OpenAI format, so no consumer embeds a vendor key or vendor code. Every call is metered per key and checked against that consumer's limits.
 
 Python 3.12 · FastAPI · no external database (JSON files and SQLite under `data/`) · MIT licensed.
 

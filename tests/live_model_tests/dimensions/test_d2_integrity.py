@@ -63,7 +63,9 @@ def test_detect_unknown_difference_is_explicit_mismatch():
 def test_detect_mojibake_covers_cjk_and_emoji():
     """Council C4 BLOCKER-2: round-trip detection catches 3/4-byte corruption
     (em-dash, 日本語, 🎯), not just 2-byte Latin."""
-    accepted, err, extra = _detect_utf8_corruption(_UTF8_PAYLOAD_MOJIBAKE, _UTF8_PAYLOAD)
+    accepted, err, extra = _detect_utf8_corruption(
+        _UTF8_PAYLOAD_MOJIBAKE, _UTF8_PAYLOAD
+    )
     assert accepted is False
     assert err == "utf8_corrupted:mojibake"
 
@@ -400,7 +402,12 @@ def test_fail_echo_in_reasoning_only():
 
 
 def test_fail_content_filtered():
-    resp = {"content": "", "reasoning": "", "finish_reason": "content_filter", "done_received": True}
+    resp = {
+        "content": "",
+        "reasoning": "",
+        "finish_reason": "content_filter",
+        "done_received": True,
+    }
     r = _verdict_from_response(
         model_id="m",
         surface="api",
@@ -451,7 +458,9 @@ class _FakeSurfaceClient:
         self.calls = []
 
     def chat(self, *, model, messages, stream, timeout, max_tokens, temperature):
-        self.calls.append({"model": model, "messages": messages, "max_tokens": max_tokens})
+        self.calls.append(
+            {"model": model, "messages": messages, "max_tokens": max_tokens}
+        )
         text = messages[0]["content"] if messages else ""
         m = re.search(r'"echo":\s*"([^"]+)"', text)
         nonce = m.group(1) if m else ""

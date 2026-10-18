@@ -77,17 +77,24 @@ def default_surface_factory(surface_name: str, base_url: str, api_key: str) -> A
         return ApiSurfaceClient(base_url=base_url, api_key=api_key)
     if surface_name == "mcp":
         # The MCP server reads PLUGBOARD_URL / PLUGBOARD_API_KEY from its env.
-        return McpSurfaceClient(env={"PLUGBOARD_URL": base_url, "PLUGBOARD_API_KEY": api_key})
+        return McpSurfaceClient(
+            env={"PLUGBOARD_URL": base_url, "PLUGBOARD_API_KEY": api_key}
+        )
     if surface_name == "ui":
         # Playwright drives the Playground; auto-login on localhost. supports_billing
         # is False (D6 skip) and raw_sse_lines is None (D5 skip) — see ui_client.
         return UiSurfaceClient(base_url=base_url, api_key=api_key)
-    raise NotImplementedError(f"Surface '{surface_name}' not recognised: {surface_name!r}")
+    raise NotImplementedError(
+        f"Surface '{surface_name}' not recognised: {surface_name!r}"
+    )
 
 
 # ── Dimension dispatch (resolves heterogeneous run_dX signatures) ────────────
 
-def _make_dispatch(aliases, pricing_resolver, tolerance_pct) -> Dict[str, Callable[..., Any]]:
+
+def _make_dispatch(
+    aliases, pricing_resolver, tolerance_pct
+) -> Dict[str, Callable[..., Any]]:
     def _d3(**kw):
         return run_d3_internet(now=None, **kw)
 
@@ -95,8 +102,9 @@ def _make_dispatch(aliases, pricing_resolver, tolerance_pct) -> Dict[str, Callab
         return run_d4_identity(aliases=aliases, **kw)
 
     def _d6(**kw):
-        return run_d6_cost_accuracy(pricing_resolver=pricing_resolver,
-                                    tolerance_pct=tolerance_pct, **kw)
+        return run_d6_cost_accuracy(
+            pricing_resolver=pricing_resolver, tolerance_pct=tolerance_pct, **kw
+        )
 
     return {
         "d1": lambda **kw: run_d1_liveness(**kw),
@@ -114,6 +122,7 @@ def _dim_config_key(dim_key: str) -> str:
 
 # ── Pure aggregation (no I/O — fully testable) ───────────────────────────────
 
+
 def _severity_rank(severity: Optional[str]) -> int:
     # None / unknown ranks 0 so it never beats a real severity in a max scan.
     # The MAJOR default for fieldless results is applied at the read site.
@@ -130,7 +139,9 @@ def _is_excluded(result: Any) -> bool:
     return bool(getattr(result, "excluded_from_threshold", False))
 
 
-def aggregate(results: List[Any], eval_config: Dict[str, Any], dim_key: str) -> Dict[str, Any]:
+def aggregate(
+    results: List[Any], eval_config: Dict[str, Any], dim_key: str
+) -> Dict[str, Any]:
     dim_config = eval_config.get("dimensions", {}).get(_dim_config_key(dim_key), {})
     threshold = float(dim_config.get("pass_threshold", 1.0))
 
@@ -139,9 +150,15 @@ def aggregate(results: List[Any], eval_config: Dict[str, Any], dim_key: str) -> 
 
     if not denominator:
         return {
-            "pass_rate": None, "dimension_pass": True, "dimension_severity": None,
-            "total": len(results), "denominator": 0, "passed": 0,
-            "skipped": len(excluded), "failed_results": [], "status": "skipped",
+            "pass_rate": None,
+            "dimension_pass": True,
+            "dimension_severity": None,
+            "total": len(results),
+            "denominator": 0,
+            "passed": 0,
+            "skipped": len(excluded),
+            "failed_results": [],
+            "status": "skipped",
             "threshold": threshold,
         }
 
@@ -157,11 +174,16 @@ def aggregate(results: List[Any], eval_config: Dict[str, Any], dim_key: str) -> 
 
     dimension_pass = pass_rate >= threshold
     return {
-        "pass_rate": pass_rate, "dimension_pass": dimension_pass,
+        "pass_rate": pass_rate,
+        "dimension_pass": dimension_pass,
         "dimension_severity": max_severity if not dimension_pass else None,
-        "total": len(results), "denominator": len(denominator), "passed": passed_count,
-        "skipped": len(excluded), "failed_results": failed,
-        "status": "pass" if dimension_pass else "fail", "threshold": threshold,
+        "total": len(results),
+        "denominator": len(denominator),
+        "passed": passed_count,
+        "skipped": len(excluded),
+        "failed_results": failed,
+        "status": "pass" if dimension_pass else "fail",
+        "threshold": threshold,
     }
 
 
@@ -190,10 +212,14 @@ def check_cross_surface_agreement(
             continue
         verdicts = list(surface_verdicts.values())
         if not all(v == verdicts[0] for v in verdicts):
-            disagreements.append({
-                "model_id": model_id, "dim": dim,
-                "surface_verdicts": surface_verdicts, "severity": severity_on_disagreement,
-            })
+            disagreements.append(
+                {
+                    "model_id": model_id,
+                    "dim": dim,
+                    "surface_verdicts": surface_verdicts,
+                    "severity": severity_on_disagreement,
+                }
+            )
     return disagreements
 
 
@@ -201,10 +227,14 @@ def compute_verdict(
     dim_aggregates: Dict[str, Dict[str, Any]],
     cross_surface_disagreements: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    failing_dims = [dim for dim, agg in dim_aggregates.items() if agg["status"] == "fail"]
+    failing_dims = [
+        dim for dim, agg in dim_aggregates.items() if agg["status"] == "fail"
+    ]
     # INTENTIONAL (Council C10 MAJOR-2): a fully-skipped dimension does NOT block
     # the GO (every model may be legitimately quarantined), but it is surfaced.
-    skipped_dims = [dim for dim, agg in dim_aggregates.items() if agg["status"] == "skipped"]
+    skipped_dims = [
+        dim for dim, agg in dim_aggregates.items() if agg["status"] == "skipped"
+    ]
 
     max_severity: Optional[str] = None
     for dim in failing_dims:
@@ -228,7 +258,10 @@ def compute_verdict(
 
 # ── Serialization ─────────────────────────────────────────────────────────────
 
-def _result_to_dict(result: Any, *, surface: str, dim: str, run_id: str) -> Dict[str, Any]:
+
+def _result_to_dict(
+    result: Any, *, surface: str, dim: str, run_id: str
+) -> Dict[str, Any]:
     d = dataclasses.asdict(result)
     d["_dim"] = dim
     d["_surface"] = surface
@@ -248,6 +281,7 @@ def write_jsonl(path: Path, records: List[Dict[str, Any]]) -> None:
 
 
 # ── Loading ───────────────────────────────────────────────────────────────────
+
 
 def load_catalog(path: Path = _CATALOG_PATH) -> Dict[str, Any]:
     with path.open(encoding="utf-8") as fh:
@@ -272,6 +306,7 @@ def load_quarantine_ids(path: Path = _QUARANTINE_PATH) -> Set[str]:
 
 
 # ── Core runner (injectable for tests) ───────────────────────────────────────
+
 
 def run(
     *,
@@ -298,7 +333,9 @@ def run(
     quarantine_ids = load_quarantine_ids(quarantine_path)
     aliases = catalog.get("aliases", {})
     tolerance_pct = float(
-        eval_config.get("dimensions", {}).get("d6_cost_accuracy", {}).get("tolerance_pct", 0.05)
+        eval_config.get("dimensions", {})
+        .get("d6_cost_accuracy", {})
+        .get("tolerance_pct", 0.05)
     )
     catalog_entries = {m["id"]: m for m in catalog.get("models", [])}
 
@@ -306,7 +343,10 @@ def run(
         selected_models = [m for m in model_ids if m in catalog_entries]
         unknown = set(model_ids) - set(catalog_entries)
         if unknown and verbose:
-            print(f"[WARN] models not in catalog (ignored): {sorted(unknown)}", file=sys.stderr)
+            print(
+                f"[WARN] models not in catalog (ignored): {sorted(unknown)}",
+                file=sys.stderr,
+            )
     else:
         selected_models = list(catalog_entries)
 
@@ -333,19 +373,28 @@ def run(
             allowed = dim_cfg.get("surfaces")
             if allowed and surface_name not in allowed:
                 if verbose:
-                    print(f"  [{dim}] not allowed on {surface_name} — skip", file=sys.stderr)
+                    print(
+                        f"  [{dim}] not allowed on {surface_name} — skip",
+                        file=sys.stderr,
+                    )
                 continue
 
             runner = dispatch[dim]
             dim_results: Dict[str, Any] = {}
             for model_id in selected_models:
                 result = runner(
-                    model_id=model_id, surface_client=client,
+                    model_id=model_id,
+                    surface_client=client,
                     catalog_entry=catalog_entries[model_id],
-                    quarantine_ids=quarantine_ids, clock=time.monotonic,
+                    quarantine_ids=quarantine_ids,
+                    clock=time.monotonic,
                 )
                 dim_results[model_id] = result
-                all_records.append(_result_to_dict(result, surface=surface_name, dim=dim, run_id=run_id))
+                all_records.append(
+                    _result_to_dict(
+                        result, surface=surface_name, dim=dim, run_id=run_id
+                    )
+                )
                 if verbose:
                     status = "PASS" if result.passed else f"FAIL({result.error_type})"
                     print(f"  [{dim}] {model_id} {status}", file=sys.stderr)
@@ -366,7 +415,8 @@ def run(
         _DIM_CONFIG_TO_SHORT.get(d, d) for d in excluded_dims_yaml
     }  # Council C10 MAJOR-1 — inverse map, not split("_")
     disagreements = check_cross_surface_agreement(
-        results_by_surface_dim_model, excluded_dimensions=excluded_short,
+        results_by_surface_dim_model,
+        excluded_dimensions=excluded_short,
         severity_on_disagreement=cross_cfg.get("severity_on_disagreement", "MAJOR"),
     )
 
@@ -392,7 +442,10 @@ def run(
     alerting_config = eval_config.get("alerting", {})
     if alerting_config.get("enabled", False):
         from tests.live_model_tests.reports.alerting import build_alerts, send_alerts
-        send_reports = send_alerts(build_alerts(summary, alerting_config), alerting_config)
+
+        send_reports = send_alerts(
+            build_alerts(summary, alerting_config), alerting_config
+        )
         summary["alert_reports"] = send_reports
         if verbose:
             for rep in send_reports:
@@ -412,21 +465,38 @@ def _print_summary(summary: Dict[str, Any]) -> None:
         rate = agg.get("pass_rate")
         rate_str = f"{rate:.1%}" if rate is not None else "N/A"
         sev = agg.get("dimension_severity") or ""
-        print(f"  {key:<30} {agg.get('status', '?').upper():<8} {rate_str:>6} {sev}", file=sys.stderr)
+        print(
+            f"  {key:<30} {agg.get('status', '?').upper():<8} {rate_str:>6} {sev}",
+            file=sys.stderr,
+        )
     for d in summary.get("cross_surface_disagreements", []):
-        print(f"  CROSS-SURFACE: {d['model_id']} {d['dim']} {d['surface_verdicts']}", file=sys.stderr)
+        print(
+            f"  CROSS-SURFACE: {d['model_id']} {d['dim']} {d['surface_verdicts']}",
+            file=sys.stderr,
+        )
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
+
 def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run Plugboard live tests.")
     p.add_argument("--surface", default="api", help="api,mcp,ui (default: api)")
-    p.add_argument("--dimensions", default=",".join(ALL_DIMENSIONS), help="d1,...,d6 (default: all)")
+    p.add_argument(
+        "--dimensions",
+        default=",".join(ALL_DIMENSIONS),
+        help="d1,...,d6 (default: all)",
+    )
     p.add_argument("--models", default="", help="model IDs (default: all in catalog)")
-    p.add_argument("--base-url", default=os.environ.get("PLUGBOARD_BASE_URL", "http://localhost:8765"))
-    p.add_argument("--api-key", default=os.environ.get("PLUGBOARD_API_KEY", ""),
-                   help="prefer the PLUGBOARD_API_KEY env var (CLI key is visible in ps)")
+    p.add_argument(
+        "--base-url",
+        default=os.environ.get("PLUGBOARD_BASE_URL", "http://localhost:8765"),
+    )
+    p.add_argument(
+        "--api-key",
+        default=os.environ.get("PLUGBOARD_API_KEY", ""),
+        help="prefer the PLUGBOARD_API_KEY env var (CLI key is visible in ps)",
+    )
     p.add_argument("--out", default=str(_DEFAULT_OUT_DIR))
     p.add_argument("--quiet", action="store_true")
     return p.parse_args(argv)
@@ -438,8 +508,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     dimensions = [d.strip() for d in args.dimensions.split(",") if d.strip()]
     model_ids = [m.strip() for m in args.models.split(",") if m.strip()] or None
     exit_code, _ = run(
-        surfaces=surfaces, dimensions=dimensions, model_ids=model_ids,
-        base_url=args.base_url, api_key=args.api_key, out_dir=Path(args.out),
+        surfaces=surfaces,
+        dimensions=dimensions,
+        model_ids=model_ids,
+        base_url=args.base_url,
+        api_key=args.api_key,
+        out_dir=Path(args.out),
         verbose=not args.quiet,
     )
     return exit_code

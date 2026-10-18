@@ -1,6 +1,7 @@
 """C1 (2026-06-01) — dynamic Claude whitelist: N latest (major,minor) per family,
 parsed from discovered ids, replacing the old hardcoded version pins so a new
 Opus/Sonnet/Haiku release surfaces with zero code edit."""
+
 from __future__ import annotations
 
 from plugboard.router import (
@@ -10,10 +11,18 @@ from plugboard.router import (
 )
 
 _DISCOVERED = [
-    "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-opus-4-5",
-    "claude-opus-4-1", "claude-opus-4-0", "claude-opus-4-20250514",
-    "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-3-7-sonnet",
-    "claude-haiku-4-5", "claude-haiku-4-5-20251001",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-opus-4-5",
+    "claude-opus-4-1",
+    "claude-opus-4-0",
+    "claude-opus-4-20250514",
+    "claude-sonnet-4-6",
+    "claude-sonnet-4-5",
+    "claude-3-7-sonnet",
+    "claude-haiku-4-5",
+    "claude-haiku-4-5-20251001",
 ]
 
 
@@ -71,7 +80,9 @@ def test_future_opus_4_9_would_surface_automatically():
 def test_is_whitelisted_uses_precomputed_set():
     allowed = {"claude-opus-4-8", "claude-opus-4-7"}
     assert _is_whitelisted_model({"id": "claude-code:claude-opus-4-8"}, allowed) is True
-    assert _is_whitelisted_model({"id": "claude-code:claude-opus-4-6"}, allowed) is False
+    assert (
+        _is_whitelisted_model({"id": "claude-code:claude-opus-4-6"}, allowed) is False
+    )
     # non-claude provider untouched by the claude set
     assert _is_whitelisted_model({"id": "ollama:minimax-m3:cloud"}, allowed) is True
 

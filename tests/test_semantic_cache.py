@@ -174,9 +174,7 @@ def test_purge_expired_removes_row(sem_mod, monkeypatch):
     assert sem_mod.get_stats()["entries"] == 2
 
     real_time = _time.time
-    monkeypatch.setattr(
-        "plugboard.semantic_cache.time.time", lambda: real_time() + 10
-    )
+    monkeypatch.setattr("plugboard.semantic_cache.time.time", lambda: real_time() + 10)
 
     deleted = sem_mod.purge_expired()
     assert deleted == 1, "exactly one expired row should be removed"

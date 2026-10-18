@@ -70,11 +70,11 @@ async def emit(event: str, data: Dict[str, Any]) -> int:
         "Content-Type": "application/json",
         "X-Plugboard-Event": event,
         # Pre-rename names, kept for existing receivers (deprecated).
-        "X-LLM-" "Enabler-Event": event,
+        "X-LLM-Enabler-Event": event,
     }
     if signature:
         headers["X-Plugboard-Signature"] = f"sha256={signature}"
-        headers["X-LLM-" "Enabler-Signature"] = f"sha256={signature}"
+        headers["X-LLM-Enabler-Signature"] = f"sha256={signature}"
 
     delivered = 0
     async with aiohttp.ClientSession() as session:

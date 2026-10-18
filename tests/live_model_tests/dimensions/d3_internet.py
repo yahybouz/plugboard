@@ -107,7 +107,7 @@ class InternetResult:
 
     # Ground truth + observation (for the scorecard).
     expected_internet: Optional[bool] = None  # None when ground truth is unknown
-    observed_status: Optional[str] = None      # "online" | "offline"
+    observed_status: Optional[str] = None  # "online" | "offline"
     observed_confidence: Optional[str] = None  # "high" | "medium" | "low"
     date_today_present: bool = False
     weekday_present: bool = False
@@ -197,13 +197,30 @@ def _verdict_from_unified(
 
     # ── Terminal transport-ish ───────────────────────────────────────────────
     if not done_received and not content and not reasoning:
-        return InternetResult(passed=False, error_type="stream_truncated", finding_severity="MAJOR", **base)
+        return InternetResult(
+            passed=False,
+            error_type="stream_truncated",
+            finding_severity="MAJOR",
+            **base,
+        )
     if finish_reason == "content_filter":
-        return InternetResult(passed=False, error_type="content_filtered", finding_severity="MAJOR", **base)
+        return InternetResult(
+            passed=False,
+            error_type="content_filtered",
+            finding_severity="MAJOR",
+            **base,
+        )
     if finish_reason in _BAD_FINISH_REASONS:
-        return InternetResult(passed=False, error_type="bad_finish_reason", finding_severity="MAJOR", **base)
+        return InternetResult(
+            passed=False,
+            error_type="bad_finish_reason",
+            finding_severity="MAJOR",
+            **base,
+        )
     if not content and not reasoning:
-        return InternetResult(passed=False, error_type="empty_response", finding_severity="MAJOR", **base)
+        return InternetResult(
+            passed=False, error_type="empty_response", finding_severity="MAJOR", **base
+        )
 
     payload = _adapt_to_probe_shape(unified)
     primary = evaluate_probe_response(payload, now=now, ignore_reasoning=True)
@@ -213,12 +230,17 @@ def _verdict_from_unified(
         # Date in CONTENT but safeguards missing → genuinely ambiguous, retry.
         if primary.date_today_present:
             return InternetResult(
-                passed=False, error_type="probe_inconclusive", finding_severity="MAJOR", **base
+                passed=False,
+                error_type="probe_inconclusive",
+                finding_severity="MAJOR",
+                **base,
             )
         # No date in content, but reasoning revealed it → ambiguous read,
         # excluded from threshold (Council C5 BLOCKER-1 §extra).
         if reasoning:
-            secondary = evaluate_probe_response(payload, now=now, ignore_reasoning=False)
+            secondary = evaluate_probe_response(
+                payload, now=now, ignore_reasoning=False
+            )
             if secondary.status == "online":
                 return InternetResult(
                     passed=False,
@@ -294,7 +316,9 @@ def run_d3_internet(
         )
 
     # 3. Unknown ground truth → observe only, out of denominator
-    expected_internet = _normalize_expected_internet(catalog_entry.get("expected_internet"))
+    expected_internet = _normalize_expected_internet(
+        catalog_entry.get("expected_internet")
+    )
     if expected_internet is None:
         # Still probe once so the scorecard can show what was observed.
         return _observe_only(
@@ -438,7 +462,9 @@ def _observe_only(
             expected_internet=None,
         )
     total_latency_ms = (clock() - t0) * 1000.0
-    probe = evaluate_probe_response(_adapt_to_probe_shape(raw), now=now, ignore_reasoning=True)
+    probe = evaluate_probe_response(
+        _adapt_to_probe_shape(raw), now=now, ignore_reasoning=True
+    )
     return InternetResult(
         model_id=model_id,
         surface=surface_name,

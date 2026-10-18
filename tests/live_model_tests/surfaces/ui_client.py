@@ -80,6 +80,7 @@ _TRUNCATION_PREFIX = "⚠️ Réponse tronquée avant le contenu"  # "⚠️ Ré
 
 # ── Exceptions ────────────────────────────────────────────────────────────────
 
+
 class UiSurfaceError(Exception):
     """``error_type`` is consumed by dimension run_dX handlers (like
     ApiSurfaceError / McpSurfaceError)."""
@@ -93,7 +94,9 @@ class UiModelUnavailable(UiSurfaceError):
     """The requested model is not offered by the Playground dropdown."""
 
     def __init__(self, model: str) -> None:
-        super().__init__("ui_model_unavailable", f"model {model!r} not in Playground dropdown")
+        super().__init__(
+            "ui_model_unavailable", f"model {model!r} not in Playground dropdown"
+        )
 
 
 class UiTransportError(UiSurfaceError):
@@ -105,12 +108,13 @@ class UiTransportError(UiSurfaceError):
 
 # ── Driver contracts ──────────────────────────────────────────────────────────
 
+
 @dataclass(frozen=True)
 class BubbleRead:
     """What the client needs to read off the final assistant bubble."""
 
     text: str
-    content_empty: bool          # from data-content-empty="1"
+    content_empty: bool  # from data-content-empty="1"
     finish_reason: Optional[str]  # from data-finish-reason
 
 
@@ -118,8 +122,8 @@ class BubbleRead:
 class TurnRead:
     """Result of one Playground turn (driver → client)."""
 
-    status_state: str            # "done" | "error"
-    status_text: str             # human status line (for error classification)
+    status_state: str  # "done" | "error"
+    status_text: str  # human status line (for error classification)
     bubble: BubbleRead
 
 
@@ -151,11 +155,14 @@ class UiDriver(Protocol):
 
 # ── Helpers (pure — unit-tested directly) ─────────────────────────────────────
 
+
 def _extract_user_message(messages: List[Dict[str, Any]]) -> str:
     """The Playground has a single text box — use the last user message. A
     system message cannot be expressed in the UI (no field); it is dropped
     (documented limitation). No live dimension currently sends a system role."""
-    user = next((m for m in reversed(messages) if (m.get("role") or "").lower() == "user"), None)
+    user = next(
+        (m for m in reversed(messages) if (m.get("role") or "").lower() == "user"), None
+    )
     if user is None:
         raise ValueError("UiSurfaceClient.chat requires at least one user message")
     return user.get("content") or ""
@@ -220,19 +227,20 @@ def _resolve_content(bubble: BubbleRead) -> tuple[str, Optional[str]]:
 def _unified(content: str, finish_reason: Optional[str]) -> Dict[str, Any]:
     return {
         "content": content,
-        "reasoning": "",              # decision 3 — UI does not scrape the panel
+        "reasoning": "",  # decision 3 — UI does not scrape the panel
         "finish_reason": finish_reason,
         "first_token_latency_ms": None,  # DOM timing is unreliable; not measured
-        "done_received": True,         # the turn reached a terminal "done" state
+        "done_received": True,  # the turn reached a terminal "done" state
         "raw_chunks": [],
-        "raw_sse_lines": None,         # not a streaming-wire surface → D5 skips
-        "billing": None,              # supports_billing=False → D6 skips
-        "model_echoed": None,          # response.model not exposed to the DOM
-        "request_id": None,            # X-Request-ID not exposed to the DOM
+        "raw_sse_lines": None,  # not a streaming-wire surface → D5 skips
+        "billing": None,  # supports_billing=False → D6 skips
+        "model_echoed": None,  # response.model not exposed to the DOM
+        "request_id": None,  # X-Request-ID not exposed to the DOM
     }
 
 
 # ── UiSurfaceClient ───────────────────────────────────────────────────────────
+
 
 class UiSurfaceClient:
     """Playground (browser) surface client. NOT thread-safe (one per worker)."""
@@ -290,7 +298,9 @@ class UiSurfaceClient:
                 self._driver.close()
             except Exception:  # noqa: BLE001
                 pass
-            self._owned_driver = False  # idempotent: don't re-close via __del__ (C9 MINOR-4)
+            self._owned_driver = (
+                False  # idempotent: don't re-close via __del__ (C9 MINOR-4)
+            )
 
     def __del__(self) -> None:
         self.close()
@@ -383,16 +393,25 @@ class PlaywrightUiDriver:
         context = self._browser.new_context()
         page = context.new_page()
         try:
-            page.goto(self._base_url, wait_until="domcontentloaded",
-                      timeout=self._remaining_ms(deadline))
+            page.goto(
+                self._base_url,
+                wait_until="domcontentloaded",
+                timeout=self._remaining_ms(deadline),
+            )
             # Auto-login on localhost makes #app visible (app.js removes .hidden).
-            page.wait_for_selector("#app:not(.hidden)", timeout=self._remaining_ms(deadline))
+            page.wait_for_selector(
+                "#app:not(.hidden)", timeout=self._remaining_ms(deadline)
+            )
             page.evaluate("location.hash = 'playground'")
-            page.wait_for_selector("#page-playground.active", timeout=self._remaining_ms(deadline))
+            page.wait_for_selector(
+                "#page-playground.active", timeout=self._remaining_ms(deadline)
+            )
 
             # Wait for the dropdown to be POPULATED first, so a slow /v1/models
             # load times out as a real timeout rather than a false unavailable.
-            page.wait_for_function(_MODELS_LOADED_JS, timeout=self._remaining_ms(deadline))
+            page.wait_for_function(
+                _MODELS_LOADED_JS, timeout=self._remaining_ms(deadline)
+            )
 
             # The dropdown shows provider-PREFIXED ids ("Codex:gpt-5.4"); the
             # catalog/API use the bare id ("gpt-5.4"). Resolve before selecting —
@@ -406,8 +425,11 @@ class PlaywrightUiDriver:
             if resolved is None:
                 raise UiModelUnavailable(model)
             try:
-                page.select_option('[data-testid="pg-model"]', value=resolved,
-                                   timeout=min(self._remaining_ms(deadline), 5000))
+                page.select_option(
+                    '[data-testid="pg-model"]',
+                    value=resolved,
+                    timeout=min(self._remaining_ms(deadline), 5000),
+                )
             except PWTimeoutError as exc:
                 raise UiModelUnavailable(model) from exc
 
@@ -427,21 +449,29 @@ class PlaywrightUiDriver:
 
             # Wait for the turn to terminate (done|error).
             try:
-                page.wait_for_function(_WAIT_DONE_JS, timeout=self._remaining_ms(deadline))
+                page.wait_for_function(
+                    _WAIT_DONE_JS, timeout=self._remaining_ms(deadline)
+                )
             except PWTimeoutError as exc:
-                raise TimeoutError(f"UI turn did not finish within deadline: {exc}") from exc
+                raise TimeoutError(
+                    f"UI turn did not finish within deadline: {exc}"
+                ) from exc
 
             status_el = page.query_selector('[data-testid="pg-status"]')
-            status_state = (status_el.get_attribute("data-state") or "") if status_el else ""
+            status_state = (
+                (status_el.get_attribute("data-state") or "") if status_el else ""
+            )
             status_text = (status_el.text_content() or "") if status_el else ""
 
             if status_state == "error":
                 # The bubble is unread on the error path (chat() raises on it), so
                 # use an empty BubbleRead — never pass status text as "content"
                 # (Council C9 NIT-1).
-                return TurnRead(status_state="error", status_text=status_text,
-                                bubble=BubbleRead(text="", content_empty=False,
-                                                  finish_reason=None))
+                return TurnRead(
+                    status_state="error",
+                    status_text=status_text,
+                    bubble=BubbleRead(text="", content_empty=False, finish_reason=None),
+                )
 
             bubbles = page.query_selector_all(
                 '[data-testid="message-bubble"][data-role="assistant"]'

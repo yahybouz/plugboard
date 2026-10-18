@@ -805,8 +805,6 @@ async def refresh_native_provider_models(provider: Dict[str, Any]) -> Dict[str, 
     }
 
 
-
-
 def _refresh_state_path() -> Path:
     return data_dir() / "catalog" / "refresh_state.json"
 
@@ -820,7 +818,9 @@ def _read_refresh_state() -> Dict[str, str]:
     return data if isinstance(data, dict) else {}
 
 
-def _cli_due(provider_id: str, state: Dict[str, str], now: datetime, hours: int) -> bool:
+def _cli_due(
+    provider_id: str, state: Dict[str, str], now: datetime, hours: int
+) -> bool:
     last = state.get(provider_id)
     if not last:
         return True
@@ -850,7 +850,9 @@ async def discover_openai_models(
         from plugboard.http_pool import get_session
 
         session = await get_session()
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=20)) as resp:
+        async with session.get(
+            url, headers=headers, timeout=aiohttp.ClientTimeout(total=20)
+        ) as resp:
             if resp.status != 200:
                 return None, f"GET /models returned HTTP {resp.status}"
             body = await resp.json(content_type=None)
@@ -859,12 +861,16 @@ async def discover_openai_models(
     data = body.get("data") if isinstance(body, dict) else None
     if not isinstance(data, list):
         return None, "GET /models did not answer in the OpenAI format"
-    ids = [m["id"] for m in data if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"]]
+    ids = [
+        m["id"]
+        for m in data
+        if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"]
+    ]
     preset = str(provider.get("preset_key") or "")
     if preset.startswith("catalog-"):
         from plugboard import models_dev
 
-        cat = models_dev.load_catalog().get(preset[len("catalog-"):])
+        cat = models_dev.load_catalog().get(preset[len("catalog-") :])
         if cat is not None:
             excluded = set(models_dev.excluded_models(cat))
             ids = [m for m in ids if m not in excluded]
@@ -873,7 +879,9 @@ async def discover_openai_models(
     return _model_entries(list(dict.fromkeys(ids))), ""
 
 
-def _family_pruned(models: List[Dict[str, Any]], used_models: Set[str], default_models: Set[str]) -> List[str]:
+def _family_pruned(
+    models: List[Dict[str, Any]], used_models: Set[str], default_models: Set[str]
+) -> List[str]:
     """Models the exposure policy hides (see ``model_exposure``).
 
     In ``latest`` mode, an unused, non-default model whose version is not among
@@ -890,7 +898,11 @@ def _family_pruned(models: List[Dict[str, Any]], used_models: Set[str], default_
             protected.add(mid)
     pruned = model_exposure.hidden_ids(ids, protected)
     for mid in pruned:
-        log.info("Hiding %s: older than the %d newest versions of its family", mid, model_exposure.versions())
+        log.info(
+            "Hiding %s: older than the %d newest versions of its family",
+            mid,
+            model_exposure.versions(),
+        )
     return pruned
 
 
@@ -920,7 +932,9 @@ async def refresh_all_model_catalogs(
 
     used_models = get_all_used_models()
     all_providers = load_providers()
-    default_models = {str(p["default_model"]) for p in all_providers if p.get("default_model")}
+    default_models = {
+        str(p["default_model"]) for p in all_providers if p.get("default_model")
+    }
     now = datetime.now(timezone.utc)
     from plugboard.intervals import cli_refresh_interval_h
 
@@ -939,7 +953,11 @@ async def refresh_all_model_catalogs(
         pid = str(provider.get("id"))
         auth_source = provider.get("auth_source", "") or ""
         is_cli = _is_cli_provider(provider)
-        if is_cli and pass_kind != "manual" and not _cli_due(pid, refresh_state, now, cli_hours):
+        if (
+            is_cli
+            and pass_kind != "manual"
+            and not _cli_due(pid, refresh_state, now, cli_hours)
+        ):
             continue
         if auth_source.startswith("subprocess:"):
             report = await refresh_subprocess_provider_models(
@@ -968,7 +986,11 @@ async def refresh_all_model_catalogs(
         # Family pruning keeps its original scope: CLI and native catalogs.
         # Reseller lists (auto_discover) are only trimmed by the absence rule.
         prunable = report.get("kind") != "openai"
-        pruned = _family_pruned(models, used_models, default_models) if models and prunable else []
+        pruned = (
+            _family_pruned(models, used_models, default_models)
+            if models and prunable
+            else []
+        )
         diff = model_diff.apply(
             pid,
             models or None,
@@ -985,11 +1007,16 @@ async def refresh_all_model_catalogs(
         if diff.changed or diff.pending_removal or diff.error:
             changes[pid] = diff.as_dict()
         if diff.changed and not diff.first_population:
-            batch.add("models.changed", {"provider": pid, "added": diff.added, "removed": diff.removed})
+            batch.add(
+                "models.changed",
+                {"provider": pid, "added": diff.added, "removed": diff.removed},
+            )
     if state_changed:
         try:
             _refresh_state_path().parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_text(_refresh_state_path(), json.dumps(refresh_state, indent=2))
+            atomic_write_text(
+                _refresh_state_path(), json.dumps(refresh_state, indent=2)
+            )
         except OSError as exc:
             log.warning("Cannot write %s: %s", _refresh_state_path(), exc)
     if persisted:
@@ -1114,7 +1141,9 @@ class ModelAvailabilityScheduler:
             last = datetime.fromisoformat(self.started_at)
         else:
             last = datetime.fromisoformat(self.last_success_at)
-        return (self._now() - last).total_seconds() > stale_after_s(self.refresh_interval_h)
+        return (self._now() - last).total_seconds() > stale_after_s(
+            self.refresh_interval_h
+        )
 
     async def run_now(self, kind: str = "manual") -> None:
         """Run one refresh now; raises RuntimeError while another one runs."""
@@ -1206,7 +1235,12 @@ class ModelAvailabilityScheduler:
         # One run at a time: a scheduled tick that finds a manual run in
         # progress (or the reverse) is skipped rather than run alongside it.
         if self._run_lock.locked():
-            log.info("%s %s skipped: another run started at %s", type(self).__name__, kind, self.running_since)
+            log.info(
+                "%s %s skipped: another run started at %s",
+                type(self).__name__,
+                kind,
+                self.running_since,
+            )
             return
         async with self._run_lock:
             self.running_since = self._now().isoformat()

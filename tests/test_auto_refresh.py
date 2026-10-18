@@ -67,7 +67,10 @@ async def refresh(payload=None, status=200):
 
 
 def listing(models):
-    return {"object": "list", "data": [{"id": m["id"], "object": "model"} for m in models]}
+    return {
+        "object": "list",
+        "data": [{"id": m["id"], "object": "model"} for m in models],
+    }
 
 
 # -- generic HTTP discovery and the diff ------------------------------------------------
@@ -78,7 +81,12 @@ async def test_new_model_is_added_and_announced(http_provider, sent):
     report = await refresh(listing(ids(6)))
     assert stored_ids() == NAMES[:6]
     assert report["last_changes"]["providers"]["reseller"]["added"] == ["foxtrot"]
-    assert sent == [("models.changed", {"provider": "reseller", "added": ["foxtrot"], "removed": []})]
+    assert sent == [
+        (
+            "models.changed",
+            {"provider": "reseller", "added": ["foxtrot"], "removed": []},
+        )
+    ]
     [line] = change_events.read_journal()
     assert line["event"] == "models.changed" and line["added"] == ["foxtrot"]
 
@@ -112,13 +120,17 @@ async def test_removed_after_two_absences_even_across_restarts(http_provider, se
     without_m4 = listing(ids(4))
     first = await refresh(without_m4)
     assert "echo" in stored_ids()
-    assert first["last_changes"]["providers"]["reseller"]["pending_removal"] == {"echo": 1}
+    assert first["last_changes"]["providers"]["reseller"]["pending_removal"] == {
+        "echo": 1
+    }
     assert sent == []
     # The absence count is on disk: a restart between passes does not reset it.
     second = await refresh(without_m4)
     assert "echo" not in stored_ids()
     assert second["last_changes"]["providers"]["reseller"]["removed"] == ["echo"]
-    assert sent == [("models.changed", {"provider": "reseller", "added": [], "removed": ["echo"]})]
+    assert sent == [
+        ("models.changed", {"provider": "reseller", "added": [], "removed": ["echo"]})
+    ]
 
 
 @pytest.mark.asyncio
@@ -133,8 +145,13 @@ async def test_reappearing_model_resets_its_count(http_provider):
 async def test_default_and_pinned_are_never_removed(tmp_path, monkeypatch, sent):
     monkeypatch.setattr("plugboard.usage.get_all_used_models", lambda: set())
     provider = {
-        "id": "reseller", "is_active": True, "base_url": BASE, "auto_discover": True,
-        "default_model": "alpha", "pinned_models": ["bravo"], "models": ids(4),
+        "id": "reseller",
+        "is_active": True,
+        "base_url": BASE,
+        "auto_discover": True,
+        "default_model": "alpha",
+        "pinned_models": ["bravo"],
+        "models": ids(4),
     }
     _setup_providers(tmp_path, monkeypatch, [provider])
     keep = listing([{"id": "charlie"}, {"id": "delta"}, {"id": "hotel"}])
@@ -146,9 +163,13 @@ async def test_default_and_pinned_are_never_removed(tmp_path, monkeypatch, sent)
 @pytest.mark.asyncio
 async def test_auto_discover_false_is_left_alone(tmp_path, monkeypatch, sent):
     monkeypatch.setattr("plugboard.usage.get_all_used_models", lambda: set())
-    _setup_providers(tmp_path, monkeypatch, [
-        {"id": "reseller", "is_active": True, "base_url": BASE, "models": ids(2)},
-    ])
+    _setup_providers(
+        tmp_path,
+        monkeypatch,
+        [
+            {"id": "reseller", "is_active": True, "base_url": BASE, "models": ids(2)},
+        ],
+    )
     with aioresponses():  # any request would fail: none is registered
         report = await ma.refresh_all_model_catalogs()
     assert report["providers"] == [] and stored_ids() == ["alpha", "bravo"]
@@ -157,9 +178,18 @@ async def test_auto_discover_false_is_left_alone(tmp_path, monkeypatch, sent):
 @pytest.mark.asyncio
 async def test_first_population_is_silent(tmp_path, monkeypatch, sent):
     monkeypatch.setattr("plugboard.usage.get_all_used_models", lambda: set())
-    _setup_providers(tmp_path, monkeypatch, [
-        {"id": "reseller", "is_active": True, "base_url": BASE, "auto_discover": True},
-    ])
+    _setup_providers(
+        tmp_path,
+        monkeypatch,
+        [
+            {
+                "id": "reseller",
+                "is_active": True,
+                "base_url": BASE,
+                "auto_discover": True,
+            },
+        ],
+    )
     await refresh(listing(ids(3)))
     assert stored_ids() == ["alpha", "bravo", "charlie"]
     assert sent == [] and change_events.read_journal() == []
@@ -187,7 +217,9 @@ def test_manual_mode_removes_at_once(http_provider):
 
 
 def test_dry_run_writes_nothing(http_provider):
-    result = model_diff.apply("reseller", ids(4) + [{"id": "new"}], "manual", dry_run=True)
+    result = model_diff.apply(
+        "reseller", ids(4) + [{"id": "new"}], "manual", dry_run=True
+    )
     assert result.removed == ["echo"] and result.added == ["new"]
     assert stored_ids() == NAMES[:5]
 
@@ -234,28 +266,55 @@ async def test_pricing_changed_pending_once_and_applied(tmp_path, monkeypatch, s
 
     monkeypatch.setattr(pricing_scraper, "_fetch_litellm_pricing", _none)
     month = billing.current_pricing_month()
-    (d / f"{month}.json").write_text(json.dumps({"models": {
-        "m": {"input_price": 2, "output_price": 8, "source": "models_dev"},
-        "small": {"input_price": 1, "output_price": 4, "source": "models_dev"},
-    }}))
-    monkeypatch.setattr(pricing_scraper, "_models_dev_pricing", lambda: ({
-        "m": {"input_price": 4, "output_price": 16},        # +100%: held
-        "small": {"input_price": 1.1, "output_price": 4},   # +10%: applied silently
-        "fresh": {"input_price": 1, "output_price": 1},     # first price: silent
-    }, {}))
+    (d / f"{month}.json").write_text(
+        json.dumps(
+            {
+                "models": {
+                    "m": {"input_price": 2, "output_price": 8, "source": "models_dev"},
+                    "small": {
+                        "input_price": 1,
+                        "output_price": 4,
+                        "source": "models_dev",
+                    },
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(
+        pricing_scraper,
+        "_models_dev_pricing",
+        lambda: (
+            {
+                "m": {"input_price": 4, "output_price": 16},  # +100%: held
+                "small": {
+                    "input_price": 1.1,
+                    "output_price": 4,
+                },  # +10%: applied silently
+                "fresh": {"input_price": 1, "output_price": 1},  # first price: silent
+            },
+            {},
+        ),
+    )
     await pricing_scraper.update_current_pricing()
     await pricing_scraper.update_current_pricing()  # same proposal: not announced again
     await change_events.drain()
     events = [data for event, data in sent if event == "pricing.changed"]
     assert len(events) == 1
-    assert events[0]["model"] == "m" and events[0]["status"] == "pending" and events[0]["pct"] == 100.0
+    assert (
+        events[0]["model"] == "m"
+        and events[0]["status"] == "pending"
+        and events[0]["pct"] == 100.0
+    )
 
     [item] = pricing_suggestions.list_suggestions()
     from plugboard import app as app_mod
 
     await app_mod._suggestion_action(item["id"], "apply")
     await change_events.drain()
-    assert [d["status"] for e, d in sent if e == "pricing.changed"] == ["pending", "applied"]
+    assert [d["status"] for e, d in sent if e == "pricing.changed"] == [
+        "pending",
+        "applied",
+    ]
 
 
 # -- scheduler status and manual run --------------------------------------------------------
@@ -277,7 +336,13 @@ async def test_auto_update_run_refuses_while_running(client):
         assert resp.json()["running_since"] == Busy.running_since
         status = await client.get("/admin/auto-update/status", headers=AUTH)
         assert status.status_code == 200
-        assert {"pricing", "models", "catalog", "pending_suggestions", "recent_changes"} <= set(status.json())
+        assert {
+            "pricing",
+            "models",
+            "catalog",
+            "pending_suggestions",
+            "recent_changes",
+        } <= set(status.json())
     finally:
         app.state.pricing_scheduler = previous
 
@@ -304,11 +369,22 @@ def test_scheduler_staleness(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cli_provider_refreshed_once_per_cli_interval(tmp_path, monkeypatch, sent):
+async def test_cli_provider_refreshed_once_per_cli_interval(
+    tmp_path, monkeypatch, sent
+):
     monkeypatch.setattr("plugboard.usage.get_all_used_models", lambda: set())
-    _setup_providers(tmp_path, monkeypatch, [
-        {"id": "cli", "is_active": True, "auth_source": "subprocess:gemini", "models": ids(1)},
-    ])
+    _setup_providers(
+        tmp_path,
+        monkeypatch,
+        [
+            {
+                "id": "cli",
+                "is_active": True,
+                "auth_source": "subprocess:gemini",
+                "models": ids(1),
+            },
+        ],
+    )
     calls = []
 
     async def fake_subprocess(provider, **kwargs):
@@ -326,27 +402,41 @@ async def test_cli_provider_refreshed_once_per_cli_interval(tmp_path, monkeypatc
 @pytest.mark.asyncio
 async def test_provider_form_fields_are_saved(client, _providers_file):
     resp = await client.put(
-        "/providers/test-provider", headers=AUTH,
+        "/providers/test-provider",
+        headers=AUTH,
         json={"auto_discover": True, "pinned_models": ["fake:model-v1"]},
     )
     assert resp.status_code == 200, resp.text
     stored = config.get_provider("test-provider")
-    assert stored["auto_discover"] is True and stored["pinned_models"] == ["fake:model-v1"]
-    bad = await client.put("/providers/test-provider", headers=AUTH, json={"pinned_models": [""]})
+    assert stored["auto_discover"] is True and stored["pinned_models"] == [
+        "fake:model-v1"
+    ]
+    bad = await client.put(
+        "/providers/test-provider", headers=AUTH, json={"pinned_models": [""]}
+    )
     assert bad.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_manual_discover_preview_then_apply(client, _providers_file, sent):
     payload = {"object": "list", "data": [{"id": "fake:model-v1"}, {"id": "fake:new"}]}
-    config.update_provider("test-provider", {"models": [{"id": "fake:model-v1"}, {"id": "fake:old"}]})
+    config.update_provider(
+        "test-provider", {"models": [{"id": "fake:model-v1"}, {"id": "fake:old"}]}
+    )
     with aioresponses() as mock:
         mock.get("http://fake-llm.test/v1/models", payload=payload, repeat=True)
-        preview = await client.post("/providers/test-provider/discover?dry_run=true", headers=AUTH)
-        assert preview.json()["removed"] == ["fake:old"] and preview.json()["added"] == ["fake:new"]
+        preview = await client.post(
+            "/providers/test-provider/discover?dry_run=true", headers=AUTH
+        )
+        assert preview.json()["removed"] == ["fake:old"] and preview.json()[
+            "added"
+        ] == ["fake:new"]
         assert stored_ids("test-provider") == ["fake:model-v1", "fake:old"]
         applied = await client.post("/providers/test-provider/discover", headers=AUTH)
     await change_events.drain()
     assert applied.json()["removed"] == ["fake:old"]
     assert stored_ids("test-provider") == ["fake:model-v1", "fake:new"]
-    assert ("models.changed", {"provider": "test-provider", "added": ["fake:new"], "removed": ["fake:old"]}) in sent
+    assert (
+        "models.changed",
+        {"provider": "test-provider", "added": ["fake:new"], "removed": ["fake:old"]},
+    ) in sent

@@ -144,7 +144,9 @@ def apply(
         result.error = "discovery returned no valid model list; nothing changed"
         return result
     pruned_set = set(pruned)
-    by_id = {e["id"]: e for e in (discovered or []) if isinstance(e, dict) and e.get("id")}
+    by_id = {
+        e["id"]: e for e in (discovered or []) if isinstance(e, dict) and e.get("id")
+    }
     passes = removal_passes()
 
     with _lock(_state_path()):
@@ -154,7 +156,9 @@ def apply(
         def change(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             current = _ids(record.get("models") or [])
             current_by_id = {
-                e["id"]: e for e in (record.get("models") or []) if isinstance(e, dict) and e.get("id")
+                e["id"]: e
+                for e in (record.get("models") or [])
+                if isinstance(e, dict) and e.get("id")
             }
             protected = set(record.get("pinned_models") or [])
             default = default_model or record.get("default_model") or ""
@@ -192,14 +196,23 @@ def apply(
             for mid in new_ids:
                 absences.pop(mid, None)
             final_ids = [m for m in new_ids if m not in pruned_set or m in protected]
-            final_ids += [m for m in keep_missing if m not in pruned_set or m in protected]
+            final_ids += [
+                m for m in keep_missing if m not in pruned_set or m in protected
+            ]
             for mid in current:
-                if mid in pruned_set and mid not in protected and mid not in result.removed:
+                if (
+                    mid in pruned_set
+                    and mid not in protected
+                    and mid not in result.removed
+                ):
                     result.removed.append(mid)
             current_set = set(current)
             if not first:
                 result.added = [m for m in final_ids if m not in current_set]
-            final = [_entry(m, by_id) if m in by_id else _entry(m, current_by_id) for m in final_ids]
+            final = [
+                _entry(m, by_id) if m in by_id else _entry(m, current_by_id)
+                for m in final_ids
+            ]
             updates: Dict[str, Any] = {}
             if final_ids != current:
                 updates["models"] = final

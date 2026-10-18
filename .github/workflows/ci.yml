@@ -42,9 +42,6 @@ jobs:
         run: ruff check plugboard/ tests/
 
       - name: Format check (ruff)
-        # Reported but not blocking until the existing files are reformatted
-        # (`make format`); the pre-commit hook formats new changes.
-        continue-on-error: true
         run: ruff format --check plugboard/ tests/
 
       - name: Test + coverage

@@ -83,7 +83,11 @@ def _short_time(value: Any) -> Optional[str]:
     if not value:
         return None
     try:
-        return datetime.fromisoformat(str(value)).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        return (
+            datetime.fromisoformat(str(value))
+            .astimezone(timezone.utc)
+            .strftime("%Y-%m-%d %H:%M UTC")
+        )
     except ValueError:
         return str(value)
 
@@ -116,21 +120,35 @@ def get_jobs_status(app_state: Any = None) -> List[Dict[str, Any]]:
     result = []
     for job_id, job in _JOBS.items():
         if job.get("continuous"):
-            result.append({
-                "id": job_id, "name": job["name"], "description": job["description"],
-                "schedule": "continuous (every 30 s)", "next_run": "continuous",
-                "last_run": None, "last_status": _watchdog_state(),
-            })
+            result.append(
+                {
+                    "id": job_id,
+                    "name": job["name"],
+                    "description": job["description"],
+                    "schedule": "continuous (every 30 s)",
+                    "next_run": "continuous",
+                    "last_run": None,
+                    "last_status": _watchdog_state(),
+                }
+            )
             continue
         sched = _scheduler(job, app_state)
         status = _status(sched) if sched is not None else {"disabled": True}
-        result.append({
-            "id": job_id, "name": job["name"], "description": job["description"],
-            "schedule": _schedule_label(status) if sched is not None else "not started",
-            "next_run": _next_run(status),
-            "last_run": _short_time(status.get("last_run_at") or status.get("last_success_at")),
-            "last_status": _scheduler_state(status),
-        })
+        result.append(
+            {
+                "id": job_id,
+                "name": job["name"],
+                "description": job["description"],
+                "schedule": _schedule_label(status)
+                if sched is not None
+                else "not started",
+                "next_run": _next_run(status),
+                "last_run": _short_time(
+                    status.get("last_run_at") or status.get("last_success_at")
+                ),
+                "last_status": _scheduler_state(status),
+            }
+        )
     return result
 
 
@@ -157,7 +175,7 @@ def get_job_log(job_id: str, lines: int = 50, app_state: Any = None) -> Dict[str
         "id": job_id,
         "name": job["name"],
         "status": status,
-        "output": "\n".join(output_lines[-max(1, lines):]),
+        "output": "\n".join(output_lines[-max(1, lines) :]),
         "lines_total": len(output_lines),
     }
 
@@ -169,15 +187,26 @@ async def run_job(job_id: str, app_state: Any = None) -> Dict[str, Any]:
         return {"error": f"Job '{job_id}' not found"}
     if job.get("continuous"):
         return {
-            "id": job_id, "name": job["name"], "status": "error",
+            "id": job_id,
+            "name": job["name"],
+            "status": "error",
             "error": f"'{job['name']}' runs continuously; it cannot be started by hand.",
         }
     sched = _scheduler(job, app_state)
     if sched is None:
-        return {"id": job_id, "name": job["name"], "status": "error", "error": "scheduler not started"}
+        return {
+            "id": job_id,
+            "name": job["name"],
+            "status": "error",
+            "error": "scheduler not started",
+        }
     if getattr(sched, "running_since", None):
-        return {"id": job_id, "name": job["name"], "status": "running",
-                "output": f"Already running since {sched.running_since}."}
+        return {
+            "id": job_id,
+            "name": job["name"],
+            "status": "running",
+            "output": f"Already running since {sched.running_since}.",
+        }
 
     async def _run() -> None:
         try:
@@ -191,5 +220,9 @@ async def run_job(job_id: str, app_state: Any = None) -> Dict[str, Any]:
     _manual_runs.add(task)
     task.add_done_callback(_manual_runs.discard)
     log.info("Job %s started by hand", job_id)
-    return {"id": job_id, "name": job["name"], "status": "started",
-            "output": "Started in the background. Refresh this page to see the result."}
+    return {
+        "id": job_id,
+        "name": job["name"],
+        "status": "started",
+        "output": "Started in the background. Refresh this page to see the result.",
+    }

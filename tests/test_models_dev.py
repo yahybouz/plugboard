@@ -84,12 +84,19 @@ async def test_refresh_stores_catalog_and_etag(catalog_env, raw):
     assert result["state"] == "updated"
     assert "acme" in models_dev.load_catalog()
     assert models_dev.status()["state"] == "ok"
-    assert json.loads((catalog_env / "catalog" / "models_dev.meta.json").read_text())["etag"] == '"v1"'
+    assert (
+        json.loads((catalog_env / "catalog" / "models_dev.meta.json").read_text())[
+            "etag"
+        ]
+        == '"v1"'
+    )
 
 
 async def test_refresh_304_keeps_copy(catalog_env, raw):
     _store(catalog_env, raw)
-    (catalog_env / "catalog" / "models_dev.meta.json").write_text(json.dumps({"etag": '"v1"'}))
+    (catalog_env / "catalog" / "models_dev.meta.json").write_text(
+        json.dumps({"etag": '"v1"'})
+    )
     with aioresponses() as m:
         m.get(URL, status=304)
         result = await models_dev.refresh_catalog()
@@ -158,7 +165,13 @@ def test_generated_presets(catalog_env, raw):
     assert presets["catalog-acme"]["base_url"] == "https://api.acme.test/v1"
     # A model routed through another SDK is excluded.
     assert presets["catalog-acme"]["known_models"] == ["acme-1"]
-    for key in ("catalog-anthropic", "catalog-templated", "catalog-private", "catalog-plainhttp", "catalog-onlyanthropic"):
+    for key in (
+        "catalog-anthropic",
+        "catalog-templated",
+        "catalog-private",
+        "catalog-plainhttp",
+        "catalog-onlyanthropic",
+    ):
         assert key not in presets
     assert all(":" not in key for key in presets)
     assert presets["catalog-acme"]["verified"] is False
@@ -199,7 +212,9 @@ def test_list_presets_hides_catalog_duplicate_of_builtin(catalog_env, raw):
     assert keys.index("anthropic") < keys.index("catalog-acme")
 
 
-def test_create_from_catalog_preset_freezes_base_url(catalog_env, raw, tmp_path, monkeypatch):
+def test_create_from_catalog_preset_freezes_base_url(
+    catalog_env, raw, tmp_path, monkeypatch
+):
     from tests.conftest import _setup_providers
     from plugboard.config import get_provider
     from plugboard.direct_providers import create_from_preset
@@ -222,12 +237,30 @@ def test_create_from_catalog_preset_freezes_base_url(catalog_env, raw, tmp_path,
     "base, url",
     [
         ("https://api.openai.com/v1", "https://api.openai.com/v1/chat/completions"),
-        ("https://generativelanguage.googleapis.com/v1beta/openai", "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"),
-        ("https://api.groq.com/openai/v1/", "https://api.groq.com/openai/v1/chat/completions"),
-        ("https://x.openai.azure.com/openai", "https://x.openai.azure.com/openai/v1/chat/completions"),
-        ("https://gw.example/v2proxy", "https://gw.example/v2proxy/v1/chat/completions"),
-        ("https://api.upstage.ai/v1/solar", "https://api.upstage.ai/v1/solar/chat/completions"),
-        ("https://api.z.ai/api/paas/v4", "https://api.z.ai/api/paas/v4/chat/completions"),
+        (
+            "https://generativelanguage.googleapis.com/v1beta/openai",
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        ),
+        (
+            "https://api.groq.com/openai/v1/",
+            "https://api.groq.com/openai/v1/chat/completions",
+        ),
+        (
+            "https://x.openai.azure.com/openai",
+            "https://x.openai.azure.com/openai/v1/chat/completions",
+        ),
+        (
+            "https://gw.example/v2proxy",
+            "https://gw.example/v2proxy/v1/chat/completions",
+        ),
+        (
+            "https://api.upstage.ai/v1/solar",
+            "https://api.upstage.ai/v1/solar/chat/completions",
+        ),
+        (
+            "https://api.z.ai/api/paas/v4",
+            "https://api.z.ai/api/paas/v4/chat/completions",
+        ),
         ("http://localhost:18789", "http://localhost:18789/v1/chat/completions"),
     ],
 )
@@ -288,7 +321,9 @@ async def test_catalog_failure_does_not_open_pricing_breaker(tmp_path):
     async def catalog():
         raise RuntimeError("catalog down")
 
-    sched = PricingScheduler(update_fn=update, catalog_fn=catalog, cb_state_file=tmp_path / "cb.json")
+    sched = PricingScheduler(
+        update_fn=update, catalog_fn=catalog, cb_state_file=tmp_path / "cb.json"
+    )
     await sched._invoke_update("daily")
     assert sched.status_dict["cb_consecutive_failures"] == 0
 
@@ -300,7 +335,9 @@ async def test_catalog_failure_does_not_open_pricing_breaker(tmp_path):
         ("http://bare.test", "http://bare.test/v1/chat/completions"),
     ],
 )
-async def test_forward_does_not_double_the_version(tmp_path, monkeypatch, base, expected):
+async def test_forward_does_not_double_the_version(
+    tmp_path, monkeypatch, base, expected
+):
     # Value: protects=requests to presets whose base_url ends in /v1 (OpenAI,
     # Groq, catalog presets) reach .../v1/chat/completions; fails_when=the
     # router concatenates "/v1/chat/completions" again; why_new=the old router
@@ -312,12 +349,25 @@ async def test_forward_does_not_double_the_version(tmp_path, monkeypatch, base, 
     _setup_providers(
         tmp_path,
         monkeypatch,
-        [{"id": "p", "name": "P", "base_url": base, "bearer_token": "k", "default_model": "m",
-          "is_active": True, "provider_type": "cloud", "timeout": 30.0, "created_at": "2026-01-01T00:00:00+00:00"}],
+        [
+            {
+                "id": "p",
+                "name": "P",
+                "base_url": base,
+                "bearer_token": "k",
+                "default_model": "m",
+                "is_active": True,
+                "provider_type": "cloud",
+                "timeout": 30.0,
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+        ],
     )
     with aioresponses() as m:
         m.post(expected, payload=FAKE_COMPLETION)
-        result = await forward({"model": "p:m", "messages": [{"role": "user", "content": "hi"}]})
+        result = await forward(
+            {"model": "p:m", "messages": [{"role": "user", "content": "hi"}]}
+        )
     assert result
 
 
@@ -328,7 +378,9 @@ async def test_catalog_preset_on_a_private_address_is_refused(monkeypatch):
     from plugboard import llm_pricing
 
     async def private(host, port):
-        raise llm_pricing.UnsafeURL(f"{host} resolves to a non-public address (10.0.0.5)")
+        raise llm_pricing.UnsafeURL(
+            f"{host} resolves to a non-public address (10.0.0.5)"
+        )
 
     monkeypatch.setattr(llm_pricing, "_resolve_public", private)
     with pytest.raises(HTTPException) as exc:

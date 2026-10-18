@@ -48,14 +48,18 @@ GRID = {
 def test_two_prices_for_one_model():
     vendor = billing.resolve_model_price("openai/gpt-4o", GRID)
     via_openrouter = billing.resolve_model_price(
-        "openai/gpt-4o", GRID, provider={"id": "or-1", "preset_key": "catalog-openrouter"}
+        "openai/gpt-4o",
+        GRID,
+        provider={"id": "or-1", "preset_key": "catalog-openrouter"},
     )
     assert vendor == p(2.5, 10)
     assert via_openrouter == p(3.0, 12)
 
 
 def test_provider_id_space_and_preset_order():
-    assert billing.resolve_model_price("gpt-4o", GRID, provider="my-provider") == p(1, 4)
+    assert billing.resolve_model_price("gpt-4o", GRID, provider="my-provider") == p(
+        1, 4
+    )
     spaces = billing.provider_spaces({"id": "x", "preset_key": "catalog-openrouter"})
     assert spaces == ["catalog-openrouter", "openrouter", "x"]
 
@@ -64,20 +68,29 @@ def test_suffix_match_never_crosses_spaces():
     # `vendor/claude-sonnet-4-6` would suffix-match nothing in the openrouter
     # space; it must fall through to the vendor price, not to another space.
     price = billing.resolve_model_price(
-        "anthropic/claude-sonnet-4-6", GRID, provider={"preset_key": "catalog-openrouter"}
+        "anthropic/claude-sonnet-4-6",
+        GRID,
+        provider={"preset_key": "catalog-openrouter"},
     )
     assert price == p(3, 15)
 
 
 def test_model_id_with_at_sign():
-    grid = {"models": {}, "models_by_provider": {"deepinfra": {"org/model@v2": p(0.5, 1)}}}
-    assert billing.resolve_model_price("org/model@v2", grid, provider="deepinfra") == p(0.5, 1)
+    grid = {
+        "models": {},
+        "models_by_provider": {"deepinfra": {"org/model@v2": p(0.5, 1)}},
+    }
+    assert billing.resolve_model_price("org/model@v2", grid, provider="deepinfra") == p(
+        0.5, 1
+    )
     assert billing.resolve_model_price("org/model@v2", grid) != p(0.5, 1)
 
 
 def test_resolution_matches_previous_semantics():
     grid = {"models": {"claude-sonnet-4-6": p(3, 15), "claude-opus-4-1": p(15, 75)}}
-    assert billing.resolve_model_price("openclaw/anthropic--claude-sonnet-4-6", grid) == p(3, 15)
+    assert billing.resolve_model_price(
+        "openclaw/anthropic--claude-sonnet-4-6", grid
+    ) == p(3, 15)
     assert billing.resolve_model_price("claude-opus-4-1-20250805", grid) == p(15, 75)
     assert billing.resolve_model_price("claude-sonnet-4.6", grid) == p(3, 15)
 
@@ -87,7 +100,9 @@ def test_ten_thousand_keys_lookup_stays_fast(pricing_dir):
     models = {f"vendor-{i}/model-{i}-large": p(1, 2) for i in range(10_000)}
     models["claude-sonnet-4-6"] = p(3, 15)
     write_grid(pricing_dir, month, {"models": models})
-    billing.resolve_price("openclaw/anthropic--claude-sonnet-4-6", month)  # warm the cache
+    billing.resolve_price(
+        "openclaw/anthropic--claude-sonnet-4-6", month
+    )  # warm the cache
     t0 = time.perf_counter()
     for _ in range(100):
         match = billing.resolve_price("openclaw/anthropic--claude-sonnet-4-6", month)
@@ -113,16 +128,26 @@ def test_negative_cache_clears_when_grid_changes(pricing_dir):
     write_grid(pricing_dir, month, {"models": {"zz-unknown-model": p(1, 1)}})
     st = path.stat()
     os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
-    assert billing.resolve_price("zz-unknown-model", month, max_months_back=1).entry == p(1, 1)
+    assert billing.resolve_price(
+        "zz-unknown-model", month, max_months_back=1
+    ).entry == p(1, 1)
 
 
 def test_price_match_reports_key_and_source(pricing_dir):
     month = billing.current_pricing_month()
-    write_grid(pricing_dir, month, {
-        "models": {"gpt-4o": p(2.5, 10, source="models_dev")},
-        "models_by_provider": {"openrouter": {"openai/gpt-4o": p(3, 12, source="provider_native")}},
-    })
-    match = billing.resolve_price("openai/gpt-4o", month, provider={"preset_key": "catalog-openrouter"})
+    write_grid(
+        pricing_dir,
+        month,
+        {
+            "models": {"gpt-4o": p(2.5, 10, source="models_dev")},
+            "models_by_provider": {
+                "openrouter": {"openai/gpt-4o": p(3, 12, source="provider_native")}
+            },
+        },
+    )
+    match = billing.resolve_price(
+        "openai/gpt-4o", month, provider={"preset_key": "catalog-openrouter"}
+    )
     assert match.price_key == "openrouter|openai/gpt-4o"
     assert match.source == "provider_native"
     assert billing.resolve_price("openai/gpt-4o", month).price_key == "gpt-4o"
@@ -173,8 +198,17 @@ def test_usage_stores_price_key_and_migrates_old_db(tmp_path, monkeypatch):
     conn.close()
     monkeypatch.setattr(usage, "_DATA_DIR", tmp_path)
     monkeypatch.setattr(usage, "_DB_PATH", db)
-    usage.append_usage("c", "openai/gpt-4o", "or-1", 10, 5, "2026_10", 0.1,
-                       price_key="openrouter|openai/gpt-4o", price_source="provider_native")
+    usage.append_usage(
+        "c",
+        "openai/gpt-4o",
+        "or-1",
+        10,
+        5,
+        "2026_10",
+        0.1,
+        price_key="openrouter|openai/gpt-4o",
+        price_source="provider_native",
+    )
     [row] = usage.get_usage(billing.current_pricing_month())
     assert row["price_key"] == "openrouter|openai/gpt-4o"
     assert row["price_source"] == "provider_native"
@@ -192,7 +226,11 @@ def refresh(pricing_dir, monkeypatch):
         return {}
 
     monkeypatch.setattr(pricing_scraper, "_fetch_litellm_pricing", _none)
-    for name in ("PLUGBOARD_PRICING_SOURCES", "PLUGBOARD_PRICE_DRIFT_ACTION", "PLUGBOARD_PRICE_DRIFT_PCT"):
+    for name in (
+        "PLUGBOARD_PRICING_SOURCES",
+        "PLUGBOARD_PRICE_DRIFT_ACTION",
+        "PLUGBOARD_PRICE_DRIFT_PCT",
+    ):
         monkeypatch.delenv(name, raising=False)
     return billing.current_pricing_month()
 
@@ -201,9 +239,13 @@ def refresh(pricing_dir, monkeypatch):
 async def test_reseller_price_kept_only_when_it_differs(refresh, monkeypatch):
     month = refresh
     vendor = {"gpt-4o": p(2.5, 10)}
-    resellers = {"openrouter": {"openai/gpt-4o": p(2.5, 10), "openai/gpt-4o-mini": p(0.2, 0.8)},
-                 "deepinfra": {"gpt-4o": p(2.0, 8)}}
-    monkeypatch.setattr(pricing_scraper, "_models_dev_pricing", lambda: (vendor, resellers))
+    resellers = {
+        "openrouter": {"openai/gpt-4o": p(2.5, 10), "openai/gpt-4o-mini": p(0.2, 0.8)},
+        "deepinfra": {"gpt-4o": p(2.0, 8)},
+    }
+    monkeypatch.setattr(
+        pricing_scraper, "_models_dev_pricing", lambda: (vendor, resellers)
+    )
     result = await pricing_scraper.update_current_pricing()
     grid = billing.load_pricing(month)
     assert grid["models"]["gpt-4o"] == p(2.5, 10, source="models_dev")
@@ -217,37 +259,55 @@ async def test_reseller_price_kept_only_when_it_differs(refresh, monkeypatch):
 @pytest.mark.asyncio
 async def test_reseller_drift_is_queued_with_its_space(refresh, monkeypatch):
     month = refresh
-    write_grid(billing._PRICING_DIR, month, {
-        "models": {"gpt-4o": p(2.5, 10, source="models_dev")},
-        "models_by_provider": {"deepinfra": {"gpt-4o": p(2.0, 8, source="models_dev")}},
-    })
+    write_grid(
+        billing._PRICING_DIR,
+        month,
+        {
+            "models": {"gpt-4o": p(2.5, 10, source="models_dev")},
+            "models_by_provider": {
+                "deepinfra": {"gpt-4o": p(2.0, 8, source="models_dev")}
+            },
+        },
+    )
     monkeypatch.setattr(
-        pricing_scraper, "_models_dev_pricing",
+        pricing_scraper,
+        "_models_dev_pricing",
         lambda: ({"gpt-4o": p(2.5, 10)}, {"deepinfra": {"gpt-4o": p(4.0, 16)}}),
     )
     await pricing_scraper.update_current_pricing()
     [item] = pricing_suggestions.list_suggestions()
     assert item["space"] == "deepinfra" and item["price_key"] == "deepinfra|gpt-4o"
     pricing_suggestions.apply(item["id"])
-    assert billing.load_pricing(month)["models_by_provider"]["deepinfra"]["gpt-4o"]["input_price"] == 4.0
+    assert (
+        billing.load_pricing(month)["models_by_provider"]["deepinfra"]["gpt-4o"][
+            "input_price"
+        ]
+        == 4.0
+    )
 
 
 @pytest.mark.asyncio
 async def test_patch_and_revert_a_provider_price(client, refresh, monkeypatch):
     month = refresh
     monkeypatch.setattr(
-        pricing_scraper, "_models_dev_pricing",
+        pricing_scraper,
+        "_models_dev_pricing",
         lambda: ({"gpt-4o": p(2.5, 10)}, {"deepinfra": {"gpt-4o": p(2.0, 8)}}),
     )
     await pricing_scraper.update_current_pricing()
     resp = await client.patch(
-        f"/admin/pricing/{month}", headers=AUTH,
+        f"/admin/pricing/{month}",
+        headers=AUTH,
         json={"models_by_provider": {"deepinfra": {"gpt-4o": p(9, 9)}}},
     )
     assert resp.status_code == 200, resp.text
-    assert resp.json()["models_by_provider"]["deepinfra"]["gpt-4o"]["source"] == "manual"
+    assert (
+        resp.json()["models_by_provider"]["deepinfra"]["gpt-4o"]["source"] == "manual"
+    )
     reverted = await client.post(
-        f"/admin/pricing/{month}/revert", headers=AUTH, json={"model": "gpt-4o", "provider": "deepinfra"}
+        f"/admin/pricing/{month}/revert",
+        headers=AUTH,
+        json={"model": "gpt-4o", "provider": "deepinfra"},
     )
     assert reverted.status_code == 200, reverted.text
     assert reverted.json()["entry"] == p(2.0, 8, source="models_dev")
@@ -256,8 +316,14 @@ async def test_patch_and_revert_a_provider_price(client, refresh, monkeypatch):
 @pytest.mark.asyncio
 async def test_put_without_provider_prices_keeps_them(client, pricing_dir):
     month = billing.current_pricing_month()
-    write_grid(pricing_dir, month, {"models": {"a": p(1, 2)}, "models_by_provider": {"x": {"a": p(3, 4)}}})
-    resp = await client.put(f"/admin/pricing/{month}", headers=AUTH, json={"models": {"a": p(1, 2)}})
+    write_grid(
+        pricing_dir,
+        month,
+        {"models": {"a": p(1, 2)}, "models_by_provider": {"x": {"a": p(3, 4)}}},
+    )
+    resp = await client.put(
+        f"/admin/pricing/{month}", headers=AUTH, json={"models": {"a": p(1, 2)}}
+    )
     assert resp.json()["models_by_provider"] == {"x": {"a": p(3, 4)}}
 
 
@@ -269,23 +335,47 @@ def test_reconcile_reports_differences_per_client_and_provider(pricing_dir):
     from pathlib import Path
 
     spec = importlib.util.spec_from_file_location(
-        "billing_reconcile", Path(__file__).resolve().parent.parent / "scripts" / "billing_reconcile.py"
+        "billing_reconcile",
+        Path(__file__).resolve().parent.parent / "scripts" / "billing_reconcile.py",
     )
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
 
     month = "2026_09"
-    write_grid(pricing_dir, month, {
-        "models": {"gpt-4o": p(2.0, 8.0)},
-        "models_by_provider": {"openrouter": {"openai/gpt-4o": p(3.0, 12.0)}},
-    })
+    write_grid(
+        pricing_dir,
+        month,
+        {
+            "models": {"gpt-4o": p(2.0, 8.0)},
+            "models_by_provider": {"openrouter": {"openai/gpt-4o": p(3.0, 12.0)}},
+        },
+    )
     entries = [
-        {"client_id": "acme", "provider_id": "or-1", "model": "openai/gpt-4o", "month": month,
-         "pricing_month": month, "prompt_tokens": 1_000_000, "completion_tokens": 0, "cost_usd": 2.0},
-        {"client_id": "acme", "provider_id": "oa-1", "model": "gpt-4o", "month": month,
-         "pricing_month": month, "prompt_tokens": 1_000_000, "completion_tokens": 0, "cost_usd": 2.0},
+        {
+            "client_id": "acme",
+            "provider_id": "or-1",
+            "model": "openai/gpt-4o",
+            "month": month,
+            "pricing_month": month,
+            "prompt_tokens": 1_000_000,
+            "completion_tokens": 0,
+            "cost_usd": 2.0,
+        },
+        {
+            "client_id": "acme",
+            "provider_id": "oa-1",
+            "model": "gpt-4o",
+            "month": month,
+            "pricing_month": month,
+            "prompt_tokens": 1_000_000,
+            "completion_tokens": 0,
+            "cost_usd": 2.0,
+        },
     ]
-    providers = {"or-1": {"id": "or-1", "preset_key": "catalog-openrouter"}, "oa-1": {"id": "oa-1"}}
+    providers = {
+        "or-1": {"id": "or-1", "preset_key": "catalog-openrouter"},
+        "oa-1": {"id": "oa-1"},
+    }
     rows = {r["provider_id"]: r for r in mod.reconcile(entries, providers)}
     assert rows["or-1"]["before_usd"] == 2.0 and rows["or-1"]["after_usd"] == 3.0
     assert rows["or-1"]["diff_pct"] == 50.0

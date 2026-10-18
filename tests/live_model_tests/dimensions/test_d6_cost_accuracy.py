@@ -24,7 +24,16 @@ def _override_skip(monkeypatch):
     monkeypatch.setenv("PLUGBOARD_RUN_LIVE_TESTS", "0")
 
 
-def _billing(cost, *, pt=10, ct=5, cache_hit=False, billed_model="claude-opus-4-7", month="2026_05", provider="anthropic"):
+def _billing(
+    cost,
+    *,
+    pt=10,
+    ct=5,
+    cache_hit=False,
+    billed_model="claude-opus-4-7",
+    month="2026_05",
+    provider="anthropic",
+):
     return {
         "cost_usd": cost,
         "prompt_tokens": pt,
@@ -38,8 +47,14 @@ def _billing(cost, *, pt=10, ct=5, cache_hit=False, billed_model="claude-opus-4-
 
 def _verdict(billing, price=PRICE, tol=0.05):
     return _verdict_from_billing(
-        model_id="claude-opus-4-7", surface="api", billing=billing, price_entry=price,
-        tolerance_pct=tol, total_latency_ms=100.0, attempts=1, first_attempt_latency_ms=None,
+        model_id="claude-opus-4-7",
+        surface="api",
+        billing=billing,
+        price_entry=price,
+        tolerance_pct=tol,
+        total_latency_ms=100.0,
+        attempts=1,
+        first_attempt_latency_ms=None,
     )
 
 
@@ -73,18 +88,24 @@ def test_compare_both_zero_pass():
 
 def test_compare_expected_zero_got_positive_blocker():
     ok, et, sev = _compare_costs(0.0, 1.0e-4, 0.05)
-    assert not ok and et == "cost_mismatch:expected_zero_got_positive" and sev == "BLOCKER"
+    assert (
+        not ok and et == "cost_mismatch:expected_zero_got_positive" and sev == "BLOCKER"
+    )
 
 
 def test_compare_expected_positive_got_zero_blocker():
     ok, et, sev = _compare_costs(1.0e-4, 0.0, 0.05)
-    assert not ok and et == "cost_mismatch:expected_positive_got_zero" and sev == "BLOCKER"
+    assert (
+        not ok and et == "cost_mismatch:expected_positive_got_zero" and sev == "BLOCKER"
+    )
 
 
 def test_compare_micro_cost_uses_absolute_tolerance():
     """MAJOR-1: below COST_FLOOR, a 1-ULP offset must not be a 50% false MAJOR."""
     expected = 1.5e-8  # well below COST_FLOOR 1e-6
-    ok, et, _ = _compare_costs(expected, expected + 1e-8, 0.05)  # +66% relative, but tiny absolute
+    ok, et, _ = _compare_costs(
+        expected, expected + 1e-8, 0.05
+    )  # +66% relative, but tiny absolute
     assert ok and et == "cost_match"
 
 
@@ -171,8 +192,13 @@ ENT = {"timeout_s": 60, "surfaces": ["api", "mcp"], "is_thinking": False}
 def test_quarantine(monkeypatch):
     _override_skip(monkeypatch)
     client = _BillingSurface([])
-    r = run_d6_cost_accuracy(model_id="bad", surface_client=client, catalog_entry=ENT,
-                             quarantine_ids={"bad"}, pricing_resolver=lambda m, mo: PRICE)
+    r = run_d6_cost_accuracy(
+        model_id="bad",
+        surface_client=client,
+        catalog_entry=ENT,
+        quarantine_ids={"bad"},
+        pricing_resolver=lambda m, mo: PRICE,
+    )
     assert r.error_type == "skipped:quarantined"
     assert client.calls == []
 
@@ -181,8 +207,12 @@ def test_surface_billing_unavailable_excluded(monkeypatch):
     """BLOCKER-2: a non-billing surface (no supports_billing) is SKIPPED, not MAJOR."""
     _override_skip(monkeypatch)
     client = _NonBillingSurface(name="mcp")
-    r = run_d6_cost_accuracy(model_id="m", surface_client=client, catalog_entry=ENT,
-                             pricing_resolver=lambda mo, mn: PRICE)
+    r = run_d6_cost_accuracy(
+        model_id="m",
+        surface_client=client,
+        catalog_entry=ENT,
+        pricing_resolver=lambda mo, mn: PRICE,
+    )
     assert r.error_type == "skipped:surface_billing_unavailable"
     assert r.excluded_from_threshold is True
     assert client.calls == []
@@ -191,8 +221,12 @@ def test_surface_billing_unavailable_excluded(monkeypatch):
 def test_pass_first_attempt(monkeypatch):
     _override_skip(monkeypatch)
     client = _BillingSurface([{"content": "pong", "billing": _billing(EXPECTED)}])
-    r = run_d6_cost_accuracy(model_id="claude-opus-4-7", surface_client=client,
-                             catalog_entry=ENT, pricing_resolver=lambda m, mo: PRICE)
+    r = run_d6_cost_accuracy(
+        model_id="claude-opus-4-7",
+        surface_client=client,
+        catalog_entry=ENT,
+        pricing_resolver=lambda m, mo: PRICE,
+    )
     assert r.passed is True
     assert r.attempts == 1
 
@@ -209,8 +243,12 @@ def test_resolver_uses_billed_model_and_month(monkeypatch):
 
     billing = _billing(EXPECTED, billed_model="claude-sonnet-4-6", month="2026_05")
     client = _BillingSurface([{"content": "pong", "billing": billing}])
-    run_d6_cost_accuracy(model_id="claude-opus-4-7", surface_client=client,
-                         catalog_entry=ENT, pricing_resolver=resolver)
+    run_d6_cost_accuracy(
+        model_id="claude-opus-4-7",
+        surface_client=client,
+        catalog_entry=ENT,
+        pricing_resolver=resolver,
+    )
     assert captured["model"] == "claude-sonnet-4-6"  # routed model, not requested opus
     assert captured["month"] == "2026_05"
 
@@ -218,8 +256,12 @@ def test_resolver_uses_billed_model_and_month(monkeypatch):
 def test_mismatch_not_retried(monkeypatch):
     _override_skip(monkeypatch)
     client = _BillingSurface([{"content": "pong", "billing": _billing(EXPECTED * 2)}])
-    r = run_d6_cost_accuracy(model_id="claude-opus-4-7", surface_client=client,
-                             catalog_entry=ENT, pricing_resolver=lambda m, mo: PRICE)
+    r = run_d6_cost_accuracy(
+        model_id="claude-opus-4-7",
+        surface_client=client,
+        catalog_entry=ENT,
+        pricing_resolver=lambda m, mo: PRICE,
+    )
     assert r.error_type == "cost_mismatch:over"
     assert r.attempts == 1
     assert len(client.calls) == 1
@@ -228,6 +270,10 @@ def test_mismatch_not_retried(monkeypatch):
 def test_max_tokens_non_thinking(monkeypatch):
     _override_skip(monkeypatch)
     client = _BillingSurface([{"content": "pong", "billing": _billing(EXPECTED)}])
-    run_d6_cost_accuracy(model_id="claude-opus-4-7", surface_client=client,
-                         catalog_entry=ENT, pricing_resolver=lambda m, mo: PRICE)
+    run_d6_cost_accuracy(
+        model_id="claude-opus-4-7",
+        surface_client=client,
+        catalog_entry=ENT,
+        pricing_resolver=lambda m, mo: PRICE,
+    )
     assert client.calls[0]["max_tokens"] == 32

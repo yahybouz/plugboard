@@ -161,7 +161,11 @@ def test_nearest_price_strips_effort_suffix_and_prefers_provider_space():
 
 
 def test_nearest_price_keeps_ollama_tags():
-    grid = {"models": {"nemotron-3-nano:30b-cloud": {"input_price": 0.06, "output_price": 0.24}}}
+    grid = {
+        "models": {
+            "nemotron-3-nano:30b-cloud": {"input_price": 0.06, "output_price": 0.24}
+        }
+    }
     match = billing.nearest_price("nemotron-3-nano:31b-cloud", grid, [])
     assert match is not None and match.key == "nemotron-3-nano:31b-cloud"
 
@@ -286,7 +290,10 @@ def test_auth_header_carries_preset_extra_headers():
     [
         # Configured providers keep their own id (no vendor guess).
         ("anthropic-direct:claude-opus-5-5", "anthropic-direct:claude-opus-5-5"),
-        ("antigravity-via-agy-cli:gpt-oss-120b-medium", "antigravity-via-agy-cli:gpt-oss-120b-medium"),
+        (
+            "antigravity-via-agy-cli:gpt-oss-120b-medium",
+            "antigravity-via-agy-cli:gpt-oss-120b-medium",
+        ),
         ("openrouter:openai/gpt-6", "openrouter:openai/gpt-6"),
         # The historical aliases still apply to the providers they stand for.
         ("claude-via-claude-cli:claude-opus-5-5", "claude-code:claude-opus-5-5"),
@@ -308,11 +315,21 @@ async def test_cli_calls_are_recorded_in_metrics(tmp_path, monkeypatch):
     from plugboard import cli_subprocess, metrics, router
     from tests.conftest import _setup_providers
 
-    _setup_providers(tmp_path, monkeypatch, [{
-        "id": "agy-test", "name": "agy", "base_url": "subprocess://agy",
-        "auth_source": "subprocess:agy", "default_model": "m1",
-        "models": [{"id": "m1"}], "is_active": True,
-    }])
+    _setup_providers(
+        tmp_path,
+        monkeypatch,
+        [
+            {
+                "id": "agy-test",
+                "name": "agy",
+                "base_url": "subprocess://agy",
+                "auth_source": "subprocess:agy",
+                "default_model": "m1",
+                "models": [{"id": "m1"}],
+                "is_active": True,
+            }
+        ],
+    )
     monkeypatch.setattr(metrics, "_stats", {})
     calls = {"n": 0}
 
@@ -320,8 +337,10 @@ async def test_cli_calls_are_recorded_in_metrics(tmp_path, monkeypatch):
         calls["n"] += 1
         if calls["n"] == 3:
             raise RuntimeError("boom")
-        return {"choices": [{"message": {"role": "assistant", "content": "OK"}}],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}
+        return {
+            "choices": [{"message": {"role": "assistant", "content": "OK"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
 
     monkeypatch.setattr(cli_subprocess, "complete", fake_complete)
     body = {"model": "agy-test:m1", "messages": [{"role": "user", "content": "hi"}]}
@@ -340,16 +359,29 @@ def test_clean_alias_pins_the_cli_provider(tmp_path, monkeypatch):
     from tests.conftest import _setup_providers
 
     def cli(pid, kind):
-        return {"id": pid, "name": pid, "base_url": f"subprocess://{kind}",
-                "auth_source": f"subprocess:{kind}", "default_model": "m", "is_active": True}
+        return {
+            "id": pid,
+            "name": pid,
+            "base_url": f"subprocess://{kind}",
+            "auth_source": f"subprocess:{kind}",
+            "default_model": "m",
+            "is_active": True,
+        }
 
-    _setup_providers(tmp_path, monkeypatch, [
-        cli("claude-via-claude-cli", "claude"), cli("chatgpt-via-codex-cli", "codex"),
-    ])
+    _setup_providers(
+        tmp_path,
+        monkeypatch,
+        [
+            cli("claude-via-claude-cli", "claude"),
+            cli("chatgpt-via-codex-cli", "codex"),
+        ],
+    )
     found = router._resolve_all_providers("Codex:gpt-6-luna")
     assert [(p["id"], m) for p, m in found] == [("chatgpt-via-codex-cli", "gpt-6-luna")]
     found = router._resolve_all_providers("claude-code:claude-haiku-5-5")
-    assert [(p["id"], m) for p, m in found] == [("claude-via-claude-cli", "claude-haiku-5-5")]
+    assert [(p["id"], m) for p, m in found] == [
+        ("claude-via-claude-cli", "claude-haiku-5-5")
+    ]
 
 
 # ── Ollama: free by default, configurable cloud families ────────────────────
@@ -372,9 +404,21 @@ def test_parse_ollama_pricing_reads_peak_rows():
 
     prices = parse_ollama_pricing(OLLAMA_HTML)
     assert prices == {
-        "gemma4:cloud": {"input_price": 0.14, "output_price": 0.40, "cached_input_price": 0.05},
-        "gpt-oss:120b-cloud": {"input_price": 0.15, "output_price": 0.60, "cached_input_price": 0.014},
-        "nemotron-3-super:cloud": {"input_price": 0.015, "output_price": 0.60, "cached_input_price": 0.015},
+        "gemma4:cloud": {
+            "input_price": 0.14,
+            "output_price": 0.40,
+            "cached_input_price": 0.05,
+        },
+        "gpt-oss:120b-cloud": {
+            "input_price": 0.15,
+            "output_price": 0.60,
+            "cached_input_price": 0.014,
+        },
+        "nemotron-3-super:cloud": {
+            "input_price": 0.015,
+            "output_price": 0.60,
+            "cached_input_price": 0.015,
+        },
     }
     assert parse_ollama_pricing("<html>no table</html>") == {}
 
@@ -387,11 +431,27 @@ def test_ollama_models_use_ollama_grid(tmp_path, monkeypatch):
     monkeypatch.setattr(billing, "_builtin_match", lambda candidates: None)
     month = billing.current_pricing_month()
     grid = {
-        "models": {"gpt-oss-120b": {"input_price": 9.0, "output_price": 9.0, "source": "litellm"}},
-        "models_by_provider": {"ollama": {
-            "gpt-oss:120b-cloud": {"input_price": 0.15, "output_price": 0.60, "source": "provider_native"},
-            "gemma4:cloud": {"input_price": 0.14, "output_price": 0.40, "source": "provider_native"},
-        }},
+        "models": {
+            "gpt-oss-120b": {
+                "input_price": 9.0,
+                "output_price": 9.0,
+                "source": "litellm",
+            }
+        },
+        "models_by_provider": {
+            "ollama": {
+                "gpt-oss:120b-cloud": {
+                    "input_price": 0.15,
+                    "output_price": 0.60,
+                    "source": "provider_native",
+                },
+                "gemma4:cloud": {
+                    "input_price": 0.14,
+                    "output_price": 0.40,
+                    "source": "provider_native",
+                },
+            }
+        },
     }
     (tmp_path / f"{month}.json").write_text(json.dumps(grid))
     ollama = {"id": "ollama", "base_url": "http://localhost:11434/v1"}

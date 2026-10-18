@@ -516,7 +516,10 @@ PRESETS: Dict[str, Dict[str, Any]] = {
                 "command": "agy models",
                 "description": "Plugboard reads this list to know which models your account can use.",
             },
-            {"title": "Check below", "description": "Click 'Verify CLI' to create the provider."},
+            {
+                "title": "Check below",
+                "description": "Click 'Verify CLI' to create the provider.",
+            },
         ],
     },
     "gemini-cli-subprocess": {

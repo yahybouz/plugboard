@@ -236,5 +236,10 @@ async def test_scheduler_jobs_listed_with_a_known_state(admin_client):
     jobs = {j["id"]: j for j in res.json()}
     for job_id in ("pricing_refresh", "model_refresh"):
         assert jobs[job_id]["last_status"] in (
-            "success", "error", "never_run", "running", "stale", "disabled",
+            "success",
+            "error",
+            "never_run",
+            "running",
+            "stale",
+            "disabled",
         )

@@ -48,16 +48,16 @@ class SurfaceClient(Protocol):
     ) -> Dict[str, Any]:
         """Return a unified dict::
 
-            {
-                "content": str,                  # final content (concatenated if stream)
-                "reasoning": str,                # final reasoning (concatenated if stream)
-                "finish_reason": str | None,
-                "first_token_latency_ms": float | None,
-                "done_received": bool,           # True if [DONE] received (stream only)
-                "raw_chunks": list,              # parsed SSE chunks, for diagnostics
-                "model_echoed": str | None,      # response.model field if present
-                "request_id": str | None,        # X-Request-ID or equivalent
-            }
+        {
+            "content": str,                  # final content (concatenated if stream)
+            "reasoning": str,                # final reasoning (concatenated if stream)
+            "finish_reason": str | None,
+            "first_token_latency_ms": float | None,
+            "done_received": bool,           # True if [DONE] received (stream only)
+            "raw_chunks": list,              # parsed SSE chunks, for diagnostics
+            "model_echoed": str | None,      # response.model field if present
+            "request_id": str | None,        # X-Request-ID or equivalent
+        }
         """
         ...
 

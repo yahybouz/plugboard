@@ -273,7 +273,9 @@ def _extra_headers(provider: Dict[str, Any]) -> Dict[str, str]:
         from plugboard.direct_providers import PRESETS
 
         preset = PRESETS.get(str(preset_key)) or {}
-        headers.update({str(k): str(v) for k, v in (preset.get("extra_headers") or {}).items()})
+        headers.update(
+            {str(k): str(v) for k, v in (preset.get("extra_headers") or {}).items()}
+        )
     own = provider.get("extra_headers")
     if isinstance(own, dict):
         headers.update({str(k): str(v) for k, v in own.items()})
@@ -363,7 +365,7 @@ def _resolve_all_providers(model_str: str) -> List[tuple[Dict[str, Any], str]]:
     # provider (claude was sent gpt-* models and quarantined them).
     for alias, canonical in _CLEAN_ALIAS_TO_PROVIDER.items():
         if model_str.startswith(alias) and canonical in active_ids:
-            model_str = canonical + ":" + model_str[len(alias):]
+            model_str = canonical + ":" + model_str[len(alias) :]
             break
 
     results: List[tuple[Dict[str, Any], str]] = []
@@ -426,7 +428,9 @@ def _resolve_all_providers(model_str: str) -> List[tuple[Dict[str, Any], str]]:
 # fallback and circuit-breaker rewrites. Billing reads it so the price is the
 # one of the provider that served the call. Each request runs in its own
 # task, so the value never leaks between requests.
-_served_by: ContextVar[Optional[tuple]] = ContextVar("plugboard_served_by", default=None)
+_served_by: ContextVar[Optional[tuple]] = ContextVar(
+    "plugboard_served_by", default=None
+)
 
 
 def served_by() -> Optional[tuple]:
@@ -486,7 +490,9 @@ async def forward(body: Dict[str, Any], timeout: float = _TIMEOUT) -> Dict[str, 
                         timeout_s=timeout,
                     )
                 except Exception:
-                    metrics.record(provider["id"], _time.perf_counter() - _t_cli, error=True)
+                    metrics.record(
+                        provider["id"], _time.perf_counter() - _t_cli, error=True
+                    )
                     raise
                 metrics.record(provider["id"], _time.perf_counter() - _t_cli)
                 # CLI subprocess returns usage=0,0,0 since the upstream CLIs
@@ -837,6 +843,8 @@ def _model_denylist() -> set:
     raw = os.environ.get("PLUGBOARD_MODEL_DENYLIST", "") or ""
     extra = {s.strip() for s in raw.split(",") if s.strip()}
     return _DISABLED_MODEL_IDS | extra
+
+
 # mtime_ns of model_status.json at the last cache fill — used to detect changes.
 # Using nanosecond resolution (st_mtime_ns) to catch rapid successive writes.
 _model_status_mtime: int = 0
@@ -958,7 +966,9 @@ def _allowed_claude_suffixes(model_names, n: int) -> set:
         mm = tuple(ver[:2])
         fam_versions[fam].add(mm)
         parsed.append((name, fam, mm))
-    top = {fam: set(sorted(vers, reverse=True)[:n]) for fam, vers in fam_versions.items()}
+    top = {
+        fam: set(sorted(vers, reverse=True)[:n]) for fam, vers in fam_versions.items()
+    }
     return {name for (name, fam, mm) in parsed if mm in top.get(fam, set())}
 
 
@@ -1013,7 +1023,9 @@ def _is_whitelisted_model(m: Dict[str, Any], claude_allowed=None) -> bool:
             # Only list_models precomputes the set; a direct/ad-hoc call lands
             # here. Allow (never hide a Claude model by accident) but flag it so
             # a future caller that forgets to pass the set is visible (C1 MAJOR-3).
-            log.debug("_is_whitelisted_model: no claude_allowed set — allowing %s", model_name)
+            log.debug(
+                "_is_whitelisted_model: no claude_allowed set — allowing %s", model_name
+            )
             return True
         return model_name in claude_allowed
 
@@ -1045,9 +1057,18 @@ def _is_whitelisted_model(m: Dict[str, Any], claude_allowed=None) -> bool:
 # Vendor names the clean aliases (claude-code:, Codex:, Gemini:, ollama:) stand for.
 _LEGACY_ALIAS_PREFIXES = frozenset(
     {
-        "anthropic", "claude", "claude-via-claude-cli", "claude-code",
-        "openai", "codex", "chatgpt", "chatgpt-via-codex-cli",
-        "google", "gemini", "google-gemini-cli", "google-gemini-via-gemini-cli",
+        "anthropic",
+        "claude",
+        "claude-via-claude-cli",
+        "claude-code",
+        "openai",
+        "codex",
+        "chatgpt",
+        "chatgpt-via-codex-cli",
+        "google",
+        "gemini",
+        "google-gemini-cli",
+        "google-gemini-via-gemini-cli",
         "ollama",
     }
 )
@@ -1095,7 +1116,11 @@ def _clean_model_id(mid: str) -> str:
         # A configured provider keeps its own id: guessing the vendor from the
         # model name sent anthropic-direct / agy / reseller models to the
         # claude-code or Codex alias, which then routed to another provider.
-        if pfx and not found_openclaw_prefix and pfx_lower not in _LEGACY_ALIAS_PREFIXES:
+        if (
+            pfx
+            and not found_openclaw_prefix
+            and pfx_lower not in _LEGACY_ALIAS_PREFIXES
+        ):
             return f"{pfx}:{rem}"
         if pfx_lower in {"anthropic", "claude", "claude-via-claude-cli", "claude-code"}:
             return f"claude-code:{rem}"
@@ -1164,7 +1189,9 @@ def _clean_model_id(mid: str) -> str:
     return mid
 
 
-def _apply_exposure(models: List[Dict[str, Any]], providers: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _apply_exposure(
+    models: List[Dict[str, Any]], providers: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
     """Drop the models the exposure policy hides (``PLUGBOARD_MODEL_EXPOSE``).
 
     Default models and models already used are always listed.
@@ -1180,7 +1207,9 @@ def _apply_exposure(models: List[Dict[str, Any]], providers: List[Dict[str, Any]
     except Exception:  # noqa: BLE001 - usage store unavailable: protect nothing more
         used = set()
     defaults = {
-        f"{p['id']}:{p['default_model']}" for p in providers if p.get("id") and p.get("default_model")
+        f"{p['id']}:{p['default_model']}"
+        for p in providers
+        if p.get("id") and p.get("default_model")
     }
     by_provider: Dict[str, List[str]] = {}
     for item in models:
@@ -1189,11 +1218,14 @@ def _apply_exposure(models: List[Dict[str, Any]], providers: List[Dict[str, Any]
     hidden: set = set()
     for ids in by_provider.values():
         protected = {
-            mid for mid in ids
+            mid
+            for mid in ids
             if mid in defaults or mid in used or mid.split(":", 1)[-1] in used
         }
         bare = {mid.split(":", 1)[-1]: mid for mid in ids}
-        for name in model_exposure.hidden_ids(list(bare), {m.split(":", 1)[-1] for m in protected}):
+        for name in model_exposure.hidden_ids(
+            list(bare), {m.split(":", 1)[-1] for m in protected}
+        ):
             hidden.add(bare[name])
     return [item for item in models if item.get("id") not in hidden]
 
@@ -1555,7 +1587,9 @@ async def _discover_ollama_models(
 # list (GET /models or a native catalog API) rather than a fallback (preset
 # list, or a model asked to list itself). Fallback lists may add models but
 # must never remove any.
-_discovery_trusted: ContextVar[bool] = ContextVar("plugboard_discovery_trusted", default=False)
+_discovery_trusted: ContextVar[bool] = ContextVar(
+    "plugboard_discovery_trusted", default=False
+)
 
 
 def last_discovery_trusted() -> bool:

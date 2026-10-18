@@ -22,13 +22,17 @@ def p(inp, out, **extra):
 
 
 def test_order_picks_highest_priority_source():
-    r = merge_sources({}, {"litellm": {"m": p(2, 8)}, "models_dev": {"m": p(2.1, 8.4)}}, ORDER)
+    r = merge_sources(
+        {}, {"litellm": {"m": p(2, 8)}, "models_dev": {"m": p(2.1, 8.4)}}, ORDER
+    )
     assert r.models["m"] == p(2.1, 8.4, source="models_dev")
     assert r.added == ["m"]
 
 
 def test_lower_source_fills_a_gap():
-    r = merge_sources({}, {"models_dev": {"a": p(1, 2)}, "litellm": {"b": p(3, 4)}}, ORDER)
+    r = merge_sources(
+        {}, {"models_dev": {"a": p(1, 2)}, "litellm": {"b": p(3, 4)}}, ORDER
+    )
     assert r.models["a"]["source"] == "models_dev"
     assert r.models["b"]["source"] == "litellm"
 
@@ -41,7 +45,9 @@ def test_silent_source_leaves_entry_unchanged():
 
 
 def test_same_source_updates_its_own_entry():
-    r = merge_sources({"m": p(2, 8, source="litellm")}, {"litellm": {"m": p(2.2, 8.8)}}, ORDER)
+    r = merge_sources(
+        {"m": p(2, 8, source="litellm")}, {"litellm": {"m": p(2.2, 8.8)}}, ORDER
+    )
     assert r.models["m"] == p(2.2, 8.8, source="litellm")
     assert r.updated[0]["pct"] == 10.0
 
@@ -64,7 +70,14 @@ def test_llm_entry_is_replaced_by_any_structured_source_even_far_off():
 
 
 def test_out_of_bounds_and_bad_ratio_are_rejected():
-    sources = {"litellm": {"big": p(1001, 1), "ratio": p(1, 60), "neg": p(-1, 1), "bad": {"input_price": "x"}}}
+    sources = {
+        "litellm": {
+            "big": p(1001, 1),
+            "ratio": p(1, 60),
+            "neg": p(-1, 1),
+            "bad": {"input_price": "x"},
+        }
+    }
     r = merge_sources({}, sources, ORDER)
     assert r.models == {}
     assert {x["model"] for x in r.rejected} == {"big", "ratio", "neg", "bad"}
@@ -83,18 +96,27 @@ def test_openrouter_per_token_strings():
 
 def test_drift_is_held_for_review():
     existing = {"m": p(2, 8, source="litellm")}
-    r = merge_sources(existing, {"litellm": {"m": p(3, 12)}}, ORDER, drift_pct=20, action="review")
+    r = merge_sources(
+        existing, {"litellm": {"m": p(3, 12)}}, ORDER, drift_pct=20, action="review"
+    )
     assert r.models["m"] == existing["m"]
     assert r.drifts[0]["pct"] == 50.0 and r.drifts[0]["new"] == p(3, 12)
 
 
 def test_drift_apply_writes_it():
-    r = merge_sources({"m": p(2, 8, source="litellm")}, {"litellm": {"m": p(3, 12)}}, ORDER, action="apply")
+    r = merge_sources(
+        {"m": p(2, 8, source="litellm")},
+        {"litellm": {"m": p(3, 12)}},
+        ORDER,
+        action="apply",
+    )
     assert r.models["m"] == p(3, 12, source="litellm")
 
 
 def test_external_is_trusted_and_not_held():
-    r = merge_sources({"m": p(2, 10)}, {"external": {"m": p(3, 15)}}, ORDER, action="review")
+    r = merge_sources(
+        {"m": p(2, 10)}, {"external": {"m": p(3, 15)}}, ORDER, action="review"
+    )
     assert r.models["m"] == p(3, 15, source="external")
     assert r.drifts == []
 
@@ -194,7 +216,9 @@ def grid(tmp_path, monkeypatch, fresh_warnings):
     month = billing.current_pricing_month()
 
     def seed(models, m=month):
-        (pricing_dir / f"{m}.json").write_text(json.dumps({"models": models, "month": m}))
+        (pricing_dir / f"{m}.json").write_text(
+            json.dumps({"models": models, "month": m})
+        )
 
     return month, seed
 
@@ -203,7 +227,9 @@ def grid(tmp_path, monkeypatch, fresh_warnings):
 async def test_refresh_uses_models_dev_and_tags_source(grid, monkeypatch):
     month, seed = grid
     seed({"old": p(1, 2)})
-    monkeypatch.setattr(pricing_scraper, "_models_dev_pricing", lambda: ({"new-model": p(2, 6)}, {}))
+    monkeypatch.setattr(
+        pricing_scraper, "_models_dev_pricing", lambda: ({"new-model": p(2, 6)}, {})
+    )
     result = await pricing_scraper.update_current_pricing()
     models = billing.load_pricing(month)["models"]
     assert models["new-model"] == p(2, 6, source="models_dev")
@@ -215,12 +241,18 @@ async def test_refresh_uses_models_dev_and_tags_source(grid, monkeypatch):
 async def test_refresh_holds_drift_as_suggestion(grid, monkeypatch):
     month, seed = grid
     seed({"m": p(2, 8, source="models_dev")})
-    monkeypatch.setattr(pricing_scraper, "_models_dev_pricing", lambda: ({"m": p(4, 16)}, {}))
+    monkeypatch.setattr(
+        pricing_scraper, "_models_dev_pricing", lambda: ({"m": p(4, 16)}, {})
+    )
     result = await pricing_scraper.update_current_pricing()
     assert result["drifts"] == 1
     assert billing.load_pricing(month)["models"]["m"]["input_price"] == 2
     [item] = pricing_suggestions.list_suggestions()
-    assert item["type"] == "drift" and item["proposed"] == p(4, 16) and item["current"] == p(2, 8)
+    assert (
+        item["type"] == "drift"
+        and item["proposed"] == p(4, 16)
+        and item["current"] == p(2, 8)
+    )
     # Same proposal on the next pass keeps the same id, no duplicate.
     await pricing_scraper.update_current_pricing()
     assert len(pricing_suggestions.list_suggestions()) == 1
@@ -231,10 +263,15 @@ async def test_refresh_reads_openrouter_prices(grid, monkeypatch):
     month, seed = grid
     seed({})
     monkeypatch.setattr(pricing_scraper, "_openrouter_configured", lambda: True)
-    payload = {"data": [
-        {"id": "vendor/model-a", "pricing": {"prompt": "0.000001", "completion": "0.000004"}},
-        {"id": "openrouter/auto", "pricing": {"prompt": "-1", "completion": "-1"}},
-    ]}
+    payload = {
+        "data": [
+            {
+                "id": "vendor/model-a",
+                "pricing": {"prompt": "0.000001", "completion": "0.000004"},
+            },
+            {"id": "openrouter/auto", "pricing": {"prompt": "-1", "completion": "-1"}},
+        ]
+    }
     with aioresponses() as mock:
         mock.get(pricing_scraper._OPENROUTER_MODELS_URL, payload=payload)
         await pricing_scraper.update_current_pricing()
@@ -251,7 +288,9 @@ async def test_refresh_never_touches_manual_or_past_month(grid, monkeypatch):
     prev = pricing_scraper._previous_month(month)
     seed({"m": p(1, 1)}, prev)
     seed({"m": p(9, 9, source="manual")})
-    monkeypatch.setattr(pricing_scraper, "_models_dev_pricing", lambda: ({"m": p(2, 6)}, {}))
+    monkeypatch.setattr(
+        pricing_scraper, "_models_dev_pricing", lambda: ({"m": p(2, 6)}, {})
+    )
     before_prev = (billing._PRICING_DIR / f"{prev}.json").read_text()
     await pricing_scraper.update_current_pricing()
     assert billing.load_pricing(month)["models"]["m"] == p(9, 9, source="manual")
@@ -262,7 +301,9 @@ async def test_refresh_never_touches_manual_or_past_month(grid, monkeypatch):
 async def test_refresh_without_change_does_not_write(grid, monkeypatch):
     month, seed = grid
     seed({"m": p(2, 6, source="models_dev")})
-    monkeypatch.setattr(pricing_scraper, "_models_dev_pricing", lambda: ({"m": p(2, 6)}, {}))
+    monkeypatch.setattr(
+        pricing_scraper, "_models_dev_pricing", lambda: ({"m": p(2, 6)}, {})
+    )
     calls = []
     monkeypatch.setattr(pricing_scraper, "save_pricing", lambda *a: calls.append(a))
     await pricing_scraper.update_current_pricing()
@@ -285,7 +326,8 @@ async def test_patch_marks_only_changed_rows_manual(client, grid):
     month, seed = grid
     seed({"a": p(1, 2, source="litellm"), "b": p(3, 4, source="litellm")})
     resp = await client.patch(
-        f"/admin/pricing/{month}", headers=AUTH,
+        f"/admin/pricing/{month}",
+        headers=AUTH,
         json={"models": {"a": p(1, 2), "c": p(5, 6)}},
     )
     assert resp.status_code == 200, resp.text
@@ -299,9 +341,13 @@ async def test_patch_marks_only_changed_rows_manual(client, grid):
 async def test_patch_validates_prices_and_month(client, grid):
     month, seed = grid
     seed({})
-    bad = await client.patch(f"/admin/pricing/{month}", headers=AUTH, json={"models": {"a": p(-1, 2)}})
+    bad = await client.patch(
+        f"/admin/pricing/{month}", headers=AUTH, json={"models": {"a": p(-1, 2)}}
+    )
     assert bad.status_code == 422
-    bad_month = await client.patch("/admin/pricing/2026-13", headers=AUTH, json={"models": {}})
+    bad_month = await client.patch(
+        "/admin/pricing/2026-13", headers=AUTH, json={"models": {}}
+    )
     assert bad_month.status_code == 422
 
 
@@ -310,7 +356,8 @@ async def test_put_without_change_keeps_sources(client, grid):
     month, seed = grid
     seed({"a": p(1, 2, source="litellm")})
     resp = await client.put(
-        f"/admin/pricing/{month}", headers=AUTH,
+        f"/admin/pricing/{month}",
+        headers=AUTH,
         json={"models": {"a": p(1.0000000001, 2), "b": p(1, 1)}, "note": "n"},
     )
     assert resp.status_code == 200
@@ -323,10 +370,16 @@ async def test_put_without_change_keeps_sources(client, grid):
 async def test_revert_recomputes_from_cached_sources(client, grid, monkeypatch):
     month, seed = grid
     seed({})
-    monkeypatch.setattr(pricing_scraper, "_models_dev_pricing", lambda: ({"m": p(2, 6)}, {}))
+    monkeypatch.setattr(
+        pricing_scraper, "_models_dev_pricing", lambda: ({"m": p(2, 6)}, {})
+    )
     await pricing_scraper.update_current_pricing()
-    await client.patch(f"/admin/pricing/{month}", headers=AUTH, json={"models": {"m": p(9, 9)}})
-    resp = await client.post(f"/admin/pricing/{month}/revert", headers=AUTH, json={"model": "m"})
+    await client.patch(
+        f"/admin/pricing/{month}", headers=AUTH, json={"models": {"m": p(9, 9)}}
+    )
+    resp = await client.post(
+        f"/admin/pricing/{month}/revert", headers=AUTH, json={"model": "m"}
+    )
     assert resp.status_code == 200, resp.text
     assert resp.json()["entry"] == p(2, 6, source="models_dev")
     assert billing.load_pricing(month)["models"]["m"] == p(2, 6, source="models_dev")
@@ -336,11 +389,17 @@ async def test_revert_recomputes_from_cached_sources(client, grid, monkeypatch):
 async def test_revert_refuses_non_manual_unknown_and_past(client, grid):
     month, seed = grid
     seed({"m": p(1, 2, source="litellm")})
-    not_manual = await client.post(f"/admin/pricing/{month}/revert", headers=AUTH, json={"model": "m"})
+    not_manual = await client.post(
+        f"/admin/pricing/{month}/revert", headers=AUTH, json={"model": "m"}
+    )
     assert not_manual.status_code == 409
-    unknown = await client.post(f"/admin/pricing/{month}/revert", headers=AUTH, json={"model": "zz"})
+    unknown = await client.post(
+        f"/admin/pricing/{month}/revert", headers=AUTH, json={"model": "zz"}
+    )
     assert unknown.status_code == 404
-    past = await client.post("/admin/pricing/2020_01/revert", headers=AUTH, json={"model": "m"})
+    past = await client.post(
+        "/admin/pricing/2020_01/revert", headers=AUTH, json={"model": "m"}
+    )
     assert past.status_code == 409
 
 
@@ -349,22 +408,34 @@ async def test_suggestion_apply_reject_and_conflict(client, grid, monkeypatch):
     month, seed = grid
     seed({"m": p(2, 8, source="models_dev"), "n": p(1, 4, source="models_dev")})
     monkeypatch.setattr(
-        pricing_scraper, "_models_dev_pricing", lambda: ({"m": p(4, 16), "n": p(3, 12)}, {})
+        pricing_scraper,
+        "_models_dev_pricing",
+        lambda: ({"m": p(4, 16), "n": p(3, 12)}, {}),
     )
     await pricing_scraper.update_current_pricing()
-    listing = (await client.get("/admin/pricing/suggestions", headers=AUTH)).json()["items"]
+    listing = (await client.get("/admin/pricing/suggestions", headers=AUTH)).json()[
+        "items"
+    ]
     by_model = {s["model"]: s["id"] for s in listing}
     assert set(by_model) == {"m", "n"}
 
-    applied = await client.post(f"/admin/pricing/suggestions/{by_model['m']}/apply", headers=AUTH)
+    applied = await client.post(
+        f"/admin/pricing/suggestions/{by_model['m']}/apply", headers=AUTH
+    )
     assert applied.status_code == 200 and applied.json()["status"] == "applied"
     assert billing.load_pricing(month)["models"]["m"] == p(4, 16, source="models_dev")
-    again = await client.post(f"/admin/pricing/suggestions/{by_model['m']}/apply", headers=AUTH)
+    again = await client.post(
+        f"/admin/pricing/suggestions/{by_model['m']}/apply", headers=AUTH
+    )
     assert again.status_code == 409
 
     # The grid entry changed under the suggestion: 409 and the item turns stale.
-    await client.patch(f"/admin/pricing/{month}", headers=AUTH, json={"models": {"n": p(1.5, 4)}})
-    stale = await client.post(f"/admin/pricing/suggestions/{by_model['n']}/apply", headers=AUTH)
+    await client.patch(
+        f"/admin/pricing/{month}", headers=AUTH, json={"models": {"n": p(1.5, 4)}}
+    )
+    stale = await client.post(
+        f"/admin/pricing/suggestions/{by_model['n']}/apply", headers=AUTH
+    )
     assert stale.status_code == 409
     assert pricing_suggestions.get(by_model["n"])["status"] == "stale"
 
@@ -376,11 +447,15 @@ async def test_suggestion_apply_reject_and_conflict(client, grid, monkeypatch):
 async def test_bulk_reject_is_remembered(client, grid, monkeypatch):
     month, seed = grid
     seed({"m": p(2, 8, source="models_dev")})
-    monkeypatch.setattr(pricing_scraper, "_models_dev_pricing", lambda: ({"m": p(4, 16)}, {}))
+    monkeypatch.setattr(
+        pricing_scraper, "_models_dev_pricing", lambda: ({"m": p(4, 16)}, {})
+    )
     await pricing_scraper.update_current_pricing()
     [item] = pricing_suggestions.list_suggestions()
     resp = await client.post(
-        "/admin/pricing/suggestions/reject", headers=AUTH, json={"ids": [item["id"], "nope"]}
+        "/admin/pricing/suggestions/reject",
+        headers=AUTH,
+        json={"ids": [item["id"], "nope"]},
     )
     body = resp.json()
     assert [d["status"] for d in body["done"]] == ["rejected"]
@@ -390,14 +465,24 @@ async def test_bulk_reject_is_remembered(client, grid, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_revert_without_cached_sources_restores_the_replaced_price(client, grid, monkeypatch):
+async def test_revert_without_cached_sources_restores_the_replaced_price(
+    client, grid, monkeypatch
+):
     month, seed = grid
     seed({"m": p(2, 6, source="litellm")})
     monkeypatch.setattr(pricing_scraper, "_last_sources", {})
-    await client.patch(f"/admin/pricing/{month}", headers=AUTH, json={"models": {"m": p(9, 9)}})
+    await client.patch(
+        f"/admin/pricing/{month}", headers=AUTH, json={"models": {"m": p(9, 9)}}
+    )
     stored = billing.load_pricing(month)["models"]["m"]
-    assert stored["source"] == "manual" and stored["previous"] == p(2, 6, source="litellm")
+    assert stored["source"] == "manual" and stored["previous"] == p(
+        2, 6, source="litellm"
+    )
     # A second manual edit keeps the original automatic price.
-    await client.patch(f"/admin/pricing/{month}", headers=AUTH, json={"models": {"m": p(8, 8)}})
-    resp = await client.post(f"/admin/pricing/{month}/revert", headers=AUTH, json={"model": "m"})
+    await client.patch(
+        f"/admin/pricing/{month}", headers=AUTH, json={"models": {"m": p(8, 8)}}
+    )
+    resp = await client.post(
+        f"/admin/pricing/{month}/revert", headers=AUTH, json={"model": "m"}
+    )
     assert resp.json()["entry"] == p(2, 6, source="litellm")

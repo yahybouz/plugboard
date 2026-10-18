@@ -1,7 +1,7 @@
 # Plugboard — GitLab CI (canonical pipeline).
 # The GitHub mirror runs the same checks in .github/workflows/ci.yml.
 #
-#   lint      ruff check (+ non-blocking format check), registry example JSON
+#   lint      ruff check and format check, registry example JSON
 #   test      pytest + coverage, against a throwaway data directory
 #   security  gitleaks over the pushed commits, bandit, pip-audit
 #   build     docker build of the slim `api` target (not pushed)
@@ -57,11 +57,9 @@ ruff:
     - ruff check plugboard/ tests/
     - python -m json.tool plugboard/registry.example.json > /dev/null
 
-# Reported but not blocking until the existing files are reformatted.
 ruff-format:
   extends: .python
   stage: lint
-  allow_failure: true
   script:
     - ruff format --check plugboard/ tests/
 

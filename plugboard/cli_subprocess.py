@@ -686,7 +686,11 @@ def list_codex_models(path: Optional[Path] = None) -> List[str]:
         if not isinstance(entry, dict):
             continue
         slug = entry.get("slug")
-        if not isinstance(slug, str) or not slug or entry.get("visibility", "list") != "list":
+        if (
+            not isinstance(slug, str)
+            or not slug
+            or entry.get("visibility", "list") != "list"
+        ):
             continue
         priority = entry.get("priority")
         ranked.append((priority if isinstance(priority, (int, float)) else 1e9, slug))
@@ -1061,7 +1065,9 @@ def _try_parse_stdout_text(
                 if str(payload.get("status", "SUCCESS")).upper() != "SUCCESS":
                     return None
                 response = payload.get("response")
-                return response if isinstance(response, str) and response.strip() else None
+                return (
+                    response if isinstance(response, str) and response.strip() else None
+                )
             if isinstance(payload, dict) and "error" in payload:
                 candidates = payload.get("candidates")
                 has_text = bool(

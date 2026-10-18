@@ -386,10 +386,9 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
     # playground dropdown displays correct 🌐/💻 icons without admin click.
     # Runs in background after schedulers are up so boot isn't blocked.
     # Opt-out via PLUGBOARD_INTERNET_CHECK_ON_BOOT=0.
-    _internet_boot_enabled = (
-        os.environ.get("PLUGBOARD_INTERNET_CHECK_ON_BOOT", "1").strip()
-        not in ("0", "false", "no", "")
-    )
+    _internet_boot_enabled = os.environ.get(
+        "PLUGBOARD_INTERNET_CHECK_ON_BOOT", "1"
+    ).strip() not in ("0", "false", "no", "")
 
     async def _internet_boot_probe():
         # Small delay so warm-up + ollama sync settle first, and so a quick
@@ -408,14 +407,20 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
             )
         except HTTPException as exc:
             # 409 if a manual bulk run is already in flight — non-fatal.
-            log.warning("internet_check_on_boot: skipped (HTTP %s: %s)", exc.status_code, exc.detail)
+            log.warning(
+                "internet_check_on_boot: skipped (HTTP %s: %s)",
+                exc.status_code,
+                exc.detail,
+            )
         except Exception as exc:  # noqa: BLE001
             log.warning("internet_check_on_boot: failed: %s", exc)
 
     if _internet_boot_enabled:
         _asyncio.create_task(_internet_boot_probe())
     else:
-        log.info("internet_check_on_boot: disabled via PLUGBOARD_INTERNET_CHECK_ON_BOOT=0")
+        log.info(
+            "internet_check_on_boot: disabled via PLUGBOARD_INTERNET_CHECK_ON_BOOT=0"
+        )
 
     yield
 
@@ -2151,9 +2156,8 @@ async def check_model_internet_access(
         status_str = last_result.status
         confidence = last_result.confidence
         if not has_internet:
-            error_str = (
-                f"after {PROBE_MAX_ATTEMPTS} attempts — "
-                + (last_result.error or "no signal")
+            error_str = f"after {PROBE_MAX_ATTEMPTS} attempts — " + (
+                last_result.error or "no signal"
             )
 
     except Exception as exc:
@@ -2232,9 +2236,7 @@ _BULK_INTERNET_CONCURRENCY = max(
 )
 _BULK_INTERNET_PER_MODEL_TIMEOUT_S = max(
     5.0,
-    float(
-        os.environ.get("PLUGBOARD_BULK_INTERNET_PER_MODEL_TIMEOUT_S", "25") or "25"
-    ),
+    float(os.environ.get("PLUGBOARD_BULK_INTERNET_PER_MODEL_TIMEOUT_S", "25") or "25"),
 )
 _BULK_INTERNET_LOCK = _asyncio.Lock()
 
@@ -2677,9 +2679,9 @@ class ProviderUpdate(BaseModel):
     # Refresh this provider's model list automatically (GET /models).
     auto_discover: Optional[bool] = None
     # Models never removed by an automatic refresh.
-    pinned_models: Optional[List[Annotated[str, Field(min_length=1, max_length=200)]]] = Field(
-        default=None, max_length=500
-    )
+    pinned_models: Optional[
+        List[Annotated[str, Field(min_length=1, max_length=200)]]
+    ] = Field(default=None, max_length=500)
 
 
 def _mask(p: Dict[str, Any]) -> Dict[str, Any]:
@@ -2812,7 +2814,10 @@ async def discover_provider_models(
         report = await refresh_subprocess_provider_models(provider)
         models = report.get("models") or []
         default_model = report.get("default_model") or None
-        extra = {"verified": report.get("verified_count", 0), "dropped": report.get("dropped", [])}
+        extra = {
+            "verified": report.get("verified_count", 0),
+            "dropped": report.get("dropped", []),
+        }
         trusted = True  # each model was probed
     else:
         from plugboard.router import last_discovery_trusted
@@ -2822,7 +2827,11 @@ async def discover_provider_models(
     if not models:
         raise HTTPException(502, f"Could not discover models from '{provider_id}'")
     diff = model_diff.apply(
-        provider_id, models, "manual", default_model=default_model, dry_run=dry_run,
+        provider_id,
+        models,
+        "manual",
+        default_model=default_model,
+        dry_run=dry_run,
         allow_removals=trusted,
     )
     if diff.error:
@@ -3160,8 +3169,12 @@ async def _test_openai_endpoint(
             connector = aiohttp.TCPConnector(
                 resolver=_PinnedResolver(host, pinned), use_dns_cache=False
             )
-        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
-            async with session.get(openai_url(base_url, "models"), headers=headers) as resp:
+        async with aiohttp.ClientSession(
+            timeout=timeout, connector=connector
+        ) as session:
+            async with session.get(
+                openai_url(base_url, "models"), headers=headers
+            ) as resp:
                 if resp.status in (401, 403):
                     return {
                         "status": "invalid_key",
@@ -3175,25 +3188,37 @@ async def _test_openai_endpoint(
                         body = await resp.json(content_type=None)
                     except ValueError:  # HTML page, plain text...
                         body = None
-                if resp.status != 200 or not isinstance(body, dict) or not isinstance(body.get("data"), list):
+                if (
+                    resp.status != 200
+                    or not isinstance(body, dict)
+                    or not isinstance(body.get("data"), list)
+                ):
                     return {
                         "status": "not_openai_compatible",
                         "message": f"Not OpenAI-compatible: {host} did not answer GET /models in the "
                         f"OpenAI format (HTTP {resp.status}). Add it as a custom endpoint or check its base URL.",
                         "docs": _TEST_DOCS,
                     }
-            models = [m.get("id") for m in body["data"] if isinstance(m, dict) and m.get("id")]
+            models = [
+                m.get("id") for m in body["data"] if isinstance(m, dict) and m.get("id")
+            ]
             result: Dict[str, Any] = {
                 "status": "ok" if models else "ok_no_models",
                 "models_count": len(models),
                 "models": models[:50],
-                "message": f"{len(models)} models found" if models else "Key valid, 0 models",
+                "message": f"{len(models)} models found"
+                if models
+                else "Key valid, 0 models",
             }
             if send_test_token and models:
                 async with session.post(
                     openai_url(base_url, "chat/completions"),
                     headers={**headers, "Content-Type": "application/json"},
-                    json={"model": models[0], "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1},
+                    json={
+                        "model": models[0],
+                        "messages": [{"role": "user", "content": "ping"}],
+                        "max_tokens": 1,
+                    },
                 ) as resp:
                     result["completion_ok"] = resp.status == 200
                     result["completion_status"] = resp.status
@@ -3216,7 +3241,9 @@ async def list_direct_presets(_: None = Depends(_require_admin)):
 
 
 @app.post("/admin/direct-providers/test")
-async def test_direct_provider(body: DirectProviderTest, _: None = Depends(_require_admin)):
+async def test_direct_provider(
+    body: DirectProviderTest, _: None = Depends(_require_admin)
+):
     """Check a key against a preset or custom endpoint without creating anything."""
     from plugboard.config import check_provider_domain_allowed, ProviderDomainNotAllowed
     from plugboard.direct_providers import get_preset
@@ -3239,7 +3266,11 @@ async def test_direct_provider(body: DirectProviderTest, _: None = Depends(_requ
         raise HTTPException(422, str(exc))
     if pinned:
         return await _test_openai_endpoint(
-            base_url, body.api_key.strip(), body.send_test_token, pinned=pinned, preset=preset
+            base_url,
+            body.api_key.strip(),
+            body.send_test_token,
+            pinned=pinned,
+            preset=preset,
         )
     return await _test_openai_endpoint(
         base_url, body.api_key.strip(), body.send_test_token, preset=preset
@@ -3686,12 +3717,15 @@ def _manual_rows(
             inp = float(row.get("input_price"))
             outp = float(row.get("output_price"))
         except (TypeError, ValueError):
-            raise HTTPException(422, f"{model}: input_price and output_price must be numbers")
+            raise HTTPException(
+                422, f"{model}: input_price and output_price must be numbers"
+            )
         if not (0 <= inp <= MAX_PRICE and 0 <= outp <= MAX_PRICE):
-            raise HTTPException(422, f"{model}: prices must be between 0 and {MAX_PRICE:g} USD per 1M tokens")
-        price = {
-            k: v for k, v in row.items() if k not in ("source", "previous")
-        }
+            raise HTTPException(
+                422,
+                f"{model}: prices must be between 0 and {MAX_PRICE:g} USD per 1M tokens",
+            )
+        price = {k: v for k, v in row.items() if k not in ("source", "previous")}
         price.update(input_price=inp, output_price=outp)
         old = current.get(model)
         if old is not None and same_price(old, price):
@@ -3702,7 +3736,9 @@ def _manual_rows(
             # even before the next update fetches the sources again.
             if old is not None and old.get("source") != "manual":
                 out[model]["previous"] = {
-                    k: old[k] for k in ("input_price", "output_price", "source") if k in old
+                    k: old[k]
+                    for k in ("input_price", "output_price", "source")
+                    if k in old
                 }
             elif old is not None and old.get("previous"):
                 out[model]["previous"] = old["previous"]
@@ -3725,7 +3761,10 @@ async def llm_pricing_run(_: None = Depends(_require_admin)):
     if not llm_pricing.enabled():
         raise HTTPException(409, "LLM pricing is off: set PLUGBOARD_LLM_PRICING=1")
     report = await llm_pricing.run(await llm_pricing.missing_models(), force=True)
-    _audit("pricing.llm.run", details=f"calls={report.calls} suggested={len(report.suggested)}")
+    _audit(
+        "pricing.llm.run",
+        details=f"calls={report.calls} suggested={len(report.suggested)}",
+    )
     return report.as_dict()
 
 
@@ -3772,12 +3811,16 @@ async def _suggestion_action(sid: str, action: str) -> Dict[str, Any]:
 
 
 @app.post("/admin/pricing/suggestions/apply")
-async def apply_pricing_suggestions(body: SuggestionIds, _: None = Depends(_require_admin)):
+async def apply_pricing_suggestions(
+    body: SuggestionIds, _: None = Depends(_require_admin)
+):
     return await _bulk_suggestions(body.ids, "apply")
 
 
 @app.post("/admin/pricing/suggestions/reject")
-async def reject_pricing_suggestions(body: SuggestionIds, _: None = Depends(_require_admin)):
+async def reject_pricing_suggestions(
+    body: SuggestionIds, _: None = Depends(_require_admin)
+):
     return await _bulk_suggestions(body.ids, "reject")
 
 
@@ -3802,7 +3845,9 @@ async def reject_pricing_suggestion(sid: str, _: None = Depends(_require_admin))
 
 
 @app.patch("/admin/pricing/{month}")
-async def patch_pricing(month: str, body: PricingPatch, _: None = Depends(_require_admin)):
+async def patch_pricing(
+    month: str, body: PricingPatch, _: None = Depends(_require_admin)
+):
     """Set the price of some models; changed rows are marked ``source=manual``.
 
     Other rows are left as they are. A manual price is never replaced by a
@@ -3820,14 +3865,23 @@ async def patch_pricing(month: str, body: PricingPatch, _: None = Depends(_requi
             table = grid.setdefault("models_by_provider", {}).setdefault(space, {})
             rows = _manual_rows(space_rows, table)
             table.update(rows)
-            changed += [f"{space}|{m}" for m, r in rows.items() if r.get("source") == "manual"]
+            changed += [
+                f"{space}|{m}" for m, r in rows.items() if r.get("source") == "manual"
+            ]
         _billing.save_pricing(month, grid)
-    _audit("pricing.patch", target_type="pricing", target_id=month, details=",".join(changed)[:500])
+    _audit(
+        "pricing.patch",
+        target_type="pricing",
+        target_id=month,
+        details=",".join(changed)[:500],
+    )
     return _billing.load_pricing(month)
 
 
 @app.post("/admin/pricing/{month}/revert")
-async def revert_pricing(month: str, body: PricingRevert, _: None = Depends(_require_admin)):
+async def revert_pricing(
+    month: str, body: PricingRevert, _: None = Depends(_require_admin)
+):
     """Drop a manual price and give the model back to the automatic sources.
 
     The new price comes from the last update's sources, else the automatic
@@ -3837,7 +3891,9 @@ async def revert_pricing(month: str, body: PricingRevert, _: None = Depends(_req
 
     _check_month(month)
     if month != _billing.current_pricing_month():
-        raise HTTPException(409, "only the current month can be recomputed; past months are frozen")
+        raise HTTPException(
+            409, "only the current month can be recomputed; past months are frozen"
+        )
     try:
         entry = revert_model(month, body.model, body.provider)
     except KeyError:
@@ -3889,7 +3945,11 @@ async def pricing_scheduler_status(_: None = Depends(_require_admin)):
 
     sched = getattr(app.state, "pricing_scheduler", None)
     if sched is None:
-        return {"running": False, "error": "scheduler not initialised", "catalog": models_dev.status()}
+        return {
+            "running": False,
+            "error": "scheduler not initialised",
+            "catalog": models_dev.status(),
+        }
     return {**sched.status_dict, "catalog": models_dev.status()}
 
 
@@ -3909,8 +3969,12 @@ async def auto_update_status(journal: int = 20, _: None = Depends(_require_admin
     pricing = getattr(app.state, "pricing_scheduler", None)
     models = getattr(app.state, "model_availability_scheduler", None)
     return {
-        "pricing": pricing.status_dict if pricing else {"error": "scheduler not initialised"},
-        "models": models.status_dict if models else {"error": "scheduler not initialised"},
+        "pricing": pricing.status_dict
+        if pricing
+        else {"error": "scheduler not initialised"},
+        "models": models.status_dict
+        if models
+        else {"error": "scheduler not initialised"},
         "catalog": models_dev.status(),
         "pending_suggestions": len(pricing_suggestions.list_suggestions("pending")),
         "recent_changes": change_events.read_journal(max(1, min(journal, 200))),
@@ -3929,7 +3993,10 @@ async def auto_update_run(_: None = Depends(_require_admin)):
         if sched is not None and sched.running_since is not None:
             return JSONResponse(
                 status_code=409,
-                content={"detail": "an update is already running", "running_since": sched.running_since},
+                content={
+                    "detail": "an update is already running",
+                    "running_since": sched.running_since,
+                },
             )
 
     async def _run() -> None:

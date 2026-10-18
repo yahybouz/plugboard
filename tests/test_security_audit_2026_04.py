@@ -702,9 +702,7 @@ def test_domain_allowlist_exact_match(monkeypatch):
         check_provider_domain_allowed,
     )
 
-    monkeypatch.setenv(
-        "PLUGBOARD_PROVIDER_DOMAINS_ALLOWED", "api.openai.com,localhost"
-    )
+    monkeypatch.setenv("PLUGBOARD_PROVIDER_DOMAINS_ALLOWED", "api.openai.com,localhost")
     check_provider_domain_allowed("https://api.openai.com/v1")
     check_provider_domain_allowed("http://localhost:8080")
     with pytest.raises(ProviderDomainNotAllowed):
@@ -744,9 +742,7 @@ async def test_post_provider_rejects_non_allowlisted_host(
     points outside the allowlist."""
     import plugboard.audit as audit_mod
 
-    monkeypatch.setenv(
-        "PLUGBOARD_PROVIDER_DOMAINS_ALLOWED", ".anthropic.com,localhost"
-    )
+    monkeypatch.setenv("PLUGBOARD_PROVIDER_DOMAINS_ALLOWED", ".anthropic.com,localhost")
     monkeypatch.setattr(audit_mod, "_DB_PATH", tmp_path / "audit.db")
 
     resp = await admin_client.post(

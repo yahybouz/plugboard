@@ -58,19 +58,37 @@ from tests.live_model_tests.protocols import (
 # ── Constants ────────────────────────────────────────────────────────────────
 
 # Exact field values that signal a polite refusal to self-identify.
-_EXACT_REFUSAL_FIELDS = frozenset({
-    "unknown", "undisclosed", "unspecified", "none", "null",
-    "n/a", "na", "not applicable", "not specified", "not provided",
-    "not available", "prefer not to say", "confidential", "withheld",
-    "redacted", "private",
-})
+_EXACT_REFUSAL_FIELDS = frozenset(
+    {
+        "unknown",
+        "undisclosed",
+        "unspecified",
+        "none",
+        "null",
+        "n/a",
+        "na",
+        "not applicable",
+        "not specified",
+        "not provided",
+        "not available",
+        "prefer not to say",
+        "confidential",
+        "withheld",
+        "redacted",
+        "private",
+    }
+)
 
 # Word-boundary phrase patterns for refusals embedded in a verbose field.
 _REFUSAL_PHRASE_PATTERNS = [
-    re.compile(r"\b(?:cannot|can't|can\s+not)\s+(?:disclose|say|determine|identify|share)\b"),
+    re.compile(
+        r"\b(?:cannot|can't|can\s+not)\s+(?:disclose|say|determine|identify|share)\b"
+    ),
     re.compile(r"\bprefer\s+not\s+(?:to\s+)?(?:say|disclose)\b"),
     re.compile(r"\bnot\s+able\s+to\s+(?:disclose|say|determine|identify)\b"),
-    re.compile(r"\b(?:do\s+not|don't)\s+know\s+(?:my\s+)?(?:name|identity|family|vendor|maker)\b"),
+    re.compile(
+        r"\b(?:do\s+not|don't)\s+know\s+(?:my\s+)?(?:name|identity|family|vendor|maker)\b"
+    ),
 ]
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -102,6 +120,7 @@ _DISCLAIMER = "cooperative_test_see_T01"
 
 
 # ── Result dataclass ─────────────────────────────────────────────────────────
+
 
 @dataclass
 class IdentityResult:
@@ -162,6 +181,7 @@ class IdentityResult:
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _tokenize(value: str) -> List[str]:
     text = unicodedata.normalize("NFKC", value).casefold().strip()
     return _TOKEN_RE.findall(text)
@@ -172,7 +192,7 @@ def _phrase_in_tokens(haystack: List[str], needle: List[str]) -> bool:
     if not needle:
         return False
     n = len(needle)
-    return any(haystack[i:i + n] == needle for i in range(len(haystack) - n + 1))
+    return any(haystack[i : i + n] == needle for i in range(len(haystack) - n + 1))
 
 
 def _matches_alias(declared: str, canonical: str, alias_list: List[str]) -> bool:
@@ -256,6 +276,7 @@ def _build_prompt(nonce: str) -> List[Dict[str, str]]:
 
 # ── Pure verdict function ─────────────────────────────────────────────────────
 
+
 def _verdict_from_response(
     *,
     model_id: str,
@@ -297,13 +318,21 @@ def _verdict_from_response(
 
     # ── Terminal transport-ish ───────────────────────────────────────────────
     if not done_received and not content:
-        return IdentityResult(passed=False, error_type="stream_truncated", extra=_extra(), **base)
+        return IdentityResult(
+            passed=False, error_type="stream_truncated", extra=_extra(), **base
+        )
     if finish_reason == "content_filter":
-        return IdentityResult(passed=False, error_type="content_filtered", extra=_extra(), **base)
+        return IdentityResult(
+            passed=False, error_type="content_filtered", extra=_extra(), **base
+        )
     if finish_reason in _BAD_FINISH_REASONS:
-        return IdentityResult(passed=False, error_type="bad_finish_reason", extra=_extra(), **base)
+        return IdentityResult(
+            passed=False, error_type="bad_finish_reason", extra=_extra(), **base
+        )
     if not content and not reasoning:
-        return IdentityResult(passed=False, error_type="empty_response", extra=_extra(), **base)
+        return IdentityResult(
+            passed=False, error_type="empty_response", extra=_extra(), **base
+        )
 
     # ── Content empty, reasoning carries identity (parity with D3) ───────────
     if not content and reasoning:
@@ -327,7 +356,9 @@ def _verdict_from_response(
                 ),
                 **base,
             )
-        return IdentityResult(passed=False, error_type="empty_response", extra=_extra(), **base)
+        return IdentityResult(
+            passed=False, error_type="empty_response", extra=_extra(), **base
+        )
 
     # ── content non-empty ────────────────────────────────────────────────────
     candidate, fence_stripped, prose_with_fence = _strip_fence(content)
@@ -335,30 +366,52 @@ def _verdict_from_response(
 
     if prose_with_fence:
         return IdentityResult(
-            passed=False, error_type="schema_invalid",
-            extra=_extra(reason="prose surrounding a markdown fence"), **base,
+            passed=False,
+            error_type="schema_invalid",
+            extra=_extra(reason="prose surrounding a markdown fence"),
+            **base,
         )
 
     parsed = _try_parse_json(candidate)
     if parsed is None:
-        return IdentityResult(passed=False, error_type="json_parse_error", extra=_extra(), **base)
+        return IdentityResult(
+            passed=False, error_type="json_parse_error", extra=_extra(), **base
+        )
 
     # ── Required fields + strict types ───────────────────────────────────────
     if "echo" not in parsed:
-        return IdentityResult(passed=False, error_type="echo_missing", extra=_extra(), **base)
+        return IdentityResult(
+            passed=False, error_type="echo_missing", extra=_extra(), **base
+        )
     if not isinstance(parsed["echo"], str):
-        return IdentityResult(passed=False, error_type="schema_invalid",
-                              extra=_extra(reason="echo not a string"), **base)
+        return IdentityResult(
+            passed=False,
+            error_type="schema_invalid",
+            extra=_extra(reason="echo not a string"),
+            **base,
+        )
     if "family" not in parsed:
-        return IdentityResult(passed=False, error_type="family_missing", extra=_extra(), **base)
+        return IdentityResult(
+            passed=False, error_type="family_missing", extra=_extra(), **base
+        )
     if not isinstance(parsed["family"], str):
-        return IdentityResult(passed=False, error_type="schema_invalid",
-                              extra=_extra(reason="family not a string"), **base)
+        return IdentityResult(
+            passed=False,
+            error_type="schema_invalid",
+            extra=_extra(reason="family not a string"),
+            **base,
+        )
     if "vendor" not in parsed:
-        return IdentityResult(passed=False, error_type="vendor_missing", extra=_extra(), **base)
+        return IdentityResult(
+            passed=False, error_type="vendor_missing", extra=_extra(), **base
+        )
     if not isinstance(parsed["vendor"], str):
-        return IdentityResult(passed=False, error_type="schema_invalid",
-                              extra=_extra(reason="vendor not a string"), **base)
+        return IdentityResult(
+            passed=False,
+            error_type="schema_invalid",
+            extra=_extra(reason="vendor not a string"),
+            **base,
+        )
 
     echo_val: str = parsed["echo"]
     family_val: str = parsed["family"]
@@ -366,8 +419,12 @@ def _verdict_from_response(
     cutoff_val = parsed.get("training_cutoff")
 
     if echo_val != nonce:
-        return IdentityResult(passed=False, error_type="echo_mismatch",
-                              extra=_extra(expected_echo=nonce, got_echo=echo_val[:80]), **base)
+        return IdentityResult(
+            passed=False,
+            error_type="echo_mismatch",
+            extra=_extra(expected_echo=nonce, got_echo=echo_val[:80]),
+            **base,
+        )
     base["echo_matched"] = True
     base["declared_family"] = family_val
     base["declared_vendor"] = vendor_val
@@ -386,21 +443,32 @@ def _verdict_from_response(
     vendor_refused = _is_refusal(vendor_val)
     if family_refused and vendor_refused:
         return IdentityResult(
-            passed=False, error_type="identity_refused",
-            finding_severity="MINOR", excluded_from_threshold=True,
-            extra=_extra(family_refused=True, vendor_refused=True, **cutoff_extra), **base,
+            passed=False,
+            error_type="identity_refused",
+            finding_severity="MINOR",
+            excluded_from_threshold=True,
+            extra=_extra(family_refused=True, vendor_refused=True, **cutoff_extra),
+            **base,
         )
 
     # ── Tolerant matcher via aliases (Council C6 BLOCKER-1 fix) ──────────────
     warn_extra: Dict[str, Any] = {}
     if not aliases:
         warn_extra["warn"] = "aliases_empty_strict_mode"  # Council C6 MAJOR-4
-    family_aliases = (aliases.get("family", {}) or {}).get(expected_family.lower(), [expected_family])
-    vendor_aliases = (aliases.get("vendor", {}) or {}).get(expected_vendor.lower(), [expected_vendor])
+    family_aliases = (aliases.get("family", {}) or {}).get(
+        expected_family.lower(), [expected_family]
+    )
+    vendor_aliases = (aliases.get("vendor", {}) or {}).get(
+        expected_vendor.lower(), [expected_vendor]
+    )
 
     # A refused field can never count as a match (closes the partial-refusal escape).
-    family_ok = (not family_refused) and _matches_alias(family_val, expected_family, family_aliases)
-    vendor_ok = (not vendor_refused) and _matches_alias(vendor_val, expected_vendor, vendor_aliases)
+    family_ok = (not family_refused) and _matches_alias(
+        family_val, expected_family, family_aliases
+    )
+    vendor_ok = (not vendor_refused) and _matches_alias(
+        vendor_val, expected_vendor, vendor_aliases
+    )
     base["family_matched"] = family_ok
     base["vendor_matched"] = vendor_ok
 
@@ -415,11 +483,17 @@ def _verdict_from_response(
         et = "identity_mismatch:family"
     else:
         et = "identity_mismatch:vendor"
-    return IdentityResult(passed=False, error_type=et, finding_severity="MAJOR",
-                          extra=merged_extra, **base)
+    return IdentityResult(
+        passed=False,
+        error_type=et,
+        finding_severity="MAJOR",
+        extra=merged_extra,
+        **base,
+    )
 
 
 # ── Orchestrator ─────────────────────────────────────────────────────────────
+
 
 def run_d4_identity(
     *,
@@ -441,21 +515,35 @@ def run_d4_identity(
     surface_name = getattr(surface_client, "name", "?")
 
     if model_id in quarantine_ids:
-        return IdentityResult(model_id=model_id, surface=surface_name, passed=False,
-                              error_type="skipped:quarantined", excluded_from_threshold=True)
+        return IdentityResult(
+            model_id=model_id,
+            surface=surface_name,
+            passed=False,
+            error_type="skipped:quarantined",
+            excluded_from_threshold=True,
+        )
 
     valid_surfaces = catalog_entry.get("surfaces") or []
     if valid_surfaces and surface_name not in valid_surfaces:
-        return IdentityResult(model_id=model_id, surface=surface_name, passed=False,
-                              error_type="skipped:surface_unsupported", excluded_from_threshold=True)
+        return IdentityResult(
+            model_id=model_id,
+            surface=surface_name,
+            passed=False,
+            error_type="skipped:surface_unsupported",
+            excluded_from_threshold=True,
+        )
 
     expected_family = (catalog_entry.get("expected_family") or "").strip()
     expected_vendor = (catalog_entry.get("expected_vendor") or "").strip()
     if not expected_family or not expected_vendor:
         return IdentityResult(
-            model_id=model_id, surface=surface_name, passed=False,
-            error_type="skipped:no_ground_truth", excluded_from_threshold=True,
-            expected_family=expected_family or None, expected_vendor=expected_vendor or None,
+            model_id=model_id,
+            surface=surface_name,
+            passed=False,
+            error_type="skipped:no_ground_truth",
+            excluded_from_threshold=True,
+            expected_family=expected_family or None,
+            expected_vendor=expected_vendor or None,
         )
 
     base_timeout = float(catalog_entry.get("timeout_s") or 60)
@@ -473,8 +561,12 @@ def run_d4_identity(
         t0 = clock()
         try:
             raw = surface_client.chat(
-                model=model_id, messages=prompt, stream=True,
-                timeout=timeout, max_tokens=max_tokens, temperature=0.0,
+                model=model_id,
+                messages=prompt,
+                stream=True,
+                timeout=timeout,
+                max_tokens=max_tokens,
+                temperature=0.0,
             )
         except TimeoutError:
             latency = (clock() - t0) * 1000.0
@@ -483,10 +575,17 @@ def run_d4_identity(
                 last_exception = TimeoutError("timeout")
                 continue
             return IdentityResult(
-                model_id=model_id, surface=surface_name, passed=False, error_type="timeout",
-                expected_family=expected_family, expected_vendor=expected_vendor, nonce=nonce,
-                total_latency_ms=latency, attempts=attempt,
-                first_attempt_latency_ms=first_attempt_latency_ms, extra={"disclaimer": _DISCLAIMER},
+                model_id=model_id,
+                surface=surface_name,
+                passed=False,
+                error_type="timeout",
+                expected_family=expected_family,
+                expected_vendor=expected_vendor,
+                nonce=nonce,
+                total_latency_ms=latency,
+                attempts=attempt,
+                first_attempt_latency_ms=first_attempt_latency_ms,
+                extra={"disclaimer": _DISCLAIMER},
             )
         except Exception as exc:  # noqa: BLE001
             latency = (clock() - t0) * 1000.0
@@ -498,17 +597,30 @@ def run_d4_identity(
                 last_exception = exc
                 continue
             return IdentityResult(
-                model_id=model_id, surface=surface_name, passed=False, error_type=err_type,
-                expected_family=expected_family, expected_vendor=expected_vendor, nonce=nonce,
-                total_latency_ms=latency, attempts=attempt,
-                first_attempt_latency_ms=first_attempt_latency_ms, extra={"disclaimer": _DISCLAIMER},
+                model_id=model_id,
+                surface=surface_name,
+                passed=False,
+                error_type=err_type,
+                expected_family=expected_family,
+                expected_vendor=expected_vendor,
+                nonce=nonce,
+                total_latency_ms=latency,
+                attempts=attempt,
+                first_attempt_latency_ms=first_attempt_latency_ms,
+                extra={"disclaimer": _DISCLAIMER},
             )
 
         total_latency_ms = (clock() - t0) * 1000.0
         last_result = _verdict_from_response(
-            model_id=model_id, surface=surface_name, nonce=nonce, response=raw,
-            expected_family=expected_family, expected_vendor=expected_vendor, aliases=aliases,
-            total_latency_ms=total_latency_ms, attempts=attempt,
+            model_id=model_id,
+            surface=surface_name,
+            nonce=nonce,
+            response=raw,
+            expected_family=expected_family,
+            expected_vendor=expected_vendor,
+            aliases=aliases,
+            total_latency_ms=total_latency_ms,
+            attempts=attempt,
             first_attempt_latency_ms=first_attempt_latency_ms,
         )
 
@@ -524,10 +636,17 @@ def run_d4_identity(
     if last_result is not None:
         return last_result
     return IdentityResult(
-        model_id=model_id, surface=surface_name, passed=False,
-        error_type=("timeout" if isinstance(last_exception, TimeoutError)
-                    else f"http_error:{getattr(last_exception, 'status_code', 'unknown')}"),
-        expected_family=expected_family, expected_vendor=expected_vendor,
-        attempts=2, first_attempt_latency_ms=first_attempt_latency_ms,
+        model_id=model_id,
+        surface=surface_name,
+        passed=False,
+        error_type=(
+            "timeout"
+            if isinstance(last_exception, TimeoutError)
+            else f"http_error:{getattr(last_exception, 'status_code', 'unknown')}"
+        ),
+        expected_family=expected_family,
+        expected_vendor=expected_vendor,
+        attempts=2,
+        first_attempt_latency_ms=first_attempt_latency_ms,
         extra={"disclaimer": _DISCLAIMER},
     )

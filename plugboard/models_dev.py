@@ -157,12 +157,17 @@ def parse_catalog(raw: Any) -> Tuple[Dict[str, CatalogProvider], int]:
                 invalid += 1
                 continue
             try:
-                models[model_key] = CatalogModel.model_validate({"id": model_key, **model})
+                models[model_key] = CatalogModel.model_validate(
+                    {"id": model_key, **model}
+                )
             except ValidationError:
                 invalid += 1
         try:
             provider = CatalogProvider.model_validate(
-                {**{k: v for k, v in entry.items() if k != "models"}, "id": entry.get("id") or key}
+                {
+                    **{k: v for k, v in entry.items() if k != "models"},
+                    "id": entry.get("id") or key,
+                }
             )
         except ValidationError:
             invalid += 1
@@ -292,7 +297,9 @@ async def refresh_catalog() -> Dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     meta["checked_at"] = now
     try:
-        code, body, etag = await _download(url, meta.get("etag", "") if _catalog_file().exists() else "")
+        code, body, etag = await _download(
+            url, meta.get("etag", "") if _catalog_file().exists() else ""
+        )
         if code == 304:
             meta["last_error"] = None
             _write_meta(meta)
@@ -316,8 +323,12 @@ async def refresh_catalog() -> Dict[str, Any]:
         _catalog_dir().mkdir(parents=True, exist_ok=True)
         atomic_write_json(_catalog_file(), raw)
         meta.update(
-            etag=etag, fetched_at=now, last_error=None, invalid_entries=invalid,
-            providers=len(providers), models=_model_count(providers),
+            etag=etag,
+            fetched_at=now,
+            last_error=None,
+            invalid_entries=invalid,
+            providers=len(providers),
+            models=_model_count(providers),
         )
         _write_meta(meta)
         log.info(
@@ -326,14 +337,21 @@ async def refresh_catalog() -> Dict[str, Any]:
             _model_count(providers),
             invalid,
         )
-        return {"state": "updated", "providers": len(providers), "invalid_entries": invalid}
+        return {
+            "state": "updated",
+            "providers": len(providers),
+            "invalid_entries": invalid,
+        }
     except Exception as exc:  # noqa: BLE001 — every failure keeps the old copy
         meta["last_error"] = f"{type(exc).__name__}: {exc}"
         try:
             _write_meta(meta)
         except OSError as write_exc:
             log.error("Cannot record catalog error: %s", write_exc)
-        log.warning("models.dev catalog refresh failed (%s); keeping the last good copy", meta["last_error"])
+        log.warning(
+            "models.dev catalog refresh failed (%s); keeping the last good copy",
+            meta["last_error"],
+        )
         return {"state": "error", "error": meta["last_error"]}
 
 
@@ -371,7 +389,11 @@ def resolve_base_url(provider: CatalogProvider) -> str:
     """OpenAI-compatible base URL for a catalog provider, or "" when unusable."""
     if provider.id in KNOWN_BASE_URLS:
         return KNOWN_BASE_URLS[provider.id]
-    if provider.npm == OPENAI_COMPATIBLE_NPM and provider.api and is_public_https(provider.api):
+    if (
+        provider.npm == OPENAI_COMPATIBLE_NPM
+        and provider.api
+        and is_public_https(provider.api)
+    ):
         return provider.api.rstrip("/")
     return ""
 
@@ -383,11 +405,15 @@ def _chat_compatible(model: CatalogModel, provider: CatalogProvider) -> bool:
 
 
 def compatible_models(provider: CatalogProvider) -> List[str]:
-    return sorted(m.id for m in provider.models.values() if _chat_compatible(m, provider))
+    return sorted(
+        m.id for m in provider.models.values() if _chat_compatible(m, provider)
+    )
 
 
 def excluded_models(provider: CatalogProvider) -> List[str]:
-    return sorted(m.id for m in provider.models.values() if not _chat_compatible(m, provider))
+    return sorted(
+        m.id for m in provider.models.values() if not _chat_compatible(m, provider)
+    )
 
 
 def _preset(provider: CatalogProvider, base_url: str) -> Dict[str, Any]:

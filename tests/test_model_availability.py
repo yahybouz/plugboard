@@ -533,7 +533,9 @@ async def test_refresh_native_provider_handles_non_native_and_keeps_default(
 
 
 @pytest.mark.asyncio
-async def test_refresh_all_model_catalogs_persists_native_and_subprocess(monkeypatch, tmp_path):
+async def test_refresh_all_model_catalogs_persists_native_and_subprocess(
+    monkeypatch, tmp_path
+):
     from plugboard import config
     from plugboard import model_availability as ma
     from tests.conftest import _setup_providers
@@ -698,6 +700,7 @@ async def test_smart_pruning_keeps_used_and_default_but_prunes_unused_deprecated
 
     def kept():
         return [m["id"] for m in config.get_provider("cli")["models"]]
+
     monkeypatch.setattr("plugboard.router.invalidate_models_cache", lambda: None)
 
     # Mock subprocess refresh to return all 3 models
@@ -1003,7 +1006,13 @@ async def test_check_internet_no_persistence_by_default(monkeypatch, tmp_path: P
         today = _dt.datetime.now(_dt.timezone.utc)
         yesterday = today - _dt.timedelta(days=1)
         weekdays_en = [
-            "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+            "Sunday",
         ]
         text = (
             f"Today is {weekdays_en[today.weekday()]}, "

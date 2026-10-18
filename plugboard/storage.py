@@ -78,6 +78,4 @@ def ensure_replaceable_json(path: Path) -> None:
 def atomic_write_json(path: Path, data: Any, mode: Optional[int] = None) -> None:
     """Write ``data`` as indented JSON atomically, never over an unreadable file."""
     ensure_replaceable_json(path)
-    atomic_write_text(
-        path, json.dumps(data, indent=2, ensure_ascii=False), mode=mode
-    )
+    atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False), mode=mode)

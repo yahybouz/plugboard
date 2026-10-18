@@ -39,7 +39,16 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, ClassVar, Dict, List, Optional, Protocol, Tuple, runtime_checkable
+from typing import (
+    Any,
+    ClassVar,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    Tuple,
+    runtime_checkable,
+)
 
 # tests/live_model_tests/surfaces/mcp_client.py → parents[3] == project root.
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -56,13 +65,16 @@ _MAX_SPAWN_RETRIES = 3
 _FOOTER_RE = re.compile(r"\n\n---\n_\(([^)]*)\)_\s*$")
 
 # Exact sentinels from mcp_server.chat() that mean "no content" (Council C8 M-2).
-_EMPTY_SENTINELS = frozenset({
-    "Error: Empty response from LLM (no choices)",
-    "Error: Empty content in LLM response",
-})
+_EMPTY_SENTINELS = frozenset(
+    {
+        "Error: Empty response from LLM (no choices)",
+        "Error: Empty content in LLM response",
+    }
+)
 
 
 # ── Exceptions ────────────────────────────────────────────────────────────────
+
 
 class McpSurfaceError(Exception):
     """``error_type`` is consumed by dimension run_dX handlers (like ApiSurfaceError)."""
@@ -89,6 +101,7 @@ class McpToolError(McpSurfaceError):
 
 # ── Transport Protocol ────────────────────────────────────────────────────────
 
+
 @runtime_checkable
 class JsonRpcTransport(Protocol):
     def send(self, obj: Dict[str, Any]) -> None: ...
@@ -97,6 +110,7 @@ class JsonRpcTransport(Protocol):
 
 
 # ── SubprocessTransport ───────────────────────────────────────────────────────
+
 
 class SubprocessTransport:
     """Concrete ``JsonRpcTransport`` over a subprocess stdio channel.
@@ -132,7 +146,9 @@ class SubprocessTransport:
         except (FileNotFoundError, PermissionError) as exc:
             raise McpTransportError(f"cannot launch {self._cmd[0]!r}: {exc}") from exc
 
-        t = threading.Thread(target=self._drain_stderr, daemon=True, name="mcp-stderr-drain")
+        t = threading.Thread(
+            target=self._drain_stderr, daemon=True, name="mcp-stderr-drain"
+        )
         t.start()
 
     def _drain_stderr(self) -> None:
@@ -156,7 +172,9 @@ class SubprocessTransport:
         if self._proc.poll() is not None:
             raise McpTransportError(f"subprocess exited (code {self._proc.returncode})")
         try:
-            self._proc.stdin.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+            self._proc.stdin.write(
+                (json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8")
+            )
             self._proc.stdin.flush()
         except (OSError, BrokenPipeError) as exc:
             raise McpTransportError(f"write failed: {exc}") from exc
@@ -219,6 +237,7 @@ class SubprocessTransport:
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _strip_footer(text: str) -> Tuple[str, Optional[Dict[str, str]]]:
     """Remove the mcp_server billing footer (anchored at end). The anchor
     (``\\n\\n---\\n_(`` ... ``)_`` at end) makes a false match inside JSON
@@ -236,11 +255,19 @@ def _strip_footer(text: str) -> Tuple[str, Optional[Dict[str, str]]]:
 
 def _extract_mcp_args(messages: List[Dict[str, Any]]) -> Dict[str, str]:
     """Last user message → ``message``; a system message → ``system_prompt``."""
-    user_msg = next((m for m in reversed(messages) if (m.get("role") or "").lower() == "user"), None)
+    user_msg = next(
+        (m for m in reversed(messages) if (m.get("role") or "").lower() == "user"), None
+    )
     if user_msg is None:
         raise ValueError("McpSurfaceClient.chat requires at least one user message")
-    system = next((m.get("content") or "" for m in messages
-                   if (m.get("role") or "").lower() == "system"), "")
+    system = next(
+        (
+            m.get("content") or ""
+            for m in messages
+            if (m.get("role") or "").lower() == "system"
+        ),
+        "",
+    )
     return {"message": user_msg.get("content") or "", "system_prompt": system}
 
 
@@ -255,13 +282,14 @@ def _make_unified_dict(content: str) -> Dict[str, Any]:
         "done_received": True,
         "raw_chunks": [],
         "raw_sse_lines": None,  # non-streaming → D5 skips
-        "billing": None,        # supports_billing=False → D6 skips
+        "billing": None,  # supports_billing=False → D6 skips
         "model_echoed": None,
         "request_id": None,
     }
 
 
 # ── McpSurfaceClient ──────────────────────────────────────────────────────────
+
 
 class McpSurfaceClient:
     """MCP stdio surface client. NOT thread-safe (one instance per worker)."""
@@ -297,18 +325,27 @@ class McpSurfaceClient:
         # Bound the handshake separately from the per-call timeout (Council C8 M-1).
         deadline = min(chat_deadline, time.monotonic() + self._startup_timeout)
         req_id = self._next_id()
-        self._transport.send({
-            "jsonrpc": "2.0", "id": req_id, "method": "initialize",
-            "params": {"protocolVersion": _PROTOCOL_VERSION, "capabilities": {},
-                       "clientInfo": {"name": "live-test", "version": "1.0"}},
-        })
+        self._transport.send(
+            {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": _PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "live-test", "version": "1.0"},
+                },
+            }
+        )
         while True:
             msg = self._transport.recv(deadline=deadline)
             if msg.get("id") == req_id:
                 if "error" in msg:
                     raise McpHandshakeError(f"initialize error: {msg['error']}")
                 break
-        self._transport.send({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+        self._transport.send(
+            {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+        )
         self._handshake_done = True
 
     def chat(
@@ -316,7 +353,7 @@ class McpSurfaceClient:
         model: str,
         messages: List[Dict[str, Any]],
         *,
-        stream: bool,          # accepted for Protocol compatibility; ignored (MCP is request-response)
+        stream: bool,  # accepted for Protocol compatibility; ignored (MCP is request-response)
         timeout: float,
         max_tokens: int,
         temperature: float,
@@ -324,7 +361,9 @@ class McpSurfaceClient:
         last_exc: Optional[Exception] = None
         for attempt in range(1, _MAX_SPAWN_RETRIES + 1):
             try:
-                return self._chat_once(model, messages, timeout, max_tokens, temperature)
+                return self._chat_once(
+                    model, messages, timeout, max_tokens, temperature
+                )
             except TimeoutError:
                 raise  # not transient — propagate so the dimension attributes "timeout"
             except (McpTransportError, McpHandshakeError) as exc:
@@ -336,21 +375,29 @@ class McpSurfaceClient:
         assert last_exc is not None
         raise last_exc
 
-    def _chat_once(self, model, messages, timeout, max_tokens, temperature) -> Dict[str, Any]:
+    def _chat_once(
+        self, model, messages, timeout, max_tokens, temperature
+    ) -> Dict[str, Any]:
         deadline = time.monotonic() + timeout
         self._do_handshake(deadline)
         args = _extract_mcp_args(messages)
         req_id = self._next_id()
         arguments: Dict[str, Any] = {
-            "model": model, "message": args["message"],
-            "max_tokens": max_tokens, "temperature": temperature,
+            "model": model,
+            "message": args["message"],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
         }
         if args["system_prompt"]:
             arguments["system_prompt"] = args["system_prompt"]
-        self._transport.send({
-            "jsonrpc": "2.0", "id": req_id, "method": "tools/call",
-            "params": {"name": "chat", "arguments": arguments},
-        })
+        self._transport.send(
+            {
+                "jsonrpc": "2.0",
+                "id": req_id,
+                "method": "tools/call",
+                "params": {"name": "chat", "arguments": arguments},
+            }
+        )
         while True:
             if time.monotonic() > deadline:
                 raise TimeoutError(f"MCP tools/call timed out after {timeout:.1f}s")
@@ -359,7 +406,9 @@ class McpSurfaceClient:
                 continue  # notification / other id — skip
             if "error" in msg:
                 err = msg["error"]
-                raise McpToolError(f"JSON-RPC error {err.get('code')}: {err.get('message')}")
+                raise McpToolError(
+                    f"JSON-RPC error {err.get('code')}: {err.get('message')}"
+                )
             result = msg.get("result") or {}
             is_error = bool(result.get("isError", False))
             content_list = result.get("content") or []

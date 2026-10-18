@@ -43,9 +43,9 @@ from plugboard.billing import calculate_cost
 from tests.live_model_tests.protocols import SURFACE_TIMEOUT_MULTIPLIER, SurfaceClient
 
 # Cost regime thresholds (Council C6-bis MAJOR-1).
-_ZERO_EPSILON_USD = 1e-8   # min representable at 8 decimal places
-_COST_FLOOR_USD = 1e-6     # $0.000001 — economic significance threshold
-_ABS_TOL_USD = 5e-8        # absolute tolerance in the micro-cost regime
+_ZERO_EPSILON_USD = 1e-8  # min representable at 8 decimal places
+_COST_FLOOR_USD = 1e-6  # $0.000001 — economic significance threshold
+_ABS_TOL_USD = 5e-8  # absolute tolerance in the micro-cost regime
 
 # Resolver: (billed_model, pricing_month) -> price_entry | None
 PricingResolver = Callable[[str, Optional[str]], Optional[Dict[str, Any]]]
@@ -58,7 +58,9 @@ _RETRY_ERROR_TYPES = {
 }
 
 
-def _default_pricing_resolver(billed_model: str, pricing_month: Optional[str]) -> Optional[Dict[str, Any]]:
+def _default_pricing_resolver(
+    billed_model: str, pricing_month: Optional[str]
+) -> Optional[Dict[str, Any]]:
     """Production resolver — same mechanism the proxy uses (single source of
     truth). Imported lazily so unit tests (which inject their own resolver) do
     not need the pricing snapshots on disk."""
@@ -118,7 +120,9 @@ class CostResult:
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
-def _compare_costs(expected: float, reported: float, tolerance_pct: float) -> tuple[bool, str, str]:
+def _compare_costs(
+    expected: float, reported: float, tolerance_pct: float
+) -> tuple[bool, str, str]:
     """Return (passed, error_type, finding_severity). Council C6-bis MAJOR-1."""
     if expected <= _ZERO_EPSILON_USD and reported <= _ZERO_EPSILON_USD:
         return True, "cost_match", "MAJOR"
@@ -187,8 +191,11 @@ def _verdict_from_billing(
     # ── Cache hit → no fresh cost to validate (excluded) ─────────────────────
     if billing.get("cache_hit"):
         return CostResult(
-            passed=False, error_type="skipped:cache_hit",
-            finding_severity="INFO", excluded_from_threshold=True, **base,
+            passed=False,
+            error_type="skipped:cache_hit",
+            finding_severity="INFO",
+            excluded_from_threshold=True,
+            **base,
         )
 
     reported = _coerce_float(billing.get("cost_usd"))
@@ -207,19 +214,26 @@ def _verdict_from_billing(
     # ── Price unresolved → can't evaluate (excluded, INFO) ───────────────────
     if not price_entry:
         return CostResult(
-            passed=False, error_type="skipped:pricing_not_found",
-            finding_severity="INFO", excluded_from_threshold=True, **base,
+            passed=False,
+            error_type="skipped:pricing_not_found",
+            finding_severity="INFO",
+            excluded_from_threshold=True,
+            **base,
         )
 
     expected = calculate_cost(prompt_tokens, completion_tokens, price_entry)
     base["expected_cost_usd"] = expected
     base["abs_diff_usd"] = abs(reported - expected)
-    base["rel_diff"] = ((reported - expected) / expected) if expected > _ZERO_EPSILON_USD else None
+    base["rel_diff"] = (
+        ((reported - expected) / expected) if expected > _ZERO_EPSILON_USD else None
+    )
 
     passed, error_type, severity = _compare_costs(expected, reported, tolerance_pct)
     if passed:
         return CostResult(passed=True, error_type=None, **base)
-    return CostResult(passed=False, error_type=error_type, finding_severity=severity, **base)
+    return CostResult(
+        passed=False, error_type=error_type, finding_severity=severity, **base
+    )
 
 
 def _build_prompt(nonce: str) -> list:
@@ -247,21 +261,36 @@ def run_d6_cost_accuracy(
     surface_name = getattr(surface_client, "name", "?")
 
     if model_id in quarantine_ids:
-        return CostResult(model_id=model_id, surface=surface_name, passed=False,
-                          error_type="skipped:quarantined",
-                          finding_severity="INFO", excluded_from_threshold=True)
+        return CostResult(
+            model_id=model_id,
+            surface=surface_name,
+            passed=False,
+            error_type="skipped:quarantined",
+            finding_severity="INFO",
+            excluded_from_threshold=True,
+        )
 
     valid_surfaces = catalog_entry.get("surfaces") or []
     if valid_surfaces and surface_name not in valid_surfaces:
-        return CostResult(model_id=model_id, surface=surface_name, passed=False,
-                          error_type="skipped:surface_unsupported",
-                          finding_severity="INFO", excluded_from_threshold=True)
+        return CostResult(
+            model_id=model_id,
+            surface=surface_name,
+            passed=False,
+            error_type="skipped:surface_unsupported",
+            finding_severity="INFO",
+            excluded_from_threshold=True,
+        )
 
     # Discriminant — only billing-capable surfaces are evaluated (BLOCKER-2).
     if not getattr(surface_client, "supports_billing", False):
-        return CostResult(model_id=model_id, surface=surface_name, passed=False,
-                          error_type="skipped:surface_billing_unavailable",
-                          finding_severity="INFO", excluded_from_threshold=True)
+        return CostResult(
+            model_id=model_id,
+            surface=surface_name,
+            passed=False,
+            error_type="skipped:surface_billing_unavailable",
+            finding_severity="INFO",
+            excluded_from_threshold=True,
+        )
 
     base_timeout = float(catalog_entry.get("timeout_s") or 60)
     timeout = base_timeout * SURFACE_TIMEOUT_MULTIPLIER.get(surface_name, 1.0)
@@ -278,8 +307,12 @@ def run_d6_cost_accuracy(
         t0 = clock()
         try:
             raw = surface_client.chat(
-                model=model_id, messages=prompt, stream=False,
-                timeout=timeout, max_tokens=max_tokens, temperature=0.0,
+                model=model_id,
+                messages=prompt,
+                stream=False,
+                timeout=timeout,
+                max_tokens=max_tokens,
+                temperature=0.0,
             )
         except TimeoutError:
             latency = (clock() - t0) * 1000.0
@@ -287,9 +320,15 @@ def run_d6_cost_accuracy(
                 first_attempt_latency_ms = latency
                 last_exception = TimeoutError("timeout")
                 continue
-            return CostResult(model_id=model_id, surface=surface_name, passed=False,
-                              error_type="timeout", total_latency_ms=latency, attempts=attempt,
-                              first_attempt_latency_ms=first_attempt_latency_ms)
+            return CostResult(
+                model_id=model_id,
+                surface=surface_name,
+                passed=False,
+                error_type="timeout",
+                total_latency_ms=latency,
+                attempts=attempt,
+                first_attempt_latency_ms=first_attempt_latency_ms,
+            )
         except Exception as exc:  # noqa: BLE001
             latency = (clock() - t0) * 1000.0
             err_type = getattr(exc, "error_type", None) or "http_error:unknown"
@@ -299,9 +338,15 @@ def run_d6_cost_accuracy(
                 first_attempt_latency_ms = latency
                 last_exception = exc
                 continue
-            return CostResult(model_id=model_id, surface=surface_name, passed=False,
-                              error_type=err_type, total_latency_ms=latency, attempts=attempt,
-                              first_attempt_latency_ms=first_attempt_latency_ms)
+            return CostResult(
+                model_id=model_id,
+                surface=surface_name,
+                passed=False,
+                error_type=err_type,
+                total_latency_ms=latency,
+                attempts=attempt,
+                first_attempt_latency_ms=first_attempt_latency_ms,
+            )
 
         total_latency_ms = (clock() - t0) * 1000.0
         billing = raw.get("billing")
@@ -311,8 +356,13 @@ def run_d6_cost_accuracy(
         price_entry = pricing_resolver(billed_model, pricing_month)
 
         last_result = _verdict_from_billing(
-            model_id=model_id, surface=surface_name, billing=billing, price_entry=price_entry,
-            tolerance_pct=tolerance_pct, total_latency_ms=total_latency_ms, attempts=attempt,
+            model_id=model_id,
+            surface=surface_name,
+            billing=billing,
+            price_entry=price_entry,
+            tolerance_pct=tolerance_pct,
+            total_latency_ms=total_latency_ms,
+            attempts=attempt,
             first_attempt_latency_ms=first_attempt_latency_ms,
         )
 
@@ -328,8 +378,14 @@ def run_d6_cost_accuracy(
     if last_result is not None:
         return last_result
     return CostResult(
-        model_id=model_id, surface=surface_name, passed=False,
-        error_type=("timeout" if isinstance(last_exception, TimeoutError)
-                    else f"http_error:{getattr(last_exception, 'status_code', 'unknown')}"),
-        attempts=2, first_attempt_latency_ms=first_attempt_latency_ms,
+        model_id=model_id,
+        surface=surface_name,
+        passed=False,
+        error_type=(
+            "timeout"
+            if isinstance(last_exception, TimeoutError)
+            else f"http_error:{getattr(last_exception, 'status_code', 'unknown')}"
+        ),
+        attempts=2,
+        first_attempt_latency_ms=first_attempt_latency_ms,
     )

@@ -30,18 +30,50 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 _MONTHS_EN = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 ]
 _MONTHS_FR = [
-    "janvier", "février", "mars", "avril", "mai", "juin",
-    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+    "janvier",
+    "février",
+    "mars",
+    "avril",
+    "mai",
+    "juin",
+    "juillet",
+    "août",
+    "septembre",
+    "octobre",
+    "novembre",
+    "décembre",
 ]
 _WEEKDAYS_EN = [
-    "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
 ]
 _WEEKDAYS_FR = [
-    "lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche",
+    "lundi",
+    "mardi",
+    "mercredi",
+    "jeudi",
+    "vendredi",
+    "samedi",
+    "dimanche",
 ]
 
 
@@ -53,15 +85,15 @@ def build_date_variants(dt: _dt.datetime) -> List[str]:
     d, m, y = dt.day, dt.month, dt.year
     me, mf = _MONTHS_EN[m - 1], _MONTHS_FR[m - 1]
     return [
-        f"{y}-{m:02d}-{d:02d}",        # ISO 2026-05-31
-        f"{d:02d}/{m:02d}/{y}",        # FR 31/05/2026
-        f"{d}/{m}/{y}",                # FR loose 31/5/2026
-        f"{m:02d}/{d:02d}/{y}",        # US 05/31/2026
-        f"{m}/{d}/{y}",                # US loose
-        f"{d} {me} {y}",               # 31 May 2026
-        f"{me} {d}, {y}",              # May 31, 2026
-        f"{me} {d} {y}",               # May 31 2026
-        f"{d} {mf} {y}",               # 31 mai 2026
+        f"{y}-{m:02d}-{d:02d}",  # ISO 2026-05-31
+        f"{d:02d}/{m:02d}/{y}",  # FR 31/05/2026
+        f"{d}/{m}/{y}",  # FR loose 31/5/2026
+        f"{m:02d}/{d:02d}/{y}",  # US 05/31/2026
+        f"{m}/{d}/{y}",  # US loose
+        f"{d} {me} {y}",  # 31 May 2026
+        f"{me} {d}, {y}",  # May 31, 2026
+        f"{me} {d} {y}",  # May 31 2026
+        f"{d} {mf} {y}",  # 31 mai 2026
     ]
 
 
@@ -168,22 +200,17 @@ def evaluate_probe_response(
     yesterday_variants = build_yesterday_variants(today)
     weekday_en, weekday_fr = today_weekdays(today)
 
-    msg = ((response.get("choices") or [{}])[0].get("message") or {})
+    msg = (response.get("choices") or [{}])[0].get("message") or {}
     # Some thinking models emit final answer in `content`, others in
     # `reasoning` then `content`. Concatenate both so we match either —
     # unless ignore_reasoning is set, then the reasoning channel is dropped.
     reasoning_part = "" if ignore_reasoning else (msg.get("reasoning") or "").strip()
-    content = (
-        (msg.get("content") or "").strip()
-        + "\n"
-        + reasoning_part
-    ).strip()
+    content = ((msg.get("content") or "").strip() + "\n" + reasoning_part).strip()
     content_lower = content.lower()
 
     date_today_present = any(v.lower() in content_lower for v in today_variants)
     weekday_present = (
-        weekday_en.lower() in content_lower
-        or weekday_fr.lower() in content_lower
+        weekday_en.lower() in content_lower or weekday_fr.lower() in content_lower
     )
     date_yesterday_present = any(v.lower() in content_lower for v in yesterday_variants)
     url_present = bool(_re.search(r"https?://[^\s)]+", content))

@@ -161,17 +161,23 @@ def _seed_pricing(data_dir: Path) -> str:
         },
         "note": "E2E seed grid",
     }
-    (pricing_dir / f"{month}.json").write_text(json.dumps(grid, indent=2), encoding="utf-8")
+    (pricing_dir / f"{month}.json").write_text(
+        json.dumps(grid, indent=2), encoding="utf-8"
+    )
     return month
 
 
-def _wait_health(base_url: str, proc: subprocess.Popen, timeout_s: float = 40.0) -> None:
+def _wait_health(
+    base_url: str, proc: subprocess.Popen, timeout_s: float = 40.0
+) -> None:
     """Poll /health until the server answers ok, or fail with the boot log."""
     deadline = time.monotonic() + timeout_s
     last_err = ""
     while time.monotonic() < deadline:
         if proc.poll() is not None:
-            raise RuntimeError(f"server exited early (rc={proc.returncode}) before /health")
+            raise RuntimeError(
+                f"server exited early (rc={proc.returncode}) before /health"
+            )
         try:
             with urllib.request.urlopen(f"{base_url}/health", timeout=3) as resp:
                 if resp.status == 200 and json.loads(resp.read()).get("ok"):
@@ -179,7 +185,9 @@ def _wait_health(base_url: str, proc: subprocess.Popen, timeout_s: float = 40.0)
         except (urllib.error.URLError, OSError, ValueError) as exc:
             last_err = str(exc)
         time.sleep(0.4)
-    raise RuntimeError(f"server did not become healthy within {timeout_s}s (last: {last_err})")
+    raise RuntimeError(
+        f"server did not become healthy within {timeout_s}s (last: {last_err})"
+    )
 
 
 @pytest.fixture(scope="session")

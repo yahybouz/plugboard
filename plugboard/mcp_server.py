@@ -266,9 +266,7 @@ async def chat_stream(
     if reasoning_chunks:
         # Truncation case: model spent the whole budget thinking.
         return (
-            "[thinking]\n"
-            + "".join(reasoning_chunks).strip()
-            + "\n[/thinking]\n\n"
+            "[thinking]\n" + "".join(reasoning_chunks).strip() + "\n[/thinking]\n\n"
             "Error: model produced reasoning but no final content "
             "(likely max_tokens exhausted — retry with a larger budget)."
         )
@@ -526,7 +524,9 @@ def _tracking_conn() -> sqlite3.Connection:
     return conn
 
 
-_LEGACY_REGISTRY_PATH = Path(__file__).resolve().parent.parent / "docs" / "registry.json"
+_LEGACY_REGISTRY_PATH = (
+    Path(__file__).resolve().parent.parent / "docs" / "registry.json"
+)
 
 
 def _load_registry() -> dict:

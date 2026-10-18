@@ -49,6 +49,7 @@ def _source_url() -> str:
         return _PRICING_SOURCE_URL
     return pricing_merge.pricing_source_url()
 
+
 # Known provider pricing (fallback when no external source)
 # Format: model_suffix -> (input_price, output_price) per 1M tokens
 _KNOWN_PRICES: Dict[str, Dict[str, float]] = {
@@ -258,7 +259,11 @@ def _secure_source(url: str) -> bool:
     parts = urlsplit(url)
     if parts.scheme == "https":
         return True
-    return parts.scheme == "http" and (parts.hostname or "") in {"localhost", "127.0.0.1", "::1"}
+    return parts.scheme == "http" and (parts.hostname or "") in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+    }
 
 
 async def _fetch_external_source() -> Dict[str, Dict[str, float]]:
@@ -518,7 +523,8 @@ def _ollama_configured() -> bool:
         log.warning("ollama pricing: cannot read providers: %s", exc)
         return False
     return any(
-        str(p.get("id") or "").startswith("ollama") or ":11434" in (p.get("base_url") or "")
+        str(p.get("id") or "").startswith("ollama")
+        or ":11434" in (p.get("base_url") or "")
         for p in providers
     )
 
@@ -545,7 +551,10 @@ def parse_ollama_pricing(html: str) -> Prices:
     table = html[start : end if end > 0 else None]
     prices: Prices = {}
     for row in re.findall(r"<tr[^>]*>(.*?)</tr>", table, flags=re.S | re.I):
-        cells = [re.sub(r"<[^>]+>", "", c).strip() for c in re.findall(r"<td[^>]*>(.*?)</td>", row, flags=re.S | re.I)]
+        cells = [
+            re.sub(r"<[^>]+>", "", c).strip()
+            for c in re.findall(r"<td[^>]*>(.*?)</td>", row, flags=re.S | re.I)
+        ]
         if len(cells) < 4 or "off-peak" in cells[0].lower():
             continue
         name = cells[0].split()[0].strip().lower()
@@ -610,12 +619,16 @@ def _models_dev_pricing() -> Tuple[Prices, Dict[str, Prices]]:
             for model_id, price in _catalog_costs(catalog[vendor_id]).items():
                 vendor.setdefault(model_id, price)
     resellers = {
-        space: _catalog_costs(catalog[space]) for space in AGGREGATORS if space in catalog
+        space: _catalog_costs(catalog[space])
+        for space in AGGREGATORS
+        if space in catalog
     }
     return vendor, {space: prices for space, prices in resellers.items() if prices}
 
 
-async def _fetch_sources(order: List[str]) -> Tuple[Dict[str, Prices], Dict[str, Dict[str, Prices]]]:
+async def _fetch_sources(
+    order: List[str],
+) -> Tuple[Dict[str, Prices], Dict[str, Dict[str, Prices]]]:
     """Fetch every listed source.
 
     Returns (vendor sources, reseller sources by space). Vendor sources feed
@@ -630,7 +643,9 @@ async def _fetch_sources(order: List[str]) -> Tuple[Dict[str, Prices], Dict[str,
     names = [name for name in order if name in fetchers]
     if "provider_native" in names:
         names.append("ollama_native")  # Ollama's own table is a provider-native source
-    results = await asyncio.gather(*(fetchers[name]() for name in names), return_exceptions=True)
+    results = await asyncio.gather(
+        *(fetchers[name]() for name in names), return_exceptions=True
+    )
     fetched: Dict[str, Prices] = {}
     for name, value in zip(names, results):
         if isinstance(value, BaseException):
@@ -660,7 +675,9 @@ def _model_suffix(model_id: str) -> str:
     return suffix
 
 
-def _known_source(existing_models: Dict[str, Any], provider_models: Optional[List[str]]) -> Prices:
+def _known_source(
+    existing_models: Dict[str, Any], provider_models: Optional[List[str]]
+) -> Prices:
     """Built-in prices, only for routable models that no grid entry prices.
 
     The fuzzy match in _match_known_price is good enough to fill a gap, not
@@ -686,7 +703,9 @@ def _known_source(existing_models: Dict[str, Any], provider_models: Optional[Lis
 def _vendor_price(model: str, models: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     from plugboard import billing
 
-    match = billing.match_in_grid({"models": models}, [], billing._candidate_keys(model))
+    match = billing.match_in_grid(
+        {"models": models}, [], billing._candidate_keys(model)
+    )
     return match.entry if match else None
 
 
@@ -703,7 +722,13 @@ def _merge_spaces(
     drift_pct: float,
     action: str,
     reviewed_all: Optional[Dict[str, Dict[str, Dict[str, float]]]] = None,
-) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]], int, List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> Tuple[
+    Dict[str, Dict[str, Any]],
+    List[Dict[str, Any]],
+    int,
+    List[Dict[str, Any]],
+    List[Dict[str, Any]],
+]:
     """Merge reseller prices; keep only those that differ from the vendor's.
 
     Returns (models_by_provider, drifts, added, updated, rejected); drift,
@@ -725,8 +750,14 @@ def _merge_spaces(
             for name, prices in (by_space.get(space) or {}).items()
         }
         res = pricing_merge.merge_sources(
-            existing, sources, order, drift_pct=drift_pct, action=action,
-            reviewed=(reviewed_all if reviewed_all is not None else {}).setdefault(space, {}),
+            existing,
+            sources,
+            order,
+            drift_pct=drift_pct,
+            action=action,
+            reviewed=(reviewed_all if reviewed_all is not None else {}).setdefault(
+                space, {}
+            ),
         )
         for drift in res.drifts:
             drift["space"] = space
@@ -778,7 +809,9 @@ async def update_current_pricing(
             # Keep the damaged file for inspection and rebuild the month from
             # the previous one and the sources, rather than fail every pass.
             damaged = _PRICING_DIR_path(month)
-            aside = damaged.with_suffix(f".corrupt-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.json")
+            aside = damaged.with_suffix(
+                f".corrupt-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.json"
+            )
             damaged.rename(aside)
             log.critical("%s; moved it to %s and rebuilt the grid", exc, aside.name)
             existing = {}
@@ -798,8 +831,12 @@ async def update_current_pricing(
                     existing_models[model] = dict(price)
                     inherited += 1
             if inherited:
-                log.info("Inherited %d models from %s into %s", inherited, prev_month, month)
-        spaces_in = {s: dict(sub) for s, sub in (prev.get("models_by_provider") or {}).items()}
+                log.info(
+                    "Inherited %d models from %s into %s", inherited, prev_month, month
+                )
+        spaces_in = {
+            s: dict(sub) for s, sub in (prev.get("models_by_provider") or {}).items()
+        }
         for space, sub in before_spaces.items():
             spaces_in[space] = {**spaces_in.get(space, {}), **sub}
 
@@ -810,22 +847,34 @@ async def update_current_pricing(
         _last_space_sources.clear()
         _last_space_sources.update({s: dict(src) for s, src in by_space.items()})
 
-        reviewed_all = {k: dict(v) for k, v in (existing.get("reviewed_prices") or {}).items()}
+        reviewed_all = {
+            k: dict(v) for k, v in (existing.get("reviewed_prices") or {}).items()
+        }
         merged = pricing_merge.merge_sources(
-            existing_models, sources, order, drift_pct=drift_pct, action=action,
+            existing_models,
+            sources,
+            order,
+            drift_pct=drift_pct,
+            action=action,
             reviewed=reviewed_all.setdefault("", {}),
         )
         models = merged.models
-        spaces, space_drifts, space_added, space_updated, space_rejected = _merge_spaces(
-            spaces_in, by_space, models, order, drift_pct, action, reviewed_all
+        spaces, space_drifts, space_added, space_updated, space_rejected = (
+            _merge_spaces(
+                spaces_in, by_space, models, order, drift_pct, action, reviewed_all
+            )
         )
         for item in merged.rejected + space_rejected:
             log.warning(
                 "Pricing %s: rejected %s price for %s (out of bounds or ratio): %s",
-                month, item["source"], item["model"], item["entry"],
+                month,
+                item["source"],
+                item["model"],
+                item["entry"],
             )
         used = [
-            name for name in order
+            name
+            for name in order
             if sources.get(name) or any(name in src for src in by_space.values())
         ]
         summary = {
@@ -848,12 +897,19 @@ async def update_current_pricing(
             log.critical(
                 "Pricing %s SENTINEL REFUSED: in-memory grid has %d models but %s had %d. "
                 "Persist aborted to avoid corrupting the on-disk snapshot.",
-                month, len(models), prev_month, prev_total,
+                month,
+                len(models),
+                prev_month,
+                prev_total,
             )
             return {**summary, "persisted": False, "sentinel_refused": True}
 
         reviewed_all = {k: v for k, v in reviewed_all.items() if v}
-        if models != before or spaces != before_spaces or reviewed_all != (existing.get("reviewed_prices") or {}):
+        if (
+            models != before
+            or spaces != before_spaces
+            or reviewed_all != (existing.get("reviewed_prices") or {})
+        ):
             now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             note = existing.get("note", "")
             label = ",".join(used) or str(summary["source"])
@@ -871,8 +927,12 @@ async def update_current_pricing(
             save_pricing(month, grid)
             log.info(
                 "Pricing %s: +%d added, %d updated, %d held for review, %d models, %d provider prices",
-                month, summary["added"], summary["updated"], summary["drifts"],
-                len(models), summary["provider_prices"],
+                month,
+                summary["added"],
+                summary["updated"],
+                summary["drifts"],
+                len(models),
+                summary["provider_prices"],
             )
 
     drifts = merged.drifts + space_drifts
@@ -883,11 +943,16 @@ async def update_current_pricing(
         created = set(pricing_suggestions.record_drifts(month, drifts))
         # Only a newly queued suggestion is announced, not the same one each pass.
         new_drifts = [
-            d for d in drifts
-            if pricing_suggestions.suggestion_id("drift", d["model"], d["new"], d.get("space", ""))
+            d
+            for d in drifts
+            if pricing_suggestions.suggestion_id(
+                "drift", d["model"], d["new"], d.get("space", "")
+            )
             in created
         ]
-    batch = price_change_events(month, merged.updated + space_updated, new_drifts, drift_pct)
+    batch = price_change_events(
+        month, merged.updated + space_updated, new_drifts, drift_pct
+    )
     if len(batch):
         summary["webhooks"] = batch.flush_in_background()
     return summary
@@ -907,7 +972,9 @@ def price_change_events(
     from plugboard.change_events import ChangeBatch
 
     batch = ChangeBatch()
-    for item, status in [(u, "applied") for u in updated] + [(d, "pending") for d in drifts]:
+    for item, status in [(u, "applied") for u in updated] + [
+        (d, "pending") for d in drifts
+    ]:
         if item.get("old") is None or float(item.get("pct") or 0) <= drift_pct:
             continue
         data = {
@@ -947,13 +1014,23 @@ def revert_model(month: str, model: str, space: str = "") -> Optional[Dict[str, 
         if entry is None:
             raise KeyError(model)
         if entry.get("source") != "manual":
-            raise ValueError(f"{model} is not a manual price (source: {entry.get('source') or 'none'})")
+            raise ValueError(
+                f"{model} is not a manual price (source: {entry.get('source') or 'none'})"
+            )
         del table[model]
         order = pricing_merge.source_order(external_configured=bool(_source_url()))
-        cached = {name: {model: prices[model]} for name, prices in cache.items() if model in prices}
+        cached = {
+            name: {model: prices[model]}
+            for name, prices in cache.items()
+            if model in prices
+        }
         merged = pricing_merge.merge_sources({}, cached, order, action="apply")
         new = merged.models.get(model)
-        if new is not None and space and _same_as_vendor(model, new, grid.get("models") or {}):
+        if (
+            new is not None
+            and space
+            and _same_as_vendor(model, new, grid.get("models") or {})
+        ):
             new = None  # the vendor price applies again
         if new is None and isinstance(entry.get("previous"), dict):
             new = dict(entry["previous"])  # the automatic price the admin replaced
@@ -961,7 +1038,8 @@ def revert_model(month: str, model: str, space: str = "") -> Optional[Dict[str, 
             prev_month = _previous_month(month)
             prev_grid = load_pricing(prev_month) if prev_month else {}
             prev_table = (
-                (prev_grid.get("models_by_provider") or {}).get(space, {}) if space
+                (prev_grid.get("models_by_provider") or {}).get(space, {})
+                if space
                 else prev_grid.get("models") or {}
             )
             if model in prev_table:

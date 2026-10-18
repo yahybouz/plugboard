@@ -42,7 +42,10 @@ def test_has_internet_access_default():
     # web CLIs stay online via their vendor token in the long provider id.
     assert has_internet_access_default("claude-via-claude-cli:claude-opus-4-7") is True
     assert has_internet_access_default("chatgpt-via-codex-cli:gpt-5.5") is True
-    assert has_internet_access_default("google-gemini-via-gemini-cli:gemini-3-pro-preview") is True
+    assert (
+        has_internet_access_default("google-gemini-via-gemini-cli:gemini-3-pro-preview")
+        is True
+    )
     # …and the same offline-provider rule holds for the real ollama provider id.
     assert has_internet_access_default("ollama:deepseek-v4-pro:cloud") is False
 
@@ -55,7 +58,11 @@ def test_enrich_adds_internet_access():
         {"id": "ollama:llama3:8b", "owned_by": "ollama"},
         # A real probe persisted internet_access=False — must be PRESERVED, never
         # re-coerced to True by the heuristic (probe is the authority).
-        {"id": "ollama:deepseek-v3.1:671b-cloud", "owned_by": "ollama", "internet_access": False},
+        {
+            "id": "ollama:deepseek-v3.1:671b-cloud",
+            "owned_by": "ollama",
+            "internet_access": False,
+        },
     ]
     enriched = enrich(models)
 
@@ -111,9 +118,29 @@ async def test_probe_passes_when_date_weekday_yesterday_match(monkeypatch):
 
     today = _dt.datetime.now(_dt.timezone.utc)
     yesterday = today - _dt.timedelta(days=1)
-    weekdays_fr = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
-    months_fr = ["janvier", "février", "mars", "avril", "mai", "juin",
-                 "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
+    weekdays_fr = [
+        "lundi",
+        "mardi",
+        "mercredi",
+        "jeudi",
+        "vendredi",
+        "samedi",
+        "dimanche",
+    ]
+    months_fr = [
+        "janvier",
+        "février",
+        "mars",
+        "avril",
+        "mai",
+        "juin",
+        "juillet",
+        "août",
+        "septembre",
+        "octobre",
+        "novembre",
+        "décembre",
+    ]
     today_str = f"{today.day} {months_fr[today.month - 1]} {today.year}"
     yesterday_str = f"{yesterday.day} {months_fr[yesterday.month - 1]} {yesterday.year}"
     weekday_str = weekdays_fr[today.weekday()]
@@ -193,4 +220,6 @@ async def test_probe_fails_when_date_present_but_no_safeguards(monkeypatch):
         {"model_id": "fake-model", "persist": False}, _=None
     )
     assert out["internet_access"] is False
-    assert "weekday" in (out.get("error") or "") or "yesterday" in (out.get("error") or "")
+    assert "weekday" in (out.get("error") or "") or "yesterday" in (
+        out.get("error") or ""
+    )

@@ -33,12 +33,22 @@ _EVAL_D3 = {"dimensions": {"d3_internet": {"pass_threshold": 1.0}}}
 
 
 def _liveness(model_id, passed, error_type=None):
-    return LivenessResult(model_id=model_id, surface="api", passed=passed, error_type=error_type)
+    return LivenessResult(
+        model_id=model_id, surface="api", passed=passed, error_type=error_type
+    )
 
 
-def _internet(model_id, passed, error_type=None, finding_severity="BLOCKER", excluded=False):
-    return InternetResult(model_id=model_id, surface="api", passed=passed, error_type=error_type,
-                          finding_severity=finding_severity, excluded_from_threshold=excluded)
+def _internet(
+    model_id, passed, error_type=None, finding_severity="BLOCKER", excluded=False
+):
+    return InternetResult(
+        model_id=model_id,
+        surface="api",
+        passed=passed,
+        error_type=error_type,
+        finding_severity=finding_severity,
+        excluded_from_threshold=excluded,
+    )
 
 
 # ── aggregate ────────────────────────────────────────────────────────────────
@@ -53,11 +63,15 @@ def test_aggregate_all_pass():
 
 
 def test_aggregate_below_threshold_fails():
-    results = [_liveness(f"m{i}", True) for i in range(9)] + [_liveness("m9", False, "timeout")]
+    results = [_liveness(f"m{i}", True) for i in range(9)] + [
+        _liveness("m9", False, "timeout")
+    ]
     agg = aggregate(results, _EVAL_D1, "d1")
     assert abs(agg["pass_rate"] - 0.9) < 1e-9
     assert agg["status"] == "fail"
-    assert agg["dimension_severity"] == "MAJOR"  # LivenessResult has no finding_severity → default
+    assert (
+        agg["dimension_severity"] == "MAJOR"
+    )  # LivenessResult has no finding_severity → default
 
 
 def test_aggregate_all_excluded_is_skipped():
@@ -73,8 +87,12 @@ def test_aggregate_all_excluded_is_skipped():
 
 def test_aggregate_severity_max_blocker_over_major():
     results = [
-        _internet("m1", False, "internet_mismatch:expected_online_got_offline", "BLOCKER"),
-        _internet("m2", False, "internet_mismatch:expected_offline_got_online", "MAJOR"),
+        _internet(
+            "m1", False, "internet_mismatch:expected_online_got_offline", "BLOCKER"
+        ),
+        _internet(
+            "m2", False, "internet_mismatch:expected_offline_got_online", "MAJOR"
+        ),
     ]
     agg = aggregate(results, _EVAL_D3, "d3")
     assert agg["status"] == "fail"
@@ -83,8 +101,10 @@ def test_aggregate_severity_max_blocker_over_major():
 
 def test_aggregate_signal_in_reasoning_only_excluded():
     """D3's signal_in_reasoning_only (excluded_from_threshold) is out of denom."""
-    results = [_internet("m1", True), _internet("m2", False, "signal_in_reasoning_only",
-                                                "MAJOR", excluded=True)]
+    results = [
+        _internet("m1", True),
+        _internet("m2", False, "signal_in_reasoning_only", "MAJOR", excluded=True),
+    ]
     agg = aggregate(results, _EVAL_D3, "d3")
     assert agg["denominator"] == 1
     assert agg["pass_rate"] == 1.0
@@ -92,39 +112,56 @@ def test_aggregate_signal_in_reasoning_only_excluded():
 
 
 def test_is_excluded_variants():
-    assert _is_excluded(_internet("m", False, "skipped:cache_hit", excluded=True)) is True
-    assert _is_excluded(_internet("m", False, "identity_refused", "MINOR", excluded=True)) is True
+    assert (
+        _is_excluded(_internet("m", False, "skipped:cache_hit", excluded=True)) is True
+    )
+    assert (
+        _is_excluded(_internet("m", False, "identity_refused", "MINOR", excluded=True))
+        is True
+    )
     assert _is_excluded(_liveness("m", False, "skipped:quarantined")) is True
-    assert _is_excluded(_liveness("m", False, "timeout")) is False  # D1 has no excluded field
+    assert (
+        _is_excluded(_liveness("m", False, "timeout")) is False
+    )  # D1 has no excluded field
 
 
 # ── cross-surface ────────────────────────────────────────────────────────────
 
 
 def test_cross_surface_no_disagreement():
-    struct = {"api": {"d1": {"a": _liveness("a", True)}},
-              "mcp": {"d1": {"a": _liveness("a", True)}}}
+    struct = {
+        "api": {"d1": {"a": _liveness("a", True)}},
+        "mcp": {"d1": {"a": _liveness("a", True)}},
+    }
     assert check_cross_surface_agreement(struct, []) == []
 
 
 def test_cross_surface_disagreement():
-    struct = {"api": {"d1": {"a": _liveness("a", True)}},
-              "mcp": {"d1": {"a": _liveness("a", False, "timeout")}}}
+    struct = {
+        "api": {"d1": {"a": _liveness("a", True)}},
+        "mcp": {"d1": {"a": _liveness("a", False, "timeout")}},
+    }
     d = check_cross_surface_agreement(struct, [])
     assert len(d) == 1
     assert d[0]["surface_verdicts"] == {"api": True, "mcp": False}
 
 
 def test_cross_surface_excluded_dim_skipped():
-    struct = {"api": {"d5": {"a": _liveness("a", True)}},
-              "mcp": {"d5": {"a": _liveness("a", False, "timeout")}}}
+    struct = {
+        "api": {"d5": {"a": _liveness("a", True)}},
+        "mcp": {"d5": {"a": _liveness("a", False, "timeout")}},
+    }
     assert check_cross_surface_agreement(struct, ["d5"]) == []
 
 
 def test_cross_surface_quarantined_does_not_disagree():
     """A model quarantined on one surface but passing on another is not a disagreement."""
-    struct = {"api": {"d3": {"a": _internet("a", True)}},
-              "mcp": {"d3": {"a": _internet("a", False, "skipped:quarantined", excluded=True)}}}
+    struct = {
+        "api": {"d3": {"a": _internet("a", True)}},
+        "mcp": {
+            "d3": {"a": _internet("a", False, "skipped:quarantined", excluded=True)}
+        },
+    }
     assert check_cross_surface_agreement(struct, []) == []
 
 
@@ -170,9 +207,13 @@ def test_result_to_dict():
 
 
 def test_result_to_dict_extra_nested():
-    r = InternetResult(model_id="m", surface="api", passed=False,
-                       error_type="signal_in_reasoning_only",
-                       extra={"reasoning_excerpt": "x", "nested": {"a": 1}})
+    r = InternetResult(
+        model_id="m",
+        surface="api",
+        passed=False,
+        error_type="signal_in_reasoning_only",
+        extra={"reasoning_excerpt": "x", "nested": {"a": 1}},
+    )
     d = _result_to_dict(r, surface="api", dim="d3", run_id="r2")
     assert d["extra"]["nested"]["a"] == 1
 
@@ -182,14 +223,32 @@ def test_result_to_dict_extra_nested():
 
 def test_scorecard_render_smoke():
     summary = {
-        "run_id": "20260531T120000Z", "timestamp": "2026-05-31T12:00:00Z",
-        "verdict": "GO", "max_severity": None, "surfaces": ["api"],
-        "dimensions": ["d1"], "models": ["claude-haiku-4-5"],
-        "cross_surface_disagreements": [], "skipped_dimensions": [],
-        "dim_aggregates": {"api.d1": {"status": "pass", "pass_rate": 1.0, "threshold": 0.95,
-                                      "dimension_severity": None}},
-        "raw_records": [{"model_id": "claude-haiku-4-5", "_dim": "d1", "_surface": "api",
-                         "passed": True, "error_type": None}],
+        "run_id": "20260531T120000Z",
+        "timestamp": "2026-05-31T12:00:00Z",
+        "verdict": "GO",
+        "max_severity": None,
+        "surfaces": ["api"],
+        "dimensions": ["d1"],
+        "models": ["claude-haiku-4-5"],
+        "cross_surface_disagreements": [],
+        "skipped_dimensions": [],
+        "dim_aggregates": {
+            "api.d1": {
+                "status": "pass",
+                "pass_rate": 1.0,
+                "threshold": 0.95,
+                "dimension_severity": None,
+            }
+        },
+        "raw_records": [
+            {
+                "model_id": "claude-haiku-4-5",
+                "_dim": "d1",
+                "_surface": "api",
+                "passed": True,
+                "error_type": None,
+            }
+        ],
     }
     out = render_scorecard(summary)
     assert "<!DOCTYPE html>" in out and "GO" in out and "claude-haiku-4-5" in out
@@ -197,11 +256,23 @@ def test_scorecard_render_smoke():
 
 def test_scorecard_nogo_shows_severity():
     summary = {
-        "run_id": "r2", "timestamp": "t", "verdict": "NO-GO", "max_severity": "BLOCKER",
-        "surfaces": ["api"], "dimensions": ["d3"], "models": ["m1"],
-        "cross_surface_disagreements": [], "skipped_dimensions": [],
-        "dim_aggregates": {"api.d3": {"status": "fail", "pass_rate": 0.5, "threshold": 1.0,
-                                      "dimension_severity": "BLOCKER"}},
+        "run_id": "r2",
+        "timestamp": "t",
+        "verdict": "NO-GO",
+        "max_severity": "BLOCKER",
+        "surfaces": ["api"],
+        "dimensions": ["d3"],
+        "models": ["m1"],
+        "cross_surface_disagreements": [],
+        "skipped_dimensions": [],
+        "dim_aggregates": {
+            "api.d3": {
+                "status": "fail",
+                "pass_rate": 0.5,
+                "threshold": 1.0,
+                "dimension_severity": "BLOCKER",
+            }
+        },
         "raw_records": [],
     }
     out = render_scorecard(summary)
@@ -257,20 +328,32 @@ class _FakeD1Surface:
         m = re.search(r"ALIVE:([0-9A-F]+)", text)
         nonce = m.group(1) if m else ""
         return {
-            "content": f"ALIVE:{nonce}", "reasoning": "", "finish_reason": "stop",
-            "done_received": True, "first_token_latency_ms": 5.0, "raw_chunks": [],
-            "raw_sse_lines": [f"data: {nonce}", "data: [DONE]"], "billing": None,
-            "model_echoed": model, "request_id": "req-x",
+            "content": f"ALIVE:{nonce}",
+            "reasoning": "",
+            "finish_reason": "stop",
+            "done_received": True,
+            "first_token_latency_ms": 5.0,
+            "raw_chunks": [],
+            "raw_sse_lines": [f"data: {nonce}", "data: [DONE]"],
+            "billing": None,
+            "model_echoed": model,
+            "request_id": "req-x",
         }
 
 
 def test_run_integration_d1_go(monkeypatch, tmp_path):
     _override_skip(monkeypatch)
     exit_code, summary = run(
-        surfaces=["api"], dimensions=["d1"], model_ids=["claude-haiku-4-5"],
-        base_url="http://x", api_key="lle_test", out_dir=tmp_path, run_id="testrun",
+        surfaces=["api"],
+        dimensions=["d1"],
+        model_ids=["claude-haiku-4-5"],
+        base_url="http://x",
+        api_key="lle_test",
+        out_dir=tmp_path,
+        run_id="testrun",
         surface_factory=lambda s, b, k: _FakeD1Surface(),
-        pricing_resolver=lambda m, mo: None, verbose=False,
+        pricing_resolver=lambda m, mo: None,
+        verbose=False,
     )
     assert exit_code == 0
     assert summary["verdict"] == "GO"
@@ -295,9 +378,16 @@ def test_run_unimplemented_surface_skipped(monkeypatch, tmp_path):
         raise NotImplementedError(f"{surface} not ready")
 
     exit_code, summary = run(
-        surfaces=["api", "mcp"], dimensions=["d1"], model_ids=["claude-haiku-4-5"],
-        base_url="http://x", api_key="lle_test", out_dir=tmp_path, run_id="r-mcp",
-        surface_factory=factory, pricing_resolver=lambda m, mo: None, verbose=False,
+        surfaces=["api", "mcp"],
+        dimensions=["d1"],
+        model_ids=["claude-haiku-4-5"],
+        base_url="http://x",
+        api_key="lle_test",
+        out_dir=tmp_path,
+        run_id="r-mcp",
+        surface_factory=factory,
+        pricing_resolver=lambda m, mo: None,
+        verbose=False,
     )
     # mcp skipped (NotImplementedError) → only api in aggregates, still GO
     assert exit_code == 0

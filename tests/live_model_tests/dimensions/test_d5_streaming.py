@@ -22,7 +22,15 @@ def _override_skip(monkeypatch):
 
 def _delta_line(content, finish_reason=None):
     return "data: " + json.dumps(
-        {"choices": [{"index": 0, "delta": {"content": content}, "finish_reason": finish_reason}]}
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": content},
+                    "finish_reason": finish_reason,
+                }
+            ]
+        }
     )
 
 
@@ -113,7 +121,11 @@ def test_missing_choices():
 
 
 def test_missing_delta():
-    lines = ['data: {"choices": [{"index": 0, "finish_reason": null}]}', _final_line(), "data: [DONE]"]
+    lines = [
+        'data: {"choices": [{"index": 0, "finish_reason": null}]}',
+        _final_line(),
+        "data: [DONE]",
+    ]
     r = _verdict(_unified(lines))
     assert r.passed is False
     assert r.error_type == "sse_malformed:missing_delta"
@@ -172,7 +184,9 @@ def test_length_truncation_passes_with_flag():
 def test_reasoning_leak_in_content_thinking():
     nonce = "CAFEBABE00112233"
     content = f"{nonce}\n1\n2\n3"  # nonce leaked into the visible output
-    r = _verdict(_unified(_good_stream(), content=content), nonce=nonce, is_thinking=True)
+    r = _verdict(
+        _unified(_good_stream(), content=content), nonce=nonce, is_thinking=True
+    )
     assert r.passed is False
     assert r.error_type == "reasoning_leak_in_content"
     assert r.extra.get("leaked_nonce") == nonce
@@ -183,12 +197,19 @@ def test_non_thinking_nonce_echo_is_not_a_leak():
     model echoing the nonce is not a reasoning leak."""
     nonce = "CAFEBABE00112233"
     content = f"{nonce}\n1\n2\n3"
-    r = _verdict(_unified(_good_stream(), content=content), nonce=nonce, is_thinking=False)
+    r = _verdict(
+        _unified(_good_stream(), content=content), nonce=nonce, is_thinking=False
+    )
     assert r.passed is True
 
 
 def test_usage_chunk_tolerated():
-    lines = [_delta_line("1\n"), _final_line(), 'data: {"usage": {"total_tokens": 5}}', "data: [DONE]"]
+    lines = [
+        _delta_line("1\n"),
+        _final_line(),
+        'data: {"usage": {"total_tokens": 5}}',
+        "data: [DONE]",
+    ]
     r = _verdict(_unified(lines))
     assert r.passed is True
 
@@ -200,7 +221,13 @@ def test_heartbeats_after_done_tolerated():
 
 
 def test_comment_lines_tolerated_anywhere():
-    lines = [": warming up", _delta_line("1\n"), ": tick", _final_line(), "data: [DONE]"]
+    lines = [
+        ": warming up",
+        _delta_line("1\n"),
+        ": tick",
+        _final_line(),
+        "data: [DONE]",
+    ]
     r = _verdict(_unified(lines))
     assert r.passed is True
 
