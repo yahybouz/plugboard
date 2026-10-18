@@ -1,6 +1,24 @@
-# Plugboard
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="Plugboard logo" width="96" height="96">
+</p>
 
-**A self-hosted, OpenAI-compatible gateway that puts all your LLM providers and subscriptions behind one endpoint, with per-client keys, spending limits, caching, fallback, monitoring and an automatically updated pricing grid.**
+<h1 align="center">Plugboard</h1>
+
+<p align="center">
+  <strong>One gateway. Every model.</strong><br>
+  A self-hosted, OpenAI-compatible gateway that puts all your LLM providers and subscriptions behind one endpoint, with per-client keys, spending limits, caching, fallback, monitoring and an automatically updated pricing grid.
+</p>
+
+<p align="center">
+  <a href="#5-minute-quickstart-local-install">Quickstart</a> ·
+  <a href="docs/guide/getting-started.md">Guide</a> ·
+  <a href="#screenshots">Screenshots</a> ·
+  <a href="LICENSE">MIT license</a>
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshots/showcase.jpg" alt="Live routing view: client keys, the Plugboard hub and every connected provider, with real requests shown as pulses" width="900">
+</p>
 
 Point any OpenAI-compatible client at `http://localhost:8765/v1`, give it a `pb_` key, and Plugboard routes the request to the provider behind the model you picked: an API key (OpenAI, Anthropic, Google, GitHub Models), a local Ollama, any OpenAI-compatible server, or a subscription you are already logged into through an official CLI. Every call is metered per client and checked against that client's limits.
 
@@ -20,6 +38,16 @@ Python 3.12 · FastAPI · no external database (JSON files and SQLite under `dat
 - **Monitoring**: admin dashboard, provider health history, a provider watchdog, a JSON and Prometheus metrics endpoint, an admin audit log, and webhook alerts for failing providers and clients nearing their budget.
 - **Admin security**: dashboard auto-login only for a local install opened in the local browser; everywhere else an `ADMIN_KEY` login with brute-force lockout and optional TOTP MFA. Provider credentials are encrypted at rest.
 - **MCP server**: exposes chat, model listing, usage and provider status to MCP clients, plus an update registry that tells client projects what to change when the gateway changes.
+
+## Screenshots
+
+| Providers | Pricing and review queue |
+|---|---|
+| <img src="docs/assets/screenshots/providers.jpg" alt="Providers page: CLI subscriptions, API providers and Ollama with their model counts" width="440"> | <img src="docs/assets/screenshots/pricing.jpg" alt="Pricing page: automatic updates and price changes waiting for review" width="440"> |
+| **Playground** | **Paper (light) theme** |
+| <img src="docs/assets/screenshots/playground.jpg" alt="Playground: a chat with a model through the gateway, with tokens and cost" width="440"> | <img src="docs/assets/screenshots/providers-light.jpg" alt="Providers page in the light theme" width="440"> |
+
+The dashboard follows the system theme (dark by default) and has a toggle in the sidebar. **Showcase** on the Overview page opens the live routing view full screen.
 
 ## 5-minute quickstart (local install)
 
@@ -93,12 +121,13 @@ A model is addressed as `<provider-id>:<model>`. The provider ID is shown on the
 
 Step-by-step setup for each kind, from the dashboard or from `.env`: [Providers and subscriptions](docs/guide/providers-and-subscriptions.md).
 
-## Using subscriptions (Claude, ChatGPT, Gemini) — read the risks
+## Using subscriptions (Claude, ChatGPT, Antigravity) — read the risks
 
-Plugboard can serve models from a consumer subscription (Claude Pro/Max, ChatGPT Plus/Pro, Gemini, GitHub Copilot) by running the provider's official CLI or by reusing the credentials that CLI stored. **This may violate the provider's terms of service.**
+Plugboard can serve models from a consumer subscription (Claude Pro/Max, ChatGPT Plus/Pro, Google Antigravity, GitHub Copilot) by running the provider's official CLI or by reusing the credentials that CLI stored. **This may violate the provider's terms of service.**
 
 - Anthropic's Claude Code terms reserve subscription (OAuth) sign-in for ordinary use of Claude Code and Anthropic's own apps, and in 2026 Anthropic restricted the use of Free, Pro and Max credentials in third-party tools, including routing requests through them. See [Claude Code legal and compliance](https://code.claude.com/docs/en/legal-and-compliance).
 - Google's Gemini CLI FAQ states that using third-party software to piggyback on Gemini CLI's OAuth sign-in violates its terms and may lead to suspension or termination of the account. See the [Gemini CLI FAQ](https://geminicli.com/docs/resources/faq/).
+- Antigravity is a Google product: the same caution applies, so read its terms before routing other people's requests through it.
 - OpenAI and GitHub publish their own terms for ChatGPT and Copilot plans; read them before relying on these modes.
 
 The feature is available because some people run Plugboard as a personal tool on their own machine. **You decide whether to use it, and you bear the risk**, including the loss of your subscription account. **API keys are the safe option**: they are billed per use, are meant for programmatic access, and are what you should use for anything shared with other people or applications.

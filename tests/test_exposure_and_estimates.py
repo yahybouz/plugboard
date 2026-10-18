@@ -146,7 +146,7 @@ GRID = {
 
 
 def test_nearest_price_picks_closest_version_of_same_family():
-    match = billing.nearest_price("cli:claude-opus-5-6", GRID, [])
+    match = billing.nearest_price("claude-opus-5-6", GRID, [])
     assert match is not None
     assert match.entry["estimated_from"] == "claude-opus-5-5"
     assert match.entry["source"] == "estimate"
@@ -155,9 +155,15 @@ def test_nearest_price_picks_closest_version_of_same_family():
 
 
 def test_nearest_price_strips_effort_suffix_and_prefers_provider_space():
-    match = billing.nearest_price("agy:gemini-4-argon-high", GRID, ["agy"])
+    match = billing.nearest_price("gemini-4-argon-high", GRID, ["agy"])
     assert match is not None and match.space == "agy"
     assert match.entry["estimated_from"] == "gemini-4-argon"
+
+
+def test_nearest_price_keeps_ollama_tags():
+    grid = {"models": {"nemotron-3-nano:30b-cloud": {"input_price": 0.06, "output_price": 0.24}}}
+    match = billing.nearest_price("nemotron-3-nano:31b-cloud", grid, [])
+    assert match is not None and match.key == "nemotron-3-nano:31b-cloud"
 
 
 def test_nearest_price_never_crosses_families():
@@ -180,9 +186,9 @@ def test_resolve_price_estimates_and_queues_review(tmp_path, monkeypatch):
         lambda self, deadline_s=120.0: journal.extend(self.events) or {},
     )
 
-    match = billing.resolve_price("cli:claude-opus-5-6", month)
+    match = billing.resolve_price("claude-opus-5-6", month)
     assert match is not None and match.source == "estimate"
-    billing.resolve_price("cli:claude-opus-5-6", month)  # notified once only
+    billing.resolve_price("claude-opus-5-6", month)  # notified once only
 
     pending = pricing_suggestions.list_suggestions()
     assert len(pending) == 1

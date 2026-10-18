@@ -553,9 +553,13 @@ def _version_value(version: Tuple[int, ...]) -> float:
 
 
 def _bare_model(real_model: str) -> str:
-    """Model id without the ``provider:`` prefix or a ``vendor/`` namespace."""
-    bare = real_model.split(":", 1)[1] if ":" in real_model else real_model
-    return bare.rsplit("/", 1)[-1]
+    """Model id without a ``vendor/`` namespace.
+
+    Billing receives the model as the provider names it (no ``provider:``
+    prefix). A colon belongs to the name: Ollama tags (``nemotron-3-nano:30b-cloud``)
+    must survive, so nothing is cut at the first colon.
+    """
+    return real_model.rsplit("/", 1)[-1]
 
 
 def nearest_price(
