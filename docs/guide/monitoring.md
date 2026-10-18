@@ -19,7 +19,7 @@ All `/admin/*` and `/metrics*` routes require `Authorization: Bearer $ADMIN_KEY`
 `GET /health` is public and cheap, suitable for load balancers and container health checks:
 
 ```json
-{"ok": true, "version": "4.0.0", "providers": 3, "active": ["openai-direct", "ollama", "claude-via-claude-cli"]}
+{"ok": true, "version": "4.0.0", "providers": 3, "active": ["anthropic-direct", "ollama", "claude-via-claude-cli"]}
 ```
 
 When `API_KEY` is empty it also returns `"auth_disabled": true` and `"dev_mode"`, so a deployment gate can refuse an instance whose client authentication is off.
@@ -95,7 +95,7 @@ Set `ALERT_WEBHOOK_URL` to receive JSON alerts (for example on a Slack or Discor
 - `provider_down`: a provider failed `ALERT_FAILURE_THRESHOLD` consecutive forwarded requests (default 3); at most one alert per provider every five minutes.
 
   ```json
-  {"type": "provider_down", "provider_id": "openai-direct", "consecutive_failures": 3, "message": "..."}
+  {"type": "provider_down", "provider_id": "anthropic-direct", "consecutive_failures": 3, "message": "..."}
   ```
 
 - `spending_alert`: a client is at or above 80 % of its monthly limit, sent on each billed request in that range.

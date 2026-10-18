@@ -1,6 +1,6 @@
 # Providers and subscriptions
 
-A **provider** is a backend that answers chat completions: a cloud API, a local Ollama, any OpenAI-compatible server, or a subscription reached through an official CLI. Each person who runs Plugboard adds their own providers with their own credentials; nothing is shared or preconfigured.
+A **provider** is a backend that answers chat completions: a cloud API, a local Ollama, any server with a standard chat API, or a subscription reached through an official CLI. Each person who runs Plugboard adds their own providers with their own credentials; nothing is shared or preconfigured.
 
 Provider credentials stay on the gateway host. API keys and tokens are encrypted at rest in `data/providers.json` and `data/credentials.db` (see `ENCRYPTION_KEY` in the [configuration reference](configuration.md)).
 
@@ -8,9 +8,9 @@ Provider credentials stay on the gateway host. API keys and tokens are encrypted
 
 | Kind | Dashboard presets | How requests are served |
 |---|---|---|
-| API key | *Anthropic Direct*, *OpenAI Direct*, *Google Gemini Direct*, *GitHub Models* | HTTP call to the vendor with your key |
-| Catalog (models.dev) | *OpenRouter · unverified*, *Groq · unverified*, *Moonshot AI (Kimi) · unverified*, *OpenCode Zen · unverified* and every other OpenAI-compatible provider the catalog lists | HTTP call with your key |
-| Custom endpoint | **+ Add Custom Provider** | HTTP call to any OpenAI-compatible server |
+| API key | *Anthropic Direct*, *Google Gemini Direct*, *GitHub Models*, *OpenAI Direct* | HTTP call to the vendor with your key |
+| Catalog (models.dev) | *OpenRouter · unverified*, *Groq · unverified*, *Moonshot AI (Kimi) · unverified*, *OpenCode Zen · unverified* and every other provider with a standard chat API that the catalog lists | HTTP call with your key |
+| Custom endpoint | **+ Add Custom Provider** | HTTP call to any server with a standard chat API |
 | Local models | *Ollama* (automatic) | HTTP call to your Ollama daemon |
 | Subscription through an official CLI | *Claude (via claude CLI)*, *ChatGPT (via codex CLI)*, *Antigravity (via agy CLI)* | Plugboard runs the CLI as a subprocess for each request |
 | Subscription through CLI credentials | *ChatGPT (via Codex CLI)*, *Gemini (via Gemini CLI)*, *GitHub Copilot (via gh CLI)*, *GitHub Models (via gh CLI)* | HTTP call with the token the CLI stored on the host |
@@ -20,7 +20,7 @@ Presets marked *roadmap* in the dashboard (for example *Claude Pro (roadmap)*) c
 
 ## Model IDs
 
-A model is addressed as `<provider-id>:<model>`, for example `openai-direct:gpt-4o-mini` or `ollama:qwen3:8b`. The provider ID is derived from the provider name when you create it (*OpenAI Direct* becomes `openai-direct`) and is shown on the Providers page.
+A model is addressed as `<provider-id>:<model>`, for example `anthropic-direct:claude-haiku-5-5` or `ollama:qwen3:8b`. The provider ID is derived from the provider name when you create it (*OpenAI Direct* becomes `openai-direct`) and is shown on the Providers page.
 
 - With an explicit provider prefix, the request goes to that provider only. Plugboard retries it on `429`, `500`, `502`, `503` and `529` with backoff, but does not switch provider.
 - Without a matching prefix, Plugboard tries the active providers in turn, ordered by a score that combines latency, error rate and requests in flight.
@@ -80,7 +80,7 @@ Models that the catalog marks as needing another API (Anthropic Messages, OpenAI
 | Connected (N models) | The key works and the provider lists N models. |
 | Key valid, but the provider lists no model | Authenticated, but nothing to route yet. Check the account (credits, region) or add a model by hand. |
 | Invalid key (401/403) | The key is wrong, revoked, or belongs to another region or project of the same vendor. |
-| Not OpenAI-compatible | The host did not answer `GET /models` in the OpenAI format. Check the base URL, or add it as a custom endpoint. |
+| Not a standard chat API | The host did not answer `GET /models` in the standard format. Check the base URL, or add it as a custom endpoint. |
 | Unreachable | No answer: network, proxy, firewall or a wrong host. |
 
 **Also send one test token** additionally sends a one-token chat completion to the first listed model. It is off by default because the provider bills it.
@@ -94,7 +94,7 @@ Each provider has two settings, in **Edit** on the Providers page or through `PU
 
 **Discover** on a row applies the provider's answer at once, including removals; when it would remove models, the dashboard lists them and asks first. Removals only follow the provider's own model list (`GET /models` or a native catalog API): when Plugboard falls back to a preset's list or asks a model to list itself, it adds what it finds and removes nothing. Providers created before this release keep `auto_discover` off, so their lists only change when you click **Discover** (Anthropic, Gemini, Ollama and the CLI subscriptions are refreshed as before).
 
-### Custom OpenAI-compatible endpoint
+### Custom endpoint
 
 Use **+ Add Custom Provider** for any server that implements `POST /v1/chat/completions` (vLLM, LM Studio, llama.cpp server, another gateway):
 
@@ -162,7 +162,7 @@ The presets *GitHub Models (OAuth via dashboard)* and *GitHub Copilot (OAuth via
 
 ## Add providers from `.env` or scripts
 
-- **Bootstrap one OpenAI-compatible provider.** When `data/providers.json` contains no provider at startup, Plugboard creates one from `OPENCLAW_URL` and `OPENCLAW_KEY` (both required), with `OPENCLAW_MODEL` as default model and `OPENCLAW_NAME` as name. The variables are named after the OpenClaw gateway, but any OpenAI-compatible endpoint works. If the provider ID contains `openclaw`, unprefixed model names are rewritten to OpenClaw's `openclaw/<vendor>--<model>` format, so pick another name for other gateways.
+- **Bootstrap one provider at startup.** When `data/providers.json` contains no provider at startup, Plugboard creates one from `OPENCLAW_URL` and `OPENCLAW_KEY` (both required), with `OPENCLAW_MODEL` as default model and `OPENCLAW_NAME` as name. The variables are named after the OpenClaw gateway, but any OpenAI-compatible endpoint works. If the provider ID contains `openclaw`, unprefixed model names are rewritten to OpenClaw's `openclaw/<vendor>--<model>` format, so pick another name for other gateways.
 - **Ollama**: `OLLAMA_URL`, `OLLAMA_ENABLED`, `OLLAMA_TIMEOUT`.
 - **API key presets on a remote instance**: `scripts/setup_railway_providers.py` reads `SETUP_ANTHROPIC_API_KEY`, `SETUP_OPENAI_API_KEY`, `SETUP_GEMINI_API_KEY` and `SETUP_GITHUB_PAT` and creates the matching presets through the admin API (`PLUGBOARD_URL` and `PLUGBOARD_ADMIN_KEY` point it at the instance). Unset variables are skipped, and presets that already exist are left untouched.
 - **Admin API**: everything the dashboard does is available over HTTP with `Authorization: Bearer $ADMIN_KEY`:
@@ -182,7 +182,7 @@ curl -s -X POST http://localhost:8765/admin/direct-providers/catalog-openrouter 
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
   -d '{"api_key": "sk-or-..."}'
 
-# test any OpenAI-compatible endpoint before adding it as a custom provider
+# test any standard chat endpoint before adding it as a custom provider
 curl -s -X POST http://localhost:8765/admin/direct-providers/test \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
   -d '{"base_url": "https://api.example.com/v1", "api_key": "..."}'

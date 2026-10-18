@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>One gateway. Every model.</strong><br>
-  A self-hosted gateway that puts every LLM provider (Anthropic, OpenAI, Google, Mistral, DeepSeek, Ollama, OpenRouter, your Claude, ChatGPT and Antigravity subscriptions...) behind one endpoint, with per-client keys, spending limits, caching, fallback, monitoring and an automatically updated pricing grid.
+  A self-hosted gateway that puts every LLM provider (Anthropic, Google, Mistral, DeepSeek, OpenRouter, Ollama, your Claude, ChatGPT and Antigravity subscriptions...) behind one endpoint, with per-client keys, spending limits, caching, fallback, monitoring and an automatically updated pricing grid.
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
   <img src="docs/assets/screenshots/showcase.jpg" alt="Live routing view: client keys, the Plugboard hub and every connected provider, with real requests shown as pulses" width="900">
 </p>
 
-Plugboard is a standalone service: it runs on its own host, independent of the applications that use it, and owns the provider credentials, the routing and the bills. It is not tied to one vendor: your providers live in one place, whether API keys (Anthropic, OpenAI, Google, GitHub Models, Mistral, DeepSeek...), resellers such as OpenRouter, a local or cloud Ollama, your own model servers, or subscriptions you are already logged into through an official CLI. Each consumer (an application, a script, an agent, an MCP client) gets its own `pb_` key and talks to one endpoint, `http://<host>:8765/v1`. That endpoint speaks the de facto standard chat API that most SDKs already use, so a consumer switches from Claude to Gemini to a local model by changing a model name, never its code, and never embeds a vendor key. Every call is metered per key and checked against that consumer's limits.
+Plugboard is a standalone service: it runs on its own host, independent of the applications that use it, and owns the provider credentials, the routing and the bills. It is not tied to one vendor: your providers live in one place, whether API keys (Anthropic, Google, Mistral, DeepSeek, GitHub Models...), resellers such as OpenRouter, a local or cloud Ollama, your own model servers, or subscriptions you are already logged into through an official CLI. Each consumer (an application, a script, an agent, an MCP client) gets its own `pb_` key and talks to one endpoint, `http://<host>:8765/v1`. That endpoint speaks the de facto standard chat API that most SDKs already use, so a consumer switches from Claude to Gemini to a local model by changing a model name, never its code, and never embeds a vendor key. Every call is metered per key and checked against that consumer's limits.
 
 Python 3.12 · FastAPI · no external database (JSON files and SQLite under `data/`) · MIT licensed.
 
@@ -28,8 +28,8 @@ Python 3.12 · FastAPI · no external database (JSON files and SQLite under `dat
 
 ## Features
 
-- **One API for every provider**: `POST /v1/chat/completions` (streaming over SSE), `GET /v1/models`, `GET /health`, in the standard chat format, whatever provider answers behind it. The OpenAI SDKs, LangChain, LlamaIndex and curl work unchanged.
-- **Many providers, one model namespace**: models are addressed as `<provider>:<model>`. Built-in presets (Anthropic, OpenAI, Google Gemini, GitHub Models), the providers of the [models.dev](https://models.dev) catalog (OpenRouter, OpenCode, Kimi, Groq, DeepSeek, Mistral...) in one click, custom endpoints, Ollama (auto-detected), and subscription access through the Claude Code, Codex and Antigravity (`agy`) CLIs or the GitHub CLI. Model lists refresh every 6 hours and changes are journaled and sent as webhooks.
+- **One API for every provider**: `POST /v1/chat/completions` (streaming over SSE), `GET /v1/models`, `GET /health`, in the standard chat format, whatever provider answers behind it. Existing chat SDKs, LangChain, LlamaIndex and curl work unchanged.
+- **Many providers, one model namespace**: models are addressed as `<provider>:<model>`. Built-in presets (Anthropic, Google Gemini, GitHub Models...), the providers of the [models.dev](https://models.dev) catalog (OpenRouter, OpenCode, Kimi, Groq, DeepSeek, Mistral...) in one click, custom endpoints, Ollama (auto-detected), and subscription access through the Claude Code, Codex and Antigravity (`agy`) CLIs or the GitHub CLI. Model lists refresh every 6 hours and changes are journaled and sent as webhooks.
 - **Per-client keys**: create `pb_` keys from the dashboard, each with a monthly USD budget, a requests-per-minute limit and an optional list of allowed models. Keys are stored as SHA-256 hashes and shown once.
 - **Usage and billing**: tokens and cost are recorded for every request, per client, per key and per month. Responses carry `X-Cost-USD`, `X-Prompt-Tokens` and `X-Completion-Tokens`. CSV export and a read-only client portal.
 - **Automatic pricing grid**: one grid per month (USD per million tokens), refreshed every 6 hours from several sources (your own JSON, OpenRouter, models.dev, LiteLLM), with the source of every price, reseller prices per provider, large changes held for your review, and manual prices that no source overwrites. Optionally, a model reads provider pricing pages and proposes prices for you to approve.
@@ -65,7 +65,7 @@ Check that `.env` contains `HOST=127.0.0.1` (set by `.env.example`; without it `
 
 Then, in the dashboard:
 
-1. **Providers → + Add Direct Provider**: pick a preset (for example *OpenAI Direct*) and paste your API key. If Ollama is running on `http://localhost:11434`, it is registered automatically at startup.
+1. **Providers → + Add Direct Provider**: pick a preset (for example *Anthropic Direct*) and paste your API key. If Ollama is running on `http://localhost:11434`, it is registered automatically at startup.
 2. **API Keys → + New Key**: enter a client ID (for example `my-app`), optionally a monthly limit and an RPM limit, and copy the `pb_...` key. It is displayed only once.
 3. **Playground**: send a test message to any listed model.
 
@@ -86,34 +86,36 @@ curl -s http://localhost:8765/v1/chat/completions \
   -H "Authorization: Bearer pb_your_key" \
   -H "Content-Type: application/json" \
   -d '{
-        "model": "openai-direct:gpt-4o-mini",
+        "model": "anthropic-direct:claude-haiku-5-5",
         "messages": [{"role": "user", "content": "Say hello in one sentence."}],
         "max_tokens": 100
       }'
 ```
 
-With the official OpenAI Python SDK:
+With the Python SDK shipped in this repository (`pip install ./sdk/python`):
 
 ```python
-from openai import OpenAI
+from plugboard_sdk import PlugboardClient
 
-client = OpenAI(base_url="http://localhost:8765/v1", api_key="pb_your_key")
+client = PlugboardClient(api_key="pb_your_key", base_url="http://localhost:8765")
 
-response = client.chat.completions.create(
-    model="openai-direct:gpt-4o-mini",
+reply = client.chat(
+    model="anthropic-direct:claude-haiku-5-5",
     messages=[{"role": "user", "content": "Say hello in one sentence."}],
 )
-print(response.choices[0].message.content)
+print(reply["choices"][0]["message"]["content"])
 ```
 
-A model is addressed as `<provider-id>:<model>`. The provider ID is shown on the dashboard's Providers page (here `openai-direct`, created by the *OpenAI Direct* preset); `GET /v1/models` lists the models the gateway advertises (by default the two newest versions of each model family, `PLUGBOARD_MODEL_EXPOSE=all` for every model), while any `<provider-id>:<model>` can still be called (see [How models are listed](docs/guide/providers-and-subscriptions.md#how-models-are-listed)). The response body also contains a `billing` object (tokens, cost, pricing month) and the `X-Cache` header tells you whether the answer came from the cache. Details: [Clients and keys](docs/guide/clients-and-keys.md).
+Any SDK or framework that speaks the standard chat API (LangChain, LlamaIndex, the vendors' own SDKs) also works: point its base URL at `http://localhost:8765/v1` and use your `pb_` key. Switching provider means changing the model name, for example `ollama:gpt-oss:20b-cloud` or `claude-code:claude-sonnet-5-5`.
+
+A model is addressed as `<provider-id>:<model>`. The provider ID is shown on the dashboard's Providers page (here `anthropic-direct`, created by the *Anthropic Direct* preset); `GET /v1/models` lists the models the gateway advertises (by default the two newest versions of each model family, `PLUGBOARD_MODEL_EXPOSE=all` for every model), while any `<provider-id>:<model>` can still be called (see [How models are listed](docs/guide/providers-and-subscriptions.md#how-models-are-listed)). The response body also contains a `billing` object (tokens, cost, pricing month) and the `X-Cache` header tells you whether the answer came from the cache. Details: [Clients and keys](docs/guide/clients-and-keys.md).
 
 ## Providers at a glance
 
 | Kind | Examples | Credentials |
 |---|---|---|
-| API key presets | Anthropic, OpenAI, Google Gemini, GitHub Models | Your API key or token, pasted in the dashboard |
-| Custom endpoint | Any server exposing an OpenAI-compatible `/v1/chat/completions` (vLLM, LM Studio, another gateway) | Optional bearer token |
+| API key presets | Anthropic, Google Gemini, GitHub Models, OpenAI | Your API key or token, pasted in the dashboard |
+| Custom endpoint | Any server exposing the standard `/v1/chat/completions` chat API (vLLM, LM Studio, another gateway) | Optional bearer token |
 | Local models | Ollama | None; detected at `OLLAMA_URL` |
 | Subscription through an official CLI | Claude Code (`claude`), Codex (`codex`), Antigravity (`agy`) | The CLI's own login on the gateway host |
 | Subscription through CLI credentials | ChatGPT via Codex CLI, Gemini via Gemini CLI, GitHub Copilot and GitHub Models via `gh` | Tokens the CLI already stored on the gateway host |
@@ -175,7 +177,7 @@ Choose **Plugboard** if you want one small self-hosted gateway for a handful of 
 
 Not built yet:
 
-- **Native adapters** for providers that do not speak the OpenAI chat format (Anthropic Messages through the catalog, Bedrock, Azure deployments).
+- **Native adapters** for providers that do not speak the standard chat format (Anthropic Messages through the catalog, Bedrock, Azure deployments).
 - **Several instances** sharing one data store.
 
 ## Contributing

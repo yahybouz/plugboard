@@ -860,7 +860,7 @@ async def discover_openai_models(
         return None, f"GET /models failed: {exc}"[:300]
     data = body.get("data") if isinstance(body, dict) else None
     if not isinstance(data, list):
-        return None, "GET /models did not answer in the OpenAI format"
+        return None, "GET /models did not answer in the standard chat format"
     ids = [
         m["id"]
         for m in data

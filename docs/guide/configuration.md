@@ -83,7 +83,7 @@ The server refuses to start when `API_KEY` or `ADMIN_KEY` holds comment text cop
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENCLAW_URL` | empty | Base URL of an OpenAI-compatible endpoint, registered when no provider exists yet. |
+| `OPENCLAW_URL` | empty | Base URL of a standard chat API endpoint, registered when no provider exists yet. |
 | `OPENCLAW_KEY` | empty | Its bearer token; both URL and key are required. |
 | `OPENCLAW_MODEL` | `claude-sonnet-4-6` | Its default model. |
 | `OPENCLAW_NAME` | `OpenClaw` | Its name; the provider ID is derived from it. |

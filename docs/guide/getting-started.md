@@ -74,7 +74,7 @@ The dashboard has these pages:
 The fastest options:
 
 - **Ollama**: if Ollama answers on `http://localhost:11434` when the server starts, it is registered automatically as the `ollama` provider.
-- **API key**: Providers → **+ Add Direct Provider** → choose *OpenAI Direct*, *Anthropic Direct*, *Google Gemini Direct* or *GitHub Models* → paste the key → **Create**.
+- **API key**: Providers → **+ Add Direct Provider** → choose *Anthropic Direct*, *Google Gemini Direct*, *GitHub Models* or *OpenAI Direct* → paste the key → **Create**.
 
 All options are described in [Providers and subscriptions](providers-and-subscriptions.md).
 
@@ -96,7 +96,7 @@ export PB_KEY=pb_your_key
 curl -s http://localhost:8765/v1/chat/completions \
   -H "Authorization: Bearer $PB_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model": "openai-direct:gpt-4o-mini", "messages": [{"role": "user", "content": "Hello"}]}'
+  -d '{"model": "anthropic-direct:claude-haiku-5-5", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
 Replace the model with `<provider-id>:<model>` for a provider you configured. Then open **Usage & Billing** to see the request and its cost.

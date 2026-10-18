@@ -94,7 +94,7 @@ The registry is operator data kept outside the repository: `data/registry.json`,
           "action": "replace",
           "description": "Prefix the model name with its provider ID.",
           "old": ["LLM_MODEL=gpt-4o-mini"],
-          "new": ["LLM_MODEL=openai-direct:gpt-4o-mini"]
+          "new": ["LLM_MODEL=anthropic-direct:claude-haiku-5-5"]
         }
       ],
       "verification": "Send one request and check that it returns 200."

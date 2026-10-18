@@ -1,7 +1,7 @@
 # plugboard-sdk
 
 Official Python SDK for [Plugboard](..) — a thin, dependency-light
-wrapper over the OpenAI-compatible `/v1/chat/completions` endpoint.
+wrapper over the gateway's standard `/v1/chat/completions` endpoint.
 
 ## Install
 

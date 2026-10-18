@@ -24,8 +24,8 @@ Plugboard is a single FastAPI process. It sits between client applications and L
 └───────┬───────────────┬──────────────────┬──────────────────────────┘
         │ HTTP          │ HTTP             │ subprocess
         ▼               ▼                  ▼
-  Cloud APIs      Ollama / custom      claude · codex · gemini CLIs
-  (API keys,      OpenAI-compatible    (the operator's own sign-in)
+  Cloud APIs      Ollama / custom      claude · codex · agy CLIs
+  (API keys,      standard chat API    (the operator's own sign-in)
   CLI tokens)     servers
 ```
 
@@ -43,7 +43,7 @@ A `POST /v1/chat/completions` goes through these steps:
    - the model string is resolved to a list of `(provider, model)` candidates. An explicit `<provider-id>:` prefix selects one provider; otherwise all active providers are candidates, ordered by a score of latency × error rate × in-flight requests;
    - a per-model circuit breaker (3 failures, 60 s cooldown) can redirect to a fallback model;
    - HTTP providers get `POST <base_url>/v1/chat/completions` with their credentials, retried on `429`, `500`, `502`, `503`, `529` after 2, 5 and 15 seconds by default;
-   - CLI providers run the vendor CLI in a neutral working directory, with a per-CLI concurrency limit, and the output is converted to an OpenAI response.
+   - CLI providers run the vendor CLI in a neutral working directory, with a per-CLI concurrency limit, and the output is converted to a standard chat response.
 8. **Billing**: token counts from the provider (estimated with a tokenizer when absent), priced with the month's grid, appended to `data/usage.db` with the client and key. The response gets a `billing` object and `X-Cost-*` headers.
 9. **Cache write** and **session record**, then the response.
 

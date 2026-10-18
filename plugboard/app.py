@@ -3195,8 +3195,8 @@ async def _test_openai_endpoint(
                 ):
                     return {
                         "status": "not_openai_compatible",
-                        "message": f"Not OpenAI-compatible: {host} did not answer GET /models in the "
-                        f"OpenAI format (HTTP {resp.status}). Add it as a custom endpoint or check its base URL.",
+                        "message": f"Not a standard chat API: {host} did not answer GET /models in the "
+                        f"standard format (HTTP {resp.status}). Add it as a custom endpoint or check its base URL.",
                         "docs": _TEST_DOCS,
                     }
             models = [

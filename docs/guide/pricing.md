@@ -140,7 +140,7 @@ Some providers publish their prices only on a web page. When `PLUGBOARD_LLM_PRIC
 ```bash
 PLUGBOARD_LLM_PRICING=1
 PLUGBOARD_LLM_PRICING_URLS=groq=https://groq.com/pricing;my-provider=https://example.com/pricing
-PLUGBOARD_LLM_PRICING_PROVIDER=openai-direct
+PLUGBOARD_LLM_PRICING_PROVIDER=anthropic-direct
 PLUGBOARD_LLM_PRICING_MODEL=gpt-4o-mini
 PLUGBOARD_LLM_PRICING_MAX_USD=0.50
 PLUGBOARD_LLM_PRICING_MAX_MODELS=20

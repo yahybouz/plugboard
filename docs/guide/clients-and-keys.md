@@ -33,7 +33,7 @@ curl -s -X POST http://localhost:8765/admin/keys \
         "label": "production",
         "monthly_limit_usd": 25,
         "rpm_limit": 120,
-        "allowed_models": ["openai-direct:", "ollama:"],
+        "allowed_models": ["anthropic-direct:", "ollama:"],
         "org_id": "acme"
       }'
 ```
@@ -72,7 +72,7 @@ When `ALERT_WEBHOOK_URL` is set, every billed request from a client at or above 
 
 ## What clients get back
 
-A successful non-streaming response is a standard OpenAI chat completion plus a `billing` object:
+A successful non-streaming response is a standard chat completion plus a `billing` object:
 
 ```json
 "billing": {
@@ -97,7 +97,7 @@ Cache hits are not billed again. Streaming responses (`"stream": true`) are serv
 
 ### Request options
 
-- `"cache": false` in the request body skips the response cache for that call. With the OpenAI Python SDK, pass `extra_body={"cache": False}`.
+- `"cache": false` in the request body skips the response cache for that call. With an SDK, send it as an extra body field (for example `extra_body={"cache": False}`).
 - `"session_id": "<uuid>"` in the body keeps the conversation on the server: Plugboard prepends the stored history, so the client only sends the new turn. Sessions are isolated per client, expire after `PLUGBOARD_SESSION_TTL_S` (24 hours) and keep `PLUGBOARD_SESSION_MAX_TURNS` turns (50).
 - `/v2/chat/completions` and `/v2/models` behave like the `/v1` routes and add `X-API-Version: 2`.
 

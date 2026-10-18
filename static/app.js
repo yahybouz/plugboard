@@ -713,7 +713,7 @@ var _TEST_LABELS = {
   ok: "Connected",
   ok_no_models: "Key valid, but the provider lists no model",
   invalid_key: "Invalid key",
-  not_openai_compatible: "Not OpenAI-compatible",
+  not_openai_compatible: "Not a standard chat API",
   unreachable: "Unreachable",
 };
 
