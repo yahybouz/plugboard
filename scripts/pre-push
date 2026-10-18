@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Git pre-push hook: refuse to push secrets or private terms.
+#
+# Install: make install-hooks
+#
+# 1. gitleaks scans every commit being pushed (config: .gitleaks.toml).
+# 2. If private/scan-terms.txt exists (untracked, one term per line, blank
+#    lines and lines starting with '#' ignored), the push is refused when a
+#    term appears, case-insensitively, in:
+#      - a file of the pushed tip,
+#      - a line added by a pushed commit,
+#      - a pushed commit message, author or committer.
+#    Set PLUGBOARD_REQUIRE_TERMS=1 to refuse the push when the file is missing.
+#
+# Git feeds "<local ref> <local sha> <remote ref> <remote sha>" lines on stdin.
+
+set -euo pipefail
+
+remote_name="${1:-origin}"
+root="$(git rev-parse --show-toplevel)"
+cd "$root"
+
+zero="0000000000000000000000000000000000000000"
+terms_file="private/scan-terms.txt"
+config_file=".gitleaks.toml"
+
+fail() {
+  printf 'pre-push: %s\n' "$*" >&2
+  exit 1
+}
+
+command -v gitleaks >/dev/null 2>&1 \
+  || fail "gitleaks is not installed; install it (https://github.com/gitleaks/gitleaks#installing) and push again."
+
+gitleaks_args=(--redact --no-banner --verbose)
+[ -f "$config_file" ] && gitleaks_args+=(--config "$config_file")
+
+# Load the private terms once, without comments or blank lines (an empty
+# pattern would match every line). Matches are tested with `grep >/dev/null`,
+# not `grep -q`: with pipefail, an early exit of `grep -q` kills the writer
+# with SIGPIPE and the pipeline reports a failure despite the match.
+patterns=""
+if [ -f "$terms_file" ]; then
+  patterns="$(mktemp)"
+  trap 'rm -f "$patterns"' EXIT
+  # tr, not sed 's/\r$//': BSD sed (macOS) reads \r as a plain "r".
+  tr -d '\r' < "$terms_file" \
+    | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+    | grep -v -e '^$' -e '^#' > "$patterns" || true
+  if [ ! -s "$patterns" ]; then
+    rm -f "$patterns"
+    patterns=""
+  fi
+fi
+if [ -z "$patterns" ] && [ "${PLUGBOARD_REQUIRE_TERMS:-0}" = "1" ]; then
+  fail "PLUGBOARD_REQUIRE_TERMS=1 but $terms_file is missing or holds no term. Add one private term per line, or unset PLUGBOARD_REQUIRE_TERMS."
+fi
+
+scan_terms() {
+  # $1: tip commit, remaining arguments: rev-list range of pushed commits.
+  local tip="$1"
+  shift
+  local found=0 commit
+
+  if git grep -I -i -F -l -f "$patterns" "$tip" -- >/dev/null 2>&1; then
+    printf 'pre-push: private terms found in files of %s:\n' "$tip" >&2
+    git grep -I -i -F -l -f "$patterns" "$tip" -- | sed -e 's/^[^:]*:/  /' >&2
+    found=1
+  fi
+
+  while IFS= read -r commit; do
+    if git show --no-color --format= --unified=0 "$commit" \
+        | grep -E '^\+' | grep -v -E '^\+\+\+ ' | grep -i -F -f "$patterns" >/dev/null; then
+      printf 'pre-push: private terms in lines added by %s\n' "$commit" >&2
+      found=1
+    fi
+    if git log -1 --format='%B%n%an%n%ae%n%cn%n%ce' "$commit" | grep -i -F -f "$patterns" >/dev/null; then
+      printf 'pre-push: private terms in the message or identity of %s\n' "$commit" >&2
+      found=1
+    fi
+  done < <(git rev-list "$@")
+
+  return "$found"
+}
+
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue  # branch deletion: nothing to scan
+
+  if [ "$remote_sha" = "$zero" ] || ! git cat-file -e "$remote_sha^{commit}" 2>/dev/null; then
+    # New branch, or remote tip not fetched (e.g. history replaced): scan
+    # every commit not already on a known remote ref.
+    # New branch: the commits not already on the remote.
+    range=("$local_sha" --not "--remotes=$remote_name")
+    log_opts="$local_sha --not --remotes=$remote_name"
+  else
+    range=("$remote_sha..$local_sha")
+    log_opts="$remote_sha..$local_sha"
+  fi
+
+  if ! first_new=$(git rev-list -n 1 "${range[@]}"); then
+    echo "pre-push: cannot list the commits being pushed ($log_opts)." >&2
+    exit 1
+  fi
+  if [ -z "$first_new" ]; then
+    continue  # nothing new to push for this ref
+  fi
+
+  echo "pre-push: gitleaks on $local_ref ($log_opts)"
+  if ! gitleaks git "${gitleaks_args[@]}" --log-opts="$log_opts" . </dev/null; then
+    echo "pre-push: gitleaks found secrets in the commits being pushed to $remote_ref." >&2
+    status=1
+  fi
+
+  if [ -n "$patterns" ]; then
+    echo "pre-push: private terms on $local_ref"
+    scan_terms "$local_sha" "${range[@]}" </dev/null || status=1
+  fi
+done
+
+if [ "$status" -ne 0 ]; then
+  fail "push refused. Remove the findings (rewrite the commits if needed) and push again."
+fi

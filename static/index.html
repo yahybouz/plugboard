@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Plugboard — Admin Dashboard</title>
+  <link rel="icon" href="/dashboard/favicon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <script src="/dashboard/theme.js?v=2"></script>
+  <link rel="stylesheet" href="/dashboard/style.css?v=11">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-logo" viewBox="0 0 32 32"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="16" cy="16" r="4.2"/><circle cx="6" cy="7" r="2.2"/><circle cx="26" cy="7" r="2.2"/><circle cx="6" cy="25" r="2.2"/><circle cx="26" cy="25" r="2.2"/><path d="M7.7 8.6l5.3 4.6M24.3 8.6l-5.3 4.6M7.7 23.4l5.3-4.6M24.3 23.4l-5.3-4.6"/></g></symbol>
+    <symbol id="i-overview" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.5"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.5"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.5"/></g></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M11 12l8.5-8.5M16 7l2.5 2.5M14 9l2 2"/></g></symbol>
+    <symbol id="i-usage" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 20h16"/><path d="M7 16v-5M12 16V7M17 16v-8"/></g></symbol>
+    <symbol id="i-providers" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><rect x="4" y="4" width="16" height="6" rx="1.5"/><rect x="4" y="14" width="16" height="6" rx="1.5"/><path d="M8 7h.01M8 17h.01" stroke-linecap="round" stroke-width="2.4"/></g></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></g></symbol>
+    <symbol id="i-pricing" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9z"/><circle cx="8.5" cy="8.5" r="1.4"/></g></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5v9a1.5 1.5 0 0 1-1.5 1.5H10l-4.5 4v-4h0A1.5 1.5 0 0 1 4 14.5z"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></g></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M3 12h4l2.5-6 5 12 2.5-6h4"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></g></symbol>
+    <symbol id="i-theme" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor"/></g></symbol>
+  </defs>
+</svg>
+
+<!-- Login modal -->
+<div id="login-modal" class="modal hidden">
+  <div class="modal-box">
+    <div style="text-align:center;margin-bottom:1.5rem;">
+      <div class="modal-logo" style="width:52px;height:52px;border-radius:14px;"><svg width="30" height="30" aria-hidden="true"><use href="#i-logo"/></svg></div>
+      <h2>Plugboard</h2>
+      <p class="muted">Enter your admin key to continue</p>
+    </div>
+    <form id="login-form">
+      <div class="form-group">
+        <input type="password" id="login-key" placeholder="Admin Key" autocomplete="off" required>
+      </div>
+      <div id="login-error" class="error hidden"></div>
+      <button type="submit" class="btn btn-primary btn-block" style="margin-top:0.5rem;padding:0.65rem;">Sign in</button>
+    </form>
+  </div>
+</div>
+
+<!-- App shell -->
+<div id="app" class="app hidden">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="logo" aria-hidden="true"><svg width="22" height="22"><use href="#i-logo"/></svg></div>
+      <div>
+        <h1>Plugboard</h1>
+        <div class="version" id="version-badge">v3.0.1</div>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-section">Dashboard</div>
+      <a href="#overview" class="nav-link active" data-tab="overview">
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-overview"/></svg></span> Overview
+      </a>
+
+      <div class="nav-section">Management</div>
+      <a href="#keys" class="nav-link" data-tab="keys">
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-key"/></svg></span> API Keys
+      </a>
+      <a href="#usage" class="nav-link" data-tab="usage">
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-usage"/></svg></span> Usage &amp; Billing
+      </a>
+      <a href="#providers" class="nav-link" data-tab="providers">
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-providers"/></svg></span> Providers
+      </a>
+      <a href="#connections" class="nav-link" data-tab="connections">
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-link"/></svg></span> Connections
+      </a>
+      <a href="#pricing" class="nav-link" data-tab="pricing">
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-pricing"/></svg></span> Pricing
+      </a>
+
+      <div class="nav-section">Tools</div>
+      <a href="#playground" class="nav-link" data-tab="playground">
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-chat"/></svg></span> Playground
+      </a>
+
+      <div class="nav-section">Sovereign</div>
+      <a href="#ollama" class="nav-link" data-tab="ollama">
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-cpu"/></svg></span> Ollama
+      </a>
+
+      <div class="nav-section">Operations</div>
+      <a href="#monitoring" class="nav-link" data-tab="monitoring">
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-activity"/></svg></span> Monitoring
+      </a>
+      <a href="#jobs" class="nav-link" data-tab="jobs">
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-clock"/></svg></span> Jobs
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <button type="button" id="theme-toggle" class="btn btn-ghost btn-sm theme-toggle" aria-label="Switch theme"><svg aria-hidden="true"><use href="#i-theme"/></svg><span>Theme</span></button>
+      <button id="logout-btn" class="btn btn-ghost btn-sm">Logout</button>
+    </div>
+  </aside>
+
+  <!-- Main content -->
+  <div class="main-content">
+
+    <!-- Overview -->
+    <section id="page-overview" class="page active">
+      <div class="topbar">
+        <h2>Overview</h2>
+        <div class="topbar-actions">
+          <button class="btn btn-sm mobile-menu-btn" id="mobile-menu-btn">&#9776;</button>
+        </div>
+      </div>
+      <div class="content">
+        <section id="live3d" class="live3d" aria-label="Live routing view">
+          <div class="live3d-canvas" aria-hidden="true"></div>
+          <div class="live3d-overlay">
+            <div class="live3d-head">
+              <div>
+                <div class="live3d-kicker"><span class="live3d-dot"></span>Live routing</div>
+                <h3 class="live3d-title">One gateway. Every model.</h3>
+                <p class="live3d-sub">Client keys, the Plugboard hub and every provider you connected, in real time.</p>
+              </div>
+              <button type="button" class="btn btn-sm live3d-showcase" aria-pressed="false">Showcase</button>
+            </div>
+            <div class="live3d-foot">
+            <div class="live3d-stats" role="status" aria-live="polite"></div>
+            <ul class="live3d-legend">
+              <li><i style="--c:#e2c992"></i>Client keys</li>
+              <li><i style="--c:#7cc2c2"></i>CLI subscriptions</li>
+              <li><i style="--c:#7f9bd6"></i>API providers</li>
+              <li><i style="--c:#7cc29a"></i>Local (Ollama)</li>
+              <li><i style="--c:#e8907f"></i>Inactive</li>
+              <li class="live3d-note">Bright pulse: a real request (polled every 3 s). Faint pulse: heartbeat.</li>
+            </ul>
+            </div>
+          </div>
+          <p class="live3d-fallback">The 3D view needs WebGL, which this browser does not provide.</p>
+        </section>
+        <div class="stats-grid" id="overview-cards"></div>
+        <div class="section-title">Metrics by Provider</div>
+        <div id="metrics-table-container"></div>
+      </div>
+    </section>
+
+    <!-- API Keys -->
+    <section id="page-keys" class="page">
+      <div class="topbar">
+        <h2>API Keys</h2>
+        <div class="topbar-actions">
+          <button class="btn btn-primary btn-sm" id="btn-create-key">+ New Key</button>
+        </div>
+      </div>
+      <div class="content">
+        <div id="new-key-alert" class="alert alert-success hidden">
+          <div>
+            <strong>Key created!</strong> Copy it now — it will not be shown again.
+            <div class="key-display">
+              <code id="new-key-value"></code>
+              <button class="btn btn-sm" id="btn-copy-key">Copy</button>
+            </div>
+          </div>
+        </div>
+        <div id="create-key-form" class="card form-card hidden">
+          <div class="card-header"><span class="card-title">Create API Key</span></div>
+          <div class="form-row">
+            <div class="form-group"><label>Client ID</label><input type="text" id="key-client-id" placeholder="e.g. acme-corp" required></div>
+            <div class="form-group"><label>Label</label><input type="text" id="key-label" placeholder="e.g. Production"></div>
+          </div>
+          <div class="form-row">
+            <div class="form-group"><label>Monthly Limit ($)</label><input type="number" id="key-limit" placeholder="0 = unlimited" step="0.01" min="0"></div>
+            <div class="form-group"><label>RPM Limit</label><input type="number" id="key-rpm" placeholder="0 = unlimited" step="1" min="0"></div>
+          </div>
+          <div class="form-actions">
+            <button class="btn btn-primary" id="btn-submit-key">Create Key</button>
+            <button class="btn btn-ghost" id="btn-cancel-key">Cancel</button>
+          </div>
+        </div>
+        <div id="keys-table-container"></div>
+      </div>
+    </section>
+
+    <!-- Usage & Billing -->
+    <section id="page-usage" class="page">
+      <div class="topbar">
+        <h2>Usage &amp; Billing</h2>
+        <div class="topbar-actions">
+          <input type="month" id="usage-month" class="input-month" aria-label="Usage month">
+          <button class="btn btn-sm" id="btn-export-csv">Export CSV</button>
+        </div>
+      </div>
+      <div class="content">
+        <div class="stats-grid" id="usage-summary-cards"></div>
+        <div class="section-title">By Client</div>
+        <div id="usage-by-client"></div>
+        <div class="section-title">By Model</div>
+        <div id="usage-by-model"></div>
+        <div class="section-title">Recent requests</div>
+        <p class="muted small">The price key says which grid entry priced the call: a provider price (<code>provider|model</code>) or the vendor price.</p>
+        <div id="usage-recent"></div>
+      </div>
+    </section>
+
+    <!-- Providers -->
+    <section id="page-providers" class="page">
+      <div class="topbar">
+        <h2>Providers</h2>
+        <div class="topbar-actions">
+          <button class="btn btn-primary btn-sm" id="btn-add-direct-provider">+ Add Direct Provider</button>
+          <button class="btn btn-sm" id="btn-add-provider">+ Add Custom Provider</button>
+        </div>
+      </div>
+      <div class="content">
+        <!-- Direct provider preset wizard -->
+        <div id="direct-provider-form" class="card" style="display:none; margin-bottom:1rem;">
+          <div style="padding:1.25rem;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+              <div style="font-weight:600; font-size:1.05rem;">Add Direct Provider</div>
+              <button class="btn btn-ghost btn-sm" id="btn-dp-cancel">&times; Close</button>
+            </div>
+            <!-- Preset selector -->
+            <div style="margin-bottom:1rem;">
+              <label for="dp-search" style="display:block; font-size:0.8rem; color:var(--text-secondary); margin-bottom:0.25rem;">Choose a provider</label>
+              <input type="search" id="dp-search" placeholder="Search providers (OpenRouter, Groq, Kimi...)" aria-describedby="dp-search-count" style="width:100%; margin-bottom:0.4rem;">
+              <select id="dp-preset" aria-label="Provider preset"></select>
+              <div id="dp-search-count" class="muted small" aria-live="polite"></div>
+            </div>
+            <!-- Setup guide (steps) -->
+            <div id="dp-setup-guide" style="margin-bottom:1rem;"></div>
+            <!-- Input + actions -->
+            <div id="dp-input-row" style="display:flex; gap:0.5rem; align-items:center;">
+              <input type="password" id="dp-api-key" placeholder="API key" autocomplete="off" style="flex:1; padding:0.5rem 0.75rem; border:1px solid var(--border-strong); border-radius:6px;">
+              <button class="btn btn-sm" id="btn-dp-check" style="display:none;">Check CLI</button>
+              <button class="btn btn-sm" id="btn-dp-test" style="display:none;">Test connection</button>
+              <button class="btn btn-primary" id="btn-dp-create">Create</button>
+            </div>
+            <label class="check small" id="dp-test-token-row" style="display:none; margin-top:0.4rem;">
+              <input type="checkbox" id="dp-test-token"> Also send one test token (billed by the provider)
+            </label>
+            <div id="dp-status" role="status" aria-live="polite" style="margin-top:0.5rem; font-size:0.85rem;"></div>
+          </div>
+        </div>
+        <div id="provider-form-container" class="hidden">
+          <form id="provider-form" class="card form-card">
+            <div class="card-header"><span class="card-title" id="pf-form-title">Add Provider</span></div>
+            <div class="form-row">
+              <div class="form-group"><label>Name</label><input type="text" id="pf-name" required></div>
+              <div class="form-group"><label>Base URL</label><input type="url" id="pf-url" required></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label>Bearer Token</label><input type="password" id="pf-token"></div>
+              <div class="form-group"><label>Default Model</label><input type="text" id="pf-model"></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label>Timeout (s)</label><input type="number" id="pf-timeout" value="60" step="1"></div>
+              <div class="form-group form-check"><label><input type="checkbox" id="pf-active" checked> Active</label></div>
+            </div>
+            <div class="form-row">
+              <div class="form-group form-check">
+                <label><input type="checkbox" id="pf-auto-discover"> Refresh the model list automatically</label>
+                <span class="muted small">Reads <code>GET /models</code> every refresh. A model leaves the list after two refreshes without it.</span>
+              </div>
+              <div class="form-group">
+                <label for="pf-pinned">Pinned models</label>
+                <input type="text" id="pf-pinned" placeholder="Comma-separated, never removed">
+              </div>
+            </div>
+            <input type="hidden" id="pf-edit-id">
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary" id="pf-submit-btn">Save</button>
+              <button type="button" class="btn btn-ghost" id="btn-cancel-provider">Cancel</button>
+            </div>
+          </form>
+        </div>
+        <div id="providers-table-container"></div>
+      </div>
+    </section>
+
+    <!-- Connections (OAuth broker) -->
+    <section id="page-connections" class="page">
+      <div class="topbar">
+        <h2>Connections</h2>
+        <div class="topbar-actions">
+          <button class="btn btn-sm" id="btn-refresh-connections">Refresh</button>
+        </div>
+      </div>
+      <div class="content">
+        <p class="muted" style="margin-bottom:1rem;">
+          OAuth connections managed by Plugboard. Clients (pb_ keys; older lle_ keys still work) use these credentials transparently — no provider login required on their side.
+        </p>
+        <div id="connections-table-container"></div>
+      </div>
+    </section>
+
+    <!-- Device Flow modal (GitHub) -->
+    <div id="device-flow-modal" class="modal hidden" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;">
+      <div style="background:var(--bg-card); border-radius:12px; padding:2rem; max-width:440px; text-align:center; box-shadow:0 4px 20px rgba(0,0,0,0.15);">
+        <h3 style="margin:0 0 0.5rem;">Connect via GitHub Device Flow</h3>
+        <p style="color:var(--text-muted); font-size:0.9rem; margin:0 0 1rem;">Enter the code below on GitHub to authorize this dashboard.</p>
+        <div id="device-code" style="font-size:1.75rem; font-family:var(--mono); font-weight:700; letter-spacing:0.1em; background:var(--bg-secondary); padding:1rem; border-radius:8px; margin-bottom:1rem;">----</div>
+        <div style="display:flex; gap:0.5rem; justify-content:center; margin-bottom:1rem;">
+          <button class="btn btn-primary btn-sm" id="device-open-btn">Open GitHub page</button>
+          <button class="btn btn-sm" id="device-copy-btn">Copy code</button>
+        </div>
+        <div id="device-status" style="color:var(--text-muted); font-size:0.85rem;">Waiting for authorization...</div>
+        <div style="margin-top:1rem;">
+          <button class="btn btn-ghost btn-sm" id="device-cancel-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pricing -->
+    <section id="page-pricing" class="page">
+      <div class="topbar">
+        <h2>Pricing</h2>
+        <div class="topbar-actions">
+          <input type="month" id="pricing-month" class="input-month" aria-label="Pricing month">
+        </div>
+      </div>
+      <div class="content">
+        <div id="pricing-auto-update"></div>
+        <div class="section-title">Needs your review</div>
+        <div id="pricing-review"></div>
+        <details class="card llm-panel" id="pricing-llm">
+          <summary><span class="card-title">Prices read by a model</span> <span id="pricing-llm-state" class="muted small"></span></summary>
+          <div id="pricing-llm-body"></div>
+        </details>
+        <div class="section-title">Price grid</div>
+        <div class="toolbar">
+          <input type="search" id="pricing-search" placeholder="Search models" aria-label="Search models">
+          <select id="pricing-source-filter" aria-label="Filter by source">
+            <option value="">All sources</option>
+            <option value="manual">manual</option>
+            <option value="external">external</option>
+            <option value="provider_native">provider_native</option>
+            <option value="models_dev">models_dev</option>
+            <option value="litellm">litellm</option>
+            <option value="known">known</option>
+            <option value="llm">llm</option>
+            <option value="none">no source</option>
+          </select>
+          <label class="check"><input type="checkbox" id="pricing-missing"> Missing price only</label>
+          <span id="pricing-count" class="muted" aria-live="polite"></span>
+        </div>
+        <div id="pricing-note" class="muted"></div>
+        <div id="pricing-table-container"></div>
+        <div id="pricing-pager" class="pager"></div>
+        <div id="pricing-actions" class="hidden" style="margin-top:1rem;">
+          <div class="form-inline">
+            <input type="text" id="new-model-name" placeholder="Model name" aria-label="New model name" style="width:200px;">
+            <input type="text" id="new-model-provider" placeholder="Provider (optional)" aria-label="Provider price space (optional)" style="width:170px;">
+            <input type="number" id="new-model-input" placeholder="Input $/1M" aria-label="Input price per million tokens" step="0.01" min="0" style="width:120px;">
+            <input type="number" id="new-model-output" placeholder="Output $/1M" aria-label="Output price per million tokens" step="0.01" min="0" style="width:120px;">
+            <button class="btn btn-sm" id="btn-add-pricing-row">+ Add</button>
+          </div>
+          <button class="btn btn-primary" id="btn-save-pricing" style="margin-top:0.75rem;" disabled>Save changes</button>
+          <span id="pricing-save-status" class="muted" aria-live="polite" style="margin-left:0.5rem;"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Jobs -->
+    <section id="page-jobs" class="page">
+      <div class="topbar">
+        <h2>Jobs</h2>
+      </div>
+      <div class="content">
+        <div id="jobs-list"></div>
+        <div class="section-title">Job Log</div>
+        <div id="job-log-container"></div>
+      </div>
+    </section>
+
+    <!-- Ollama -->
+    <section id="page-ollama" class="page">
+      <div class="topbar">
+        <h2>Ollama — Sovereign Provider</h2>
+        <div class="topbar-actions">
+          <button class="btn btn-primary btn-sm" id="btn-pull-model">+ Pull Model</button>
+          <button class="btn btn-sm" id="btn-refresh-ollama">Refresh</button>
+        </div>
+      </div>
+      <div class="content">
+        <div class="stats-grid" id="ollama-status"></div>
+        <div id="ollama-pull-form" class="card" style="display:none; margin-bottom:1rem;">
+          <div style="padding:1rem;">
+            <div style="font-weight:600; margin-bottom:0.5rem;">Pull Model</div>
+            <div style="display:flex; gap:0.5rem; align-items:center;">
+              <input type="text" id="ollama-model-name" placeholder="e.g. llama3, mistral:7b, phi3" style="flex:1; padding:0.4rem 0.6rem; border:1px solid var(--border-strong); border-radius:6px;">
+              <button class="btn btn-primary btn-sm" id="btn-start-pull">Pull</button>
+              <button class="btn btn-ghost btn-sm" id="btn-cancel-pull">Cancel</button>
+            </div>
+            <div id="ollama-pull-progress" style="display:none; margin-top:0.5rem;">
+              <div style="background:var(--bg-secondary); border-radius:4px; height:8px; overflow:hidden;">
+                <div id="ollama-progress-fill" style="background:var(--accent); height:100%; width:0%; transition:width 0.3s;"></div>
+              </div>
+              <div class="muted" id="ollama-pull-status" style="font-size:0.75rem; margin-top:0.25rem;"></div>
+            </div>
+          </div>
+        </div>
+        <div class="section-title">Installed Models</div>
+        <div id="ollama-models-container"></div>
+      </div>
+    </section>
+
+    <!-- Playground -->
+    <section id="page-playground" class="page">
+      <div class="topbar">
+        <h2>Playground</h2>
+        <div class="topbar-actions">
+          <button class="btn btn-sm" id="btn-clear-chat">Clear</button>
+        </div>
+      </div>
+      <div class="content" style="display:flex; flex-direction:column; height:calc(100vh - 120px);">
+        <!-- Model selector -->
+        <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.75rem; flex-wrap:wrap;">
+          <select id="pg-model" data-testid="pg-model" aria-label="Model" style="flex:1; min-width:250px; padding:0.4rem 0.6rem; border:1px solid var(--border-strong); border-radius:6px; font-size:0.85rem;">
+            <option value="">Loading models...</option>
+          </select>
+          <button id="btn-check-internet" class="btn" style="padding: 0.4rem 0.6rem; border:1px solid var(--border-strong); border-radius: 6px; font-size: 0.85rem; background:var(--bg-card); cursor: pointer; display: flex; align-items: center; gap: 0.25rem;" title="Check the currently selected model only">
+            🔍 Check Internet
+          </button>
+          <button id="btn-check-internet-all" class="btn" style="padding: 0.4rem 0.6rem; border:1px solid var(--border-strong); border-radius: 6px; font-size: 0.85rem; background:var(--bg-card); cursor: pointer; display: flex; align-items: center; gap: 0.25rem;" title="Probe ALL models for internet access (sequential, may take a few minutes)">
+            🌐 Check All
+          </button>
+          <label style="font-size:0.8rem; display:flex; align-items:center; gap:0.25rem;">
+            <input type="checkbox" id="pg-stream" data-testid="pg-stream" checked> Stream
+          </label>
+          <label style="font-size:0.8rem; display:flex; align-items:center; gap:0.25rem;">
+            Temp: <input type="number" id="pg-temp" data-testid="pg-temp" value="0.7" min="0" max="2" step="0.1" style="width:55px; padding:0.3rem; border:1px solid var(--border-strong); border-radius:4px;">
+          </label>
+          <label style="font-size:0.8rem; display:flex; align-items:center; gap:0.25rem;">
+            Max: <input type="number" id="pg-max-tokens" data-testid="pg-max-tokens" value="2048" min="1" max="32768" step="256" style="width:70px; padding:0.3rem; border:1px solid var(--border-strong); border-radius:4px;">
+          </label>
+        </div>
+        <!-- Chat messages -->
+        <div id="pg-messages" data-testid="pg-messages" style="flex:1; overflow-y:auto; border:1px solid var(--border-strong); border-radius:8px; padding:1rem; background:var(--bg-secondary); display:flex; flex-direction:column; gap:0.75rem;">
+          <div class="muted" style="text-align:center; padding:2rem;">Select a model and start chatting.</div>
+        </div>
+        <!-- Input -->
+        <div style="display:flex; gap:0.5rem; margin-top:0.75rem;">
+          <textarea id="pg-input" data-testid="pg-input" rows="2" placeholder="Type your message..." style="flex:1; padding:0.5rem 0.75rem; border:1px solid var(--border-strong); border-radius:8px; resize:none; font-size:0.9rem; font-family:inherit;"></textarea>
+          <button class="btn btn-primary" id="btn-send-chat" data-testid="pg-send" style="align-self:flex-end; padding:0.5rem 1.25rem;">Send</button>
+        </div>
+        <div id="pg-status" data-testid="pg-status" class="muted" style="font-size:0.75rem; margin-top:0.25rem;"></div>
+      </div>
+    </section>
+
+    <!-- Monitoring -->
+    <section id="page-monitoring" class="page">
+      <div class="topbar">
+        <h2>Monitoring</h2>
+        <div class="topbar-actions">
+          <button class="btn btn-primary btn-sm" id="btn-refresh-monitoring">Refresh</button>
+        </div>
+      </div>
+      <div class="content">
+        <div id="monitoring-auto-update"></div>
+        <div class="stats-grid" id="monitoring-summary"></div>
+        <div class="section-title">Providers</div>
+        <div id="monitoring-providers"></div>
+        <div class="section-title">History (last 24h)</div>
+        <div id="monitoring-history"></div>
+        <div class="section-title">Recent automatic changes</div>
+        <div id="monitoring-changes"></div>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<div class="toast-container" id="toast-container"></div>
+<script src="/dashboard/app.js?v=16"></script>
+<script src="/dashboard/auto_update.js?v=4"></script>
+<script type="module" src="/dashboard/live3d.js?v=4"></script>
+</body>
+</html>

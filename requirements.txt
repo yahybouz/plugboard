@@ -1,0 +1,10 @@
+# Backward-compatible entry point: `pip install -r requirements.txt` still
+# installs the runtime dependencies plus the test and lint toolchain, now
+# from the pinned, hash-checked lock.
+#
+#   requirements.in      / requirements.lock      runtime (Docker image)
+#   requirements-dev.in  / requirements-dev.lock  runtime + tests + lint
+#   requirements-mcp.in  / requirements-mcp.lock  MCP server (.venv-mcp)
+#
+# Edit the *.in files, then run `make lock` to regenerate the *.lock files.
+-r requirements-dev.lock

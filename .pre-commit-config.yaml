@@ -1,0 +1,72 @@
+# Pre-commit hooks for plugboard.
+# Install once: pip install pre-commit && pre-commit install
+# Run manually:  pre-commit run --all-files
+
+# BUG-2026-05-04-precommit-pricing-wipe : data/pricing/*.json is generated
+# state (PricingScheduler output, ~200KB, 2000+ models). It is tracked in
+# git for reproducibility but pre-commit hooks (trailing-whitespace,
+# end-of-file-fixer) must NOT touch it — a single auto-fix that misreads
+# the file can wipe production pricing data. Exclude defensively. The
+# file is still validated by check-json (read-only) and check-added-large-files.
+exclude: |
+  (?x)^(
+    data/pricing/.*\.json
+  )$
+
+repos:
+  # ── Generic hygiene ─────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        # Pricing files can grow to ~250KB legitimately as new models ship.
+        args: ["--maxkb=500"]
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  # ── Secret scanning ─────────────────────────────────────────────────────
+  # gitleaks catches API keys, tokens, private keys, .env secrets that would
+  # otherwise be committed. It runs on every commit and can scan history.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  # ── Python lint + format (ruff replaces flake8 + isort + black) ─────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.22
+    hooks:
+      - id: ruff
+        args: ["--fix", "--exit-non-zero-on-fix"]
+      - id: ruff-format
+
+  # ── Conventional Commits ────────────────────────────────────────────────
+  # Enforce `feat|fix|docs|refactor|test|chore(scope?): description` on the
+  # commit message itself. Admin can still override with `--no-verify` in an
+  # emergency, but the default path is gated.
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.2.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        # The positional `types` list enumerates the allowed commit type
+        # prefixes. Extend here if a new category is needed.
+        args:
+          [
+            "feat",
+            "fix",
+            "docs",
+            "refactor",
+            "test",
+            "chore",
+            "perf",
+            "ci",
+            "build",
+            "revert",
+            "style",
+            "sec",
+          ]

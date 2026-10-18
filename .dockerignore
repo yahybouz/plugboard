@@ -1,0 +1,91 @@
+# ============================================================
+# Files excluded from the Docker build context.
+# The Dockerfile copies only what it needs; this list keeps the context
+# small and makes sure local state and secrets never reach the daemon.
+# ============================================================
+
+# Secrets and local configuration
+.env*
+!.env.example
+*.pem
+*.key
+*secret*
+.mcp.json
+
+# Local state: databases, keys, pricing snapshots (use a volume for /app/data)
+data/
+logs/
+*.log
+
+# Private, agent and tooling directories
+private/
+.claude/
+CLAUDE.local.md
+.equipe/
+.gemini/
+graphify-out/
+ownership-map-out*/
+.playwright-mcp/
+.sonar/
+
+# Images (screenshots are not needed in the image)
+*.png
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtualenvs
+.venv
+.venv*/
+venv/
+ENV/
+env/
+.python-version
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Tests & coverage
+tests/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Documentation and tooling not needed at runtime
+docs/
+sdk/
+*.md
+!README.md
+
+# Git and CI
+.git/
+.gitignore
+.gitattributes
+.github/
+.gitlab-ci.yml
+.gitleaks.toml
+.pre-commit-config.yaml
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Misc
+*.bak
+*.orig
+*.rej

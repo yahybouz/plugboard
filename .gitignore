@@ -1,0 +1,92 @@
+# Secrets
+.env
+.env.*
+!.env.example
+.mcp.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+.venv-mcp/
+.venv-skill/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Data (ne pas versionner les configs avec vrais tokens)
+data/providers.json
+data/api_keys.json
+data/admin_mfa.json
+data/usage_*.json
+data/cb_state.json
+data/*.lock
+data/pricing/*.lock
+# Live-test framework run artifacts (append-only JSONL, per-run — never commit)
+data/live_test_runs/
+# Live-test framework screenshots (Playwright evidence — regenerable, large PNGs)
+docs/live-test-framework/screenshots/
+# Auto-generated token encryption key (per-installation, never commit)
+data/.encryption_key
+# SQLite (credentials, sessions, cache, audit, usage, monitoring...) — jamais en git
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
+data/sessions/
+data/logs/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Claude Code local state
+.claude/hooks/
+.claude/skills/
+.claude/worktrees/
+
+# Ruff
+.ruff_cache/
+
+# SonarQube
+.sonar/
+docs/SECURITY_REPORTS/
+
+# Ownership-map tool outputs (generated artefacts, ~200K each, regeneratable)
+ownership-map-out/
+ownership-map-out-sensitive/
+ownership-sensitive.csv
+
+data/cb_state.json
+
+# E2E: vendored axe-core (553K, downloaded on first run) + Playwright MCP artefacts
+tests/e2e/vendor/
+.playwright-mcp/
+
+# Runtime data (providers, keys, pricing grids, status): never tracked
+data/*
+!data/.gitkeep
+
+# Local agent settings and notes (never published)
+.claude/
+CLAUDE.local.md
+.equipe/
+graphify-out/
+private/
+.venv

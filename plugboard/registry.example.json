@@ -1,0 +1,25 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2026-01-01",
+  "prompts": [
+    {
+      "id": "CP-001",
+      "version": "1.0.0",
+      "date": "2026-01-01",
+      "impact": "MEDIUM",
+      "clients": [
+        "my-app"
+      ],
+      "title": "Use provider-prefixed model names",
+      "summary": "Model names must include the provider prefix, e.g. openai/gpt-4o-mini.",
+      "changes": [
+        {
+          "file": ".env",
+          "action": "replace",
+          "description": "Prefix LLM_MODEL with the provider id."
+        }
+      ],
+      "verification": "Send one chat request and check the response is 200."
+    }
+  ]
+}

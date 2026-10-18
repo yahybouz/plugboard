@@ -1,0 +1,28 @@
+# ============================================================
+# Plugboard — Railway configuration
+# ============================================================
+# This config makes Railway build from the repository's Dockerfile, which
+# bundles the provider CLIs (gemini, claude, codex, gh).
+# Volumes (for /app/data and /home/app) and secrets are configured via the
+# Railway dashboard — see docs/guide/deployment.md.
+# ============================================================
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# run.py reads $PORT from the environment.
+startCommand = "python run.py"
+
+# Health check: /health exposes provider status, latency, etc.
+# 180 s start period covers cold starts when the persistent volume is
+# being attached and the provider catalog is being indexed.
+healthcheckPath = "/health"
+healthcheckTimeout = 180
+
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
+
+# Number of replicas — keep at 1 unless DB state is moved out of SQLite.
+# numReplicas = 1

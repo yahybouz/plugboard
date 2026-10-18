@@ -1,0 +1,78 @@
+# CI of the GitHub mirror. The canonical pipeline is .gitlab-ci.yml on
+# GitLab, which also runs gitleaks and the Docker build.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  # Coverage floor (measured: 84% on 2026-10-17).
+  COV_MIN: "80"
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The locks are compiled for Python 3.12 and newer.
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-dev.lock
+
+      - name: Install dependencies (hash-checked lock)
+        run: python -m pip install --require-hashes -r requirements-dev.lock
+
+      - name: Lint (ruff)
+        run: ruff check plugboard/ tests/
+
+      - name: Format check (ruff)
+        # Reported but not blocking until the existing files are reformatted
+        # (`make format`); the pre-commit hook formats new changes.
+        continue-on-error: true
+        run: ruff format --check plugboard/ tests/
+
+      - name: Test + coverage
+        env:
+          PLUGBOARD_SKIP_DOTENV: "1"
+        run: |
+          export PLUGBOARD_DATA="$(mktemp -d)"
+          python -m pytest tests/ -q -p no:cacheprovider \
+            --cov=plugboard \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under="$COV_MIN"
+
+      - name: Security audit (bandit)
+        run: bandit -r plugboard/ -x tests/ -ll
+
+      - name: Dependency CVE audit (pip-audit)
+        # pip-audit (PyPA) checks the pinned set against the PyPI advisory
+        # database and fails on any known vulnerability.
+        run: pip-audit --strict --progress-spinner off --disable-pip --require-hashes -r requirements-dev.lock
+
+      - name: Validate the registry example JSON
+        run: python -m json.tool plugboard/registry.example.json > /dev/null
+
+      - name: Upload coverage
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+

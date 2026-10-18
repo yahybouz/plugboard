@@ -1,0 +1,39 @@
+# Plugboard — single-host deployment of the slim `api` image.
+#
+#   make init         # creates .env with fresh secrets (never overwrites)
+#   make compose-up   # docker compose up -d --build
+#
+# .env must define ADMIN_KEY (`make init` writes a random one): without it
+# the server refuses to start and the container never becomes healthy.
+#
+# The service is published on the host's loopback only (127.0.0.1:8765).
+# To expose it on a network, put a TLS reverse proxy in front of it
+# instead of widening the port binding. See docs/guide/deployment.md.
+
+services:
+  api:
+    build:
+      context: .
+      target: api
+    image: plugboard:api
+    restart: unless-stopped
+    env_file: .env
+    # Entries under `environment:` take precedence over `env_file:`.
+    environment:
+      # HOST is pinned here on purpose so that .env cannot override it. The
+      # .env generated from .env.example sets HOST=127.0.0.1 for a local
+      # `make dev`; inside a container that would bind the container's own
+      # loopback and the published port below would be unreachable. Network
+      # exposure is restricted by the host-side binding (127.0.0.1), not by
+      # HOST. Because the server does not listen on loopback inside the
+      # container, dashboard auto-login stays off: sign in with ADMIN_KEY.
+      HOST: 0.0.0.0
+      # Must match the container side of the port mapping below.
+      PORT: "8765"
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - plugboard-data:/app/data
+
+volumes:
+  plugboard-data:

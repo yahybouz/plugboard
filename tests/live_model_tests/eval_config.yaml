@@ -1,0 +1,83 @@
+# Evaluation thresholds + verdict policy for the live-test framework.
+# Last reviewed: 2026-05-31
+#
+# Each dimension declares:
+#   - pass_threshold : minimum proportion of models that must pass for the
+#                      run to be considered green for this dimension
+#   - severity_on_miss : BLOCKER | MAJOR | MINOR — drives alerting
+#   - per_model_assertion : additional per-model constraint (regex etc.)
+
+version: 1
+last_reviewed_at: "2026-05-31"
+
+dimensions:
+  d1_liveness:
+    pass_threshold: 0.95           # ≥95% of probed models must answer
+    severity_on_miss: MAJOR
+    notes: "A single muted model is normal (CLI auth refresh); a wave of muting is blocker."
+
+  d2_integrity:
+    pass_threshold: 0.90
+    severity_on_miss: MAJOR
+    notes: "JSON-strict + nonce echo. False positive from reasoning channel is filtered (content-only matching)."
+
+  d3_internet:
+    pass_threshold: 1.0            # 100% — each model MUST agree with catalog ground-truth
+    severity_on_miss: BLOCKER
+    unknown_catalog_warn_threshold: 0.20   # Council C5 MINOR-1: warn if >20% unknown
+    notes: >
+      Mismatch with catalog.yaml.expected_internet is a real divergence.
+      Per-model finding_severity may be MAJOR (confidence=low offline->online
+      mismatch, or signal_in_reasoning_only) vs BLOCKER (all other mismatches).
+      Dimension severity = max(finding_severity) over non-skipped results.
+      Content-only matching (ignore_reasoning=True) — Council C5 BLOCKER-1.
+
+  d4_identity_cooperative:
+    pass_threshold: 0.80
+    severity_on_miss: MAJOR
+    notes: "Cooperative test only — see T-01 for cryptographic disguise detection. Some models refuse self-id."
+
+  d5_streaming_integrity:
+    pass_threshold: 1.0            # 100% — broken streaming is a proxy bug
+    severity_on_miss: BLOCKER
+    surfaces: [api]               # Council C5 BLOCKER-3 — API only in C5
+    notes: >
+      SSE chunks malformed/duplicated/out-of-order -> broken proxy. Zero tolerance.
+      C5 scope: API surface only (MCP stdio and UI Playwright cannot expose
+      raw_sse_lines). C8/C9 add MCP/UI when StreamingCapableSurface is wired
+      there; until then those surfaces return skipped:surface_non_streaming.
+
+  d6_cost_accuracy:
+    pass_threshold: 0.95
+    severity_on_miss: MAJOR
+    tolerance_pct: 0.05            # X-Cost-USD must be within ±5% of pricing × tokens
+    notes: "Wider tolerance for tokenizer drift; tighter for pricing mismatches."
+
+# Cross-surface verdict comparison
+cross_surface:
+  required_agreement: true         # API and MCP verdicts on D3/D4 MUST match
+  severity_on_disagreement: MAJOR
+  excluded_dimensions: [d5_streaming_integrity]   # Council C5 — D5 is single-surface (api) in C5
+  notes: >
+    Diverging verdicts mean the proxy applies different effective prompts per
+    surface (Codex C1 BLOCKER #2). D5 is excluded in C5 because it runs on a
+    single surface (api) and cannot "diverge".
+
+# Alerting routes — Council C11 (devops triplet). DISABLED by default.
+# Secrets are read from env at send time; this file holds NO secrets:
+#   PLUGBOARD_SLACK_WEBHOOK  — Slack incoming webhook URL
+#   PLUGBOARD_NOTION_TOKEN   — Notion integration token
+#   PLUGBOARD_NOTION_DB      — Notion database id
+# Notion DB required columns: Title(title) Severity(select) Dimension(rich_text)
+#   RunID(rich_text) Verdict(select) Date(date).
+alerting:
+  enabled: false                   # off by default (no-cron policy validated by user)
+  min_severity: MINOR              # drop alerts below this floor (BLOCKER>MAJOR>MINOR>INFO)
+  channels:
+    slack_webhook: ""              # placeholder only — real value via env (above)
+    notion_database_id: ""         # placeholder only — real value via env (above)
+  routing:
+    BLOCKER: [slack, notion]
+    MAJOR: [slack]
+    MINOR: [notion]
+    # INFO intentionally absent → no alert on GO runs (no noise)

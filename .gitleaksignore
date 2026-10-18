@@ -1,0 +1,2 @@
+# Fake low-entropy test fixture (tests/test_log_redact.py), replaced in a later commit.
+8b48cbe093827f8d49d821546d61783c6ef03229:tests/test_log_redact.py:generic-api-key:115

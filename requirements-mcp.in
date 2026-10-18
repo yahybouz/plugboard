@@ -1,0 +1,6 @@
+# MCP server (scripts/run_mcp.py). Install in its own virtualenv
+# (.venv-mcp), not in the API one. Pinned set: requirements-mcp.lock —
+# regenerate with `make lock`.
+mcp>=1.27,<2
+# Same exact pin as the API (see requirements.in).
+aiohttp==3.14.3

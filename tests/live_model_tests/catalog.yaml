@@ -1,0 +1,172 @@
+# Live test ground-truth catalog
+# Last reviewed: 2026-05-31
+# Source: empirical observation + boot probe v2 results 2026-05-31
+#
+# Each entry MUST declare:
+#   - id                   : exact model id as accepted by /v1/chat/completions
+#   - surfaces             : which surfaces are valid for this model (api|mcp|ui)
+#   - expected_internet    : true|false|unknown
+#   - expected_family      : substring matcher for D4 (case-insensitive)
+#   - expected_vendor      : substring matcher for D4 (case-insensitive)
+#   - timeout_s            : per-call timeout
+#   - is_thinking          : if true, bump max_tokens
+#   - last_reviewed_at     : YYYY-MM-DD (warn if > 90 days)
+#   - notes                : free text
+
+version: 1
+last_reviewed_at: "2026-05-31"
+reviewer: "maintainers"
+
+models:
+  - id: claude-opus-4-7
+    surfaces: [api, mcp, ui]
+    expected_internet: true
+    expected_family: claude
+    expected_vendor: anthropic
+    timeout_s: 60
+    is_thinking: false
+    last_reviewed_at: "2026-05-31"
+    notes: "Anthropic Claude CLI sub. Confirmed online via probe v2."
+
+  - id: claude-opus-4-6
+    surfaces: [api, mcp, ui]
+    expected_internet: true
+    expected_family: claude
+    expected_vendor: anthropic
+    timeout_s: 60
+    is_thinking: false
+    last_reviewed_at: "2026-05-31"
+    notes: "Reproof needed sometimes due to flakiness — retry-on-fail recovers it."
+
+  - id: claude-sonnet-4-6
+    surfaces: [api, mcp, ui]
+    expected_internet: true
+    expected_family: claude
+    expected_vendor: anthropic
+    timeout_s: 60
+    is_thinking: false
+    last_reviewed_at: "2026-05-31"
+    notes: ""
+
+  - id: claude-haiku-4-5
+    surfaces: [api, mcp, ui]
+    expected_internet: true
+    expected_family: claude
+    expected_vendor: anthropic
+    timeout_s: 60
+    is_thinking: false
+    last_reviewed_at: "2026-05-31"
+    notes: "Fast model — useful for canary smoke."
+
+  - id: gpt-5.5
+    surfaces: [api, mcp, ui]
+    expected_internet: true
+    expected_family: gpt
+    expected_vendor: openai
+    timeout_s: 60
+    is_thinking: false
+    last_reviewed_at: "2026-05-31"
+    notes: "Codex CLI sub."
+
+  - id: gpt-5.4
+    surfaces: [api, mcp, ui]
+    expected_internet: true
+    expected_family: gpt
+    expected_vendor: openai
+    timeout_s: 60
+    is_thinking: false
+    last_reviewed_at: "2026-05-31"
+    notes: ""
+
+  - id: gemini-3.1-pro-preview
+    surfaces: [api, mcp, ui]
+    expected_internet: true
+    expected_family: gemini
+    expected_vendor: google
+    timeout_s: 90
+    is_thinking: false
+    last_reviewed_at: "2026-05-31"
+    notes: "Gemini CLI sub. Probe needs longer timeout."
+
+  - id: gemini-3-flash-preview
+    surfaces: [api, mcp, ui]
+    expected_internet: true
+    expected_family: gemini
+    expected_vendor: google
+    timeout_s: 60
+    is_thinking: false
+    last_reviewed_at: "2026-05-31"
+    notes: ""
+
+  - id: kimi-k2.6:cloud
+    surfaces: [api, mcp, ui]
+    expected_internet: false
+    expected_family: kimi
+    expected_vendor: moonshot
+    timeout_s: 180
+    is_thinking: true
+    last_reviewed_at: "2026-05-31"
+    notes: "Vérifié 2026-05-31 : Moonshot AI, cutoff April 2024, refuse la date. Offline confirmé."
+
+  - id: deepseek-v4-pro:cloud
+    surfaces: [api, mcp, ui]
+    expected_internet: false
+    expected_family: deepseek
+    expected_vendor: deepseek
+    timeout_s: 180
+    is_thinking: true
+    last_reviewed_at: "2026-05-31"
+    notes: "Ollama Turbo cloud. No web search capability."
+
+  - id: glm-5.1:cloud
+    surfaces: [api, mcp, ui]
+    expected_internet: false
+    expected_family: glm
+    expected_vendor: zhipu
+    timeout_s: 180
+    is_thinking: true
+    last_reviewed_at: "2026-05-31"
+    notes: ""
+
+  - id: qwen3.5:397b-cloud
+    surfaces: [api, mcp, ui]
+    expected_internet: false
+    expected_family: qwen
+    expected_vendor: alibaba
+    timeout_s: 180
+    is_thinking: true
+    last_reviewed_at: "2026-05-31"
+    notes: "Thinking model — 1042 billion params confirmed via ollama show. Self-id: Alibaba Qwen."
+
+  - id: gpt-oss:120b-cloud
+    surfaces: [api, mcp, ui]
+    expected_internet: unknown
+    expected_family: gpt
+    expected_vendor: openai
+    timeout_s: 180
+    is_thinking: true
+    last_reviewed_at: "2026-05-31"
+    notes: "Open-source GPT-OSS via Ollama cloud. Boot probe says online — surprising for OSS variant. Set to 'unknown' (Council C5 BLOCKER-2) pending empirical re-probe; D3 observes without BLOCKER-failing the run."
+
+# ── Aliases for D4 matcher ──────────────────────────────────────────────────
+# Acceptable substring alternatives for family / vendor matching.
+# Format: <canonical>: [<alias1>, <alias2>, ...]
+aliases:
+  family:
+    claude: [claude, sonnet, opus, haiku]
+    gpt: [gpt, chatgpt, openai]
+    gemini: [gemini, bard, palm]
+    kimi: [kimi, moonshot]
+    deepseek: [deepseek, deepseek-coder]
+    glm: [glm, chatglm]
+    qwen: [qwen, qianwen, tongyi]
+    llama: [llama, meta-llama]
+  vendor:
+    anthropic: [anthropic]
+    openai: [openai, chatgpt]
+    google: [google, deepmind, google deepmind]
+    moonshot: [moonshot, moonshot ai, moonshot.cn]
+    deepseek: [deepseek, deepseek ai, deepseek-ai]
+    zhipu: [zhipu, zhipu ai, chatglm]
+    alibaba: [alibaba, alibaba cloud, qwen]
+    meta: [meta, meta ai, facebook]

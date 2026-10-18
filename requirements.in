@@ -1,0 +1,13 @@
+# Runtime dependencies (direct only). The pinned, hashed set lives in
+# requirements.lock — regenerate it with `make lock` after editing this file.
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+# Exact pin: the aioresponses test double is verified against this release
+# (tests/test_aioresponses_compat.py). Bump deliberately, with the test suite.
+# 3.14.3 fixes CVE-2026-69244, CVE-2026-69243 and CVE-2026-59881 (3.14.1).
+aiohttp==3.14.3
+pydantic>=2.0.0
+filelock>=3.12.0
+cryptography>=42.0
+tiktoken>=0.7.0
+python-dotenv>=1.0.0

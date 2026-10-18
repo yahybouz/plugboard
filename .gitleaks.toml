@@ -1,0 +1,65 @@
+# gitleaks configuration (gitleaks >= 8.25, for the [[allowlists]] syntax).
+#
+#   make secret-scan              # working tree + full history
+#   scripts/pre-push              # commits being pushed (make install-hooks)
+#
+# Default rules stay on; the allowlists below only cover values that are
+# known to be fake or public. Keep every entry as narrow as possible and
+# explain why it is safe.
+
+title = "plugboard"
+
+[extend]
+useDefault = true
+
+# Client API keys issued by the gateway: "pb_" + 64 hex characters
+# (plugboard/apikeys.py); keys issued before the rename start with "lle_".
+# Placeholders in the docs are shorter or not hex, so they do not match.
+[[rules]]
+id = "plugboard-client-key"
+description = "Plugboard client API key"
+regex = '''\b(?:pb|lle)_[0-9a-f]{64}\b'''
+keywords = ["pb_", "lle_"]
+
+# Server secrets assigned in env files or shell snippets.
+[[rules]]
+id = "plugboard-env-secret"
+description = "Plugboard server secret assignment"
+regex = '''(?i)\b(?:ADMIN_KEY|API_KEY|ENCRYPTION_KEY|OPENCLAW_KEY)[ \t]*[:=][ \t]*["']?([A-Za-z0-9_\-+/=]{20,})'''
+secretGroup = 1
+entropy = 3.5
+keywords = ["admin_key", "api_key", "encryption_key", "openclaw_key"]
+
+# Fake keys used by the test fixtures (tests/conftest.py and friends).
+[[allowlists]]
+description = "Test fixture keys"
+regexes = [
+  '''adminkey-conftest''',
+  '''testkey-conftest''',
+]
+
+# Canary values that tests/test_cli_subprocess_isolation.py plants in the
+# server environment to prove they never reach a CLI child.
+[[allowlists]]
+description = "CLI isolation canaries"
+condition = "AND"
+paths = ['''(?:^|/)tests/test_cli_subprocess_isolation\.py$''']
+regexes = ['''^canary-[a-z-]+-[0-9a-f]{4}$''']
+
+# Client-key placeholders used in the docs, the Bruno collection and the
+# client registry. None has the shape of a real key (64 hex characters).
+[[allowlists]]
+description = "Documentation key placeholders"
+regexes = [
+  '''^(?:pb|lle)_(?:votre_cle(?:_ici)?|your_(?:client_)?key(?:_here)?|x{8,}|9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4c)(?:\.{3})?$''',
+]
+
+# Synthetic secrets that tests/test_log_redact.py feeds to the log redactor.
+[[allowlists]]
+description = "Log redaction test inputs"
+condition = "AND"
+paths = ['''(?:^|/)tests/test_log_redact\.py$''']
+regexes = [
+  '''^ya29\.a0Abc_ZyXwVuTsRqPoNmLkJiHgFeDcBa0123456789$''',
+  '''^secret123456789abcdef$''',
+]

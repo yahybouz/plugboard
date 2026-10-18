@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Plugboard — Client Portal</title>
+  <link rel="icon" href="/dashboard/favicon.svg">
+  <link rel="stylesheet" href="/dashboard/style.css?v=10">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- Login modal -->
+<div id="login-modal" class="modal">
+  <div class="modal-box">
+    <h2>Client Portal</h2>
+    <p class="muted">Enter your API key to view your usage.</p>
+    <form id="login-form">
+      <div class="form-group">
+        <input type="password" id="login-key" placeholder="pb_..." autocomplete="off" required>
+      </div>
+      <div id="login-error" class="error hidden"></div>
+      <button type="submit" class="btn btn-primary btn-block">Sign in</button>
+    </form>
+  </div>
+</div>
+
+<div id="app" class="app hidden">
+  <header>
+    <div class="header-left">
+      <h1>Plugboard — My Usage</h1>
+      <span id="client-badge" class="badge badge-accent"></span>
+    </div>
+    <button id="logout-btn" class="btn btn-ghost">Logout</button>
+  </header>
+  <main>
+    <!-- Summary cards -->
+    <div class="overview-grid" id="summary-cards"></div>
+
+    <!-- Spending limit bar -->
+    <div id="spending-bar-container" class="hidden">
+      <div class="section-title">Spending Limit</div>
+      <div id="spending-bar"></div>
+    </div>
+
+    <!-- By model -->
+    <div class="section-title">Usage by Model</div>
+    <div id="by-model"></div>
+
+    <!-- Chart -->
+    <div class="section-title">Daily Usage</div>
+    <div class="card" id="chart-container" style="padding:1rem;">
+      <canvas id="usage-chart" height="220"></canvas>
+    </div>
+
+    <!-- By day table -->
+    <div class="section-title">Daily Breakdown</div>
+    <div id="by-day"></div>
+  </main>
+</div>
+
+<script src="/dashboard/portal.js?v=3"></script>
+</body>
+</html>
