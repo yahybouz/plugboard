@@ -1,0 +1,12 @@
+[Unit]
+Description=Cold encrypted Plugboard backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/opt/plugboard/deploy/ovh/backup.sh
+TimeoutStartSec=10min

@@ -122,6 +122,10 @@ RUN echo "── Installed CLI binaries ──" \
  && (command -v codex && codex --version 2>/dev/null | head -1 || echo "codex: not installed") \
  && (command -v gh && gh --version | head -1 || echo "gh: not installed")
 
+# CLI version probes can create private state as root during the build.
+# Keep the persisted runtime HOME writable by the unprivileged app user.
+RUN chown -R app:app /home/app
+
 # The CLIs write their OAuth tokens under $HOME (~/.gemini, ~/.codex, ...):
 # mount a volume at /home/app to keep them across redeploys.
 # Parallel client sessions can spawn many CLI processes at once; a higher

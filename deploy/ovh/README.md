@@ -6,16 +6,19 @@ One small Ubuntu VPS, Docker `full`, private Tailscale Serve, no public applicat
 
 ## Current verification
 
-- Source baseline: `735232a`.
-- Image successfully built locally (Linux ARM64 on the Mac); rebuild on the VPS for its actual architecture.
+- Application source baseline: `735232a`; deployment and home-ownership hardening are tracked as separate local commits.
+- Full image built and exercised on both local ARM64 and the delivered AMD64 Ubuntu 24.04 VPS.
 - `shellcheck`, shell syntax, and Compose configuration validation pass.
 - Authentication/MFA regression selection: 106 passed, 46 deselected.
-- Disposable runtime: `/health` and `/login` return 200; unauthenticated admin/models and invalid bearer return 401.
-- Claude, Codex, Gemini and GitHub CLIs execute their version commands as UID 1000. This does NOT establish provider login or inference capability.
-- Data and CLI-home markers survive container removal/recreation with named volumes.
-- Cold archive extracted successfully using a root archive helper. A separate populated WAL-mode SQLite fixture was archived/restored into an isolated volume; `PRAGMA integrity_check=ok`, sentinel row and root-only file were verified. Real VPS data restoration remains untested.
-- No completion requests or paid model probes were made.
-- Server access, host firewall, Tailscale TLS/ACLs, MFA enrollment, provider logins, encrypted off-host backup and real VPS restoration are NOT yet verified. An accepted hosting order is not a deployed service.
+- Production `/health` and `/login` return 200; unauthenticated admin/models and invalid bearer return 401. A separately issued limited client key returns 200 and survives restoration.
+- Claude, Codex, Gemini and GitHub CLI version commands work as UID 1000 without home-permission warnings. Root-owned build-time CLI state was fixed in the Dockerfile and the existing volume with a one-off helper; the gateway remains capability-dropped and unprivileged.
+- Data and CLI-home markers survive container recreation and a real VPS reboot onto the updated kernel. Docker and Tailscale restart automatically; the gateway is healthy afterwards.
+- UFW defaults to deny incoming on IPv4/IPv6; SSH and HTTPS are permitted only on `tailscale0`. Public-IP TCP 22, 443 and 8765 were unreachable from the Mac. The gateway binds only host loopback. Serve is tailnet-only; no Funnel configuration is present.
+- The saved tailnet grant allows only the owner identity to the VPS IPv4, not to the Mac. Actual private SSH and certificate-validated HTTPS work; a VPS-to-Mac desktop connection is blocked. A separate outside-tailnet identity was not enrolled solely for testing.
+- A real cold backup includes application data, CLI home and runtime encryption/admin configuration. It was age-encrypted, copied to the Mac and SHA256-verified, then decrypted into isolated disposable volumes. Both populated production SQLite databases passed `PRAGMA integrity_check`; the restored app started with no network or published ports and accepted the original client key.
+- Daily encrypted VPS backups are scheduled by `plugboard-backup.timer` (03:30 UTC plus up to 10 minutes jitter), keeping 7 archives. `sync-backups.sh` verifies copies and retains 30 on the Mac. The hourly offsite-sync script is scheduled by Hermes, not a LaunchAgent; copying requires an awake Mac with Tailscale and Hermes running. A manual sync passed. Store the Mac's age identity separately in a secure password manager for disaster recovery.
+- No completion requests or paid model probes were made; the production health response currently reports zero connected providers.
+- **Still pending:** owner TOTP enrollment (the required flag is set, but enrollment and enforcement currently remain false), provider OAuth/login, a real inference test after provider approval, and verification of the owner's Google-account MFA. Do not describe the whole setup as fully ready until these gates are completed.
 
 ## Deployment after authorized SSH is available
 
