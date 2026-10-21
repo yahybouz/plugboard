@@ -1,0 +1,53 @@
+# Private single-instance deployment. Run from the repository root:
+# docker compose -f deploy/ovh/compose.yml --env-file /etc/plugboard/runtime.env up -d --build
+name: plugboard-private
+services:
+  gateway:
+    build:
+      context: ../..
+      target: full
+      args:
+        GEMINI_CLI_VERSION: "0.65.0"
+        CLAUDE_CODE_VERSION: "2.1.306"
+        CODEX_VERSION: "0.163.0"
+    image: plugboard:private-full-735232a
+    restart: unless-stopped
+    env_file:
+      - ${PLUGBOARD_ENV_FILE:-/etc/plugboard/runtime.env}
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8765"
+      PLUGBOARD_DATA: /app/data
+      PLUGBOARD_LOCAL_AUTO_LOGIN: "0"
+      COOKIE_SECURE: "true"
+      CORS_ORIGINS: ""
+      PLUGBOARD_MAX_INFLIGHT_CHAT: "1"
+      PLUGBOARD_SUBPROCESS_LIMIT: "1"
+      PLUGBOARD_CODEX_SANDBOX: read-only
+      MODEL_AVAILABILITY_SCHEDULER_DISABLED: "1"
+      PLUGBOARD_INTERNET_CHECK_ON_BOOT: "0"
+      PRICING_SCHEDULER_DISABLED: "1"
+      PLUGBOARD_LLM_PRICING: "0"
+      OLLAMA_ENABLED: "false"
+    ports:
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - data:/app/data
+      - cli-home:/home/app
+      - logs:/app/logs
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 3g
+    cpus: 1.75
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  data:
+  cli-home:
+  logs:
