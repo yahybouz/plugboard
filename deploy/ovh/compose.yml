@@ -34,6 +34,19 @@ services:
     volumes:
       - data:/app/data
       - cli-home:/home/app
+      # Reuse the owner's native VPS sessions; auth refreshes stay shared.
+      # Do not mount individual auth files: CLIs replace them atomically.
+      # Missing source directories must fail, not become root-owned stubs.
+      - type: bind
+        source: /home/ubuntu/.codex
+        target: /home/app/.codex
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /home/ubuntu/.claude
+        target: /home/app/.claude
+        bind:
+          create_host_path: false
       - logs:/app/logs
     security_opt:
       - no-new-privileges:true
