@@ -17,9 +17,19 @@ One small Ubuntu VPS, Docker `full`, private Tailscale Serve, no public applicat
 - The saved tailnet grant allows only the owner identity to the VPS IPv4, not to the Mac. Actual private SSH and certificate-validated HTTPS work; a VPS-to-Mac desktop connection is blocked. A separate outside-tailnet identity was not enrolled solely for testing.
 - A real cold backup includes application data, CLI home and runtime encryption/admin configuration. It was age-encrypted, copied to the Mac and SHA256-verified, then decrypted into isolated disposable volumes. Both populated production SQLite databases passed `PRAGMA integrity_check`; the restored app started with no network or published ports and accepted the original client key.
 - Daily encrypted VPS backups are scheduled by `plugboard-backup.timer` (03:30 UTC plus up to 10 minutes jitter), keeping 7 archives. `sync-backups.sh` verifies copies and retains 30 on the Mac. The hourly offsite-sync script is scheduled by Hermes, not a LaunchAgent; copying requires an awake Mac with Tailscale and Hermes running. A manual sync passed. Store the Mac's age identity separately in a secure password manager for disaster recovery.
-- No completion requests or paid model probes were made; the production health response currently reports zero connected providers.
+- Provisioning has not sent model completions or paid probes. The owner's later dashboard changes now expose three configured active providers in health (`chatgpt-via-codex-cli`, `claude-via-claude-cli`, `anthropic-direct`); configuration alone does not establish usable authenticated inference.
 - Admin TOTP has been enrolled with the existing CLI bootstrap and enforcement is verified: an otherwise-valid admin key alone receives `401` with `mfa_required`. The provisioning QR and manual recovery secret stay in private files on the owner's Mac, not in Git, chat or external QR services. Owner import into an authenticator and the first complete browser MFA login remain pending; the backup restoration above predates this enrollment.
 - **Still pending:** owner authenticator import and complete TOTP login, provider OAuth/login, a real inference test after provider approval, and verification of the owner's Google-account MFA. Do not describe the whole setup as fully ready until these gates are completed.
+
+## Native SSH tools
+
+The Ubuntu host additionally has native Codex 0.163.0, Claude Code 2.1.306, Antigravity CLI (`agy`) 1.4.4 and Ollama 0.40.8. This is separate from the CLIs embedded in the gateway image. All four version commands work from an ordinary Ubuntu SSH shell; help commands for the three agents pass without inference.
+
+`install-host-tools.sh` installs one selected tool at a time as `ubuntu`. Stage that script, `ollama-private.service`, and the reviewed official `https://claude.ai/install.sh` as `~/claude-native-install.sh` before invoking it. Codex and Ollama archives are SHA256-verified against their official GitHub release digests; AGY is SHA512-verified against the official installer's release manifest. Claude's native installer verifies its vendor manifest. User-local native binaries have global symlinks so already-open SSH shells can find them without PATH edits.
+
+Ollama runs as the dedicated `ollama` user with systemd, bound only to `127.0.0.1:11434`, limited to 1 GiB RAM and one CPU. Version API and empty model inventory are verified; port 11434 is unreachable from the Mac through both public and Tailscale addresses. No model was pulled or executed. The gateway remained healthy after installation.
+
+Native SSH account credentials are not automatically shared with `/home/app` in the gateway, and the existing gateway backup does not cover native host CLI homes. Do not claim native login automatically connects Plugboard, expose Ollama publicly to bridge the gap, or copy account tokens without deliberate authorization.
 
 ## Deployment after authorized SSH is available
 
