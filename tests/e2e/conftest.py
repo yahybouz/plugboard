@@ -86,7 +86,6 @@ def _server_env(data_dir: Path, enc_key: str, port: int) -> dict:
         "OPENCLAW_MODEL",
         "OPENCLAW_NAME",
         "PLUGBOARD_PROVIDER_DOMAINS_ALLOWED",
-        "ADMIN_KEY",  # force the localhost auto-login path, not key auth
         "MODEL_STATUS_PATH",
     ):
         env.pop(leak, None)
@@ -102,6 +101,17 @@ def _server_env(data_dir: Path, enc_key: str, port: int) -> dict:
             "MODEL_AVAILABILITY_SCHEDULER_DISABLED": "1",
             "PLUGBOARD_PROBE_ON_BOOT": "false",
             "PLUGBOARD_INTERNET_CHECK_ON_BOOT": "0",
+            # A throwaway admin key, never the operator's: the server refuses
+            # to boot without one, and auto-login is refused ("no_admin_key")
+            # without one too. The suite then reaches the dashboard through
+            # the localhost auto-login, not through key auth, because HOST
+            # above makes the server a loopback-only local install.
+            "ADMIN_KEY": "e2e-" + "0" * 28,
+            # Every test loads the dashboard, and one page is already a dozen
+            # admin calls from the same address: the default 60/min per IP
+            # rejects the whole suite after a handful of tests (429 on `GET /`,
+            # so auto-login never happens). The limiter has its own unit tests.
+            "RATE_LIMIT": "0",
         }
     )
     return env
