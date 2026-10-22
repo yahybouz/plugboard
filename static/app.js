@@ -5,8 +5,8 @@
 
 function toast(msg, type) {
   type = type || "success";
-  var container = document.getElementById("toast-container");
-  var el = document.createElement("div");
+  const container = document.getElementById("toast-container");
+  const el = document.createElement("div");
   el.className = "toast " + type;
   el.textContent = msg;
   container.appendChild(el);
@@ -16,10 +16,10 @@ function toast(msg, type) {
 // ── API client ──────────────────────────────────────────────────────────────
 
 async function api(method, path, body) {
-  var opts = { method: method, headers: {} };
+  const opts = { method: method, headers: {} };
   if (body !== undefined) opts.headers["Content-Type"] = "application/json";
   if (body !== undefined) opts.body = JSON.stringify(body);
-  var res = await fetch(path, opts);
+  const res = await fetch(path, opts);
   if (res.status === 401) { logout(); throw new Error("Unauthorized"); }
   return res;
 }
@@ -27,13 +27,13 @@ async function api(method, path, body) {
 async function logout(explicit) {
   try {
     await fetch("/auth/admin/logout", { method: "POST" });
-  } catch (e) { /* ignore */ }
+  } catch (e) { console.debug("logout request failed:", e); }
   // An explicit logout must not be undone by local auto-login.
   location.href = explicit ? "/login?logged_out=1" : "/login";
 }
 
 function currentMonth() {
-  var d = new Date();
+  const d = new Date();
   return d.getFullYear() + "_" + String(d.getMonth() + 1).padStart(2, "0");
 }
 function toApiMonth(htmlMonth) { return htmlMonth.replace("-", "_"); }
@@ -43,20 +43,20 @@ function fmt(n) { return Number(n || 0).toLocaleString(); }
 
 // ── Auth ────────────────────────────────────────────────────────────────────
 
-var loginModal = document.getElementById("login-modal");
-var loginForm = document.getElementById("login-form");
-var loginError = document.getElementById("login-error");
-var appEl = document.getElementById("app");
+const loginModal = document.getElementById("login-modal");
+const loginForm = document.getElementById("login-form");
+const loginError = document.getElementById("login-error");
+const appEl = document.getElementById("app");
 
 async function tryLogin(key) {
   try {
-    var res = await fetch("/auth/admin/login", {
+    const res = await fetch("/auth/admin/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ key: key }),
     });
     return res.ok;
-  } catch (e) {
+  } catch (e) { console.debug("admin session check failed:", e);
     return false;
   }
 }
@@ -64,9 +64,9 @@ async function tryLogin(key) {
 loginForm.addEventListener("submit", async function (e) {
   e.preventDefault();
   loginError.classList.add("hidden");
-  var key = document.getElementById("login-key").value.trim();
+  const key = document.getElementById("login-key").value.trim();
   if (!key) return;
-  var ok = await tryLogin(key);
+  const ok = await tryLogin(key);
   if (ok) {
     showApp();
   } else {
@@ -87,12 +87,12 @@ function showApp() {
 // admin endpoints fetched there fail (auth issues, network blip).
 async function refreshVersionBadge() {
   try {
-    var res = await fetch("/health");
+    const res = await fetch("/health");
     if (!res.ok) return;
-    var health = await res.json();
-    var badge = document.getElementById("version-badge");
+    const health = await res.json();
+    const badge = document.getElementById("version-badge");
     if (badge && health.version) badge.textContent = "v" + health.version;
-  } catch (e) {
+  } catch (e) { console.debug("version lookup failed:", e);
     /* leave the hardcoded fallback in place */
   }
 }
@@ -100,18 +100,16 @@ async function refreshVersionBadge() {
 // auto-login if secure admin session cookie already exists
 (async function () {
   try {
-    var res = await fetch("/admin/keys");
+    const res = await fetch("/admin/keys");
     if (res.ok) { showApp(); return; }
-  } catch (e) {
-    /* ignore */
-  }
+  } catch (e) { console.debug("session probe failed:", e); }
   loginModal.classList.remove("hidden");
 })();
 
 document.getElementById("logout-btn").addEventListener("click", function () { logout(true); });
 
 // Mobile menu
-var mobileBtn = document.getElementById("mobile-menu-btn");
+const mobileBtn = document.getElementById("mobile-menu-btn");
 if (mobileBtn) {
   mobileBtn.addEventListener("click", function () {
     document.getElementById("sidebar").classList.toggle("open");
@@ -120,9 +118,9 @@ if (mobileBtn) {
 
 // ── Tab / Sidebar routing ───────────────────────────────────────────────────
 
-var TAB_LOADERS = { overview: loadOverview, keys: loadKeys, usage: loadUsage, providers: loadProviders, pricing: loadPricing, monitoring: loadMonitoring, jobs: loadJobs, ollama: loadOllama, playground: loadPlayground };
-var navLinks = document.querySelectorAll(".nav-link");
-var pages = document.querySelectorAll(".page");
+const TAB_LOADERS = { overview: loadOverview, keys: loadKeys, usage: loadUsage, providers: loadProviders, pricing: loadPricing, monitoring: loadMonitoring, jobs: loadJobs, ollama: loadOllama, playground: loadPlayground };
+const navLinks = document.querySelectorAll(".nav-link");
+const pages = document.querySelectorAll(".page");
 
 function switchTab(name) {
   navLinks.forEach(function (t) { t.classList.toggle("active", t.dataset.tab === name); });
@@ -146,10 +144,10 @@ function initTabs() {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function h(tag, attrs) {
-  var children = Array.prototype.slice.call(arguments, 2);
-  var el = document.createElement(tag);
+  const children = Array.prototype.slice.call(arguments, 2);
+  const el = document.createElement(tag);
   if (attrs) Object.keys(attrs).forEach(function (k) {
-    var v = attrs[k];
+    const v = attrs[k];
     if (k === "className") el.className = v;
     else if (k.startsWith("on")) el.addEventListener(k.slice(2).toLowerCase(), v);
     else el.setAttribute(k, v);
@@ -171,8 +169,8 @@ function table(headers, rows) {
 }
 
 function skeleton(count) {
-  var els = [];
-  for (var i = 0; i < count; i++) els.push(h("div", { className: "skeleton skeleton-card", style: "margin-bottom:0.75rem;" }));
+  const els = [];
+  for (let i = 0; i < count; i++) els.push(h("div", { className: "skeleton skeleton-card", style: "margin-bottom:0.75rem;" }));
   return h("div", null, els);
 }
 
@@ -188,23 +186,23 @@ function emptyState(icon, text) {
 // button silently did nothing. Resolves to true only on an explicit OK.
 function confirmAction(msg, okLabel) {
   return new Promise(function (resolve) {
-    var previous = document.activeElement;
-    var overlay = document.createElement("div");
+    const previous = document.activeElement;
+    const overlay = document.createElement("div");
     overlay.className = "modal confirm-modal";
-    var box = document.createElement("div");
+    const box = document.createElement("div");
     box.className = "modal-box confirm-box";
     box.setAttribute("role", "alertdialog");
     box.setAttribute("aria-modal", "true");
-    var text = document.createElement("p");
+    const text = document.createElement("p");
     text.className = "confirm-text";
     text.id = "confirm-text-" + Date.now();
     text.textContent = msg;
     box.setAttribute("aria-describedby", text.id);
-    var cancel = document.createElement("button");
+    const cancel = document.createElement("button");
     cancel.type = "button"; cancel.className = "btn"; cancel.textContent = "Cancel";
-    var ok = document.createElement("button");
+    const ok = document.createElement("button");
     ok.type = "button"; ok.className = "btn btn-danger"; ok.textContent = okLabel || "Confirm";
-    var actions = document.createElement("div");
+    const actions = document.createElement("div");
     actions.className = "btn-group confirm-actions";
     actions.appendChild(cancel); actions.appendChild(ok);
     box.appendChild(text); box.appendChild(actions);
@@ -212,7 +210,7 @@ function confirmAction(msg, okLabel) {
     function close(answer) {
       document.removeEventListener("keydown", onKey, true);
       overlay.remove();
-      if (previous && previous.focus) previous.focus();
+      if (previous?.focus) previous.focus();
       resolve(answer);
     }
     function onKey(ev) {
@@ -234,25 +232,25 @@ function confirmAction(msg, okLabel) {
 // ── Overview ────────────────────────────────────────────────────────────────
 
 async function loadOverview() {
-  var container = document.getElementById("overview-cards");
-  var metricsContainer = document.getElementById("metrics-table-container");
+  const container = document.getElementById("overview-cards");
+  const metricsContainer = document.getElementById("metrics-table-container");
   container.innerHTML = "";
   container.appendChild(skeleton(4));
   metricsContainer.innerHTML = "";
 
   try {
-    var results = await Promise.all([
+    const results = await Promise.all([
       api("GET", "/health"),
       api("GET", "/admin/usage/" + currentMonth()),
       api("GET", "/metrics"),
     ]);
-    var health = await results[0].json();
-    var usage = await results[1].json();
-    var metrics = await results[2].json();
+    const health = await results[0].json();
+    const usage = await results[1].json();
+    const metrics = await results[2].json();
 
     document.getElementById("version-badge").textContent = "v" + health.version;
 
-    var summary = usage.summary || {};
+    const summary = usage.summary || {};
     container.innerHTML = "";
     container.appendChild(statCard("⬤", "Status", health.ok ? "Online" : "DOWN", health.ok ? "green" : "red"));
     container.appendChild(statCard("⚙", "Providers", String(health.providers), "accent"));
@@ -260,9 +258,9 @@ async function loadOverview() {
     container.appendChild(statCard("💰", "Cost (month)", usd(summary.total_cost_usd || 0), "orange"));
 
     // Metrics table
-    var pids = Object.keys(metrics);
+    const pids = Object.keys(metrics);
     if (pids.length) {
-      var rows = pids.map(function (pid) {
+      const rows = pids.map(function (pid) {
         return h("tr", null,
           h("td", null, h("code", null, pid)),
           h("td", null, fmt(metrics[pid].requests)),
@@ -274,14 +272,14 @@ async function loadOverview() {
     } else {
       metricsContainer.appendChild(emptyState("—", "No metrics recorded yet."));
     }
-  } catch (err) {
+  } catch (err) { console.warn("overview load failed:", err);
     container.innerHTML = "";
     container.appendChild(h("div", { className: "alert alert-error" }, "Failed to load overview."));
   }
 }
 
 function statCard(icon, label, value, color) {
-  var card = h("div", { className: "card stat-card stat-" + (color || "accent") },
+  const card = h("div", { className: "card stat-card stat-" + (color || "accent") },
     h("div", { className: "stat-value " + (color || "") }, value),
     h("div", { className: "stat-label" }, label),
   );
@@ -290,8 +288,8 @@ function statCard(icon, label, value, color) {
 
 // ── API Keys ────────────────────────────────────────────────────────────────
 
-var createKeyForm = document.getElementById("create-key-form");
-var newKeyAlert = document.getElementById("new-key-alert");
+const createKeyForm = document.getElementById("create-key-form");
+const newKeyAlert = document.getElementById("new-key-alert");
 
 document.getElementById("btn-create-key").addEventListener("click", function () {
   createKeyForm.classList.toggle("hidden");
@@ -300,14 +298,14 @@ document.getElementById("btn-create-key").addEventListener("click", function () 
 document.getElementById("btn-cancel-key").addEventListener("click", function () { createKeyForm.classList.add("hidden"); });
 
 document.getElementById("btn-submit-key").addEventListener("click", async function () {
-  var clientId = document.getElementById("key-client-id").value.trim();
+  const clientId = document.getElementById("key-client-id").value.trim();
   if (!clientId) return;
-  var label = document.getElementById("key-label").value.trim();
-  var limit = parseFloat(document.getElementById("key-limit").value) || 0;
-  var rpm = parseInt(document.getElementById("key-rpm").value) || 0;
+  const label = document.getElementById("key-label").value.trim();
+  const limit = parseFloat(document.getElementById("key-limit").value) || 0;
+  const rpm = parseInt(document.getElementById("key-rpm").value) || 0;
   try {
-    var res = await api("POST", "/admin/keys", { client_id: clientId, label: label, monthly_limit_usd: limit, rpm_limit: rpm });
-    var body = await res.json();
+    const res = await api("POST", "/admin/keys", { client_id: clientId, label: label, monthly_limit_usd: limit, rpm_limit: rpm });
+    const body = await res.json();
     document.getElementById("new-key-value").textContent = body.key;
     newKeyAlert.classList.remove("hidden");
     createKeyForm.classList.add("hidden");
@@ -317,7 +315,7 @@ document.getElementById("btn-submit-key").addEventListener("click", async functi
     document.getElementById("key-rpm").value = "";
     toast("API key created for " + clientId, "success");
     loadKeys();
-  } catch (e) { toast("Failed to create key", "error"); }
+  } catch (e) { console.warn("key creation failed:", e); toast("Failed to create key", "error"); }
 });
 
 document.getElementById("btn-copy-key").addEventListener("click", function () {
@@ -326,15 +324,15 @@ document.getElementById("btn-copy-key").addEventListener("click", function () {
 });
 
 async function loadKeys() {
-  var container = document.getElementById("keys-table-container");
+  const container = document.getElementById("keys-table-container");
   container.innerHTML = "";
   container.appendChild(skeleton(3));
   try {
-    var res = await api("GET", "/admin/keys");
-    var keys = await res.json();
+    const res = await api("GET", "/admin/keys");
+    const keys = await res.json();
     container.innerHTML = "";
     if (!keys.length) { container.appendChild(emptyState("—", "No API keys yet. Create one to get started.")); return; }
-    var rows = keys.map(function (k) {
+    const rows = keys.map(function (k) {
       return h("tr", null,
         h("td", null, h("strong", null, k.client_id)),
         h("td", null, k.label || "—"),
@@ -352,7 +350,7 @@ async function loadKeys() {
       );
     });
     container.appendChild(table(["Client", "Label", "Key", "Status", "Limit", "RPM", "Created", "Actions"], rows));
-  } catch (e) { container.innerHTML = ""; container.appendChild(h("div", { className: "alert alert-error" }, "Failed to load keys.")); }
+  } catch (e) { console.warn("keys load failed:", e); container.innerHTML = ""; container.appendChild(h("div", { className: "alert alert-error" }, "Failed to load keys.")); }
 }
 
 async function revokeKey(keyId) {
@@ -370,18 +368,18 @@ async function deleteKey(keyId) {
 
 // ── Usage & Billing ─────────────────────────────────────────────────────────
 
-var usageMonthInput = document.getElementById("usage-month");
+const usageMonthInput = document.getElementById("usage-month");
 usageMonthInput.value = toHtmlMonth(currentMonth());
 usageMonthInput.addEventListener("change", loadUsage);
 
 document.getElementById("btn-export-csv").addEventListener("click", async function () {
-  var month = toApiMonth(usageMonthInput.value);
+  const month = toApiMonth(usageMonthInput.value);
   try {
-    var res = await fetch("/admin/usage/" + month + "/export?format=csv");
+    const res = await fetch("/admin/usage/" + month + "/export?format=csv");
     if (!res.ok) throw new Error("Export failed");
-    var blob = await res.blob();
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement("a");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
     a.href = url; a.download = "usage_" + month + ".csv"; a.click();
     URL.revokeObjectURL(url);
     toast("CSV exported", "success");
@@ -389,17 +387,17 @@ document.getElementById("btn-export-csv").addEventListener("click", async functi
 });
 
 async function loadUsage() {
-  var month = toApiMonth(usageMonthInput.value);
-  var cardsEl = document.getElementById("usage-summary-cards");
-  var clientEl = document.getElementById("usage-by-client");
-  var modelEl = document.getElementById("usage-by-model");
+  const month = toApiMonth(usageMonthInput.value);
+  const cardsEl = document.getElementById("usage-summary-cards");
+  const clientEl = document.getElementById("usage-by-client");
+  const modelEl = document.getElementById("usage-by-model");
   cardsEl.innerHTML = ""; cardsEl.appendChild(skeleton(4));
   clientEl.innerHTML = ""; modelEl.innerHTML = "";
 
   try {
-    var res = await api("GET", "/admin/usage/" + month);
-    var data = await res.json();
-    var s = data.summary || {};
+    const res = await api("GET", "/admin/usage/" + month);
+    const data = await res.json();
+    const s = data.summary || {};
 
     cardsEl.innerHTML = "";
     cardsEl.appendChild(statCard("📈", "Requests", fmt(s.total_entries || 0), "accent"));
@@ -408,14 +406,14 @@ async function loadUsage() {
     cardsEl.appendChild(statCard("💰", "Total Cost", usd(s.total_cost_usd || 0), "orange"));
 
     // By client
-    var byClient = {};
+    const byClient = {};
     (data.entries || []).forEach(function (e) {
-      var c = byClient[e.client_id] = byClient[e.client_id] || { entries: 0, tokens: 0, cost: 0 };
+      const c = byClient[e.client_id] = byClient[e.client_id] || { entries: 0, tokens: 0, cost: 0 };
       c.entries++; c.tokens += e.total_tokens || 0; c.cost += e.cost_usd || 0;
     });
-    var clientIds = Object.keys(byClient);
+    const clientIds = Object.keys(byClient);
     if (clientIds.length) {
-      var rows = clientIds.map(function (cid) {
+      const rows = clientIds.map(function (cid) {
         return h("tr", null,
           h("td", null, h("strong", null, cid)),
           h("td", null, fmt(byClient[cid].entries)),
@@ -429,10 +427,10 @@ async function loadUsage() {
     }
 
     // By model
-    var bm = s.by_model || {};
-    var modelNames = Object.keys(bm);
+    const bm = s.by_model || {};
+    const modelNames = Object.keys(bm);
     if (modelNames.length) {
-      var mrows = modelNames.map(function (m) {
+      const mrows = modelNames.map(function (m) {
         return h("tr", null,
           h("td", null, h("code", null, m)),
           h("td", null, fmt(bm[m].entries)),
@@ -444,16 +442,16 @@ async function loadUsage() {
     }
 
     // Recent requests, newest first, with the grid entry that priced them
-    var recentEl = document.getElementById("usage-recent");
+    const recentEl = document.getElementById("usage-recent");
     recentEl.innerHTML = "";
-    var recentData = data;
-    var perPage = data.limit || 100;
+    let recentData = data;
+    const perPage = data.limit || 100;
     if ((data.total || 0) > perPage) {
-      var lastPage = Math.ceil(data.total / perPage);
-      var lastRes = await api("GET", "/admin/usage/" + month + "?page=" + lastPage + "&limit=" + perPage);
+      const lastPage = Math.ceil(data.total / perPage);
+      const lastRes = await api("GET", "/admin/usage/" + month + "?page=" + lastPage + "&limit=" + perPage);
       if (lastRes.ok) recentData = await lastRes.json();
     }
-    var recent = (recentData.entries || []).slice(-20).reverse();
+    const recent = (recentData.entries || []).slice(-20).reverse();
     if (recent.length) {
       recentEl.appendChild(table(["Time", "Client", "Model", "Served by", "Price key", "Source", "Cost"], recent.map(function (e) {
         return h("tr", null,
@@ -469,13 +467,13 @@ async function loadUsage() {
     } else {
       recentEl.appendChild(emptyState("—", "No requests this month."));
     }
-  } catch (e) { cardsEl.innerHTML = ""; cardsEl.appendChild(h("div", { className: "alert alert-error" }, "Failed to load usage.")); }
+  } catch (e) { console.warn("usage load failed:", e); cardsEl.innerHTML = ""; cardsEl.appendChild(h("div", { className: "alert alert-error" }, "Failed to load usage.")); }
 }
 
 // ── Providers ───────────────────────────────────────────────────────────────
 
-var providerFormContainer = document.getElementById("provider-form-container");
-var providerForm = document.getElementById("provider-form");
+const providerFormContainer = document.getElementById("provider-form-container");
+const providerForm = document.getElementById("provider-form");
 
 document.getElementById("btn-add-provider").addEventListener("click", function () {
   providerFormContainer.classList.remove("hidden");
@@ -493,31 +491,31 @@ document.getElementById("btn-add-provider").addEventListener("click", function (
 document.getElementById("btn-cancel-provider").addEventListener("click", function () { providerFormContainer.classList.add("hidden"); });
 
 // Direct provider presets wizard (API key + OAuth via CLI)
-var directProviderForm = document.getElementById("direct-provider-form");
-var _directPresets = [];
+const directProviderForm = document.getElementById("direct-provider-form");
+let _directPresets = [];
 
 async function _loadDirectPresets() {
   if (_directPresets.length) return;
   try {
-    var res = await api("GET", "/admin/direct-providers/presets");
-    var data = await res.json();
+    const res = await api("GET", "/admin/direct-providers/presets");
+    const data = await res.json();
     _directPresets = data.presets || [];
     _fillPresetSelect("");
-    var select = document.getElementById("dp-preset");
+    const select = document.getElementById("dp-preset");
     select.addEventListener("change", _renderPresetView);
-    var search = document.getElementById("dp-search");
+    const search = document.getElementById("dp-search");
     search.addEventListener("input", function () {
       _fillPresetSelect(search.value.trim().toLowerCase());
     });
-  } catch (e) { /* ignore */ }
+  } catch (e) { console.debug("provider presets unavailable:", e); }
 }
 
 function _fillPresetSelect(query) {
-  var select = document.getElementById("dp-preset");
-  var previous = select.value;
+  const select = document.getElementById("dp-preset");
+  const previous = select.value;
   select.innerHTML = "";
   // Group by auth type; catalog presets come from models.dev and are unverified.
-  var groups = [
+  const groups = [
     ["sub", "CLI subprocess (OpenClaw-style) — recommended"],
     ["broker", "OAuth (via dashboard)"],
     ["api", "Built-in · API key"],
@@ -525,27 +523,24 @@ function _fillPresetSelect(query) {
     ["cli", "OAuth (via CLI token file)"],
     ["roadmap", "Roadmap (not yet available)"],
   ];
-  var byGroup = {};
-  groups.forEach(function (g) { var og = document.createElement("optgroup"); og.label = g[1]; byGroup[g[0]] = og; });
-  var shown = 0;
+  const byGroup = {};
+  groups.forEach(function (g) { const og = document.createElement("optgroup"); og.label = g[1]; byGroup[g[0]] = og; });
+  let shown = 0;
   _directPresets.forEach(function (p) {
-    var label = p.name + (p.catalog ? " · unverified" : "");
+    const label = p.name + (p.catalog ? " · unverified" : "");
     if (query && (label + " " + p.key + " " + (p.base_url || "")).toLowerCase().indexOf(query) < 0) return;
-    var opt = document.createElement("option");
+    const opt = document.createElement("option");
     opt.value = p.key;
     opt.textContent = label;
-    var group = p.status === "roadmap" ? "roadmap"
-      : _isSubprocessPreset(p) ? "sub"
-      : _isBrokerPreset(p) ? "broker"
-      : _isCliPreset(p) ? "cli"
-      : p.catalog ? "catalog" : "api";
+    const group = _presetGroup(p);
     if (group === "roadmap") opt.disabled = true;
     byGroup[group].appendChild(opt);
     shown++;
   });
   groups.forEach(function (g) { if (byGroup[g[0]].children.length) select.appendChild(byGroup[g[0]]); });
-  var count = document.getElementById("dp-search-count");
-  count.textContent = query ? shown + " provider" + (shown === 1 ? "" : "s") + " match" : _directPresets.length + " providers available";
+  const count = document.getElementById("dp-search-count");
+  const plural = shown === 1 ? "" : "s";
+  count.textContent = query ? shown + " provider" + plural + " match" : _directPresets.length + " providers available";
   if (previous && Array.prototype.some.call(select.options, function (o) { return o.value === previous; })) select.value = previous;
   if (!shown) {
     document.getElementById("dp-setup-guide").innerHTML = '<p class="muted">No provider matches. Add it as a custom endpoint with <strong>+ Add Custom Provider</strong>.</p>';
@@ -558,15 +553,15 @@ function _fillPresetSelect(query) {
 }
 
 function _isCliPreset(preset) {
-  return preset && preset.auth_source && preset.auth_source.indexOf("cli:") === 0;
+  return preset?.auth_source?.indexOf("cli:") === 0;
 }
 
 function _isBrokerPreset(preset) {
-  return preset && preset.auth_source && preset.auth_source.indexOf("broker:") === 0;
+  return preset?.auth_source?.indexOf("broker:") === 0;
 }
 
 function _isSubprocessPreset(preset) {
-  return preset && preset.auth_source && preset.auth_source.indexOf("subprocess:") === 0;
+  return preset?.auth_source?.indexOf("subprocess:") === 0;
 }
 
 function _isOAuthPreset(preset) {
@@ -575,15 +570,15 @@ function _isOAuthPreset(preset) {
 
 function _copyToClipboard(text, btn) {
   navigator.clipboard.writeText(text).then(function () {
-    var orig = btn.textContent;
+    const orig = btn.textContent;
     btn.textContent = "Copied!";
     setTimeout(function () { btn.textContent = orig; }, 1500);
   });
 }
 
 function _renderSetupSteps(preset) {
-  if (!preset.setup_steps || !preset.setup_steps.length) return "";
-  var html = '<div style="background:var(--bg-secondary); border:1px solid var(--border-strong); border-radius:8px; padding:0.75rem 1rem;">';
+  if (!preset.setup_steps?.length) return "";
+  let html = '<div style="background:var(--bg-secondary); border:1px solid var(--border-strong); border-radius:8px; padding:0.75rem 1rem;">';
   html += '<div style="font-weight:600; font-size:0.85rem; margin-bottom:0.5rem; color:var(--text);">Setup guide</div>';
   html += '<ol style="margin:0; padding-left:1.25rem; font-size:0.85rem; line-height:1.5;">';
   preset.setup_steps.forEach(function (step, i) {
@@ -596,7 +591,7 @@ function _renderSetupSteps(preset) {
       html += '<div style="margin-top:0.2rem;"><a href="' + _escape(_safeHref(step.link)) + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent-dark); font-size:0.8rem;">' + _escape(step.link) + ' →</a></div>';
     }
     if (step.command) {
-      var cmdId = "dp-cmd-" + i;
+      const cmdId = "dp-cmd-" + i;
       html += '<div style="margin-top:0.3rem; display:flex; gap:0.4rem; align-items:center;">';
       html += '<code id="' + cmdId + '" style="flex:1; background:var(--code-bg); color:var(--code-text); padding:0.35rem 0.6rem; border-radius:4px; font-size:0.78rem; font-family:var(--mono);">' + _escape(step.command) + '</code>';
       html += '<button type="button" data-cmd="' + _escape(step.command) + '" class="btn btn-ghost btn-sm dp-copy-btn" style="font-size:0.75rem; padding:0.2rem 0.5rem;">Copy</button>';
@@ -616,12 +611,30 @@ function _escape(s) {
 function _safeHref(s) {
   if (s == null) return "#";
   try {
-    var u = new URL(String(s), window.location.href);
+    const u = new URL(String(s), window.location.href);
     if (u.protocol !== "http:" && u.protocol !== "https:") return "#";
     return u.toString();
-  } catch (e) {
+  } catch (e) { console.debug("invalid URL:", e);
     return "#";
   }
+}
+
+let _dpTested = null;  // {key, ok} for the preset/key pair last tested
+
+function _presetGroup(p) {
+  if (p.status === "roadmap") return "roadmap";
+  if (_isSubprocessPreset(p)) return "sub";
+  if (_isBrokerPreset(p)) return "broker";
+  if (_isCliPreset(p)) return "cli";
+  return p.catalog ? "catalog" : "api";
+}
+
+function _oauthVendorLabel(preset) {
+  const name = preset.name;
+  if (name.indexOf("Google") >= 0) return "Google";
+  if (name.indexOf("GitHub") >= 0 || name.indexOf("Copilot") >= 0) return "GitHub";
+  if (name.indexOf("ChatGPT") >= 0 || name.indexOf("OpenAI") >= 0) return "OpenAI";
+  return preset.oauth_source || "Provider";
 }
 
 // A slow status check for a preset the user already left must not overwrite
@@ -631,17 +644,17 @@ function _presetStillSelected(preset) {
 }
 
 async function _renderPresetView() {
-  var key = document.getElementById("dp-preset").value;
-  var preset = _directPresets.find(function (p) { return p.key === key; });
-  var guideEl = document.getElementById("dp-setup-guide");
-  var apiKeyInput = document.getElementById("dp-api-key");
-  var checkBtn = document.getElementById("btn-dp-check");
-  var createBtn = document.getElementById("btn-dp-create");
-  var statusEl = document.getElementById("dp-status");
+  const key = document.getElementById("dp-preset").value;
+  const preset = _directPresets.find(function (p) { return p.key === key; });
+  const guideEl = document.getElementById("dp-setup-guide");
+  const apiKeyInput = document.getElementById("dp-api-key");
+  const checkBtn = document.getElementById("btn-dp-check");
+  const createBtn = document.getElementById("btn-dp-create");
+  const statusEl = document.getElementById("dp-status");
   if (!preset) { guideEl.innerHTML = ""; return; }
 
   // Header info
-  var header = '';
+  let header = '';
   if (preset.base_url) header += '<div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:0.5rem;">Endpoint : <code>' + _escape(preset.base_url) + '</code>';
   if (preset.default_model) header += ' · Default model : <code>' + _escape(preset.default_model) + '</code>';
   if (preset.base_url) header += '</div>';
@@ -678,10 +691,7 @@ async function _renderPresetView() {
     apiKeyInput.style.display = "none";
     apiKeyInput.value = "";
     checkBtn.style.display = "none";
-    var label = preset.name.indexOf("Google") >= 0 ? "Google"
-              : preset.name.indexOf("GitHub") >= 0 || preset.name.indexOf("Copilot") >= 0 ? "GitHub"
-              : preset.name.indexOf("ChatGPT") >= 0 || preset.name.indexOf("OpenAI") >= 0 ? "OpenAI"
-              : preset.oauth_source || "Provider";
+    const label = _oauthVendorLabel(preset);
     createBtn.textContent = "Connect with " + label;
     createBtn.disabled = false;
     await _checkBrokerConnection(preset);
@@ -703,7 +713,7 @@ async function _renderPresetView() {
     createBtn.textContent = "Test and create";
     createBtn.disabled = false;
   }
-  var apiKeyPreset = preset.status !== "roadmap" && !_isOAuthPreset(preset);
+  const apiKeyPreset = preset.status !== "roadmap" && !_isOAuthPreset(preset);
   document.getElementById("btn-dp-test").style.display = apiKeyPreset ? "" : "none";
   document.getElementById("dp-test-token-row").style.display = apiKeyPreset ? "" : "none";
   document.getElementById("dp-test-token").checked = false;
@@ -713,9 +723,7 @@ async function _renderPresetView() {
   }
 }
 
-var _dpTested = null;  // {key, ok} for the preset/key pair last tested
-
-var _TEST_LABELS = {
+const _TEST_LABELS = {
   ok: "Connected",
   ok_no_models: "Key valid, but the provider lists no model",
   invalid_key: "Invalid key",
@@ -724,30 +732,32 @@ var _TEST_LABELS = {
 };
 
 async function _testDirectProvider() {
-  var presetKey = document.getElementById("dp-preset").value;
-  var apiKey = document.getElementById("dp-api-key").value.trim();
-  var statusEl = document.getElementById("dp-status");
+  const presetKey = document.getElementById("dp-preset").value;
+  const apiKey = document.getElementById("dp-api-key").value.trim();
+  const statusEl = document.getElementById("dp-status");
   if (!apiKey) { statusEl.innerHTML = '<span class="text-red">Enter an API key first.</span>'; return null; }
   statusEl.innerHTML = '<span class="muted">Testing the connection…</span>';
-  var testBtn = document.getElementById("btn-dp-test");
-  var createBtn = document.getElementById("btn-dp-create");
+  const testBtn = document.getElementById("btn-dp-test");
+  const createBtn = document.getElementById("btn-dp-create");
   testBtn.disabled = true;
   createBtn.disabled = true;
   try {
-    var res = await api("POST", "/admin/direct-providers/test", {
+    const res = await api("POST", "/admin/direct-providers/test", {
       preset_key: presetKey, api_key: apiKey, send_test_token: document.getElementById("dp-test-token").checked,
     });
-    var r = await res.json();
+    const r = await res.json();
     if (!res.ok) throw new Error(r.detail || ("HTTP " + res.status));
-    var ok = r.status === "ok" || r.status === "ok_no_models";
-    var label = _TEST_LABELS[r.status] || r.status;
-    var html = '<span class="' + (r.status === "ok" ? "text-green" : ok ? "text-orange" : "text-red") + '">' +
+    const ok = r.status === "ok" || r.status === "ok_no_models";
+    const label = _TEST_LABELS[r.status] || r.status;
+    let tone = ok ? "text-orange" : "text-red";
+    if (r.status === "ok") tone = "text-green";
+    let html = '<span class="' + tone + '">' +
       (ok ? "✓ " : "✗ ") + _escape(label) + '</span> <span class="muted">' + _escape(r.message || "") + '</span>';
     if (r.completion_status != null) html += ' <span class="muted">· test token: HTTP ' + _escape(r.completion_status) + '</span>';
     if (r.docs) html += ' <span class="muted small">See ' + _escape(r.docs) + '</span>';
     if (!ok) html += ' <button type="button" class="btn btn-sm" id="dp-save-anyway">Save anyway</button>';
     statusEl.innerHTML = html;
-    var anyway = document.getElementById("dp-save-anyway");
+    const anyway = document.getElementById("dp-save-anyway");
     if (anyway) anyway.addEventListener("click", function () { _createDirectProvider(true); });
     _dpTested = { key: presetKey + "|" + apiKey, ok: ok };
     return ok;
@@ -763,13 +773,13 @@ async function _testDirectProvider() {
 
 async function _checkBrokerConnection(preset) {
   // Display existing connection status if already connected.
-  var statusEl = document.getElementById("dp-status");
-  var createBtn = document.getElementById("btn-dp-create");
+  const statusEl = document.getElementById("dp-status");
+  const createBtn = document.getElementById("btn-dp-create");
   try {
-    var res = await api("GET", "/admin/oauth/connections");
-    var data = await res.json();
+    const res = await api("GET", "/admin/oauth/connections");
+    const data = await res.json();
     if (!_presetStillSelected(preset)) return;
-    var match = (data.connections || []).find(function (c) {
+    const match = (data.connections || []).find(function (c) {
       return c.source === preset.oauth_source;
     });
     if (match) {
@@ -779,11 +789,11 @@ async function _checkBrokerConnection(preset) {
         + ' <button type="button" class="btn btn-danger btn-sm" id="dp-disconnect-btn" style="margin-left:0.25rem;">Disconnect</button>';
       createBtn.textContent = "Provider ready";
       createBtn.disabled = false;
-      var reconnectBtn = document.getElementById("dp-reconnect-btn");
+      const reconnectBtn = document.getElementById("dp-reconnect-btn");
       if (reconnectBtn) {
         reconnectBtn.addEventListener("click", function () { _startBrokerFlow(preset); });
       }
-      var disconnectBtn = document.getElementById("dp-disconnect-btn");
+      const disconnectBtn = document.getElementById("dp-disconnect-btn");
       if (disconnectBtn) {
         disconnectBtn.addEventListener("click", async function () {
           if (await disconnectOAuth(preset.oauth_source)) _checkBrokerConnection(preset);
@@ -792,19 +802,19 @@ async function _checkBrokerConnection(preset) {
     } else {
       statusEl.innerHTML = '<span style="color:var(--text-muted);">Not connected yet. Click the button to start.</span>';
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) { console.debug("broker status unavailable:", e); }
 }
 
 async function _checkCLI(preset) {
-  var statusEl = document.getElementById("dp-status");
-  var createBtn = document.getElementById("btn-dp-create");
+  const statusEl = document.getElementById("dp-status");
+  const createBtn = document.getElementById("btn-dp-create");
   statusEl.innerHTML = '<span style="color:var(--text-muted);">Checking CLI...</span>';
   try {
-    var res = await api("GET", "/admin/direct-providers/" + preset.key + "/check");
-    var status = await res.json();
+    const res = await api("GET", "/admin/direct-providers/" + preset.key + "/check");
+    const status = await res.json();
     if (!_presetStillSelected(preset)) return;
     if (status.ok) {
-      var label;
+      let label;
       if (status.auth_type === "subprocess") {
         label = '✓ CLI found: <code>' + _escape(status.binary || status.kind)
               + '</code>' + (status.version ? ' (' + _escape(status.version) + ')' : '');
@@ -836,8 +846,8 @@ document.getElementById("btn-dp-cancel").addEventListener("click", function () {
 });
 
 document.getElementById("btn-dp-check").addEventListener("click", async function () {
-  var presetKey = document.getElementById("dp-preset").value;
-  var preset = _directPresets.find(function (p) { return p.key === presetKey; });
+  const presetKey = document.getElementById("dp-preset").value;
+  const preset = _directPresets.find(function (p) { return p.key === presetKey; });
   if (preset) await _checkCLI(preset);
 });
 
@@ -846,9 +856,9 @@ document.getElementById("btn-dp-test").addEventListener("click", _testDirectProv
 document.getElementById("btn-dp-create").addEventListener("click", function () { _createDirectProvider(false); });
 
 async function _createDirectProvider(skipTest) {
-  var presetKey = document.getElementById("dp-preset").value;
-  var preset = _directPresets.find(function (p) { return p.key === presetKey; });
-  var apiKey = document.getElementById("dp-api-key").value.trim();
+  const presetKey = document.getElementById("dp-preset").value;
+  const preset = _directPresets.find(function (p) { return p.key === presetKey; });
+  const apiKey = document.getElementById("dp-api-key").value.trim();
   if (!presetKey) {
     toast("Select a provider", "error");
     return;
@@ -858,26 +868,26 @@ async function _createDirectProvider(skipTest) {
     await _startBrokerFlow(preset);
     return;
   }
-  var isOauth = _isOAuthPreset(preset);
+  const isOauth = _isOAuthPreset(preset);
   if (!isOauth && !apiKey) {
     toast("Enter an API key", "error");
     return;
   }
   // API-key presets are tested first; a failed test offers "Save anyway".
   if (!isOauth && !skipTest) {
-    var tested = _dpTested && _dpTested.key === presetKey + "|" + apiKey ? _dpTested.ok : await _testDirectProvider();
+    const tested = _dpTested && _dpTested.key === presetKey + "|" + apiKey ? _dpTested.ok : await _testDirectProvider();
     if (!tested) return;
   }
   try {
-    var res = await api("POST", "/admin/direct-providers/" + presetKey, { api_key: isOauth ? "" : apiKey });
+    const res = await api("POST", "/admin/direct-providers/" + presetKey, { api_key: isOauth ? "" : apiKey });
     if (res.status === 201) {
-      var data = await res.json();
+      const data = await res.json();
       toast("Provider created: " + data.name, "success");
       directProviderForm.style.display = "none";
       _markDiscovering(data.id, (data.models || []).length);
       loadProviders();
     } else {
-      var err = await res.json();
+      const err = await res.json();
       toast("Error: " + (err.detail || res.status), "error");
     }
   } catch (e) {
@@ -886,7 +896,7 @@ async function _createDirectProvider(skipTest) {
 }
 
 // A provider created from a preset discovers its models in the background.
-var _discovering = {};  // id -> {since, count}
+const _discovering = {};  // id -> {since, count}
 
 function _markDiscovering(id, count) {
   if (!id) return;
@@ -896,19 +906,19 @@ function _markDiscovering(id, count) {
 
 // ── Broker OAuth flows ──────────────────────────────────────────────────────
 
-var _devicePollTimer = null;
-var _oauthMsgHandler = null;
+let _devicePollTimer = null;
+let _oauthMsgHandler = null;
 
 async function _startBrokerFlow(preset) {
-  var statusEl = document.getElementById("dp-status");
+  const statusEl = document.getElementById("dp-status");
   statusEl.innerHTML = '<span style="color:var(--text-muted);">Starting OAuth flow...</span>';
   try {
-    var res = await api("POST", "/admin/oauth/start", { preset: preset.key });
+    const res = await api("POST", "/admin/oauth/start", { preset: preset.key });
     if (!res.ok) {
-      var err = await res.json();
+      const err = await res.json();
       throw new Error(err.detail || ("HTTP " + res.status));
     }
-    var data = await res.json();
+    const data = await res.json();
     if (data.flow === "authorization_code") {
       _runPopupFlow(preset, data);
     } else if (data.flow === "device_code") {
@@ -923,10 +933,10 @@ async function _startBrokerFlow(preset) {
 }
 
 function _runPopupFlow(preset, data) {
-  var statusEl = document.getElementById("dp-status");
+  const statusEl = document.getElementById("dp-status");
   // noreferrer strips Referer; noopener is intentionally omitted so the parent
   // can still receive postMessage from the popup for the OAuth handshake.
-  var popup = window.open(data.auth_url, "oauth_" + preset.oauth_source,
+  const popup = window.open(data.auth_url, "oauth_" + preset.oauth_source,
                           "width=600,height=720,left=200,top=100,noreferrer");
   if (!popup) {
     statusEl.innerHTML = '<span style="color:var(--red);">✗ Popup blocked. Allow popups for this site.</span>';
@@ -963,33 +973,32 @@ function _runPopupFlow(preset, data) {
 }
 
 function _runDeviceFlow(preset, data) {
-  var modal = document.getElementById("device-flow-modal");
-  var codeEl = document.getElementById("device-code");
-  var openBtn = document.getElementById("device-open-btn");
-  var copyBtn = document.getElementById("device-copy-btn");
-  var cancelBtn = document.getElementById("device-cancel-btn");
-  var deviceStatus = document.getElementById("device-status");
+  const modal = document.getElementById("device-flow-modal");
+  const codeEl = document.getElementById("device-code");
+  const openBtn = document.getElementById("device-open-btn");
+  const copyBtn = document.getElementById("device-copy-btn");
+  const cancelBtn = document.getElementById("device-cancel-btn");
+  const deviceStatus = document.getElementById("device-status");
 
   codeEl.textContent = data.user_code || "----";
   deviceStatus.textContent = "Waiting for authorization...";
   modal.style.display = "flex";
   modal.classList.remove("hidden");
 
-  var verificationUri = data.verification_uri || "https://github.com/login/device";
+  const verificationUri = data.verification_uri || "https://github.com/login/device";
   openBtn.onclick = function () { window.open(verificationUri, "_blank"); };
   copyBtn.onclick = function () { _copyToClipboard(data.user_code, copyBtn); };
   cancelBtn.onclick = function () { _closeDeviceFlow(); };
 
-  var interval = Math.max((data.interval || 5) * 1000, 2000);
-  var state = data.state;
-  var preset_key = preset.key;
+  const interval = Math.max((data.interval || 5) * 1000, 2000);
+  const state = data.state;
 
   if (_devicePollTimer) clearInterval(_devicePollTimer);
   _devicePollTimer = setInterval(async function () {
     try {
-      var res = await api("GET", "/admin/oauth/device/poll/" + state);
+      const res = await api("GET", "/admin/oauth/device/poll/" + state);
       if (!res.ok) return; // keep polling on transient errors
-      var d = await res.json();
+      const d = await res.json();
       if (d.status === "success") {
         _closeDeviceFlow();
         toast("Connected: " + (d.account || "user"), "success");
@@ -1001,12 +1010,12 @@ function _runDeviceFlow(preset, data) {
       } else {
         deviceStatus.textContent = "Waiting for authorization... (" + d.status + ")";
       }
-    } catch (e) { /* keep polling */ }
+    } catch (e) { console.debug("discovery poll failed:", e); /* keep polling */ }
   }, interval);
 }
 
 function _closeDeviceFlow() {
-  var modal = document.getElementById("device-flow-modal");
+  const modal = document.getElementById("device-flow-modal");
   modal.style.display = "none";
   modal.classList.add("hidden");
   if (_devicePollTimer) {
@@ -1017,23 +1026,23 @@ function _closeDeviceFlow() {
 
 providerForm.addEventListener("submit", async function (e) {
   e.preventDefault();
-  var editId = document.getElementById("pf-edit-id").value;
-  var body = {
+  const editId = document.getElementById("pf-edit-id").value;
+  const body = {
     name: document.getElementById("pf-name").value.trim(),
     base_url: document.getElementById("pf-url").value.trim(),
     default_model: document.getElementById("pf-model").value.trim(),
     is_active: document.getElementById("pf-active").checked,
     timeout: parseFloat(document.getElementById("pf-timeout").value) || 60,
   };
-  var tokenVal = document.getElementById("pf-token").value.trim();
+  const tokenVal = document.getElementById("pf-token").value.trim();
 
   if (editId) {
     if (tokenVal) body.bearer_token = tokenVal;
     body.auto_discover = document.getElementById("pf-auto-discover").checked;
     body.pinned_models = document.getElementById("pf-pinned").value.split(",")
       .map(function (x) { return x.trim(); }).filter(Boolean);
-    var upd = await api("PUT", "/providers/" + editId, body);
-    if (!upd.ok) { var uerr = await upd.json(); toast("Update failed: " + (uerr.detail || upd.status), "error"); return; }
+    const upd = await api("PUT", "/providers/" + editId, body);
+    if (!upd.ok) { const uerr = await upd.json(); toast("Update failed: " + (uerr.detail || upd.status), "error"); return; }
     toast("Provider updated", "success");
   } else {
     body.bearer_token = tokenVal;
@@ -1045,26 +1054,27 @@ providerForm.addEventListener("submit", async function (e) {
 });
 
 async function loadProviders() {
-  var container = document.getElementById("providers-table-container");
+  const container = document.getElementById("providers-table-container");
   container.innerHTML = ""; container.appendChild(skeleton(3));
   try {
-    var res = await api("GET", "/providers");
-    var providers = await res.json();
-    var changes = {};
+    const res = await api("GET", "/providers");
+    const providers = await res.json();
+    let changes = {};
     try {
-      var sres = await api("GET", "/admin/models/scheduler/status");
-      if (sres.ok) changes = ((await sres.json()).last_changes || {}).providers || {};
-    } catch (e) { /* status is optional */ }
+      const sres = await api("GET", "/admin/models/scheduler/status");
+      if (sres.ok) changes = (await sres.json()).last_changes?.providers || {};
+    } catch (e) { console.debug("auto-update status unavailable:", e); /* status is optional */ }
     container.innerHTML = "";
     if (!providers.length) { container.appendChild(emptyState("—", "No providers configured.")); return; }
-    var rows = providers.map(function (p) {
-      var count = (p.models || []).length;
-      var disc = _discovering[p.id];
+    const rows = providers.map(function (p) {
+      const count = (p.models || []).length;
+      let disc = _discovering[p.id];
       if (disc && (count !== disc.count || Date.now() - disc.since > 30000)) { delete _discovering[p.id]; disc = null; }
-      var ch = changes[p.id] || {};
-      var pending = Object.keys(ch.pending_removal || {});
-      var modelsCell = h("td", null,
-        disc ? h("span", { className: "badge badge-accent" }, "Discovering…") : (count ? count + " models" : "—"),
+      const ch = changes[p.id] || {};
+      const pending = Object.keys(ch.pending_removal || {});
+      const modelsText = count ? count + " models" : "—";
+      const modelsCell = h("td", null,
+        disc ? h("span", { className: "badge badge-accent" }, "Discovering…") : modelsText,
         p.auto_discover ? h("div", { className: "muted small" }, "auto-refresh") : null,
         pending.length ? h("div", { className: "muted small", title: pending.join(", ") }, pending.length + " missing, removed after the next refresh") : null,
         (ch.removed || []).length ? h("div", { className: "muted small", title: ch.removed.join(", ") }, ch.removed.length + " removed at last refresh") : null,
@@ -1089,7 +1099,7 @@ async function loadProviders() {
       );
     });
     container.appendChild(table(["Name / ID", "Base URL", "Default Model", "Timeout", "Status", "Health", "Models", "Actions"], rows));
-  } catch (e) { container.innerHTML = ""; container.appendChild(h("div", { className: "alert alert-error" }, "Failed to load providers.")); }
+  } catch (e) { console.warn("providers load failed:", e); container.innerHTML = ""; container.appendChild(h("div", { className: "alert alert-error" }, "Failed to load providers.")); }
 }
 
 function editProvider(p) {
@@ -1119,28 +1129,28 @@ async function deleteProvider(id) {
 async function discoverModels(id) {
   try {
     // Preview first: a manual discover removes missing models at once.
-    var preview = await api("POST", "/providers/" + encodeURIComponent(id) + "/discover?dry_run=true");
-    if (!preview.ok) { var perr = await preview.json(); toast("Discovery failed: " + (perr.detail || "Error"), "error"); return; }
-    var pdata = await preview.json();
-    var removed = pdata.removed || [];
+    const preview = await api("POST", "/providers/" + encodeURIComponent(id) + "/discover?dry_run=true");
+    if (!preview.ok) { const perr = await preview.json(); toast("Discovery failed: " + (perr.detail || "Error"), "error"); return; }
+    const pdata = await preview.json();
+    const removed = pdata.removed || [];
     if (pdata.removals_allowed === false) toast("The provider's model API did not answer: models can be added, none will be removed.", "success");
     if (removed.length && !await confirmAction(
       "Discovery found " + pdata.discovered + " models. It will remove " + removed.length + " model(s) from " + id + ":\n\n" +
       removed.slice(0, 15).join("\n") + (removed.length > 15 ? "\n…" : "") + "\n\nContinue?")) return;
-    var res = await api("POST", "/providers/" + encodeURIComponent(id) + "/discover");
-    if (!res.ok) { var err = await res.json(); toast("Discovery failed: " + (err.detail || "Error"), "error"); return; }
-    var data = await res.json();
+    const res = await api("POST", "/providers/" + encodeURIComponent(id) + "/discover");
+    if (!res.ok) { const err = await res.json(); toast("Discovery failed: " + (err.detail || "Error"), "error"); return; }
+    const data = await res.json();
     toast("Discovered " + data.discovered + " models (+" + (data.added || []).length + ", −" + (data.removed || []).length + ")", "success");
     loadProviders();
   } catch (err) { toast("Discovery error: " + err.message, "error"); }
 }
 
 async function checkProviderHealth(id) {
-  var cell = document.getElementById("health-" + id);
+  const cell = document.getElementById("health-" + id);
   if (cell) cell.textContent = "...";
   try {
-    var res = await api("GET", "/providers/" + id + "/health");
-    var data = await res.json();
+    const res = await api("GET", "/providers/" + id + "/health");
+    const data = await res.json();
     if (cell) {
       cell.innerHTML = "";
       cell.appendChild(
@@ -1149,7 +1159,7 @@ async function checkProviderHealth(id) {
           : h("span", { className: "badge badge-red" }, "DOWN")
       );
     }
-  } catch (e) { if (cell) { cell.innerHTML = ""; cell.appendChild(h("span", { className: "badge badge-red" }, "ERROR")); } }
+  } catch (e) { console.warn("provider check failed:", e); if (cell) { cell.innerHTML = ""; cell.appendChild(h("span", { className: "badge badge-red" }, "ERROR")); } }
 }
 
 // ── OAuth broker disconnect (from the provider form) ────────────────────────
@@ -1157,13 +1167,13 @@ async function checkProviderHealth(id) {
 async function disconnectOAuth(source) {
   if (!await confirmAction("Disconnect " + source + "? Broker providers using this source will stop working until you reconnect.")) return false;
   try {
-    var res = await api("DELETE", "/admin/oauth/" + source);
+    const res = await api("DELETE", "/admin/oauth/" + source);
     if (res.status === 204) {
       toast("Disconnected " + source, "success");
       loadProviders();
       return true;
     }
-    var err = await res.json();
+    const err = await res.json();
     toast("Disconnect failed: " + (err.detail || res.status), "error");
   } catch (e) { toast("Disconnect error: " + e.message, "error"); }
   return false;
@@ -1184,16 +1194,16 @@ async function loadMonitoring() {
   if (typeof window.renderAutoUpdate === "function") {
     window.renderAutoUpdate(document.getElementById("monitoring-auto-update"), { changesEl: document.getElementById("monitoring-changes") });
   }
-  var summaryEl = document.getElementById("monitoring-summary");
-  var providersEl = document.getElementById("monitoring-providers");
-  var historyEl = document.getElementById("monitoring-history");
+  const summaryEl = document.getElementById("monitoring-summary");
+  const providersEl = document.getElementById("monitoring-providers");
+  const historyEl = document.getElementById("monitoring-history");
   summaryEl.innerHTML = ""; summaryEl.appendChild(skeleton(3));
   providersEl.innerHTML = ""; historyEl.innerHTML = "";
 
   try {
-    var res = await api("GET", "/admin/monitoring");
-    var data = await res.json();
-    var s = data.summary || {};
+    const res = await api("GET", "/admin/monitoring");
+    const data = await res.json();
+    const s = data.summary || {};
 
     // Summary cards
     summaryEl.innerHTML = "";
@@ -1202,17 +1212,18 @@ async function loadMonitoring() {
     summaryEl.appendChild(statCard("", "Unhealthy", String(s.unhealthy || 0), s.unhealthy > 0 ? "red" : "green"));
 
     // Provider details
-    if (data.providers && data.providers.length) {
-      var rows = data.providers.map(function (p) {
-        var health = p.health || {};
-        var met = p.metrics || {};
-        var uptime24 = p.uptime_24h || {};
-        var statusBadge = health.ok
+    if (data.providers?.length) {
+      const rows = data.providers.map(function (p) {
+        const health = p.health || {};
+        const met = p.metrics || {};
+        const uptime24 = p.uptime_24h || {};
+        const downLabel = health.error ? "down" : "error";
+        const statusBadge = health.ok
           ? h("span", { className: "badge badge-green" }, "healthy")
-          : h("span", { className: "badge badge-red" }, health.error ? "down" : "error");
-        var uptimeStr = uptime24.uptime_pct != null ? uptime24.uptime_pct + "%" : "—";
-        var latencyStr = health.latency_ms ? health.latency_ms + "ms" : "—";
-        var errRate = met.error_rate_pct != null ? met.error_rate_pct + "%" : "—";
+          : h("span", { className: "badge badge-red" }, downLabel);
+        const uptimeStr = uptime24.uptime_pct != null ? uptime24.uptime_pct + "%" : "—";
+        const latencyStr = health.latency_ms ? health.latency_ms + "ms" : "—";
+        const errRate = met.error_rate_pct != null ? met.error_rate_pct + "%" : "—";
 
         return h("tr", null,
           h("td", null, h("strong", null, p.name || p.id), h("br"), h("code", null, p.id)),
@@ -1233,12 +1244,12 @@ async function loadMonitoring() {
     }
 
     // History
-    var histRes = await api("GET", "/admin/monitoring/history?limit=20");
-    var histData = await histRes.json();
-    var entries = histData.entries || [];
+    const histRes = await api("GET", "/admin/monitoring/history?limit=20");
+    const histData = await histRes.json();
+    const entries = histData.entries || [];
     if (entries.length) {
-      var hrows = entries.map(function (e) {
-        var statusBadge = e.is_healthy
+      const hrows = entries.map(function (e) {
+        const statusBadge = e.is_healthy
           ? h("span", { className: "badge badge-green" }, "OK")
           : h("span", { className: "badge badge-red" }, "DOWN");
         return h("tr", null,
@@ -1263,20 +1274,20 @@ async function loadMonitoring() {
 // ── Jobs ────────────────────────────────────────────────────────────────────
 
 async function loadJobs() {
-  var listEl = document.getElementById("jobs-list");
-  var logEl = document.getElementById("job-log-container");
+  const listEl = document.getElementById("jobs-list");
+  const logEl = document.getElementById("job-log-container");
   listEl.innerHTML = ""; listEl.appendChild(skeleton(2));
   logEl.innerHTML = "";
 
   try {
-    var res = await api("GET", "/admin/jobs");
-    var jobs = await res.json();
+    const res = await api("GET", "/admin/jobs");
+    const jobs = await res.json();
     listEl.innerHTML = "";
 
     if (!jobs.length) { listEl.appendChild(emptyState("—", "No background jobs.")); return; }
 
-    var rows = jobs.map(function (j) {
-      var statusBadge;
+    const rows = jobs.map(function (j) {
+      let statusBadge;
       if (j.last_status === "success" || j.last_status === "running") statusBadge = h("span", { className: "badge badge-green" }, j.last_status);
       else if (j.last_status === "error" || j.last_status === "stopped") statusBadge = h("span", { className: "badge badge-red" }, j.last_status);
       else if (j.last_status === "stale") statusBadge = h("span", { className: "badge badge-orange" }, "stale");
@@ -1307,12 +1318,12 @@ async function loadJobs() {
 async function runJob(jobId) {
   
   try {
-    var res = await api("POST", "/admin/jobs/" + jobId + "/run");
-    var data = await res.json();
+    const res = await api("POST", "/admin/jobs/" + jobId + "/run");
+    const data = await res.json();
     // FastAPI errors come back as {detail}; job-level failures as {status, error}.
     // Read all shapes so a 404/500 shows the real reason instead of "undefined".
-    var jobName = data.name || jobId;
-    var errMsg = data.detail || data.error || data.errors || "";
+    const jobName = data.name || jobId;
+    const errMsg = data.detail || data.error || data.errors || "";
     if (res.ok && (data.status === "started" || data.status === "running")) {
       toast(jobName + (data.status === "started" ? " started" : " is already running"), "success");
     } else {
@@ -1320,7 +1331,7 @@ async function runJob(jobId) {
     }
     loadJobs();
     // Show output in log area
-    var logEl = document.getElementById("job-log-container");
+    const logEl = document.getElementById("job-log-container");
     logEl.innerHTML = "";
     logEl.appendChild(h("div", { className: "card" },
       h("div", { className: "card-header" }, h("span", { className: "card-title" }, jobName + " — Output")),
@@ -1330,16 +1341,16 @@ async function runJob(jobId) {
 }
 
 async function viewJobLog(jobId) {
-  var logEl = document.getElementById("job-log-container");
+  const logEl = document.getElementById("job-log-container");
   logEl.innerHTML = ""; logEl.appendChild(skeleton(3));
   try {
-    var res = await api("GET", "/admin/jobs/" + jobId + "/log?lines=100");
-    var data = await res.json();
+    const res = await api("GET", "/admin/jobs/" + jobId + "/log?lines=100");
+    const data = await res.json();
     logEl.innerHTML = "";
     logEl.appendChild(h("div", { className: "card" },
       h("div", { className: "card-header" },
         h("span", { className: "card-title" }, data.name + " — last result"),
-        h("span", { className: "badge badge-" + (data.status === "success" ? "green" : data.status === "error" ? "red" : "muted") }, data.status || "unknown"),
+        h("span", { className: "badge badge-" + ({ success: "green", error: "red" }[data.status] || "muted") }, data.status || "unknown"),
       ),
       h("pre", { style: "font-family:var(--mono);font-size:0.78rem;white-space:pre-wrap;max-height:500px;overflow:auto;color:var(--text-secondary);margin:0;padding:1rem;background:var(--bg);border-radius:8px;" }, data.output || "No result yet.")
     ));
@@ -1352,12 +1363,12 @@ async function viewJobLog(jobId) {
 
 // ── Ollama ──────────────────────────────────────────────────────────────────
 
-var _ollamaInitDone = false;
+let _ollamaInitDone = false;
 
 function _initOllamaEvents() {
   if (_ollamaInitDone) return;
   _ollamaInitDone = true;
-  var pullForm = document.getElementById("ollama-pull-form");
+  const pullForm = document.getElementById("ollama-pull-form");
   document.getElementById("btn-pull-model").addEventListener("click", function () {
     pullForm.style.display = pullForm.style.display === "none" ? "block" : "none";
   });
@@ -1367,7 +1378,7 @@ function _initOllamaEvents() {
     document.getElementById("ollama-model-name").value = "";
   });
   document.getElementById("btn-start-pull").addEventListener("click", function () {
-    var name = document.getElementById("ollama-model-name").value.trim();
+    const name = document.getElementById("ollama-model-name").value.trim();
     if (name) pullOllamaModel(name);
   });
   document.getElementById("btn-refresh-ollama").addEventListener("click", loadOllama);
@@ -1380,10 +1391,10 @@ async function loadOllama() {
 }
 
 async function loadOllamaStatus() {
-  var el = document.getElementById("ollama-status");
+  const el = document.getElementById("ollama-status");
   try {
-    var res = await api("GET", "/admin/ollama/status");
-    var d = await res.json();
+    const res = await api("GET", "/admin/ollama/status");
+    const d = await res.json();
     el.innerHTML = "";
     el.appendChild(h("div", { className: "stat-card" },
       h("div", { className: "stat-label" }, "Status"),
@@ -1407,24 +1418,24 @@ async function loadOllamaStatus() {
 
 function _formatSize(bytes) {
   if (!bytes) return "-";
-  var gb = bytes / (1024 * 1024 * 1024);
+  const gb = bytes / (1024 * 1024 * 1024);
   if (gb >= 1) return gb.toFixed(1) + " GB";
-  var mb = bytes / (1024 * 1024);
+  const mb = bytes / (1024 * 1024);
   return mb.toFixed(0) + " MB";
 }
 
 async function loadOllamaModels() {
-  var el = document.getElementById("ollama-models-container");
+  const el = document.getElementById("ollama-models-container");
   try {
-    var res = await api("GET", "/admin/ollama/models");
-    var data = await res.json();
-    var models = data.models || [];
+    const res = await api("GET", "/admin/ollama/models");
+    const data = await res.json();
+    const models = data.models || [];
     if (models.length === 0) {
       el.innerHTML = "";
       el.appendChild(h("div", { className: "muted", style: "padding:1rem;" }, "No models installed. Use \"+ Pull Model\" to download one."));
       return;
     }
-    var table = h("table", { className: "data-table" },
+    const table = h("table", { className: "data-table" },
       h("thead", null,
         h("tr", null,
           h("th", null, "Model"),
@@ -1434,11 +1445,11 @@ async function loadOllamaModels() {
         )
       )
     );
-    var tbody = h("tbody");
+    const tbody = h("tbody");
     models.forEach(function (m) {
-      var name = m.name || m.model || "-";
-      var size = _formatSize(m.size);
-      var modified = m.modified_at ? new Date(m.modified_at).toLocaleDateString() : "-";
+      const name = m.name || m.model || "-";
+      const size = _formatSize(m.size);
+      const modified = m.modified_at ? new Date(m.modified_at).toLocaleDateString() : "-";
       tbody.appendChild(h("tr", null,
         h("td", null,
           h("span", { style: "font-weight:600;" }, name)
@@ -1461,38 +1472,38 @@ async function loadOllamaModels() {
 }
 
 async function pullOllamaModel(name) {
-  var progressEl = document.getElementById("ollama-pull-progress");
-  var fillEl = document.getElementById("ollama-progress-fill");
-  var statusEl = document.getElementById("ollama-pull-status");
+  const progressEl = document.getElementById("ollama-pull-progress");
+  const fillEl = document.getElementById("ollama-progress-fill");
+  const statusEl = document.getElementById("ollama-pull-status");
   progressEl.style.display = "block";
   fillEl.style.width = "0%";
   statusEl.textContent = "Starting pull for " + name + "...";
 
   try {
-    var res = await fetch("/admin/ollama/models/pull", {
+    const res = await fetch("/admin/ollama/models/pull", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: name }),
     });
-    var reader = res.body.getReader();
-    var decoder = new TextDecoder();
-    var buf = "";
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
     while (true) {
-      var result = await reader.read();
-      var pullDone = result.done;
+      const result = await reader.read();
+      const pullDone = result.done;
       // Flush + buffer partial NDJSON lines across chunks (same defect as the
       // _pgSend SSE parser): the final {"status":"complete"} can arrive without
       // a trailing newline and would otherwise be dropped, freezing the bar.
       buf += pullDone ? decoder.decode() : decoder.decode(result.value, { stream: true });
-      var lines = buf.split("\n");
+      const lines = buf.split("\n");
       buf = pullDone ? "" : lines.pop();
-      for (var i = 0; i < lines.length; i++) {
-        if (!lines[i].trim()) continue;
+      for (const line of lines) {
+        if (!line.trim()) continue;
         try {
-          var progress = JSON.parse(lines[i]);
+          const progress = JSON.parse(line);
           statusEl.textContent = progress.status || "";
           if (progress.total && progress.completed) {
-            var pct = Math.round((progress.completed / progress.total) * 100);
+            const pct = Math.round((progress.completed / progress.total) * 100);
             fillEl.style.width = pct + "%";
           }
           if (progress.status === "complete") {
@@ -1504,7 +1515,7 @@ async function pullOllamaModel(name) {
             statusEl.textContent = "Error: " + (progress.error || "unknown");
             toast("Pull failed: " + (progress.error || "unknown"), "error");
           }
-        } catch (e) { /* skip invalid JSON */ }
+        } catch (e) { console.debug("skipped a line that is not JSON:", e); }
       }
       if (pullDone) break;
     }
@@ -1518,12 +1529,12 @@ async function pullOllamaModel(name) {
 async function deleteOllamaModel(name) {
   if (!await confirmAction("Delete model '" + name + "' from Ollama? This cannot be undone.")) return;
   try {
-    var res = await api("DELETE", "/admin/ollama/models/" + encodeURIComponent(name));
+    const res = await api("DELETE", "/admin/ollama/models/" + encodeURIComponent(name));
     if (res.status === 204) {
       toast("Model " + name + " deleted", "success");
       await loadOllamaModels();
     } else {
-      var data = await res.json();
+      const data = await res.json();
       toast("Delete failed: " + (data.detail || "unknown error"), "error");
     }
   } catch (err) {
@@ -1533,10 +1544,10 @@ async function deleteOllamaModel(name) {
 
 async function showOllamaModelInfo(name) {
   try {
-    var res = await api("GET", "/admin/ollama/models/" + encodeURIComponent(name));
-    var data = await res.json();
-    var details = data.details || {};
-    var info = "Model: " + name + "\n";
+    const res = await api("GET", "/admin/ollama/models/" + encodeURIComponent(name));
+    const data = await res.json();
+    const details = data.details || {};
+    let info = "Model: " + name + "\n";
     info += "Format: " + (details.format || "-") + "\n";
     info += "Family: " + (details.family || "-") + "\n";
     info += "Parameters: " + (details.parameter_size || "-") + "\n";
@@ -1551,8 +1562,8 @@ async function showOllamaModelInfo(name) {
 
 // ── Playground (Chat) ───────────────────────────────────────────────────────
 
-var _pgInitDone = false;
-var _pgHistory = [];  // {role, content}
+let _pgInitDone = false;
+let _pgHistory = [];  // chat turns, each with a role and its content
 
 function _initPlaygroundEvents() {
   if (_pgInitDone) return;
@@ -1568,23 +1579,23 @@ function _initPlaygroundEvents() {
   });
 
   document.getElementById("btn-check-internet").addEventListener("click", async function () {
-    var modelSelect = document.getElementById("pg-model");
-    var modelId = modelSelect.value;
+    const modelSelect = document.getElementById("pg-model");
+    const modelId = modelSelect.value;
     if (!modelId) {
       toast("Please select a model first.", "error");
       return;
     }
 
-    var btn = document.getElementById("btn-check-internet");
-    var oldText = btn.textContent;
+    const btn = document.getElementById("btn-check-internet");
+    const oldText = btn.textContent;
     btn.disabled = true;
     btn.textContent = "⏳ Probing...";
 
     toast("Checking internet access for " + modelId + "...", "success");
 
     try {
-      var res = await api("POST", "/admin/models/check-internet", { model_id: modelId, persist: true });
-      var data = await res.json();
+      const res = await api("POST", "/admin/models/check-internet", { model_id: modelId, persist: true });
+      const data = await res.json();
 
       if (data.status === "quarantined") {
         toast("Model not found and has been quarantined. Reloading selector...", "error");
@@ -1607,10 +1618,10 @@ function _initPlaygroundEvents() {
   });
 
   document.getElementById("btn-check-internet-all").addEventListener("click", async function () {
-    var btn = document.getElementById("btn-check-internet-all");
-    var oldText = btn.textContent;
-    var statusEl = document.getElementById("pg-status");
-    var currentSelection = document.getElementById("pg-model").value;
+    const btn = document.getElementById("btn-check-internet-all");
+    const oldText = btn.textContent;
+    const statusEl = document.getElementById("pg-status");
+    const currentSelection = document.getElementById("pg-model").value;
 
     if (!await confirmAction("Probe ALL models for live internet access? This calls each model with a real prompt — may take a few minutes and consume some quota. Persistence: results saved to providers.json.")) return;
 
@@ -1619,13 +1630,13 @@ function _initPlaygroundEvents() {
     statusEl.textContent = "Bulk internet check in progress...";
 
     try {
-      var res = await api("POST", "/admin/models/check-internet/all", { persist: true });
-      var data = await res.json();
-      var online = data.online_count || 0;
-      var offline = data.offline_count || 0;
-      var failed = data.failed_count || 0;
-      var total = data.total || 0;
-      var elapsed = data.elapsed_s ? (" in " + data.elapsed_s.toFixed(1) + "s") : "";
+      const res = await api("POST", "/admin/models/check-internet/all", { persist: true });
+      const data = await res.json();
+      const online = data.online_count || 0;
+      const offline = data.offline_count || 0;
+      const failed = data.failed_count || 0;
+      const total = data.total || 0;
+      const elapsed = data.elapsed_s ? (" in " + data.elapsed_s.toFixed(1) + "s") : "";
       toast("Bulk check done" + elapsed + ": " + online + " 🌐 online / " + offline + " offline / " + failed + " failed (total " + total + ")", "success");
       statusEl.textContent = "Last bulk check: " + online + " online / " + offline + " offline / " + failed + " failed";
       // Log per-model results to console for verification (user requested ability to check correctness)
@@ -1647,38 +1658,38 @@ function _initPlaygroundEvents() {
 async function loadPlayground() {
   _initPlaygroundEvents();
   // Load models into selector
-  var select = document.getElementById("pg-model");
+  const select = document.getElementById("pg-model");
   try {
-    var res = await api("GET", "/v1/models");
-    var data = await res.json();
-    var models = (data.data || data || []);
+    const res = await api("GET", "/v1/models");
+    const data = await res.json();
+    const models = (data.data || data || []);
     select.innerHTML = "";
     // Group by provider
-    var groups = {};
+    const groups = {};
     models.forEach(function (m) {
-      var owner = m.owned_by || m.provider || "unknown";
+      const owner = m.owned_by || m.provider || "unknown";
       if (!groups[owner]) groups[owner] = [];
       groups[owner].push(m);
     });
     Object.keys(groups).sort(function (a, b) { return a.localeCompare(b); }).forEach(function (owner) {
-      var optgroup = document.createElement("optgroup");
+      const optgroup = document.createElement("optgroup");
       optgroup.label = owner;
       groups[owner].forEach(function (m) {
-        var opt = document.createElement("option");
+        const opt = document.createElement("option");
         opt.value = m.id;
         // Short display name
-        var name = m.id;
+        let name = m.id;
         if (name.includes(":")) name = name.split(":").slice(1).join(":");
 
         // Single internet-access icon: 🌐 = online model, 💻 = local/offline model
-        var icon = m.internet_access ? "🌐 " : "💻 ";
+        const icon = m.internet_access ? "🌐 " : "💻 ";
 
         opt.textContent = icon + name;
 
         // Tooltip: probed timestamp + reason if offline
-        var titleParts = [];
+        const titleParts = [];
         if (m.last_probed_at) {
-          var ts = m.last_probed_at.replace("T", " ").replace(/\.\d+Z$/, " UTC").replace("Z", " UTC");
+          const ts = m.last_probed_at.replace("T", " ").replace(/\.\d+Z$/, " UTC").replace("Z", " UTC");
           titleParts.push("Probed at " + ts);
         } else {
           titleParts.push("Never probed");
@@ -1692,18 +1703,18 @@ async function loadPlayground() {
       });
       select.appendChild(optgroup);
     });
-  } catch (err) {
+  } catch (err) { console.warn("model list load failed:", err);
     select.innerHTML = "<option value=''>Failed to load models</option>";
   }
 }
 
 function _pgAddMessage(role, content) {
-  var container = document.getElementById("pg-messages");
+  const container = document.getElementById("pg-messages");
   // Remove placeholder
-  var placeholder = container.querySelector(".muted");
+  const placeholder = container.querySelector(".muted");
   if (placeholder) placeholder.remove();
 
-  var bubble = document.createElement("div");
+  const bubble = document.createElement("div");
   bubble.style.cssText = role === "user"
     ? "align-self:flex-end; background:var(--accent); color:var(--on-accent); border-radius:12px 12px 2px 12px; padding:0.6rem 0.9rem; max-width:75%; white-space:pre-wrap; font-size:0.9rem;"
     : "align-self:flex-start; background:var(--bg-card); border:1px solid var(--border-strong); border-radius:12px 12px 12px 2px; padding:0.6rem 0.9rem; max-width:75%; white-space:pre-wrap; font-size:0.9rem;";
@@ -1716,15 +1727,15 @@ function _pgAddMessage(role, content) {
 }
 
 async function _pgSend() {
-  var input = document.getElementById("pg-input");
-  var model = document.getElementById("pg-model").value;
-  var message = input.value.trim();
+  const input = document.getElementById("pg-input");
+  const model = document.getElementById("pg-model").value;
+  const message = input.value.trim();
   if (!message || !model) return;
 
-  var useStream = document.getElementById("pg-stream").checked;
-  var temperature = parseFloat(document.getElementById("pg-temp").value) || 0.7;
-  var maxTokens = parseInt(document.getElementById("pg-max-tokens").value) || 2048;
-  var statusEl = document.getElementById("pg-status");
+  const useStream = document.getElementById("pg-stream").checked;
+  const temperature = parseFloat(document.getElementById("pg-temp").value) || 0.7;
+  const maxTokens = parseInt(document.getElementById("pg-max-tokens").value) || 2048;
+  const statusEl = document.getElementById("pg-status");
 
   // Add user message
   _pgHistory.push({ role: "user", content: message });
@@ -1732,11 +1743,11 @@ async function _pgSend() {
   input.value = "";
 
   // Add assistant placeholder
-  var assistantBubble = _pgAddMessage("assistant", "...");
+  const assistantBubble = _pgAddMessage("assistant", "...");
   statusEl.textContent = "Sending to " + model + "...";
   statusEl.dataset.state = "sending";  // live-test completion hook (C9)
 
-  var body = {
+  const body = {
     model: model,
     messages: _pgHistory.slice(),
     temperature: temperature,
@@ -1744,44 +1755,44 @@ async function _pgSend() {
     stream: useStream,
   };
 
-  var t0 = performance.now();
+  const t0 = performance.now();
 
   if (useStream) {
     // Streaming response
     try {
-      var res = await fetch("/v1/chat/completions", {
+      const res = await fetch("/v1/chat/completions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       if (res.status === 401) { logout(); throw new Error("Unauthorized"); }
       if (!res.ok) {
-        var errData = await res.json().catch(function () { return { detail: res.statusText }; });
+        const errData = await res.json().catch(function () { return { detail: res.statusText }; });
         assistantBubble.textContent = "Error: " + (errData.detail || res.status);
         statusEl.textContent = "Error " + res.status;
         statusEl.dataset.state = "error";  // C9
         return;
       }
-      var reader = res.body.getReader();
-      var decoder = new TextDecoder();
-      var fullContent = "";
-      var fullReasoning = "";
-      var streamUsage = null;
-      var finishReason = null;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let fullContent = "";
+      let fullReasoning = "";
+      let streamUsage = null;
+      let finishReason = null;
       assistantBubble.textContent = "";
 
       // Thinking models (Ollama qwen3.5/kimi/glm/deepseek, OpenAI o1 family)
       // emit chain-of-thought in delta.reasoning before delta.content. We
       // render reasoning in a <details> block placed BEFORE the response
       // bubble so the user sees activity while the model is "thinking".
-      var thinkingEl = null;
-      var thinkingContent = null;
+      let thinkingEl = null;
+      let thinkingContent = null;
       function _ensureThinkingPanel() {
         if (thinkingEl) return;
         thinkingEl = document.createElement("details");
         thinkingEl.open = true; // open while streaming, will collapse on done
         thinkingEl.style.cssText = "align-self:flex-start; max-width:75%; margin-bottom:0.25rem; background:var(--bg-secondary); border:1px solid var(--border-strong); border-radius:10px; padding:0.35rem 0.6rem; font-size:0.8rem; color:var(--text-secondary);";
-        var summary = document.createElement("summary");
+        const summary = document.createElement("summary");
         summary.style.cssText = "cursor:pointer; user-select:none; font-weight:500;";
         summary.textContent = "🧠 Thinking…";
         thinkingEl.appendChild(summary);
@@ -1791,42 +1802,42 @@ async function _pgSend() {
         assistantBubble.parentNode.insertBefore(thinkingEl, assistantBubble);
       }
 
-      var sseBuffer = "";
+      let sseBuffer = "";
       while (true) {
-        var result = await reader.read();
-        var streamDone = result.done;
+        const result = await reader.read();
+        const streamDone = result.done;
         // Accumulate, then split into COMPLETE lines only — keep the trailing
         // partial line buffered across reads. An SSE "data:" line can be split
         // across TCP chunks; without this buffering the partial line fails
         // JSON.parse and its content delta is silently dropped, corrupting the
         // rendered output (e.g. only the tail of a fast model's answer survives).
         sseBuffer += streamDone ? decoder.decode() : decoder.decode(result.value, { stream: true });
-        var lines = sseBuffer.split("\n");
+        const lines = sseBuffer.split("\n");
         sseBuffer = streamDone ? "" : lines.pop();
-        for (var i = 0; i < lines.length; i++) {
-          var line = lines[i].trim();
-          if (!line || !line.startsWith("data: ")) continue;
-          var payload = line.slice(6);
+        for (const rawLine of lines) {
+          const line = rawLine.trim();
+          if (!line?.startsWith("data: ")) continue;
+          const payload = line.slice(6);
           if (payload === "[DONE]") continue;
           try {
-            var parsed = JSON.parse(payload);
-            var choice = parsed.choices && parsed.choices[0];
-            var delta = choice && choice.delta;
-            if (delta && delta.reasoning) {
+            const parsed = JSON.parse(payload);
+            const choice = parsed.choices?.[0];
+            const delta = choice?.delta;
+            if (delta?.reasoning) {
               fullReasoning += delta.reasoning;
               _ensureThinkingPanel();
               thinkingContent.textContent = fullReasoning;
               thinkingContent.scrollTop = thinkingContent.scrollHeight;
             }
-            if (delta && delta.content) {
+            if (delta?.content) {
               fullContent += delta.content;
               assistantBubble.textContent = fullContent;
               document.getElementById("pg-messages").scrollTop = document.getElementById("pg-messages").scrollHeight;
             }
-            if (choice && choice.finish_reason) finishReason = choice.finish_reason;
+            if (choice?.finish_reason) finishReason = choice.finish_reason;
             // OpenAI-style include_usage: final chunk carries usage block
             if (parsed.usage) streamUsage = parsed.usage;
-          } catch (e) { /* skip invalid SSE */ }
+          } catch (e) { console.debug("skipped an SSE line that is not JSON:", e); }
         }
         if (streamDone) break;
       }
@@ -1835,7 +1846,7 @@ async function _pgSend() {
       // available for inspection but out of the way.
       if (thinkingEl) {
         thinkingEl.open = false;
-        var rTokens = (streamUsage && streamUsage.reasoning_tokens) || "?";
+        const rTokens = streamUsage?.reasoning_tokens || "?";
         thinkingEl.querySelector("summary").textContent = "🧠 Thinking (" + rTokens + " tokens) (click to expand)";
       }
 
@@ -1854,10 +1865,10 @@ async function _pgSend() {
       }
       if (finishReason) assistantBubble.dataset.finishReason = finishReason;  // C9
       _pgHistory.push({ role: "assistant", content: fullContent });
-      var elapsed = ((performance.now() - t0) / 1000).toFixed(1);
-      var tokens = (streamUsage && streamUsage.completion_tokens)
+      const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+      const tokens = streamUsage?.completion_tokens
                  || res.headers.get("X-Completion-Tokens") || "?";
-      var cost;
+      let cost;
       if (streamUsage && typeof streamUsage.cost_usd === "number") {
         cost = streamUsage.cost_usd.toFixed(6);
       } else {
@@ -1873,9 +1884,9 @@ async function _pgSend() {
   } else {
     // Non-streaming
     try {
-      var res = await api("POST", "/v1/chat/completions", body);
-      var data = await res.json();
-      var elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+      const res = await api("POST", "/v1/chat/completions", body);
+      const data = await res.json();
+      const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
 
       if (!res.ok) {
         assistantBubble.textContent = "Error: " + (data.detail || res.status);
@@ -1884,22 +1895,22 @@ async function _pgSend() {
         return;
       }
 
-      var choice0 = data.choices && data.choices[0];
-      var msg = choice0 && choice0.message;
-      var content = msg && msg.content;
-      var reasoning = msg && msg.reasoning;
-      var finishReasonNS = choice0 && choice0.finish_reason;
+      const choice0 = data.choices?.[0];
+      const msg = choice0?.message;
+      let content = msg?.content;
+      const reasoning = msg?.reasoning;
+      const finishReasonNS = choice0?.finish_reason;
 
       // Render reasoning in a collapsed <details> above the bubble — same
       // UX as the streaming path so thinking models behave consistently.
       if (reasoning) {
-        var thinkEl = document.createElement("details");
+        const thinkEl = document.createElement("details");
         thinkEl.style.cssText = "align-self:flex-start; max-width:75%; margin-bottom:0.25rem; background:var(--bg-secondary); border:1px solid var(--border-strong); border-radius:10px; padding:0.35rem 0.6rem; font-size:0.8rem; color:var(--text-secondary);";
-        var sumEl = document.createElement("summary");
+        const sumEl = document.createElement("summary");
         sumEl.style.cssText = "cursor:pointer; user-select:none; font-weight:500;";
         sumEl.textContent = "🧠 Thinking (click to expand)";
         thinkEl.appendChild(sumEl);
-        var contentEl = document.createElement("div");
+        const contentEl = document.createElement("div");
         contentEl.style.cssText = "white-space:pre-wrap; margin-top:0.4rem; font-family:ui-monospace,monospace; font-size:0.75rem; max-height:300px; overflow-y:auto;";
         contentEl.textContent = reasoning;
         thinkEl.appendChild(contentEl);
@@ -1918,9 +1929,9 @@ async function _pgSend() {
       assistantBubble.textContent = content;
       _pgHistory.push({ role: "assistant", content: content });
 
-      var billing = data.billing || {};
-      var cost = billing.cost_usd !== undefined ? "$" + billing.cost_usd.toFixed(4) : "?";
-      var tokens = (billing.completion_tokens || "?");
+      const billing = data.billing || {};
+      const cost = billing.cost_usd !== undefined ? "$" + billing.cost_usd.toFixed(4) : "?";
+      const tokens = (billing.completion_tokens || "?");
       statusEl.textContent = elapsed + "s | " + tokens + " tokens | " + cost;
       statusEl.dataset.state = "done";  // C9
     } catch (err) {
@@ -1933,7 +1944,7 @@ async function _pgSend() {
 
 function _pgClear() {
   _pgHistory = [];
-  var container = document.getElementById("pg-messages");
+  const container = document.getElementById("pg-messages");
   container.innerHTML = '<div class="muted" style="text-align:center; padding:2rem;">Select a model and start chatting.</div>';
   document.getElementById("pg-status").textContent = "";
 }

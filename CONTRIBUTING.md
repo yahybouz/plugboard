@@ -31,6 +31,7 @@ Useful targets:
 | `make check` | Lint, tests and a Bandit security scan |
 | `make secret-scan` | Look for secrets before you push |
 | `make test-e2e` | Browser tests of the dashboard (Playwright, isolated server) |
+| `make sonar-up` / `make sonar-scan` / `make sonar-down` | SonarQube analysis against a local server on http://localhost:9000 (needs Docker; run `make test` first for `coverage.xml`) |
 
 Tests never need real provider credentials: providers are mocked. Do not add tests that call a paid API by default.
 

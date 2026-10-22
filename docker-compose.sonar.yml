@@ -1,0 +1,37 @@
+# Plugboard — local SonarQube server for `make sonar-scan`.
+#
+#   make sonar-up     start the server, wait until it answers
+#   make sonar-scan   analyse the working tree (needs coverage.xml: make test)
+#   make sonar-down   stop it (the volumes below keep the analysis history)
+#
+# Development only: the server is published on the host's loopback
+# (127.0.0.1:9000) and keeps SonarQube's default embedded database. It is not
+# part of the deployment stack in docker-compose.yml and never holds product
+# data — only the analysis of this repository.
+
+services:
+  sonarqube:
+    image: sonarqube:25.9.0.112764-community
+    # Elasticsearch inside the image needs a raised mmap count; the official
+    # image handles it when the host allows it. Stop on failure instead of
+    # restarting in a loop.
+    restart: "no"
+    environment:
+      # Local analysis of a single repository: the embedded H2 database is
+      # enough and avoids running a PostgreSQL service alongside it.
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    ports:
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - sonar-data:/opt/sonarqube/data
+      - sonar-extensions:/opt/sonarqube/extensions
+      - sonar-logs:/opt/sonarqube/logs
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+volumes:
+  sonar-data:
+  sonar-extensions:
+  sonar-logs:

@@ -427,7 +427,7 @@ def main() -> int:
                 # by bumping the counter QUARANTINE_THRESHOLD times. Saves
                 # 2 nightlies for an obviously-dead model.
                 for _ in range(QUARANTINE_THRESHOLD):
-                    entry = record_failure(suffix, reason=probe.get("error", "")[:200])
+                    record_failure(suffix, reason=probe.get("error", "")[:200])
                 row["quarantine_note"] = "deprecated → quarantined"
             else:
                 entry = record_failure(suffix, reason=probe.get("error", "")[:200])

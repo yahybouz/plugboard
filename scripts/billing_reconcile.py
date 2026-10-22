@@ -68,7 +68,10 @@ def reconcile(entries: Iterable[Dict[str, Any]], providers: Dict[str, Dict[str, 
     rows = []
     for (client_id, provider_id), row in sorted(groups.items()):
         diff = row["after"] - row["before"]
-        pct = (diff / row["before"] * 100) if row["before"] else (100.0 if diff else 0.0)
+        if row["before"]:
+            pct = diff / row["before"] * 100
+        else:
+            pct = 100.0 if diff else 0.0
         rows.append(
             {
                 "client_id": client_id,

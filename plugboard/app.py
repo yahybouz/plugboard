@@ -240,9 +240,12 @@ if not _API_KEY:
 # follow-up sprint when a 4th comportement is needed (manifesto §30.5).
 from plugboard.cache_common import strict_tenant_mode as _strict_tenant_mode  # noqa: E402
 
-AUTH_MODE = (
-    "DISABLED" if not _API_KEY else ("ENFORCED" if _strict_tenant_mode() else "LEGACY")
-)
+if not _API_KEY:
+    AUTH_MODE = "DISABLED"
+elif _strict_tenant_mode():
+    AUTH_MODE = "ENFORCED"
+else:
+    AUTH_MODE = "LEGACY"
 log.info("auth.mode=%s api_key_set=%s", AUTH_MODE, bool(_API_KEY))
 
 
@@ -313,6 +316,17 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
     import asyncio as _asyncio
     from plugboard.cli_subprocess import warm_up_all_installed
 
+    # Fire-and-forget boot tasks. The event loop only keeps a weak reference
+    # to a task, so one that nothing holds can be garbage-collected while it
+    # still runs; these references keep them alive until they finish, and
+    # whatever is still pending is cancelled at shutdown.
+    _boot_tasks: set[_asyncio.Task] = set()
+
+    def _spawn_boot_task(coro, name: str) -> None:
+        task = _asyncio.create_task(coro, name=name)
+        _boot_tasks.add(task)
+        task.add_done_callback(_boot_tasks.discard)
+
     async def _warm():
         try:
             results = await warm_up_all_installed(timeout_s=10.0)
@@ -331,21 +345,19 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
         except Exception as exc:
             log.debug("subprocess warm-up background task error: %s", exc)
 
-    _asyncio.create_task(_warm())
+    _spawn_boot_task(_warm(), "subprocess-warm-up")
 
     # Repeat the auth-disabled warning every 5 minutes in non-dev contexts so
     # long-running deployments can't forget they are wide open (TM-007).
     async def _auth_nag():
-        try:
-            while True:
-                await _asyncio.sleep(300)
-                if not _API_KEY and not _DEV_MODE:
-                    log.critical(
-                        "API_KEY still empty — /v1/* remains OPEN. "
-                        "Set API_KEY or PLUGBOARD_DEV=1."
-                    )
-        except _asyncio.CancelledError:
-            pass
+        # Cancelled at shutdown; CancelledError propagates on its own.
+        while True:
+            await _asyncio.sleep(300)
+            if not _API_KEY and not _DEV_MODE:
+                log.critical(
+                    "API_KEY still empty — /v1/* remains OPEN. "
+                    "Set API_KEY or PLUGBOARD_DEV=1."
+                )
 
     _nag_task = None
     if not _API_KEY and not _DEV_MODE:
@@ -416,7 +428,7 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
             log.warning("internet_check_on_boot: failed: %s", exc)
 
     if _internet_boot_enabled:
-        _asyncio.create_task(_internet_boot_probe())
+        _spawn_boot_task(_internet_boot_probe(), "internet-boot-probe")
     else:
         log.info(
             "internet_check_on_boot: disabled via PLUGBOARD_INTERNET_CHECK_ON_BOOT=0"
@@ -435,6 +447,8 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
         log.warning("Shutdown: some change webhooks were not delivered")
     if _nag_task:
         _nag_task.cancel()
+    for task in _boot_tasks:
+        task.cancel()
     stop_watchdog()
     log.info("Provider watchdog stopped")
     # Close the shared HTTP pool so pooled sockets don't leak at shutdown.
@@ -1095,7 +1109,6 @@ def _check_model_access(
                 status_code=403,
                 detail=f"Model '{model_str}' not allowed for client '{client_id}'. Allowed: {allowed}",
             )
-    return
 
 
 def _model_is_compatible(
@@ -1824,9 +1837,7 @@ async def preflight(
     for item in body.items:
         t0 = time.perf_counter()
         try:
-            provider, real_model = resolve_provider_and_model(
-                f"{item.provider}:{item.model}"
-            )
+            resolve_provider_and_model(f"{item.provider}:{item.model}")
             # Minimal ping to verify the pipe is open
             ping_body = {
                 "model": f"{item.provider}:{item.model}",
@@ -2403,7 +2414,7 @@ async def admin_monitoring(_: None = Depends(_require_admin)):
     """Full health check of all providers + metrics + uptime."""
     from plugboard.monitoring import full_health_check, get_uptime_stats
 
-    report = await full_health_check(_effective_admin_key())
+    report = await full_health_check()
 
     # Add uptime stats for each provider
     for p in report["providers"]:
@@ -3005,7 +3016,7 @@ async def oauth_callback(
         )
 
     # Auto-create the provider record if not exists
-    await _ensure_broker_provider(source, cred.account)
+    _ensure_broker_provider(source)
 
     safe_account = _html.escape(cred.account)
     body_html = (
@@ -3032,9 +3043,8 @@ async def oauth_device_poll(state: str, _: None = Depends(_require_admin)):
         raise HTTPException(502, f"Poll failed: {exc}")
     if result.get("status") == "success":
         source = result.get("source", "")
-        account = result.get("account", "")
         if source:
-            await _ensure_broker_provider(source, account)
+            _ensure_broker_provider(source)
     return result
 
 
@@ -3058,7 +3068,7 @@ async def oauth_disconnect(source: str, _: None = Depends(_require_admin)):
     invalidate_models_cache()
 
 
-async def _ensure_broker_provider(oauth_source: str, account: str) -> None:
+def _ensure_broker_provider(oauth_source: str) -> None:
     """Create a Provider record for a broker-based preset after successful OAuth.
 
     Finds all broker presets bound to this oauth_source and creates providers
@@ -3383,7 +3393,7 @@ def _schedule_initial_discovery(provider_id: str) -> None:
             if models:
                 update_provider(provider_id, {"models": models})
                 invalidate_models_cache()
-        except Exception as exc:  # noqa: BLE001 — background, never crash the app
+        except Exception as exc:  # noqa: BLE001  (background: never crash the app)
             log.warning("Initial discovery for %s failed: %s", provider_id, exc)
 
     task = _asyncio.get_running_loop().create_task(_run())

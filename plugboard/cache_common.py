@@ -65,7 +65,7 @@ def strict_tenant_mode() -> bool:
             _DEPRECATION_LOGGED = True
         return legacy not in {"0", "false", "no", "off"}
 
-    return True  # default = strict
+    return True  # strict unless explicitly turned off
 
 
 def check_client_id(client_id: str) -> str:

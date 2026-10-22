@@ -26,9 +26,9 @@ function fmt(n) { return Number(n || 0).toLocaleString(); }
 // ── DOM helpers ──────────────────────────────────────────────────────────────
 
 function h(tag, attrs, ...children) {
-  var el = document.createElement(tag);
+  const el = document.createElement(tag);
   if (attrs) Object.entries(attrs).forEach(function (pair) {
-    var k = pair[0], v = pair[1];
+    const k = pair[0], v = pair[1];
     if (k === "className") el.className = v;
     else el.setAttribute(k, v);
   });
@@ -57,18 +57,18 @@ function statCard(label, value, color) {
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
-var loginModal = document.getElementById("login-modal");
-var loginForm = document.getElementById("login-form");
-var loginError = document.getElementById("login-error");
-var appEl = document.getElementById("app");
+const loginModal = document.getElementById("login-modal");
+const loginForm = document.getElementById("login-form");
+const loginError = document.getElementById("login-error");
+const appEl = document.getElementById("app");
 
 async function tryLogin(key) {
   sessionStorage.setItem("client_key", key);
   try {
-    var res = await api("GET", "/usage/me");
+    const res = await api("GET", "/usage/me");
     if (!res.ok) throw new Error();
     return true;
-  } catch (e) {
+  } catch (e) { console.debug("client key check failed:", e);
     sessionStorage.removeItem("client_key");
     return false;
   }
@@ -77,9 +77,9 @@ async function tryLogin(key) {
 loginForm.addEventListener("submit", async function (e) {
   e.preventDefault();
   loginError.classList.add("hidden");
-  var key = document.getElementById("login-key").value.trim();
+  const key = document.getElementById("login-key").value.trim();
   if (!key) return;
-  var ok = await tryLogin(key);
+  const ok = await tryLogin(key);
   if (ok) { showApp(); }
   else { loginError.textContent = "Invalid API key."; loginError.classList.remove("hidden"); }
 });
@@ -92,12 +92,12 @@ function showApp() {
 
 // auto-login if key in sessionStorage
 (async function () {
-  var key = getKey();
+  const key = getKey();
   if (key) {
     try {
-      var res = await fetch("/usage/me", { headers: { "Authorization": "Bearer " + key } });
+      const res = await fetch("/usage/me", { headers: { "Authorization": "Bearer " + key } });
       if (res.ok) { showApp(); return; }
-    } catch (e) { /* ignore */ }
+    } catch (e) { console.debug("session probe failed:", e); }
   }
   loginModal.classList.remove("hidden");
 })();
@@ -107,11 +107,11 @@ document.getElementById("logout-btn").addEventListener("click", logout);
 // ── Portal data loading ──────────────────────────────────────────────────────
 
 async function loadPortal() {
-  var cardsEl = document.getElementById("summary-cards");
-  var byModelEl = document.getElementById("by-model");
-  var byDayEl = document.getElementById("by-day");
-  var spendingContainer = document.getElementById("spending-bar-container");
-  var spendingBar = document.getElementById("spending-bar");
+  const cardsEl = document.getElementById("summary-cards");
+  const byModelEl = document.getElementById("by-model");
+  const byDayEl = document.getElementById("by-day");
+  const spendingContainer = document.getElementById("spending-bar-container");
+  const spendingBar = document.getElementById("spending-bar");
 
   cardsEl.innerHTML = "Loading...";
   byModelEl.innerHTML = "";
@@ -119,15 +119,15 @@ async function loadPortal() {
   spendingContainer.classList.add("hidden");
 
   try {
-    var [meRes, infoRes] = await Promise.all([
+    const [meRes, infoRes] = await Promise.all([
       api("GET", "/usage/me"),
       api("GET", "/v1/me"),
     ]);
-    var meData = await meRes.json();
-    var infoData = await infoRes.json();
+    const meData = await meRes.json();
+    const infoData = await infoRes.json();
 
-    var summary = meData.summary || {};
-    var entries = meData.entries || [];
+    const summary = meData.summary || {};
+    const entries = meData.entries || [];
 
     // Client badge
     document.getElementById("client-badge").textContent = infoData.client_id || meData.client_id || "unknown";
@@ -139,14 +139,16 @@ async function loadPortal() {
     cardsEl.appendChild(statCard("Cost (month)", usd(summary.total_cost_usd || 0), "orange"));
 
     // Spending limit
-    var limit = infoData.monthly_limit_usd || 0;
+    const limit = infoData.monthly_limit_usd || 0;
     if (limit > 0) {
-      var remaining = infoData.remaining_usd != null ? infoData.remaining_usd : limit;
-      var pct = Math.min(100, ((summary.total_cost_usd || 0) / limit) * 100);
-      var colorClass = pct >= 100 ? "red" : pct >= 80 ? "orange" : "green";
+      const remaining = infoData.remaining_usd != null ? infoData.remaining_usd : limit;
+      const pct = Math.min(100, ((summary.total_cost_usd || 0) / limit) * 100);
+      let colorClass = "green";
+      if (pct >= 100) colorClass = "red";
+      else if (pct >= 80) colorClass = "orange";
       spendingContainer.classList.remove("hidden");
       spendingBar.innerHTML = "";
-      var bar = h("div", { className: "spending-bar" },
+      const bar = h("div", { className: "spending-bar" },
         h("div", {
           className: "spending-fill " + colorClass,
           style: "width:" + pct.toFixed(1) + "%",
@@ -162,10 +164,10 @@ async function loadPortal() {
     }
 
     // By model table
-    var bm = summary.by_model || {};
-    var modelNames = Object.keys(bm);
+    const bm = summary.by_model || {};
+    const modelNames = Object.keys(bm);
     if (modelNames.length) {
-      var rows = modelNames.map(function (m) {
+      const rows = modelNames.map(function (m) {
         return h("tr", null,
           h("td", null, h("code", null, m)),
           h("td", null, fmt(bm[m].entries)),
@@ -179,23 +181,23 @@ async function loadPortal() {
     }
 
     // By day aggregation
-    var byDay = {};
+    const byDay = {};
     entries.forEach(function (e) {
-      var day = (e.ts || "").slice(0, 10);
+      const day = (e.ts || "").slice(0, 10);
       if (!day) return;
-      var d = byDay[day] = byDay[day] || { requests: 0, tokens: 0, cost: 0 };
+      const d = byDay[day] = byDay[day] || { requests: 0, tokens: 0, cost: 0 };
       d.requests++;
       d.tokens += e.total_tokens || 0;
       d.cost += e.cost_usd || 0;
     });
-    var days = Object.keys(byDay).sort(function (a, b) { return a.localeCompare(b); });
+    const days = Object.keys(byDay).sort(function (a, b) { return a.localeCompare(b); });
 
     // Chart.js bar chart
     renderDailyChart(days, byDay);
 
     // By day table
     if (days.length) {
-      var dayRows = days.map(function (day) {
+      const dayRows = days.map(function (day) {
         return h("tr", null,
           h("td", null, day),
           h("td", null, fmt(byDay[day].requests)),
@@ -208,17 +210,17 @@ async function loadPortal() {
       byDayEl.innerHTML = '<p class="muted">No daily data yet.</p>';
     }
 
-  } catch (err) {
+  } catch (err) { console.warn("portal data load failed:", err);
     cardsEl.innerHTML = '<p class="error">Failed to load portal data.</p>';
   }
 }
 
 // ── Chart.js ────────────────────────────────────────────────────────────────
 
-var _chart = null;
+let _chart = null;
 
 function renderDailyChart(days, byDay) {
-  var canvas = document.getElementById("usage-chart");
+  const canvas = document.getElementById("usage-chart");
   if (!canvas || typeof Chart === "undefined") return;
 
   if (_chart) { _chart.destroy(); _chart = null; }
@@ -228,8 +230,8 @@ function renderDailyChart(days, byDay) {
     return;
   }
 
-  var costs = days.map(function (d) { return +(byDay[d].cost || 0).toFixed(4); });
-  var requests = days.map(function (d) { return byDay[d].requests || 0; });
+  const costs = days.map(function (d) { return +(byDay[d].cost || 0).toFixed(4); });
+  const requests = days.map(function (d) { return byDay[d].requests || 0; });
 
   _chart = new Chart(canvas.getContext("2d"), {
     type: "bar",

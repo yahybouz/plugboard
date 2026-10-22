@@ -662,9 +662,8 @@ async def refresh_subprocess_provider_models(
             dropped.append({"id": mid, "reason": "probe_failed", "failures": fails})
 
     current_default = provider.get("default_model", "") or ""
-    new_default = (
-        current_default if current_default in kept else (kept[0] if kept else "")
-    )
+    fallback_default = kept[0] if kept else ""
+    new_default = current_default if current_default in kept else fallback_default
     return {
         "provider": provider.get("id"),
         "kind": kind,
@@ -785,10 +784,9 @@ async def refresh_native_provider_models(provider: Dict[str, Any]) -> Dict[str, 
                         model_ids = list(dict.fromkeys(list(model_ids) + cloud_ids))
             except Exception as exc:  # noqa: BLE001
                 log.warning("ollama cloud autosync merge failed: %s", exc)
+    fallback_default = model_ids[0] if model_ids else ""
     new_default = (
-        current_default
-        if current_default in set(model_ids)
-        else (model_ids[0] if model_ids else "")
+        current_default if current_default in set(model_ids) else fallback_default
     )
     return {
         "provider": provider.get("id"),
@@ -1206,10 +1204,7 @@ class ModelAvailabilityScheduler:
 
         try:
             while not self._stopping.is_set():
-                try:
-                    await self._sleep(self._seconds_until_next_run())
-                except asyncio.CancelledError:
-                    raise
+                await self._sleep(self._seconds_until_next_run())
                 if self._stopping.is_set():
                     return
                 await self._invoke("daily")
@@ -1306,13 +1301,11 @@ class ModelAvailabilityScheduler:
 
         Runs every ``_OLLAMA_RECHECK_INTERVAL_S`` seconds in the background.
         Transitions offline→online and online→offline are logged at INFO level.
-        Exits cleanly on CancelledError (triggered by scheduler stop).
+        CancelledError (triggered by scheduler stop) propagates, so the task
+        ends cancelled; `_run` cancels and awaits it in its `finally`.
         """
         while True:
-            try:
-                await self._sleep(_OLLAMA_RECHECK_INTERVAL_S)
-            except asyncio.CancelledError:
-                return
+            await self._sleep(_OLLAMA_RECHECK_INTERVAL_S)
 
             status_before = load_model_status()
             models_before: Dict[str, Any] = status_before.get("models", {})
@@ -1332,7 +1325,7 @@ class ModelAvailabilityScheduler:
                     timeout=60.0,
                 )
             except asyncio.CancelledError:
-                return
+                raise
             except Exception as exc:  # noqa: BLE001
                 log.warning("ollama_watcher: probe failed (%s)", exc)
                 continue

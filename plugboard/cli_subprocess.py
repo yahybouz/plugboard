@@ -1096,7 +1096,7 @@ def _try_parse_stdout_text(
                 text = _extract_text_from_claude_jsonl(lines)
         else:
             return None
-    except (json.JSONDecodeError, KeyError, ValueError):
+    except (KeyError, ValueError):
         return None
     return text if text else None
 

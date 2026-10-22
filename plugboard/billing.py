@@ -135,7 +135,7 @@ def _candidate_keys(real_model: str) -> list:
 
     # Ollama `name:tag` → try the bare name (without tag).
     if ":" in real_model:
-        head, tail = real_model.split(":", 1)
+        head = real_model.split(":", 1)[0]
         # Keep both the full `name:tag` AND just the name.
         candidates.append(head)
         # Some known prices have `name:tag` form (e.g. `llama3:8b`), so keep raw.

@@ -411,16 +411,9 @@ def dedupe_family_snapshots(models: Iterable[Dict[str, Any]]) -> List[Dict[str, 
             # thing.
             for e in entries:
                 v = e.get("variant", "") or ""
-                if v == "latest":
+                if v == "latest" or (v and not _is_dated_variant(v)):
                     kept.append(e)
-                elif v and not _is_dated_variant(v):
-                    kept.append(e)
-        elif has_bare:
-            # Rule 2: bare beats dated; non-dated variants (size tags)
-            # still coexist because they are not duplicates.
-            for e in non_dated:
-                kept.append(e)
-        elif dated_entries and not non_dated:
+        elif not has_bare and dated_entries and not non_dated:
             # Rule 3: promote newest dated snapshot to canonical.
             newest = max(dated_entries, key=lambda e: e.get("variant", ""))
             promoted = dict(newest)
@@ -440,10 +433,11 @@ def dedupe_family_snapshots(models: Iterable[Dict[str, Any]]) -> List[Dict[str, 
                 promoted["promoted_from"] = original_variant
             kept.append(promoted)
         else:
-            # No canonical hint and no dated-only collapse — keep every
-            # non-dated entry (size tags) as is.
-            for e in non_dated:
-                kept.append(e)
+            # Rule 2: bare beats dated; non-dated variants (size tags) still
+            # coexist because they are not duplicates. Without a canonical
+            # hint nor a dated-only collapse, every non-dated entry is kept
+            # as is too.
+            kept.extend(non_dated)
 
     # Rule 4 — drop `family-0` when the bare `family` is also present
     # under the same owner. The shorter name is canonical.

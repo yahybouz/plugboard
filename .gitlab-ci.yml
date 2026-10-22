@@ -3,6 +3,7 @@
 #
 #   lint      ruff check and format check, registry example JSON
 #   test      pytest + coverage, against a throwaway data directory
+#   analysis  SonarQube scan (only when SONAR_HOST_URL and SONAR_TOKEN are set)
 #   security  gitleaks over the pushed commits, bandit, pip-audit
 #   build     docker build of the slim `api` target (not pushed)
 #   smoke     nightly model smoke test (scheduled pipelines only)
@@ -19,6 +20,7 @@ workflow:
 stages:
   - lint
   - test
+  - analysis
   - security
   - build
   - smoke
@@ -88,6 +90,35 @@ pytest:
       coverage_report:
         coverage_format: cobertura
         path: coverage.xml
+
+# ── analysis ──────────────────────────────────────────────────
+# Reads pytest's coverage.xml, so it never runs the suite itself. Set the
+# masked CI/CD variables SONAR_HOST_URL (https://..., no trailing /) and
+# SONAR_TOKEN to enable it; without them the job is simply not created.
+
+sonarqube:
+  extends: .not-scheduled
+  stage: analysis
+  image:
+    name: sonarsource/sonar-scanner-cli:11.5
+    entrypoint: [""]
+  needs:
+    - job: pytest
+      artifacts: true
+  variables:
+    # Full history, so SonarQube can attribute new code to its commits.
+    GIT_DEPTH: "0"
+    SONAR_USER_HOME: "$CI_PROJECT_DIR/.cache/sonar"
+  cache:
+    key: "sonar-$CI_COMMIT_REF_SLUG"
+    paths:
+      - .cache/sonar
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
+    - if: $SONAR_HOST_URL && $SONAR_TOKEN
+  script:
+    - sonar-scanner -Dsonar.projectVersion="$(cat VERSION)"
 
 # ── security ──────────────────────────────────────────────────
 
