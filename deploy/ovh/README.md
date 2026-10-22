@@ -47,7 +47,9 @@ Before starting the gateway, run `sudo bash deploy/ovh/install-codex-sandbox.sh`
 
 The Codex child profile keeps `:root=deny`, adds Codex's Linux `:minimal=read` runtime paths so its own helper can execute, masks `/etc`, and allows only its private spawn directory for application data. A real offline test must first read a public file in the allowed directory successfully, then refuse reads outside it and refuse writes. A sandbox that fails to start is not a successful denial test. Local macOS unit coverage skips this Linux integration; it must also be exercised in the real Linux container. No model call is needed for these checks.
 
-Claude CLI catalogues are exposed with the `claude-code:` model prefix, while their owner remains `claude-via-claude-cli`. Discovering preset model names is not an account entitlement or generation test; do not enable paid probes merely to refresh the list.
+The sandbox fix is deployed as `plugboard:private-full-sandbox-v1`. Local regression coverage reports 191 passed and one Linux-only integration skipped on macOS. The real Linux preflight also passes in both a disposable image container and the deployed gateway: allowed file read succeeds, three outside reads and writes are refused, UID1000/zero capabilities/no-new-privileges/seccomp/AppArmor enforcement remain verified. Application auth denial checks, MFA, preserved data marker and private HTTPS pass after recreation. The native Playground dropdown was visually inspected and contains both CLI groups, including the Claude models; no message or model probe was submitted.
+
+Claude CLI catalogues are exposed with the `claude-code:` model prefix, while their owner/UI group remains `claude-via-claude-cli` (distinct from the paid `anthropic-direct` API provider). Discovering preset model names is not an account entitlement or generation test; do not enable paid probes merely to refresh the list.
 
 ## Deployment after authorized SSH is available
 
