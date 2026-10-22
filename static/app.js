@@ -1564,6 +1564,7 @@ async function showOllamaModelInfo(name) {
 
 let _pgInitDone = false;
 let _pgHistory = [];  // chat turns, each with a role and its content
+let _pgContextModel = "";  // the model the turns in _pgHistory were sent to
 
 function _initPlaygroundEvents() {
   if (_pgInitDone) return;
@@ -1708,6 +1709,23 @@ async function loadPlayground() {
   }
 }
 
+// Marks where the conversation restarted for another model.
+function _pgAddDivider(text) {
+  const container = document.getElementById("pg-messages");
+  const divider = document.createElement("p");
+  divider.style.cssText = "align-self:stretch; text-align:center; font-size:0.75rem; color:var(--text-muted); border-top:1px dashed var(--border-strong); padding-top:0.4rem; margin:0.5rem 0;";
+  divider.textContent = text;
+  divider.dataset.role = "divider";
+  container.appendChild(divider);
+}
+
+// A turn that got no answer is not part of the conversation: sending its
+// question again with the next one would make the model answer both.
+function _pgDropUnanswered(message) {
+  const last = _pgHistory.at(-1);
+  if (last?.role === "user" && last.content === message) _pgHistory.pop();
+}
+
 function _pgAddMessage(role, content) {
   const container = document.getElementById("pg-messages");
   // Remove placeholder
@@ -1737,6 +1755,14 @@ async function _pgSend() {
   const maxTokens = parseInt(document.getElementById("pg-max-tokens").value) || 2048;
   const statusEl = document.getElementById("pg-status");
 
+  // A conversation belongs to one model. The next model must not receive the
+  // previous one's answers: it would take that identity over and repeat it.
+  if (_pgHistory.length && model !== _pgContextModel) {
+    _pgHistory = [];
+    _pgAddDivider("New conversation with " + model + ": earlier messages are not sent to it.");
+  }
+  _pgContextModel = model;
+
   // Add user message
   _pgHistory.push({ role: "user", content: message });
   _pgAddMessage("user", message);
@@ -1744,6 +1770,8 @@ async function _pgSend() {
 
   // Add assistant placeholder
   const assistantBubble = _pgAddMessage("assistant", "...");
+  assistantBubble.dataset.model = model;
+  assistantBubble.title = "Answer from " + model;
   statusEl.textContent = "Sending to " + model + "...";
   statusEl.dataset.state = "sending";  // live-test completion hook (C9)
 
@@ -1771,6 +1799,7 @@ async function _pgSend() {
         assistantBubble.textContent = "Error: " + (errData.detail || res.status);
         statusEl.textContent = "Error " + res.status;
         statusEl.dataset.state = "error";  // C9
+        _pgDropUnanswered(message);
         return;
       }
       const reader = res.body.getReader();
@@ -1880,6 +1909,7 @@ async function _pgSend() {
       assistantBubble.textContent = "Error: " + err.message;
       statusEl.textContent = "Connection error";
       statusEl.dataset.state = "error";  // C9
+      _pgDropUnanswered(message);
     }
   } else {
     // Non-streaming
@@ -1892,6 +1922,7 @@ async function _pgSend() {
         assistantBubble.textContent = "Error: " + (data.detail || res.status);
         statusEl.textContent = "Error " + res.status;
         statusEl.dataset.state = "error";  // C9
+        _pgDropUnanswered(message);
         return;
       }
 
@@ -1938,12 +1969,14 @@ async function _pgSend() {
       assistantBubble.textContent = "Error: " + err.message;
       statusEl.textContent = "Connection error";
       statusEl.dataset.state = "error";  // C9
+      _pgDropUnanswered(message);
     }
   }
 }
 
 function _pgClear() {
   _pgHistory = [];
+  _pgContextModel = "";
   const container = document.getElementById("pg-messages");
   container.innerHTML = '<div class="muted" style="text-align:center; padding:2rem;">Select a model and start chatting.</div>';
   document.getElementById("pg-status").textContent = "";
