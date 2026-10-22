@@ -20,6 +20,8 @@ build/
 .coverage
 htmlcov/
 coverage.xml
+# pytest JUnit report (produced for the SonarQube scan)
+report.xml
 
 # Data (ne pas versionner les configs avec vrais tokens)
 data/providers.json
@@ -90,3 +92,6 @@ CLAUDE.local.md
 graphify-out/
 private/
 .venv
+
+# SonarQube scanner workspace (regenerated at every scan)
+.scannerwork/
