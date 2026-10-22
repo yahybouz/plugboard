@@ -1,8 +1,8 @@
-"""E2E — data-bound read-only tabs: overview, monitoring, usage, ollama, connections.
+"""E2E — data-bound read-only tabs: overview, monitoring, usage, ollama; the removed Connections tab stays absent.
 
 Goes beyond the smoke (which only checks render) by asserting that the seeded
 provider actually surfaces in the overview + monitoring views, and that the
-usage/ollama/connections data containers render their content or empty state.
+usage/ollama data containers render their content or empty state.
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ async def test_overview_reflects_seeded_provider(dashboard):
     page = dashboard.page
     await dashboard.goto_tab("overview")
     await page.wait_for_selector("#overview-cards", timeout=10_000)
-    # The stat cards render and include the Providers metric.
-    assert await page.locator("#overview-cards", has_text="Providers").count() >= 1
+    # The stat cards are appended after /health answers: wait for them.
+    await page.locator("#overview-cards", has_text="Providers").wait_for(timeout=10_000)
     assert dashboard.js_errors == [], dashboard.js_errors
 
 
@@ -46,8 +46,9 @@ async def test_ollama_tab_renders_models_container(dashboard):
     await page.wait_for_selector("#ollama-models-container", timeout=10_000)
 
 
-async def test_connections_tab_renders_table_container(dashboard):
+async def test_connections_tab_is_not_in_the_dashboard(dashboard):
+    # OAuth accounts are managed from the provider form (Reconnect/Disconnect).
     page = dashboard.page
-    await dashboard.goto_tab("connections")
-    await page.wait_for_selector("#connections-table-container", timeout=10_000)
+    assert await page.locator('.nav-link[data-tab="connections"]').count() == 0
+    assert await page.locator("#page-connections").count() == 0
     assert dashboard.js_errors == [], dashboard.js_errors

@@ -1,7 +1,7 @@
 """Smoke E2E: every dashboard tab renders in a real browser with no JS error.
 
 This is the backbone of the dashboard E2E suite — it proves the harness works
-(isolated server + auto-login) and that none of the 10 tabs is broken at render
+(isolated server + auto-login) and that none of the 9 tabs is broken at render
 time (a JS error or a missing ``#page-<tab>`` would fail here before any deeper
 interaction spec runs).
 """
@@ -20,7 +20,7 @@ async def test_autologin_reveals_dashboard(dashboard):
     """Localhost auto-login lands on the dashboard with the sidebar nav present."""
     page = dashboard.page
     assert await page.locator("#app:not(.hidden)").count() == 1
-    # The Jobs nav link is one of the 10 tabs — its presence proves the
+    # The Jobs nav link is one of the 9 tabs — its presence proves the
     # sidebar rendered.
     assert await page.get_by_role("link", name="Jobs", exact=True).count() == 1
     assert dashboard.js_errors == [], dashboard.js_errors

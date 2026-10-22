@@ -1,4 +1,6 @@
 [run]
+# Relative paths let SonarQube (or CI in another checkout) map coverage.xml.
+relative_files = True
 omit =
     plugboard/mcp_server.py
 

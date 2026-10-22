@@ -33,13 +33,12 @@ import pytest_asyncio
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _RUN_PY = _PROJECT_ROOT / "run.py"
 
-# The 10 dashboard tabs (data-tab / #page-<tab>) in nav order.
+# The 9 dashboard tabs (data-tab / #page-<tab>) in nav order.
 DASHBOARD_TABS: List[str] = [
     "overview",
     "keys",
     "usage",
     "providers",
-    "connections",
     "pricing",
     "playground",
     "ollama",
@@ -107,11 +106,9 @@ def _server_env(data_dir: Path, enc_key: str, port: int) -> dict:
             # the localhost auto-login, not through key auth, because HOST
             # above makes the server a loopback-only local install.
             "ADMIN_KEY": "e2e-" + "0" * 28,
-            # Every test loads the dashboard, and one page is already a dozen
-            # admin calls from the same address: the default 60/min per IP
-            # rejects the whole suite after a handful of tests (429 on `GET /`,
-            # so auto-login never happens). The limiter has its own unit tests.
-            "RATE_LIMIT": "0",
+            # Every browser context comes from 127.0.0.1: the default 60 req/min
+            # per-IP limit turns later tests into 429s and blank dashboards.
+            "RATE_LIMIT": "100000",
         }
     )
     return env

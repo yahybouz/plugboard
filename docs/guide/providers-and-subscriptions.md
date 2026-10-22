@@ -158,7 +158,7 @@ Refreshing an expired Gemini CLI token, and signing in to Gemini from the dashbo
 
 ### GitHub sign-in from the dashboard
 
-The presets *GitHub Models (OAuth via dashboard)* and *GitHub Copilot (OAuth via dashboard)* use GitHub's device flow: the dashboard shows a code, you open the GitHub page, enter the code and approve. The token is stored encrypted in `data/credentials.db`. The **Connections** page lists connected accounts and disconnects them.
+The presets *GitHub Models (OAuth via dashboard)* and *GitHub Copilot (OAuth via dashboard)* use GitHub's device flow: the dashboard shows a code, you open the GitHub page, enter the code and approve. The token is stored encrypted in `data/credentials.db`. When you pick the same preset again, the provider form shows the connected account with **Reconnect** and **Disconnect**; `GET /admin/oauth/connections` lists every connected account.
 
 ## Add providers from `.env` or scripts
 

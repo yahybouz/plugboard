@@ -10,7 +10,7 @@ services:
         GEMINI_CLI_VERSION: "0.65.0"
         CLAUDE_CODE_VERSION: "2.1.306"
         CODEX_VERSION: "0.163.0"
-    image: plugboard:private-full-735232a
+    image: plugboard:private-full-v4.1.0
     restart: unless-stopped
     env_file:
       - ${PLUGBOARD_ENV_FILE:-/etc/plugboard/runtime.env}
@@ -28,7 +28,13 @@ services:
       PLUGBOARD_INTERNET_CHECK_ON_BOOT: "0"
       PRICING_SCHEDULER_DISABLED: "1"
       PLUGBOARD_LLM_PRICING: "0"
-      OLLAMA_ENABLED: "false"
+      OLLAMA_ENABLED: "true"
+      OLLAMA_URL: http://172.30.114.1:11434
+      # Publish installed references only, not an unverified paid cloud catalog.
+      PLUGBOARD_OLLAMA_CLOUD_AUTOSYNC: "0"
+    networks:
+      - default
+      - ollama-private
     ports:
       - "127.0.0.1:8765:8765"
     volumes:
@@ -50,6 +56,10 @@ services:
       - logs:/app/logs
     security_opt:
       - no-new-privileges:true
+      # Bubblewrap needs user/mount namespaces, not a privileged container.
+      # Install the named AppArmor policy with install-codex-sandbox.sh first.
+      - apparmor=plugboard-codex
+      - seccomp=${PLUGBOARD_CODEX_SECCOMP_PROFILE:-/opt/plugboard/deploy/ovh/codex-seccomp.json}
     cap_drop:
       - ALL
     pids_limit: 256
@@ -60,6 +70,10 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+networks:
+  ollama-private:
+    external: true
+    name: plugboard-ollama
 volumes:
   data:
   cli-home:

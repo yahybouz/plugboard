@@ -17,7 +17,8 @@ check /health 200
 check /login 200
 check /admin/mfa/status 401
 check /v1/models 401
-invalid="$(curl --silent --show-error --max-time 15 --output /dev/null --write-out '%{http_code}' -H 'Authorization: Bearer invalid-deployment-probe' "${base}/v1/models")"
+rejected_bearer="invalid-$(date +%s)-probe"  # deliberately wrong, must be refused
+invalid="$(curl --silent --show-error --max-time 15 --output /dev/null --write-out '%{http_code}' -H "Authorization: Bearer ${rejected_bearer}" "${base}/v1/models")"
 [[ "$invalid" == 401 ]] || { printf 'FAIL invalid bearer: %s\n' "$invalid" >&2; exit 1; }
 printf 'PASS invalid bearer: 401\n'
 printf 'No model completions were requested. Remote exposure and MFA enrollment require separate checks.\n'

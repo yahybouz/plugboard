@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import shutil
+import sys
 import tempfile
 import time
 import uuid
@@ -74,8 +75,9 @@ _SPAWN_CWD_CACHE: Optional[str] = None
 def _clean_spawn_cwd() -> str:
     """Return the private directory CLI subprocesses are spawned from.
 
-    It is the only path a CLI child may read (codex permission profile,
-    gemini workspace), so it holds nothing of the server's: a fresh
+    It is the only application-data path a CLI child may read (Codex also
+    needs read-only OS runtime files on Linux). It holds nothing of the
+    server's: a fresh
     `mkdtemp` directory (mode 0700, unpredictable name) created on first call
     and reused for the process lifetime. A fixed name under a shared /tmp
     could be pre-created or swapped by another local user.
@@ -481,7 +483,14 @@ def codex_isolation_args(spawn_cwd: str) -> List[str]:
         )
         access = "read"
     root = _toml_string(os.path.realpath(spawn_cwd))
-    filesystem = f'{{":root"="deny",{root}={_toml_string(access)}}}'
+    # Bubblewrap starts from an empty filesystem when :root is denied.
+    # Linux needs Codex's built-in runtime roots (binaries, loader and libs)
+    # to execute its own fs helper. User homes and application data stay
+    # hidden; mask /etc again because :minimal otherwise includes it.
+    runtime = (
+        '":minimal"="read","/etc"="deny",' if sys.platform.startswith("linux") else ""
+    )
+    filesystem = f'{{":root"="deny",{runtime}{root}={_toml_string(access)}}}'
     args = [
         "-c",
         f"default_permissions={_toml_string(_CODEX_PROFILE)}",

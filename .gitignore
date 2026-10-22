@@ -92,6 +92,4 @@ CLAUDE.local.md
 graphify-out/
 private/
 .venv
-
-# SonarQube scanner workspace (regenerated at every scan)
 .scannerwork/

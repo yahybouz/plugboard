@@ -118,7 +118,7 @@ if (mobileBtn) {
 
 // ── Tab / Sidebar routing ───────────────────────────────────────────────────
 
-const TAB_LOADERS = { overview: loadOverview, keys: loadKeys, usage: loadUsage, providers: loadProviders, connections: loadConnections, pricing: loadPricing, monitoring: loadMonitoring, jobs: loadJobs, ollama: loadOllama, playground: loadPlayground };
+const TAB_LOADERS = { overview: loadOverview, keys: loadKeys, usage: loadUsage, providers: loadProviders, pricing: loadPricing, monitoring: loadMonitoring, jobs: loadJobs, ollama: loadOllama, playground: loadPlayground };
 const navLinks = document.querySelectorAll(".nav-link");
 const pages = document.querySelectorAll(".page");
 
@@ -637,6 +637,12 @@ function _oauthVendorLabel(preset) {
   return preset.oauth_source || "Provider";
 }
 
+// A slow status check for a preset the user already left must not overwrite
+// the status of the preset now selected.
+function _presetStillSelected(preset) {
+  return document.getElementById("dp-preset").value === preset.key;
+}
+
 async function _renderPresetView() {
   const key = document.getElementById("dp-preset").value;
   const preset = _directPresets.find(function (p) { return p.key === key; });
@@ -772,18 +778,26 @@ async function _checkBrokerConnection(preset) {
   try {
     const res = await api("GET", "/admin/oauth/connections");
     const data = await res.json();
+    if (!_presetStillSelected(preset)) return;
     const match = (data.connections || []).find(function (c) {
       return c.source === preset.oauth_source;
     });
     if (match) {
       statusEl.innerHTML = '<span style="color:var(--green);">✓ Already connected as <strong>'
         + _escape(match.account) + '</strong></span>'
-        + ' <button type="button" class="btn btn-ghost btn-sm" id="dp-reconnect-btn" style="margin-left:0.5rem;">Reconnect</button>';
+        + ' <button type="button" class="btn btn-ghost btn-sm" id="dp-reconnect-btn" style="margin-left:0.5rem;">Reconnect</button>'
+        + ' <button type="button" class="btn btn-danger btn-sm" id="dp-disconnect-btn" style="margin-left:0.25rem;">Disconnect</button>';
       createBtn.textContent = "Provider ready";
       createBtn.disabled = false;
       const reconnectBtn = document.getElementById("dp-reconnect-btn");
       if (reconnectBtn) {
         reconnectBtn.addEventListener("click", function () { _startBrokerFlow(preset); });
+      }
+      const disconnectBtn = document.getElementById("dp-disconnect-btn");
+      if (disconnectBtn) {
+        disconnectBtn.addEventListener("click", async function () {
+          if (await disconnectOAuth(preset.oauth_source)) _checkBrokerConnection(preset);
+        });
       }
     } else {
       statusEl.innerHTML = '<span style="color:var(--text-muted);">Not connected yet. Click the button to start.</span>';
@@ -798,6 +812,7 @@ async function _checkCLI(preset) {
   try {
     const res = await api("GET", "/admin/direct-providers/" + preset.key + "/check");
     const status = await res.json();
+    if (!_presetStillSelected(preset)) return;
     if (status.ok) {
       let label;
       if (status.auth_type === "subprocess") {
@@ -813,6 +828,7 @@ async function _checkCLI(preset) {
       createBtn.disabled = true;
     }
   } catch (e) {
+    if (!_presetStillSelected(preset)) return;
     statusEl.innerHTML = '<span style="color:var(--red);">✗ Check failed: ' + _escape(e.message) + '</span>';
     createBtn.disabled = true;
   }
@@ -944,7 +960,6 @@ function _runPopupFlow(preset, data) {
       toast("Connected: " + event.data.account, "success");
       directProviderForm.style.display = "none";
       loadProviders();
-      if (typeof loadConnections === "function") loadConnections();
     } else if (event.data.type === "oauth-error"
                && event.data.source === preset.oauth_source) {
       window.removeEventListener("message", _oauthMsgHandler);
@@ -989,7 +1004,6 @@ function _runDeviceFlow(preset, data) {
         toast("Connected: " + (d.account || "user"), "success");
         directProviderForm.style.display = "none";
         loadProviders();
-        if (typeof loadConnections === "function") loadConnections();
       } else if (d.status === "denied" || d.status === "expired") {
         _closeDeviceFlow();
         toast("OAuth " + d.status + ": " + (d.error || ""), "error");
@@ -1148,73 +1162,22 @@ async function checkProviderHealth(id) {
   } catch (e) { console.warn("provider check failed:", e); if (cell) { cell.innerHTML = ""; cell.appendChild(h("span", { className: "badge badge-red" }, "ERROR")); } }
 }
 
-// ── Connections (OAuth broker) tab ──────────────────────────────────────────
-
-async function loadConnections() {
-  const container = document.getElementById("connections-table-container");
-  if (!container) return;
-  container.innerHTML = "";
-  container.appendChild(skeleton(2));
-  try {
-    const res = await api("GET", "/admin/oauth/connections");
-    const data = await res.json();
-    const conns = data.connections || [];
-    container.innerHTML = "";
-    if (!conns.length) {
-      container.appendChild(emptyState("—", "No OAuth connections. Go to Providers → Add Direct Provider and pick an 'OAuth via dashboard' preset."));
-      return;
-    }
-    const rows = conns.map(function (c) {
-      let expiresTxt = "—";
-      if (c.expires_at) {
-        const diff = c.expires_at - (Date.now() / 1000);
-        if (diff > 0) {
-          const mins = Math.round(diff / 60);
-          expiresTxt = mins > 60 ? Math.round(mins / 60) + "h" : mins + "min";
-        } else {
-          expiresTxt = "expired (auto-refresh)";
-        }
-      }
-      const scopeEllipsis = c.scope && c.scope.length > 50 ? "…" : "";
-      return h("tr", null,
-        h("td", null, h("strong", null, c.source)),
-        h("td", null, c.account || "—"),
-        h("td", null, c.scope ? h("code", null, c.scope.slice(0, 50) + scopeEllipsis) : "—"),
-        h("td", null, expiresTxt),
-        h("td", null, c.updated_at || "—"),
-        h("td", null, h("div", { className: "btn-group" },
-          h("button", {
-            className: "btn btn-sm btn-danger",
-            onClick: function () { disconnectOAuth(c.source); }
-          }, "Disconnect"),
-        )),
-      );
-    });
-    container.appendChild(table(
-      ["Source", "Account", "Scope", "Expires in", "Updated", "Actions"], rows));
-  } catch (e) {
-    container.innerHTML = "";
-    container.appendChild(h("div", { className: "alert alert-error" }, "Failed to load connections: " + e.message));
-  }
-}
+// ── OAuth broker disconnect (from the provider form) ────────────────────────
 
 async function disconnectOAuth(source) {
-  if (!await confirmAction("Disconnect " + source + "? Broker providers using this source will stop working until you reconnect.")) return;
+  if (!await confirmAction("Disconnect " + source + "? Broker providers using this source will stop working until you reconnect.")) return false;
   try {
     const res = await api("DELETE", "/admin/oauth/" + source);
     if (res.status === 204) {
       toast("Disconnected " + source, "success");
-      loadConnections();
       loadProviders();
-    } else {
-      const err = await res.json();
-      toast("Disconnect failed: " + (err.detail || res.status), "error");
+      return true;
     }
+    const err = await res.json();
+    toast("Disconnect failed: " + (err.detail || res.status), "error");
   } catch (e) { toast("Disconnect error: " + e.message, "error"); }
+  return false;
 }
-
-const _refreshConnBtn = document.getElementById("btn-refresh-connections");
-if (_refreshConnBtn) _refreshConnBtn.addEventListener("click", loadConnections);
 
 // ── Pricing ─────────────────────────────────────────────────────────────────
 // The Pricing page and the auto-update panels live in auto_update.js.

@@ -1,0 +1,21 @@
+[Unit]
+Description=Private Docker Ollama loopback proxy
+Requires=plugboard-ollama.socket
+After=ollama.service
+
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:11434
+DynamicUser=true
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=127.0.0.1
+IPAddressAllow=172.30.114.0/29
+MemoryMax=64M
+TasksMax=32

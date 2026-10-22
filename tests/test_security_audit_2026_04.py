@@ -20,6 +20,7 @@ from __future__ import annotations
 
 
 import os
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -316,14 +317,16 @@ def test_codex_default_sandbox_is_read_only(monkeypatch):
     assert "--sandbox" not in cs.get_backend("codex").args
     args = cs.codex_isolation_args("/srv/spawn")
     profile = next(a for a in args if a.startswith("permissions."))
-    assert profile.endswith('{":root"="deny","/srv/spawn"="read"}'), (
-        f"Codex must default to read-only access on the spawn cwd, got {profile!r}"
-    )
+    table = tomllib.loads("filesystem=" + profile.split("=", 1)[1])["filesystem"]
+    assert table[":root"] == "deny" and table["/srv/spawn"] == "read"
+    if cs.sys.platform.startswith("linux"):
+        assert table[":minimal"] == "read" and table["/etc"] == "deny"
     # Env override is respected.
     monkeypatch.setenv("PLUGBOARD_CODEX_SANDBOX", "workspace-write")
     args2 = cs.codex_isolation_args("/srv/spawn")
     profile2 = next(a for a in args2 if a.startswith("permissions."))
-    assert profile2.endswith('{":root"="deny","/srv/spawn"="write"}')
+    table2 = tomllib.loads("filesystem=" + profile2.split("=", 1)[1])["filesystem"]
+    assert table2[":root"] == "deny" and table2["/srv/spawn"] == "write"
 
 
 def test_encryption_key_auto_generated_when_env_absent(tmp_path, monkeypatch):

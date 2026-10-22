@@ -1,0 +1,17 @@
+[Unit]
+Description=Private Docker-only bridge to loopback Ollama
+# Avoid ordering a Docker-dependent socket before sockets.target/basic.target.
+DefaultDependencies=no
+Requires=docker.service
+Wants=ollama.service
+After=docker.service ollama.service
+Before=shutdown.target
+Conflicts=shutdown.target
+
+[Socket]
+ListenStream=172.30.114.1:11434
+FreeBind=true
+NoDelay=true
+
+[Install]
+WantedBy=multi-user.target

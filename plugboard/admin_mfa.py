@@ -54,7 +54,9 @@ def _b32_normalize(secret: str) -> bytes:
 
 def _hotp(secret_bytes: bytes, counter: int) -> str:
     msg = struct.pack(">Q", counter)
-    digest = hmac.new(secret_bytes, msg, hashlib.sha1).digest()
+    # RFC 4226/6238 HOTP/TOTP is defined over HMAC-SHA1 and authenticator apps
+    # default to it; HMAC-SHA1 is not affected by SHA-1 collision attacks.
+    digest = hmac.new(secret_bytes, msg, hashlib.sha1).digest()  # NOSONAR
     offset = digest[-1] & 0x0F
     code_int = (
         ((digest[offset] & 0x7F) << 24)

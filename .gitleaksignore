@@ -1,2 +1,4 @@
 # Fake low-entropy test fixture (tests/test_log_redact.py), replaced in a later commit.
 8b48cbe093827f8d49d821546d61783c6ef03229:tests/test_log_redact.py:generic-api-key:115
+# Deliberately invalid bearer in deploy/ovh/verify.sh (401 check), built at runtime since 4.1.0.
+50340bfa0038452a0e97ccf728efdb5594393736:deploy/ovh/verify.sh:curl-auth-header:20

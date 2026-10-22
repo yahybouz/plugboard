@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.1.0] — 2026-10-22
+
 ### Upgrading
 
 Defaults that change, and how to keep the previous behaviour:
@@ -44,8 +46,18 @@ Prices already in the grid without a `source` (written by an earlier update or a
 - `PUT /admin/pricing/{month}` now checks every row: both prices must be numbers between 0 and 1000 USD per million tokens, and the month must look like `YYYY_MM` (422 otherwise). Price edits on a grid file that cannot be read answer 503 instead of replacing it.
 - `GET /usage/me` (client keys) does not return the price key or source of each entry; admins see them in `/admin/usage`.
 
+### Removed
+
+- The dashboard **Connections** tab. A connected OAuth account (GitHub Models, GitHub Copilot) is now shown in the provider form when you pick its preset, with **Reconnect** and **Disconnect**. `GET /admin/oauth/connections` and `DELETE /admin/oauth/{source}` are unchanged.
+
 ### Fixed
 
+- Codex CLI sessions failed inside the hardened container (`bwrap: No permissions to create a new namespace`). The Linux sandbox profile now grants the CLI's read-only runtime roots (`:minimal`) while masking `/etc`; `deploy/ovh` ships a service-scoped AppArmor profile, a pinned Docker-default seccomp with the seven syscalls bubblewrap needs, an installer and an offline preflight. Host user-namespace sysctls, `cap_drop: ALL` and `no-new-privileges` are unchanged.
+- In the Add Direct Provider form, a slow check for the previously selected preset could overwrite the status (and buttons) of the preset now selected.
+- The client portal loaded Chart.js from a CDN without an integrity check; it is now vendored (`static/vendor/chartjs`, 4.4.1, MIT, verified against the npm tarball integrity).
+- With `CORS_ORIGINS` set, rate-limit (429) and body-size (413) answers had no CORS headers, so browsers reported a CORS error instead of the real status: CORS is now the outermost middleware.
+- Dependency security updates: `aiohttp` 3.14.5 and `certifi` 2026.10.19 (pip-audit findings).
+- `deploy/ovh`: the gateway reaches the host's loopback-only Ollama through an internal Docker network and a socket-activated proxy bound to that bridge only; nothing listens on public or Tailscale addresses.
 - The setup steps of the built-in presets were in French; they are now in English.
 - On narrow screens wide tables pushed the whole dashboard sideways; they now scroll inside their frame.
 - Usage was recorded against the provider named in the request even when another provider served it after a fallback or a circuit-breaker rewrite.
