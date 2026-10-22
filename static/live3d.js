@@ -206,7 +206,8 @@ class LiveRouting {
       const color = COLORS[kind];
       const group = this.node(position, color, 0.42);
       const models = modelCounts[p.id] || 0;
-      const label = labelSprite(p.name || p.id, models ? models + " models" : kind === "down" ? "inactive" : "", color);
+      const idleText = kind === "down" ? "inactive" : "";
+      const label = labelSprite(p.name || p.id, models ? models + " models" : idleText, color);
       label.position.set(0, 1.05, 0);
       label.scale.set(4.6, 1.15, 1);
       group.add(label);
@@ -315,7 +316,7 @@ class LiveRouting {
         this.renderStats();
       }
       this.lastCounts = counts;
-    } catch (err) {
+    } catch (err) { console.debug("metrics unavailable:", err);
       /* metrics unavailable: keep the heartbeat only */
     }
   }
@@ -389,7 +390,7 @@ function webglAvailable() {
   try {
     const canvas = document.createElement("canvas");
     return !!(canvas.getContext("webgl2") || canvas.getContext("webgl"));
-  } catch (err) {
+  } catch (err) { console.debug("WebGL detection failed:", err);
     return false;
   }
 }

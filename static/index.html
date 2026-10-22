@@ -130,7 +130,7 @@
               <button type="button" class="btn btn-sm live3d-showcase" aria-pressed="false">Showcase</button>
             </div>
             <div class="live3d-foot">
-            <div class="live3d-stats" role="status" aria-live="polite"></div>
+            <output class="live3d-stats" aria-live="polite"></output>
             <ul class="live3d-legend">
               <li><i style="--c:#e2c992"></i>Client keys</li>
               <li><i style="--c:#7cc2c2"></i>CLI subscriptions</li>
@@ -170,12 +170,12 @@
         <div id="create-key-form" class="card form-card hidden">
           <div class="card-header"><span class="card-title">Create API Key</span></div>
           <div class="form-row">
-            <div class="form-group"><label>Client ID</label><input type="text" id="key-client-id" placeholder="e.g. acme-corp" required></div>
-            <div class="form-group"><label>Label</label><input type="text" id="key-label" placeholder="e.g. Production"></div>
+            <div class="form-group"><label for="key-client-id">Client ID</label><input type="text" id="key-client-id" placeholder="e.g. acme-corp" required></div>
+            <div class="form-group"><label for="key-label">Label</label><input type="text" id="key-label" placeholder="e.g. Production"></div>
           </div>
           <div class="form-row">
-            <div class="form-group"><label>Monthly Limit ($)</label><input type="number" id="key-limit" placeholder="0 = unlimited" step="0.01" min="0"></div>
-            <div class="form-group"><label>RPM Limit</label><input type="number" id="key-rpm" placeholder="0 = unlimited" step="1" min="0"></div>
+            <div class="form-group"><label for="key-limit">Monthly Limit ($)</label><input type="number" id="key-limit" placeholder="0 = unlimited" step="0.01" min="0"></div>
+            <div class="form-group"><label for="key-rpm">RPM Limit</label><input type="number" id="key-rpm" placeholder="0 = unlimited" step="1" min="0"></div>
           </div>
           <div class="form-actions">
             <button class="btn btn-primary" id="btn-submit-key">Create Key</button>
@@ -243,22 +243,22 @@
             <label class="check small" id="dp-test-token-row" style="display:none; margin-top:0.4rem;">
               <input type="checkbox" id="dp-test-token"> Also send one test token (billed by the provider)
             </label>
-            <div id="dp-status" role="status" aria-live="polite" style="margin-top:0.5rem; font-size:0.85rem;"></div>
+            <output id="dp-status" aria-live="polite" style="display:block; margin-top:0.5rem; font-size:0.85rem;"></output>
           </div>
         </div>
         <div id="provider-form-container" class="hidden">
           <form id="provider-form" class="card form-card">
             <div class="card-header"><span class="card-title" id="pf-form-title">Add Provider</span></div>
             <div class="form-row">
-              <div class="form-group"><label>Name</label><input type="text" id="pf-name" required></div>
-              <div class="form-group"><label>Base URL</label><input type="url" id="pf-url" required></div>
+              <div class="form-group"><label for="pf-name">Name</label><input type="text" id="pf-name" required></div>
+              <div class="form-group"><label for="pf-url">Base URL</label><input type="url" id="pf-url" required></div>
             </div>
             <div class="form-row">
-              <div class="form-group"><label>Bearer Token</label><input type="password" id="pf-token"></div>
-              <div class="form-group"><label>Default Model</label><input type="text" id="pf-model"></div>
+              <div class="form-group"><label for="pf-token">Bearer Token</label><input type="password" id="pf-token"></div>
+              <div class="form-group"><label for="pf-model">Default Model</label><input type="text" id="pf-model"></div>
             </div>
             <div class="form-row">
-              <div class="form-group"><label>Timeout (s)</label><input type="number" id="pf-timeout" value="60" step="1"></div>
+              <div class="form-group"><label for="pf-timeout">Timeout (s)</label><input type="number" id="pf-timeout" value="60" step="1"></div>
               <div class="form-group form-check"><label><input type="checkbox" id="pf-active" checked> Active</label></div>
             </div>
             <div class="form-row">
