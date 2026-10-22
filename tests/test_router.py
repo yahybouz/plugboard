@@ -617,3 +617,87 @@ def test_normalize_payload_o_series_max_completion_tokens_wins():
     )
     assert "max_tokens" not in out
     assert out["max_completion_tokens"] == 200  # not overwritten by 100
+
+
+# Claude Opus 4.7 and later, Sonnet 5+, Haiku 5+, Fable and Mythos answer
+# HTTP 400 ("`temperature` is deprecated for this model") to sampling
+# parameters. The router drops them, as it renames max_tokens for o-series.
+_SAMPLING = {"temperature": 0.7, "top_p": 0.9, "top_k": 40}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-5",
+        "claude-opus-5-5",
+        "claude-sonnet-5",
+        "claude-sonnet-5-5",
+        "claude-haiku-5-5",
+        "claude-fable-5-1",
+        "claude-mythos-5-1",
+        "anthropic/claude-opus-4.7",
+        "Claude-Opus-4-7",
+    ],
+)
+def test_sampling_params_dropped_for_claude_models_that_reject_them(model):
+    from plugboard.router import _drop_unsupported_sampling_params
+
+    payload = {"model": model, "messages": [], "max_tokens": 64, **_SAMPLING}
+    out = _drop_unsupported_sampling_params(model, payload)
+    assert not set(_SAMPLING) & set(out)
+    assert out["max_tokens"] == 64 and out["messages"] == []
+    assert payload["temperature"] == 0.7  # the caller's dict is not mutated
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5",
+        "claude-haiku-4-5",
+        "claude-haiku-4-5-20251001",
+        "claude-opus-4-20250514",
+        "claude-3-7-sonnet-latest",
+        "claude-3-5-haiku-20241022",
+        "gpt-4o",
+        "llama3.2:3b",
+        "",
+    ],
+)
+def test_sampling_params_kept_for_other_models(model):
+    from plugboard.router import _drop_unsupported_sampling_params
+
+    payload = {"model": model, "messages": [], **_SAMPLING}
+    assert _drop_unsupported_sampling_params(model, payload) == payload
+
+
+@pytest.mark.asyncio
+async def test_forward_drops_temperature_for_claude_opus_4_7(_providers_file):
+    from plugboard.router import forward
+
+    captured = {}
+
+    with aioresponses() as mock:
+
+        def callback(_url, **kwargs):
+            captured["body"] = kwargs.get("json", {})
+            from aioresponses import CallbackResult
+
+            return CallbackResult(status=200, payload=FAKE_COMPLETION)
+
+        mock.post("http://fake-llm.test/v1/chat/completions", callback=callback)
+        await forward(
+            {
+                "model": "test-provider:claude-opus-4-7",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "temperature": 0.7,
+                "max_tokens": 5,
+            }
+        )
+
+    assert captured["body"]["model"] == "claude-opus-4-7"
+    assert "temperature" not in captured["body"]
+    assert captured["body"]["max_tokens"] == 5

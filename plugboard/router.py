@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import logging
 import os
+import re
 import time as _time
 import uuid as _uuid
 from typing import Any, AsyncIterator, Dict, Iterator, List, Optional
@@ -63,6 +64,52 @@ def _normalize_payload_for_o_series(
         converted["max_completion_tokens"] = converted["max_tokens"]
     converted.pop("max_tokens", None)
     return converted
+
+
+# Claude Opus 4.7 and later, Sonnet 5+, Haiku 5+ and the Fable / Mythos models
+# reject sampling parameters: Anthropic answers HTTP 400 ("`temperature` is
+# deprecated for this model"), on the native API and on its OpenAI-compatible
+# endpoint alike. Older Claude models (Opus 4.6, Sonnet 4.6, Haiku 4.5, 3.x)
+# still accept them. Names are matched on the upstream model id, whatever the
+# provider in front of it: claude-opus-4-7, anthropic/claude-opus-4.7, ...
+_CLAUDE_SAMPLING_PARAMS = ("temperature", "top_p", "top_k")
+_CLAUDE_MODEL_RE = re.compile(
+    r"claude-(opus|sonnet|haiku|fable|mythos)-(\d+)(?:-(\d{1,2})(?!\d))?"
+)
+_CLAUDE_FIRST_WITHOUT_SAMPLING = (4, 7)
+
+
+def _claude_rejects_sampling(model: str) -> bool:
+    name = model.rsplit("/", 1)[-1].lower().replace(".", "-")
+    match = _CLAUDE_MODEL_RE.search(name)
+    if not match:
+        return False
+    family, major, minor = match.group(1), int(match.group(2)), match.group(3)
+    if family in ("fable", "mythos"):
+        return True
+    return (major, int(minor or 0)) >= _CLAUDE_FIRST_WITHOUT_SAMPLING
+
+
+def _drop_unsupported_sampling_params(
+    model: str, payload: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Remove temperature / top_p / top_k for Claude models that reject them.
+
+    Returns a new dict; never mutates the caller's payload. No-op for any
+    other model, or when the payload carries none of these parameters.
+    """
+    present = [k for k in _CLAUDE_SAMPLING_PARAMS if k in payload]
+    if not present or not model or not _claude_rejects_sampling(model):
+        return payload
+    log.debug("Dropping %s for %s (not accepted by this model)", present, model)
+    return {k: v for k, v in payload.items() if k not in _CLAUDE_SAMPLING_PARAMS}
+
+
+def _adapt_payload(model: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Model-family request adjustments applied before any HTTP forward."""
+    return _drop_unsupported_sampling_params(
+        model, _normalize_payload_for_o_series(model, payload)
+    )
 
 
 def _read_env_float(name: str, default: float, *, min_value: float = 0.0) -> float:
@@ -567,9 +614,7 @@ async def forward(body: Dict[str, Any], timeout: float = _TIMEOUT) -> Dict[str, 
             "X-Request-ID": _request_id_var.get("-"),
             "X-Session-ID": _uuid.uuid4().hex,  # unique session per request
         }
-        payload = _normalize_payload_for_o_series(
-            real_model, {**body, "model": real_model}
-        )
+        payload = _adapt_payload(real_model, {**body, "model": real_model})
         log.info("→ %s | model=%s | provider=%s", url, real_model, provider["id"])
 
         provider_failed = False
@@ -803,7 +848,7 @@ async def forward_stream(
         "X-Request-ID": _request_id_var.get("-"),
         "X-Session-ID": _uuid.uuid4().hex,  # unique session per request
     }
-    payload = _normalize_payload_for_o_series(real_model, {**body, "model": real_model})
+    payload = _adapt_payload(real_model, {**body, "model": real_model})
 
     log.info("→ stream %s | model=%s | provider=%s", url, real_model, provider["id"])
 
@@ -1775,12 +1820,15 @@ async def discover_models(provider: Dict[str, Any]) -> List[Dict[str, str]]:
         async with session.post(
             openai_url(base, "chat/completions"),
             headers={**headers, "Content-Type": "application/json"},
-            json={
-                "model": default_model,
-                "messages": [{"role": "user", "content": _DISCOVER_PROMPT}],
-                "max_tokens": 2000,
-                "temperature": 0,
-            },
+            json=_adapt_payload(
+                default_model,
+                {
+                    "model": default_model,
+                    "messages": [{"role": "user", "content": _DISCOVER_PROMPT}],
+                    "max_tokens": 2000,
+                    "temperature": 0,
+                },
+            ),
             timeout=aiohttp.ClientTimeout(total=60),
         ) as resp:
             if resp.status != 200:

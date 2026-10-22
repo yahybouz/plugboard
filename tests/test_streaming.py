@@ -104,3 +104,36 @@ async def test_forward_stream_no_retry(_providers_file):
                 {"model": _MODEL, "messages": [], "stream": True}
             ):
                 pass
+
+
+@pytest.mark.asyncio
+async def test_forward_stream_drops_temperature_for_claude_sonnet_5_5(_providers_file):
+    """Streamed requests get the same sampling-parameter cleanup."""
+    from aioresponses import CallbackResult
+
+    from plugboard.router import forward_stream
+
+    captured = {}
+
+    def callback(_url, **kwargs):
+        captured["body"] = kwargs.get("json", {})
+        return CallbackResult(
+            status=200, body=FAKE_STREAM_BODY, content_type="text/event-stream"
+        )
+
+    with aioresponses() as mock:
+        mock.post("http://fake-llm.test/v1/chat/completions", callback=callback)
+        async for _ in forward_stream(
+            {
+                "model": "test-provider:claude-sonnet-5-5",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "stream": True,
+            }
+        ):
+            pass
+
+    assert captured["body"]["model"] == "claude-sonnet-5-5"
+    assert "temperature" not in captured["body"]
+    assert "top_p" not in captured["body"]

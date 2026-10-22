@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.1.2] — 2026-10-22
+
+### Fixed
+
+- Playground: changing the model starts a new conversation. The previous model's answers were sent to the new one, which took that identity over and repeated them (asking "which model are you?" after a switch returned the previous answer). The earlier messages stay on screen above a divider, and each answer shows which model it was asked to.
+- Playground: a message that ends in an error is no longer sent again with the next one.
+- Claude Opus 4.7 / 4.8 / 5 / 5.5, Sonnet 5 / 5.5, Haiku 5.5 and the Fable / Mythos models no longer fail with HTTP 400 "`temperature` is deprecated for this model": the gateway removes `temperature`, `top_p` and `top_k` for these models, which do not accept them. Other models are unchanged.
+
 ## [4.1.1] — 2026-10-22
 
 ### Fixed
