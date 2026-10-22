@@ -51,6 +51,10 @@ The sandbox fix is deployed as `plugboard:private-full-sandbox-v1`. Local regres
 
 Claude CLI catalogues are exposed with the `claude-code:` model prefix, while their owner/UI group remains `claude-via-claude-cli` (distinct from the paid `anthropic-direct` API provider). Discovering preset model names is not an account entitlement or generation test; do not enable paid probes merely to refresh the list.
 
+## Ollama bridge
+
+Native Ollama stays bound to host loopback `127.0.0.1:11434`. `install-ollama-bridge.sh` creates the internal Docker network `plugboard-ollama` (`172.30.114.0/29`, bridge `br-pb-ollama`) and a socket-activated `systemd-socket-proxyd` listening only on `172.30.114.1:11434`, forwarding to loopback. UFW allows that port only on that bridge, from that subnet. Nothing is published on the public or Tailscale interfaces. The gateway joins this network with `OLLAMA_URL=http://172.30.114.1:11434`; cloud-catalog autosync is disabled so only the installed references appear, not unverified paid models. Run the installer before `docker compose up`.
+
 ## Deployment after authorized SSH is available
 
 1. Confirm the delivered hostname/IP, OS and architecture from OVH and the live host; establish a dedicated authorized SSH key. Never request passwords in chat.
