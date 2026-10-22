@@ -145,3 +145,75 @@ async def test_stream_does_not_duplicate_usage_when_upstream_already_sent_it(
     assert usage_count == 1, (
         f"expected exactly 1 usage chunk, got {usage_count}. body={body[-500:]}"
     )
+
+
+def _usage_index_and_done_index(sse_text: str) -> tuple:
+    """Positions of the first usage event and of `data: [DONE]` in the stream."""
+    usage_at = done_at = None
+    for i, line in enumerate(raw.strip() for raw in sse_text.split("\n")):
+        if line == "data: [DONE]":
+            done_at = i if done_at is None else done_at
+        elif line.startswith("data: ") and usage_at is None:
+            try:
+                if json.loads(line[6:]).get("usage"):
+                    usage_at = i
+            except json.JSONDecodeError:
+                pass
+    return usage_at, done_at
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        # A short answer often reaches the gateway as one network read.
+        [
+            b'data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Hi"}}]}\n\n'
+            b"data: [DONE]\n\n"
+        ],
+        [
+            b'data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Hello"}}]}\n\n',
+            b'data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":" world"}}]}\n\n',
+            b"data: [DONE]\n\n",
+        ],
+    ],
+    ids=["single-read", "several-reads"],
+)
+@pytest.mark.asyncio
+async def test_injected_usage_comes_before_done(client, monkeypatch, chunks):
+    """OpenAI clients stop reading at `data: [DONE]`: usage sent after it is lost."""
+    from plugboard import app as app_mod
+    from plugboard.config import create_provider, get_provider
+
+    create_provider(
+        name="Done Order",
+        base_url="https://done-order.example.com",
+        bearer_token="tok",
+        default_model="do-model",
+    )
+
+    async def fake_forward_stream(body):
+        for ch in chunks:
+            yield ch
+
+    monkeypatch.setattr(app_mod, "forward_stream", fake_forward_stream)
+    monkeypatch.setattr(
+        app_mod,
+        "resolve_provider_and_model",
+        lambda _m: (get_provider("done-order"), "do-model"),
+    )
+
+    res = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer testkey"},
+        json={
+            "model": "done-order:do-model",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
+    )
+    assert res.status_code == 200
+    usage_at, done_at = _usage_index_and_done_index(res.text)
+    assert usage_at is not None, res.text[-400:]
+    assert done_at is not None, res.text[-400:]
+    assert usage_at < done_at, f"usage after [DONE]:\n{res.text[-400:]}"
+    assert res.text.count("data: [DONE]") == 1

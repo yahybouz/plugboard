@@ -1589,14 +1589,23 @@ async def chat_completions(
 
             accumulated = bytearray()
             # 1) First chunk is already consumed by the caller's probe —
-            # accumulate and yield immediately.
+            # accumulate and yield immediately. A short answer can arrive
+            # whole in this one read: then `[DONE]` is held back with the
+            # tail, or the usage chunk would land after it and OpenAI
+            # clients, which stop reading at `[DONE]`, would never see it.
             accumulated.extend(first_chunk)
-            yield first_chunk
+            done_in_first = first_chunk.rfind(b"data: [DONE]")
+            if done_in_first == -1:
+                yield first_chunk
+            elif done_in_first:
+                yield first_chunk[:done_in_first]
             # 2) Keep the very last bytes buffered so we can detect `[DONE]`.
             # Most upstreams end with `data: [DONE]\n\n` — 16 bytes is enough
             # to disambiguate. We buffer the trailing window only.
             TAIL = 64
-            tail_buf = bytearray()
+            tail_buf = bytearray(
+                first_chunk[done_in_first:] if done_in_first != -1 else b""
+            )
             async for chunk in rest:
                 accumulated.extend(chunk)
                 tail_buf.extend(chunk)
