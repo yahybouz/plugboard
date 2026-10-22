@@ -4246,6 +4246,18 @@ async def admin_usage_client(
     }
 
 
+# -- Client API contract (public) --------------------------------------------
+# The documented, versioned subset an integrator may rely on (docs/api/).
+# It describes public routes only, so it needs no key, unlike /openapi.json.
+
+
+@app.get("/v1/openapi.json")
+async def client_api_contract():
+    from plugboard.api_contract import build_openapi
+
+    return build_openapi()
+
+
 # -- API docs (admin-protected) -----------------------------------------------
 
 

@@ -31,6 +31,7 @@ LOCK_OPTS := --universal --python-version 3.12 --generate-hashes --custom-compil
         audit check verify secret-scan install-hooks docker-build docker-build-full \
         compose-up compose-down smoke-models admin-mfa-setup \
         sonar-up sonar-token sonar-scan sonar-issues sonar-down \
+        contract contract-check \
         mcp mcp-sse mcp-http precommit-install precommit-run live-tests live-tests-mvp
 
 help:          ## List the available targets
@@ -291,6 +292,18 @@ sonar-issues:  ## Print the open SonarQube issues of the last analysis (JSON)
 
 sonar-down:    ## Stop the local SonarQube server (the analysis volumes are kept)
 	$(SONAR_COMPOSE) down
+
+# ── Integration contracts ─────────────────────────────────────
+
+contract:      ## Write docs/api/openapi.json and docs/api/mcp.json from the code
+	"$(PY)" scripts/export_contract.py
+	@test -x "$(MCP_VENV)/bin/python" || { echo "$(MCP_VENV) is missing: run 'make setup-mcp' for docs/api/mcp.json."; exit 1; }
+	"$(MCP_VENV)/bin/python" scripts/export_contract.py --mcp
+
+contract-check: ## Fail when docs/api/ no longer matches the code (CI runs it)
+	"$(PY)" scripts/export_contract.py --check
+	@test -x "$(MCP_VENV)/bin/python" || { echo "$(MCP_VENV) is missing: run 'make setup-mcp'."; exit 1; }
+	"$(MCP_VENV)/bin/python" scripts/export_contract.py --mcp --check
 
 # ── Secrets ───────────────────────────────────────────────────
 

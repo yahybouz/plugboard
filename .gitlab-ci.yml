@@ -2,7 +2,8 @@
 # The GitHub mirror runs the same checks in .github/workflows/ci.yml.
 #
 #   lint      ruff check and format check, registry example JSON
-#   test      pytest + coverage, against a throwaway data directory
+#   test      pytest + coverage, against a throwaway data directory;
+#             the MCP contract (docs/api/mcp.json) in the MCP environment
 #   analysis  SonarQube scan (only when SONAR_HOST_URL and SONAR_TOKEN are set)
 #   security  gitleaks over the pushed commits, bandit, pip-audit
 #   build     docker build of the slim `api` target (not pushed)
@@ -90,6 +91,27 @@ pytest:
       coverage_report:
         coverage_format: cobertura
         path: coverage.xml
+
+# The MCP server has its own lock (requirements-mcp.lock): its contract is
+# checked in that environment. The OpenAPI contract is checked by pytest.
+mcp-contract:
+  extends: .not-scheduled
+  stage: test
+  image: $PYTHON_IMAGE
+  needs: []
+  cache:
+    key:
+      files:
+        - requirements-mcp.lock
+    paths:
+      - .cache/pip
+  variables:
+    PLUGBOARD_SKIP_DOTENV: "1"
+  before_script:
+    - python -m pip install --require-hashes -r requirements-mcp.lock
+  script:
+    - export PLUGBOARD_DATA="$(mktemp -d)"
+    - python scripts/export_contract.py --mcp --check
 
 # ── analysis ──────────────────────────────────────────────────
 # Reads pytest's coverage.xml, so it never runs the suite itself. Set the
