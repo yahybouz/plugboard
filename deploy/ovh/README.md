@@ -39,6 +39,16 @@ Native Codex and Claude authentication is now deliberately shared with the gatew
 
 Both CLI auth-status commands succeed inside the gateway under the exact `build_child_env` used by the adapters. Codex's obsolete `gpt-5.5` default was replaced with `gpt-6.1-sol`; the provider catalogue was rebuilt from the signed-in account's model cache and the new default is visible through `/v1/models`. App health, auth denial checks and persisted data markers pass after recreation. Actual Claude/Codex generation through Plugboard remains unverified: consent for two subscription-quota micro-tests was requested but not received. Do not label the inference path fully verified.
 
+## Codex Linux sandbox
+
+Codex 0.163 requires bubblewrap for filesystem-restricted sessions, including the initial `AGENTS.md` read. Docker's default seccomp and AppArmor policies block its namespace setup even when `kernel.unprivileged_userns_clone=1`; restarting alone does not fix this. The deprecated Landlock fallback explicitly refuses this restricted policy, so do not switch to full-access or disable the sandbox.
+
+Before starting the gateway, run `sudo bash deploy/ovh/install-codex-sandbox.sh`. It installs the persistent, named `plugboard-codex` AppArmor profile. Compose uses that profile and `codex-seccomp.json`: the Moby default-deny policy plus seven namespace/mount setup syscalls. All outer capabilities remain dropped, `no-new-privileges` remains enabled, and no host sysctl is changed. Upstream revision/license are in `codex-sandbox-source.json` and `LICENSE.moby-profiles`.
+
+The Codex child profile keeps `:root=deny`, adds Codex's Linux `:minimal=read` runtime paths so its own helper can execute, masks `/etc`, and allows only its private spawn directory for application data. A real offline test must first read a public file in the allowed directory successfully, then refuse reads outside it and refuse writes. A sandbox that fails to start is not a successful denial test. Local macOS unit coverage skips this Linux integration; it must also be exercised in the real Linux container. No model call is needed for these checks.
+
+Claude CLI catalogues are exposed with the `claude-code:` model prefix, while their owner remains `claude-via-claude-cli`. Discovering preset model names is not an account entitlement or generation test; do not enable paid probes merely to refresh the list.
+
 ## Deployment after authorized SSH is available
 
 1. Confirm the delivered hostname/IP, OS and architecture from OVH and the live host; establish a dedicated authorized SSH key. Never request passwords in chat.
@@ -46,6 +56,7 @@ Both CLI auth-status commands succeed inside the gateway under the exact `build_
 3. Prepare `/etc/plugboard/runtime.env` with mode 0600 and random independent `ADMIN_KEY`, nonempty `API_KEY` and `ENCRYPTION_KEY`. Back up these secrets outside the VPS securely. `API_KEY` enables client authentication; issue actual `pb_` client keys through the authenticated application.
 4. From this repository root:
    ```sh
+   sudo bash deploy/ovh/install-codex-sandbox.sh
    docker compose -f deploy/ovh/compose.yml config --quiet
    docker compose -f deploy/ovh/compose.yml up -d --build
    docker compose -f deploy/ovh/compose.yml exec gateway sh -ec 'id; claude --version; codex --version; gemini --version; gh --version'

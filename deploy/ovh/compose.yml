@@ -10,7 +10,7 @@ services:
         GEMINI_CLI_VERSION: "0.65.0"
         CLAUDE_CODE_VERSION: "2.1.306"
         CODEX_VERSION: "0.163.0"
-    image: plugboard:private-full-735232a
+    image: plugboard:private-full-sandbox-v1
     restart: unless-stopped
     env_file:
       - ${PLUGBOARD_ENV_FILE:-/etc/plugboard/runtime.env}
@@ -50,6 +50,10 @@ services:
       - logs:/app/logs
     security_opt:
       - no-new-privileges:true
+      # Bubblewrap needs user/mount namespaces, not a privileged container.
+      # Install the named AppArmor policy with install-codex-sandbox.sh first.
+      - apparmor=plugboard-codex
+      - seccomp=${PLUGBOARD_CODEX_SECCOMP_PROFILE:-/opt/plugboard/deploy/ovh/codex-seccomp.json}
     cap_drop:
       - ALL
     pids_limit: 256

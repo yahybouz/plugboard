@@ -271,11 +271,7 @@ async def test_real_codex_child_is_confined_to_its_cwd(fake_cli):
     argv = child["argv"]
     assert "--sandbox" not in argv
     assert 'default_permissions="plugboard_chat"' in argv
-    profile = next(a for a in argv if a.startswith("permissions."))
-    assert profile == (
-        "permissions.plugboard_chat.filesystem="
-        f'{{":root"="deny",{json.dumps(child["cwd"])}="read"}}'
-    )
+    assert _profile_table(argv) == _expected_profile(child["cwd"])
 
 
 # ── Codex: permission profile, user config and MCP neutralised ──────────────
@@ -286,6 +282,13 @@ def _profile_table(args: list) -> dict:
     return tomllib.loads(f"filesystem = {value}")["filesystem"]
 
 
+def _expected_profile(cwd: str, access: str = "read") -> dict:
+    table = {":root": "deny", cwd: access}
+    if cli_subprocess.sys.platform.startswith("linux"):
+        table.update({":minimal": "read", "/etc": "deny"})
+    return table
+
+
 def test_codex_backend_drops_user_config_rules_and_sessions():
     args = cli_subprocess.get_backend("codex").args
     for flag in ("--ignore-user-config", "--ignore-rules", "--ephemeral"):
@@ -293,11 +296,31 @@ def test_codex_backend_drops_user_config_rules_and_sessions():
     assert "--sandbox" not in args
 
 
+@pytest.mark.parametrize("platform_name", ["linux", "darwin"])
+def test_codex_runtime_bootstrap_keeps_user_files_denied(
+    monkeypatch, tmp_path, platform_name
+):
+    """Linux bwrap must see its executable without opening host data."""
+    monkeypatch.delenv("PLUGBOARD_CODEX_SANDBOX", raising=False)
+    monkeypatch.setattr(cli_subprocess.sys, "platform", platform_name)
+    table = _profile_table(codex_isolation_args(str(tmp_path)))
+    assert table[":root"] == "deny"
+    assert table[str(tmp_path.resolve())] == "read"
+    if platform_name == "linux":
+        assert table[":minimal"] == "read"
+        assert table["/etc"] == "deny"
+    else:
+        assert ":minimal" not in table
+    assert "/" not in table
+    assert "/home" not in table
+    assert "/app" not in table
+
+
 def test_codex_profile_denies_root_and_grants_spawn_cwd_only(monkeypatch, tmp_path):
     monkeypatch.delenv("PLUGBOARD_CODEX_SANDBOX", raising=False)
     args = codex_isolation_args(str(tmp_path))
     assert 'default_permissions="plugboard_chat"' in args
-    assert _profile_table(args) == {":root": "deny", str(tmp_path.resolve()): "read"}
+    assert _profile_table(args) == _expected_profile(str(tmp_path.resolve()))
     for feature in ("apps", "plugins", "hooks", "computer_use", "browser_use"):
         assert f"features.{feature}=false" in args
     assert "--sandbox" not in args
@@ -306,17 +329,14 @@ def test_codex_profile_denies_root_and_grants_spawn_cwd_only(monkeypatch, tmp_pa
 def test_codex_profile_quotes_unusual_paths(monkeypatch):
     monkeypatch.delenv("PLUGBOARD_CODEX_SANDBOX", raising=False)
     odd = '/srv/we"ird \\ dir/é'
-    assert _profile_table(codex_isolation_args(odd)) == {
-        ":root": "deny",
-        odd: "read",
-    }
+    assert _profile_table(codex_isolation_args(odd)) == _expected_profile(odd)
 
 
 def test_codex_unknown_sandbox_mode_falls_back_to_read_only(monkeypatch, caplog):
     monkeypatch.setenv("PLUGBOARD_CODEX_SANDBOX", "full-yolo")
     with caplog.at_level("WARNING", logger="plugboard.cli_subprocess"):
         table = _profile_table(codex_isolation_args("/srv/spawn"))
-    assert table == {":root": "deny", "/srv/spawn": "read"}
+    assert table == _expected_profile("/srv/spawn")
     assert "not a supported mode" in caplog.text
 
 
@@ -325,6 +345,10 @@ def test_codex_danger_full_access_stays_an_explicit_opt_in(monkeypatch):
     assert codex_isolation_args("/srv/spawn") == ["--sandbox", "danger-full-access"]
 
 
+@pytest.mark.skipif(
+    cli_subprocess.sys.platform != "linux",
+    reason="Linux bubblewrap integration must run in the target Linux container",
+)
 @pytest.mark.skipif(shutil.which("codex") is None, reason="codex CLI not installed")
 def test_codex_sandbox_cannot_read_a_file_outside_spawn_cwd(tmp_path, monkeypatch):
     """Run the real codex sandbox (no model call) with our profile.
@@ -338,7 +362,20 @@ def test_codex_sandbox_cannot_read_a_file_outside_spawn_cwd(tmp_path, monkeypatc
     secret = tmp_path / "project" / ".env"
     secret.parent.mkdir()
     secret.write_text("ADMIN_KEY=canary-sandbox-9e1f\n")
+    allowed = spawn / "allowed.txt"
+    allowed.write_text("sandbox-positive-read-canary\n")
     overrides = codex_isolation_args(str(spawn))
+    # A broken/blocked sandbox also denies reads. Require a working positive
+    # probe first so namespace/runtime failures cannot masquerade as safety.
+    positive = subprocess.run(
+        ["codex", "sandbox", *overrides, "--", "/bin/cat", str(allowed.resolve())],
+        cwd=spawn,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert positive.returncode == 0, positive.stderr
+    assert positive.stdout.strip() == "sandbox-positive-read-canary"
     proc = subprocess.run(
         ["codex", "sandbox", *overrides, "--", "/bin/cat", str(secret.resolve())],
         cwd=spawn,

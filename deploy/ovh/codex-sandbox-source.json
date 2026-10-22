@@ -1,0 +1,16 @@
+{
+  "source": "https://github.com/moby/profiles",
+  "upstream_commit": "4b8214fc4971e06172938a1f1554ccff6647ee80",
+  "base_seccomp_sha256": "6416b47770785a41ac59073cdc77d9fe98517df2799dc83ef207e622de3053f6",
+  "license": "Apache-2.0",
+  "extra_syscalls": [
+    "chroot",
+    "clone",
+    "mount",
+    "pivot_root",
+    "setns",
+    "umount2",
+    "unshare"
+  ],
+  "scope": "Private Plugboard container only; default seccomp deny, all capabilities dropped, no-new-privileges retained. No host userns sysctl change."
+}
