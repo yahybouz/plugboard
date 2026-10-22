@@ -454,13 +454,6 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_CORS_ORIGINS,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 
 # ── SEC-001 violation handler ───────────────────────────────────────────────
 #
@@ -711,6 +704,13 @@ app.add_middleware(_SecurityHeadersMiddleware)
 app.add_middleware(_BodySizeLimitMiddleware)
 app.add_middleware(_RequestIdMiddleware)
 app.add_middleware(_RateLimitMiddleware)
+# Added last = outermost: 429/413 answers and preflights also get CORS headers.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_CORS_ORIGINS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # -- Auth ---------------------------------------------------------------------
@@ -4550,7 +4550,9 @@ async def login_page(request: Request):
                 ip=peer,
             )
             resp = RedirectResponse(url="/dashboard", status_code=302)
-            resp.set_cookie(
+            # Auto-login only serves plain-http localhost (refused otherwise),
+            # so the cookie cannot carry the Secure flag.
+            resp.set_cookie(  # NOSONAR
                 _ADMIN_COOKIE_NAME,
                 session_token,
                 max_age=_ADMIN_SESSION_MAX_AGE,
@@ -4565,7 +4567,8 @@ async def login_page(request: Request):
     return Response(content=html, media_type="text/html")
 
 
-@app.post("/auth/admin/login", include_in_schema=False, status_code=204)
+# Every path returns its own Response (204 on success, 401/429 otherwise).
+@app.post("/auth/admin/login", include_in_schema=False)
 async def admin_login(body: AdminLogin, request: Request):
     from plugboard.ratelimit import (
         check_auth_rate_limit,

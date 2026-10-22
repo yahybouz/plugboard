@@ -33,13 +33,12 @@ import pytest_asyncio
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _RUN_PY = _PROJECT_ROOT / "run.py"
 
-# The 10 dashboard tabs (data-tab / #page-<tab>) in nav order.
+# The 9 dashboard tabs (data-tab / #page-<tab>) in nav order.
 DASHBOARD_TABS: List[str] = [
     "overview",
     "keys",
     "usage",
     "providers",
-    "connections",
     "pricing",
     "playground",
     "ollama",
@@ -102,6 +101,9 @@ def _server_env(data_dir: Path, enc_key: str, port: int) -> dict:
             "MODEL_AVAILABILITY_SCHEDULER_DISABLED": "1",
             "PLUGBOARD_PROBE_ON_BOOT": "false",
             "PLUGBOARD_INTERNET_CHECK_ON_BOOT": "0",
+            # Every browser context comes from 127.0.0.1: the default 60 req/min
+            # per-IP limit turns later tests into 429s and blank dashboards.
+            "RATE_LIMIT": "100000",
         }
     )
     return env

@@ -3,4 +3,4 @@
 # regenerate with `make lock`.
 mcp>=1.27,<2
 # Same exact pin as the API (see requirements.in).
-aiohttp==3.14.3
+aiohttp==3.14.5

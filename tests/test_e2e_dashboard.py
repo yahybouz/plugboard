@@ -26,6 +26,7 @@ in the session.
 
 from __future__ import annotations
 
+import pathlib
 from collections import defaultdict
 
 import pytest
@@ -59,6 +60,32 @@ async def test_dashboard_static_assets_served(admin_client):
         "content-type", ""
     ) or "javascript" in js.headers.get("content-type", "")
     assert css.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_portal_loads_vendored_chart_js_without_a_cdn(admin_client):
+    """The client portal must not pull a third-party script at runtime."""
+    portal = (
+        pathlib.Path(__file__).resolve().parent.parent / "static" / "portal.html"
+    ).read_text()
+    assert "https://" not in "".join(
+        line for line in portal.splitlines() if "<script" in line
+    )
+    chart = await admin_client.get("/dashboard/vendor/chartjs/chart.umd.js")
+    assert chart.status_code == 200
+    assert "Chart.js v4.4.1" in chart.text[:400]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_has_no_connections_tab(admin_client):
+    """OAuth accounts are managed from the provider form, not a separate tab."""
+    await admin_client.post("/auth/admin/login", json={"key": "adminkey"})
+    shell = (await admin_client.get("/dashboard")).text
+    assert 'data-tab="connections"' not in shell
+    assert 'id="page-connections"' not in shell
+    assert (
+        'id="dp-disconnect-btn"' in (await admin_client.get("/dashboard/app.js")).text
+    )
 
 
 # ── Wiring : each frontend fetch has a backend that answers ──────────────────

@@ -90,3 +90,4 @@ CLAUDE.local.md
 graphify-out/
 private/
 .venv
+.scannerwork/

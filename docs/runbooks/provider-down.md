@@ -126,7 +126,7 @@ for the same models.
   Log in again with that CLI as the same OS user that runs Plugboard.
 - OAuth-connected source (`auth_source` starting with `broker:`): list the
   connections, remove the broken one, then reconnect it from the dashboard
-  (Providers page).
+  (Providers → Add Direct Provider → same preset: **Disconnect**, then **Reconnect**).
 
   ```bash
   curl -s -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/admin/oauth/connections

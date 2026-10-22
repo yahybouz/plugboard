@@ -1,6 +1,6 @@
 # Dashboard E2E suite (Playwright / Chromium)
 
-Browser-level end-to-end tests of the **admin dashboard** — the 10 tabs, their
+Browser-level end-to-end tests of the **admin dashboard** — the 9 tabs, their
 CRUD flows, rendering, and accessibility.
 
 > **Not** to be confused with [`tests/live_model_tests/`](../live_model_tests/),
@@ -71,8 +71,7 @@ First run downloads `axe-core` once into `vendor/` (then hermetic/offline).
 | overview | ✅ | seeded provider count (`test_data_tabs`) | ✅ |
 | keys | ✅ | **CRUD**: create → `lle_` key → revoke (`test_keys`) | ✅ |
 | usage | ✅ | summary container (`test_data_tabs`) | ✅ |
-| providers | ✅ | seeded row + **edit toggle active↔inactive** + add-form (`test_providers`) | ✅ |
-| connections | ✅ | table container (`test_data_tabs`) | ✅ |
+| providers | ✅ | seeded row + **edit toggle active↔inactive** + add-form + OAuth **Disconnect** in the form (`test_providers`) | ✅ |
 | pricing | ✅ | seeded grid renders models (`test_pricing_playground`) | ✅ |
 | playground | ✅ | dropdown populated + Send ready, hermetic (`test_pricing_playground`) | ✅ |
 | ollama | ✅ | models container (`test_data_tabs`) | ✅ |

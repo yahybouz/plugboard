@@ -293,6 +293,4 @@ def rotate_key(key_id: str) -> Optional[Dict[str, Any]]:
 
 def mask_key(key_prefix: str) -> str:
     """Return a masked representation using the stored key_prefix."""
-    if len(key_prefix) <= 4:
-        return key_prefix + "***"
     return key_prefix + "***"
