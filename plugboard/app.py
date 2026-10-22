@@ -1175,6 +1175,23 @@ def _send_spending_alert(
 # -- /v1/chat/completions ----------------------------------------------------
 
 
+def _for_caller(completion: Dict[str, Any], client_id: Optional[str]) -> Dict[str, Any]:
+    """The completion as the caller may see it.
+
+    ``billing.price_key`` names the grid entry that priced the call, which
+    reveals provider routing: admins see it (like ``X-Price-Key`` and the
+    entries of ``/usage/me``), client keys do not. Applied to every answer,
+    including those served from the cache.
+    """
+    bill = completion.get("billing")
+    if client_id == "admin" or not isinstance(bill, dict) or "price_key" not in bill:
+        return completion
+    return {
+        **completion,
+        "billing": {k: v for k, v in bill.items() if k != "price_key"},
+    }
+
+
 @app.post("/v1/chat/completions", dependencies=[Depends(_inflight_chat_dep)])
 async def chat_completions(
     request: Request,
@@ -1288,7 +1305,7 @@ async def chat_completions(
                             sim,
                             client_id or "-",
                         )
-                        resp = JSONResponse(content=sem_cached)
+                        resp = JSONResponse(content=_for_caller(sem_cached, client_id))
                         resp.headers["X-Cache"] = f"SEMANTIC-HIT-{layer}"
                         if sim is not None:
                             resp.headers["X-Cache-Similarity"] = str(sim)
@@ -1304,7 +1321,7 @@ async def chat_completions(
                 client_id or "-",
             )
             if not _is_streaming:
-                resp = JSONResponse(content=cached)
+                resp = JSONResponse(content=_for_caller(cached, client_id))
                 resp.headers["X-Cache"] = "HIT"
                 await _pad_cache_hit_response(_request_t0)  # ARCH-DEBT-026
                 return resp
@@ -1800,7 +1817,7 @@ async def chat_completions(
         except Exception as exc:
             log.warning("Cache write error (non-fatal): %s", exc)
 
-    resp = JSONResponse(content=result)
+    resp = JSONResponse(content=_for_caller(result, client_id))
     resp.headers["X-Cache"] = "MISS"
     if billing_info:
         resp.headers["X-Cost-USD"] = str(billing_info["cost_usd"])
