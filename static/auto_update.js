@@ -300,7 +300,7 @@
       h("span", null, st.last_run ? ago(st.last_run) + " · " + (rep.calls || 0) + " call(s), " + ((rep.suggested || []).length) + " suggestion(s)" : "never"),
       rep.skipped ? h("span", { className: "muted" }, rep.skipped) : null));
     var reasons = rep.reasons || {};
-    var names = Object.keys(reasons).sort();
+    var names = Object.keys(reasons).sort(function (a, b) { return a.localeCompare(b); });
     if (names.length) {
       body.appendChild(table(["Model without a price", "Why, and what to do"], names.map(function (m) {
         return h("tr", null, h("td", null, h("code", null, m)), h("td", null, reasons[m]));
@@ -341,7 +341,7 @@
   function providerPrices(model) {
     var out = [];
     var spaces = state.grid.models_by_provider || {};
-    Object.keys(spaces).sort().forEach(function (space) {
+    Object.keys(spaces).sort(function (a, b) { return a.localeCompare(b); }).forEach(function (space) {
       if (spaces[space] && spaces[space][model]) out.push({ space: space, entry: spaces[space][model] });
     });
     return out;
@@ -357,7 +357,7 @@
     if (missingOnly.checked) {
       list = state.missing.map(function (id) { return { model: id, missing: true }; });
     } else {
-      list = Object.keys(names).sort().map(function (m) { return { model: m, entry: models[m] || null }; });
+      list = Object.keys(names).sort(function (a, b) { return a.localeCompare(b); }).map(function (m) { return { model: m, entry: models[m] || null }; });
     }
     var q = searchInput.value.trim().toLowerCase();
     if (q) list = list.filter(function (r) { return r.model.toLowerCase().indexOf(q) >= 0; });

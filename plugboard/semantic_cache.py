@@ -56,6 +56,10 @@ from plugboard.storage import data_dir
 
 log = logging.getLogger(__name__)
 
+# Below this, a vector's norm is too small to divide by: the cosine score it
+# would produce carries no signal, so the entry is skipped.
+_NORM_EPSILON = 1e-12
+
 
 # ARCH-DEBT-039 closed: rename EMBED_* -> PLUGBOARD_EMBED_* for naming
 # convention consistency. Backwards compat: read new var first, then legacy
@@ -698,7 +702,7 @@ def _cosine_lookup(
 
         q = [float(x) for x in query_vec]
         q_norm = sum(x * x for x in q) ** 0.5
-        if q_norm == 0.0:
+        if q_norm <= _NORM_EPSILON:
             return None
 
         best_score = 0.0
@@ -714,7 +718,7 @@ def _cosine_lookup(
                 # Different embed model dim — skip cross-model comparison.
                 continue
             v_norm = sum(x * x for x in v) ** 0.5
-            if v_norm == 0.0:
+            if v_norm <= _NORM_EPSILON:
                 continue
             dot = sum(a * b for a, b in zip(q, v))
             score = dot / (q_norm * v_norm)

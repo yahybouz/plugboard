@@ -188,7 +188,7 @@ async function loadPortal() {
       d.tokens += e.total_tokens || 0;
       d.cost += e.cost_usd || 0;
     });
-    var days = Object.keys(byDay).sort();
+    var days = Object.keys(byDay).sort(function (a, b) { return a.localeCompare(b); });
 
     // Chart.js bar chart
     renderDailyChart(days, byDay);

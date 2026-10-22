@@ -1306,13 +1306,11 @@ class ModelAvailabilityScheduler:
 
         Runs every ``_OLLAMA_RECHECK_INTERVAL_S`` seconds in the background.
         Transitions offline→online and online→offline are logged at INFO level.
-        Exits cleanly on CancelledError (triggered by scheduler stop).
+        CancelledError (triggered by scheduler stop) propagates, so the task
+        ends cancelled; `_run` cancels and awaits it in its `finally`.
         """
         while True:
-            try:
-                await self._sleep(_OLLAMA_RECHECK_INTERVAL_S)
-            except asyncio.CancelledError:
-                return
+            await self._sleep(_OLLAMA_RECHECK_INTERVAL_S)
 
             status_before = load_model_status()
             models_before: Dict[str, Any] = status_before.get("models", {})
@@ -1332,7 +1330,7 @@ class ModelAvailabilityScheduler:
                     timeout=60.0,
                 )
             except asyncio.CancelledError:
-                return
+                raise
             except Exception as exc:  # noqa: BLE001
                 log.warning("ollama_watcher: probe failed (%s)", exc)
                 continue

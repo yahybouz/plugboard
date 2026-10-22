@@ -313,6 +313,17 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
     import asyncio as _asyncio
     from plugboard.cli_subprocess import warm_up_all_installed
 
+    # Fire-and-forget boot tasks. The event loop only keeps a weak reference
+    # to a task, so one that nothing holds can be garbage-collected while it
+    # still runs; these references keep them alive until they finish, and
+    # whatever is still pending is cancelled at shutdown.
+    _boot_tasks: set[_asyncio.Task] = set()
+
+    def _spawn_boot_task(coro, name: str) -> None:
+        task = _asyncio.create_task(coro, name=name)
+        _boot_tasks.add(task)
+        task.add_done_callback(_boot_tasks.discard)
+
     async def _warm():
         try:
             results = await warm_up_all_installed(timeout_s=10.0)
@@ -331,21 +342,19 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
         except Exception as exc:
             log.debug("subprocess warm-up background task error: %s", exc)
 
-    _asyncio.create_task(_warm())
+    _spawn_boot_task(_warm(), "subprocess-warm-up")
 
     # Repeat the auth-disabled warning every 5 minutes in non-dev contexts so
     # long-running deployments can't forget they are wide open (TM-007).
     async def _auth_nag():
-        try:
-            while True:
-                await _asyncio.sleep(300)
-                if not _API_KEY and not _DEV_MODE:
-                    log.critical(
-                        "API_KEY still empty — /v1/* remains OPEN. "
-                        "Set API_KEY or PLUGBOARD_DEV=1."
-                    )
-        except _asyncio.CancelledError:
-            pass
+        # Cancelled at shutdown; CancelledError propagates on its own.
+        while True:
+            await _asyncio.sleep(300)
+            if not _API_KEY and not _DEV_MODE:
+                log.critical(
+                    "API_KEY still empty — /v1/* remains OPEN. "
+                    "Set API_KEY or PLUGBOARD_DEV=1."
+                )
 
     _nag_task = None
     if not _API_KEY and not _DEV_MODE:
@@ -416,7 +425,7 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
             log.warning("internet_check_on_boot: failed: %s", exc)
 
     if _internet_boot_enabled:
-        _asyncio.create_task(_internet_boot_probe())
+        _spawn_boot_task(_internet_boot_probe(), "internet-boot-probe")
     else:
         log.info(
             "internet_check_on_boot: disabled via PLUGBOARD_INTERNET_CHECK_ON_BOOT=0"
@@ -435,6 +444,8 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
         log.warning("Shutdown: some change webhooks were not delivered")
     if _nag_task:
         _nag_task.cancel()
+    for task in _boot_tasks:
+        task.cancel()
     stop_watchdog()
     log.info("Provider watchdog stopped")
     # Close the shared HTTP pool so pooled sockets don't leak at shutdown.

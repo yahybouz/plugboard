@@ -1696,7 +1696,7 @@ async function loadPlayground() {
       if (!groups[owner]) groups[owner] = [];
       groups[owner].push(m);
     });
-    Object.keys(groups).sort().forEach(function (owner) {
+    Object.keys(groups).sort(function (a, b) { return a.localeCompare(b); }).forEach(function (owner) {
       var optgroup = document.createElement("optgroup");
       optgroup.label = owner;
       groups[owner].forEach(function (m) {
