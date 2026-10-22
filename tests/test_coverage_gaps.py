@@ -297,7 +297,7 @@ async def test_full_health_check_inactive_provider(tmp_path, monkeypatch):
     from plugboard.monitoring import full_health_check
 
     monkeypatch.setenv("PLUGBOARD_DATA", str(tmp_path / "data"))
-    report = await full_health_check("admin")
+    report = await full_health_check()
     assert report["summary"]["unhealthy"] == 1
     p = report["providers"][0]
     assert p["active"] is False

@@ -635,11 +635,8 @@ def _bill_internal(
     prompt = int(used.get("prompt_tokens") or 0)
     completion = int(used.get("completion_tokens") or 0)
     match = billing.resolve_price(model, provider=provider)
-    cost = (
-        billing.calculate_cost(prompt, completion, match.entry if match else None)
-        if prompt
-        else estimate
-    )
+    entry = match.entry if match else None
+    cost = billing.calculate_cost(prompt, completion, entry) if prompt else estimate
     try:
         usage.append_usage(
             client_id=INTERNAL_CLIENT,

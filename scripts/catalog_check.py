@@ -25,7 +25,7 @@ REQUIRED = ("openrouter", "groq", "moonshotai", "opencode")
 
 async def main() -> int:
     url = models_dev.catalog_url() or models_dev.DEFAULT_CATALOG_URL
-    code, body, _ = await models_dev._download(url, "")
+    _, body, _ = await models_dev._download(url, "")
     providers, invalid = models_dev.parse_catalog(json.loads(body))
     presets = models_dev.generated_presets(providers)
     print(f"{url}: {len(providers)} providers, {invalid} invalid entries, {len(presets)} presets\n")

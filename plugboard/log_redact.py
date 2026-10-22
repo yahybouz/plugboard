@@ -73,7 +73,7 @@ _PATTERNS = [
     # captured as part of the non-token delimiter class.
     (
         "bearer_header",
-        re.compile(r"(?i)(authorization[\"'\s:]+bearer\s+)[A-Za-z0-9._\-~+/=]{16,}"),
+        re.compile(r"(?i)(authorization[\"'\s:]+bearer\s+)[a-z0-9._\-~+/=]{16,}"),
         r"\1***REDACTED***",
     ),
     # JSON "api_key" / "apiKey" / "access_token" fields.

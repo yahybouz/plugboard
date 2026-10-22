@@ -347,10 +347,7 @@ class PricingScheduler:
         # mid-loop month rollover doesn't desync.
         while not self._stopping.is_set():
             sleep_for = self._seconds_until_next_run()
-            try:
-                await self._sleep(sleep_for)
-            except asyncio.CancelledError:
-                raise
+            await self._sleep(sleep_for)
             if self._stopping.is_set():
                 return
             if self._cb_should_skip():

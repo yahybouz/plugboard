@@ -117,7 +117,7 @@ async def check_model_availability(
         }
 
 
-async def full_health_check(admin_key: str) -> Dict[str, Any]:
+async def full_health_check() -> Dict[str, Any]:
     """
     Complete monitoring snapshot:
     1. Check each provider's /health

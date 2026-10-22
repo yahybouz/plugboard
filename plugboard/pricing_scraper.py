@@ -247,7 +247,7 @@ _KNOWN_PRICES: Dict[str, Dict[str, float]] = {
 }
 
 
-def _PRICING_DIR_path(month: str):
+def _pricing_dir_path(month: str):
     from plugboard import billing
 
     return billing._PRICING_DIR / f"{month}.json"
@@ -808,7 +808,7 @@ async def update_current_pricing(
         except PricingFileError as exc:
             # Keep the damaged file for inspection and rebuild the month from
             # the previous one and the sources, rather than fail every pass.
-            damaged = _PRICING_DIR_path(month)
+            damaged = _pricing_dir_path(month)
             aside = damaged.with_suffix(
                 f".corrupt-{datetime.now(timezone.utc):%Y%m%dT%H%M%S}.json"
             )
