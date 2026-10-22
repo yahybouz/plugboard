@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.1.1] — 2026-10-22
+
+### Fixed
+
+- Dashboard lists (provider groups, price review reasons, provider prices, the pricing grid, the portal's daily chart) are sorted with the locale, so accented names no longer land after `z`.
+- The CLI warm-up and the boot-time internet probe can no longer be garbage-collected while they run, and no longer outlive a shutdown.
+- The model-availability scheduler and the Ollama late-start watcher end cancelled when stopped, instead of swallowing the cancellation.
+- Semantic cache: vectors with a near-zero norm are skipped instead of producing a meaningless similarity score.
+
+### Changed
+
+- Dashboard accessibility: every form label is tied to its control, and the live status regions are `<output>` elements.
+- Dashboard background calls that fail now record the cause in the browser console (`debug` for an expected fallback, `warn` when the page shows an error) instead of discarding it. Nothing else changes for the user.
+
+### Development
+
+- SonarQube analysis: `make sonar-up`, `make sonar-scan`, `make sonar-issues`, `make sonar-down` against a local server (Docker, `127.0.0.1:9000`), and a GitLab CI `sonarqube` job, created only when `SONAR_HOST_URL` and `SONAR_TOKEN` are set. See [CONTRIBUTING.md](CONTRIBUTING.md).
+- The dashboard end-to-end suite (`make test-e2e`) boots again: its isolated server gets a throwaway admin key.
+- Dashboard JavaScript uses `let`/`const`, optional chaining and no nested ternaries; mechanical SonarQube code smells are cleared in Python.
+
 ## [4.1.0] — 2026-10-22
 
 ### Upgrading
