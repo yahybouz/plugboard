@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.2.0] — 2026-10-23
+
 ### Added
 
 - **Client API contract**: [`docs/api/openapi.json`](docs/api/openapi.json) (OpenAPI 3.1) describes every route a client key calls, with request and response schemas, status codes and headers, and [`docs/api/mcp.json`](docs/api/mcp.json) the MCP tools with their input schemas. Both are generated from the code (`make contract`) and checked in CI, against the routes and against real answers. A running instance serves the OpenAPI document without a key at `GET /v1/openapi.json`. Integration guide: [`docs/api/README.md`](docs/api/README.md).
