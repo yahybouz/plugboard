@@ -4251,11 +4251,19 @@ async def admin_usage_client(
 # It describes public routes only, so it needs no key, unlike /openapi.json.
 
 
+_client_api_contract_body: Optional[bytes] = None
+
+
 @app.get("/v1/openapi.json")
 async def client_api_contract():
-    from plugboard.api_contract import build_openapi
+    # Built once per process (about 10 ms): the contract only changes with
+    # the code, and this route needs no key.
+    global _client_api_contract_body
+    if _client_api_contract_body is None:
+        from plugboard.api_contract import build_openapi
 
-    return build_openapi()
+        _client_api_contract_body = json.dumps(build_openapi()).encode("utf-8")
+    return Response(content=_client_api_contract_body, media_type="application/json")
 
 
 # -- API docs (admin-protected) -----------------------------------------------
