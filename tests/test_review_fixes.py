@@ -545,3 +545,44 @@ async def test_catalog_test_connects_only_to_the_checked_address(monkeypatch):
         )
     assert seen["host"] == "api.cat.example" and seen["results"] == pinned
     assert seen["connector"]["use_dns_cache"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller, sees_price_key", [("acme", False), ("admin", True)])
+async def test_completion_billing_shows_the_price_key_to_admins_only(
+    client, caller, sees_price_key
+):
+    """`billing.price_key` reveals provider routing, like X-Price-Key and the
+    entries of /usage/me: admins see it, client keys do not."""
+    from aioresponses import aioresponses
+
+    from plugboard import app as app_mod
+    from tests.factories import FAKE_COMPLETION
+
+    async def as_caller():
+        return caller
+
+    app_mod.app.dependency_overrides[app_mod._resolve_client] = as_caller
+    try:
+        with aioresponses() as mock:
+            mock.post(
+                "http://fake-llm.test/v1/chat/completions", payload=FAKE_COMPLETION
+            )
+            resp = await client.post(
+                "/v1/chat/completions",
+                headers={"Authorization": "Bearer testkey"},
+                json={
+                    "model": "test-provider:fake:model-v1",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "cache": False,
+                },
+            )
+    finally:
+        app_mod.app.dependency_overrides.clear()
+    assert resp.status_code == 200
+    billing_body = resp.json()["billing"]
+    assert billing_body["cost_usd"] >= 0
+    assert ("price_key" in billing_body) is sees_price_key
+    assert ("x-price-key" in resp.headers) is (
+        sees_price_key and bool(billing_body.get("price_key"))
+    )

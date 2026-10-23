@@ -1175,6 +1175,23 @@ def _send_spending_alert(
 # -- /v1/chat/completions ----------------------------------------------------
 
 
+def _for_caller(completion: Dict[str, Any], client_id: Optional[str]) -> Dict[str, Any]:
+    """The completion as the caller may see it.
+
+    ``billing.price_key`` names the grid entry that priced the call, which
+    reveals provider routing: admins see it (like ``X-Price-Key`` and the
+    entries of ``/usage/me``), client keys do not. Applied to every answer,
+    including those served from the cache.
+    """
+    bill = completion.get("billing")
+    if client_id == "admin" or not isinstance(bill, dict) or "price_key" not in bill:
+        return completion
+    return {
+        **completion,
+        "billing": {k: v for k, v in bill.items() if k != "price_key"},
+    }
+
+
 @app.post("/v1/chat/completions", dependencies=[Depends(_inflight_chat_dep)])
 async def chat_completions(
     request: Request,
@@ -1288,7 +1305,7 @@ async def chat_completions(
                             sim,
                             client_id or "-",
                         )
-                        resp = JSONResponse(content=sem_cached)
+                        resp = JSONResponse(content=_for_caller(sem_cached, client_id))
                         resp.headers["X-Cache"] = f"SEMANTIC-HIT-{layer}"
                         if sim is not None:
                             resp.headers["X-Cache-Similarity"] = str(sim)
@@ -1304,7 +1321,7 @@ async def chat_completions(
                 client_id or "-",
             )
             if not _is_streaming:
-                resp = JSONResponse(content=cached)
+                resp = JSONResponse(content=_for_caller(cached, client_id))
                 resp.headers["X-Cache"] = "HIT"
                 await _pad_cache_hit_response(_request_t0)  # ARCH-DEBT-026
                 return resp
@@ -1589,14 +1606,23 @@ async def chat_completions(
 
             accumulated = bytearray()
             # 1) First chunk is already consumed by the caller's probe —
-            # accumulate and yield immediately.
+            # accumulate and yield immediately. A short answer can arrive
+            # whole in this one read: then `[DONE]` is held back with the
+            # tail, or the usage chunk would land after it and OpenAI
+            # clients, which stop reading at `[DONE]`, would never see it.
             accumulated.extend(first_chunk)
-            yield first_chunk
+            done_in_first = first_chunk.rfind(b"data: [DONE]")
+            if done_in_first == -1:
+                yield first_chunk
+            elif done_in_first:
+                yield first_chunk[:done_in_first]
             # 2) Keep the very last bytes buffered so we can detect `[DONE]`.
             # Most upstreams end with `data: [DONE]\n\n` — 16 bytes is enough
             # to disambiguate. We buffer the trailing window only.
             TAIL = 64
-            tail_buf = bytearray()
+            tail_buf = bytearray(
+                first_chunk[done_in_first:] if done_in_first != -1 else b""
+            )
             async for chunk in rest:
                 accumulated.extend(chunk)
                 tail_buf.extend(chunk)
@@ -1791,7 +1817,7 @@ async def chat_completions(
         except Exception as exc:
             log.warning("Cache write error (non-fatal): %s", exc)
 
-    resp = JSONResponse(content=result)
+    resp = JSONResponse(content=_for_caller(result, client_id))
     resp.headers["X-Cache"] = "MISS"
     if billing_info:
         resp.headers["X-Cost-USD"] = str(billing_info["cost_usd"])
@@ -4218,6 +4244,26 @@ async def admin_usage_client(
         "entries": entries,
         "summary": _usage.summarize_usage(entries),
     }
+
+
+# -- Client API contract (public) --------------------------------------------
+# The documented, versioned subset an integrator may rely on (docs/api/).
+# It describes public routes only, so it needs no key, unlike /openapi.json.
+
+
+_client_api_contract_body: Optional[bytes] = None
+
+
+@app.get("/v1/openapi.json")
+async def client_api_contract():
+    # Built once per process (about 10 ms): the contract only changes with
+    # the code, and this route needs no key.
+    global _client_api_contract_body
+    if _client_api_contract_body is None:
+        from plugboard.api_contract import build_openapi
+
+        _client_api_contract_body = json.dumps(build_openapi()).encode("utf-8")
+    return Response(content=_client_api_contract_body, media_type="application/json")
 
 
 # -- API docs (admin-protected) -----------------------------------------------

@@ -1,0 +1,266 @@
+{
+  "server": "plugboard",
+  "contract_version": "1.0.0",
+  "transport": [
+    "stdio",
+    "sse",
+    "streamable-http"
+  ],
+  "tools": [
+    {
+      "name": "chat",
+      "description": "Send a chat completion request to an LLM via Plugboard.\n\n    Use list_models to see available models.\n    Use list_models to discover available model IDs for configured providers.\n\n    Args:\n        model: Model ID as returned by list_models (e.g. my-provider:claude-sonnet-4-6)\n        message: The user message to send\n        max_tokens: Maximum tokens in the response (default: 4096)\n        temperature: Sampling temperature 0.0-1.0 (default: 0.7)\n        system_prompt: Optional system prompt to set context\n        session_id: Optional server-side session ID (PERF-1). When set,\n            Plugboard prepends the stored history so you only need to send the\n            new turn. TTL 24h, 50-turn cap, isolated per API key. Use a UUID\n            per conversation.",
+      "inputSchema": {
+        "properties": {
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "max_tokens": {
+            "default": 4096,
+            "title": "Max Tokens",
+            "type": "integer"
+          },
+          "temperature": {
+            "default": 0.7,
+            "title": "Temperature",
+            "type": "number"
+          },
+          "system_prompt": {
+            "default": "",
+            "title": "System Prompt",
+            "type": "string"
+          },
+          "session_id": {
+            "default": "",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "message"
+        ],
+        "title": "chatArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "chat_stream",
+      "description": "Send a streaming chat completion. Same as chat but with stream=true.\n\n    Args:\n        model: Model ID\n        message: The user message\n        max_tokens: Maximum tokens (default: 4096)\n        temperature: Sampling temperature (default: 0.7)\n        system_prompt: Optional system prompt\n        session_id: Optional PERF-1 session ID to preserve history server-side.",
+      "inputSchema": {
+        "properties": {
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "max_tokens": {
+            "default": 4096,
+            "title": "Max Tokens",
+            "type": "integer"
+          },
+          "temperature": {
+            "default": 0.7,
+            "title": "Temperature",
+            "type": "number"
+          },
+          "system_prompt": {
+            "default": "",
+            "title": "System Prompt",
+            "type": "string"
+          },
+          "session_id": {
+            "default": "",
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "model",
+          "message"
+        ],
+        "title": "chat_streamArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "check_updates",
+      "description": "Check for pending Plugboard updates that need to be applied to your project.\n\n    Call this at the START of every session to see if there are breaking changes\n    or new features to integrate. CRITIQUE updates must be applied immediately.\n\n    Args:\n        client_id: Your project identifier, as listed in the registry (e.g. my-app)",
+      "inputSchema": {
+        "properties": {
+          "client_id": {
+            "title": "Client Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_id"
+        ],
+        "title": "check_updatesArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "check_usage",
+      "description": "Check current month usage, spending, and billing for the API key.\n\n    Returns token counts, costs, and spending limit status.",
+      "inputSchema": {
+        "properties": {},
+        "title": "check_usageArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_update_prompt",
+      "description": "Get the full technical prompt for a specific update.\n\n    Returns the complete instructions: what changed in Plugboard,\n    which files to modify in your project, exact code changes,\n    and how to verify it works.\n\n    Apply the changes, then call mark_applied(client_id, prompt_id).\n\n    Args:\n        prompt_id: The update ID (e.g. CP-001, CP-002)",
+      "inputSchema": {
+        "properties": {
+          "prompt_id": {
+            "title": "Prompt Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "prompt_id"
+        ],
+        "title": "get_update_promptArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_applied",
+      "description": "List all updates that have been applied for a client.\n\n    Args:\n        client_id: Your project identifier, as listed in the registry (e.g. my-app)",
+      "inputSchema": {
+        "properties": {
+          "client_id": {
+            "title": "Client Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_id"
+        ],
+        "title": "list_appliedArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_models",
+      "description": "List all available LLM models from Plugboard.\n\n    Returns model IDs grouped by vendor (Anthropic, OpenAI, Google, etc.).\n    Use these exact IDs in the chat tool's model parameter.",
+      "inputSchema": {
+        "properties": {},
+        "title": "list_modelsArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "mark_applied",
+      "description": "Mark an update as applied for your project. This prevents it from showing up again.\n\n    Call this AFTER you have successfully applied and tested the changes.\n\n    Args:\n        client_id: Your project identifier, as listed in the registry (e.g. my-app)\n        prompt_id: The update ID that was applied (e.g. CP-001)\n        notes: Optional notes about the application (e.g. 'applied with minor adaptation')",
+      "inputSchema": {
+        "properties": {
+          "client_id": {
+            "title": "Client Id",
+            "type": "string"
+          },
+          "prompt_id": {
+            "title": "Prompt Id",
+            "type": "string"
+          },
+          "notes": {
+            "default": "",
+            "title": "Notes",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_id",
+          "prompt_id"
+        ],
+        "title": "mark_appliedArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "provider_status",
+      "description": "Check the health and status of all LLM providers.\n\n    Shows provider health, watchdog status, and recent events.\n    Requires admin access.",
+      "inputSchema": {
+        "properties": {},
+        "title": "provider_statusArguments",
+        "type": "object"
+      }
+    }
+  ],
+  "resources": [
+    {
+      "uri": "models://list",
+      "name": "resource_models",
+      "description": "All available LLM models with their IDs.",
+      "mimeType": "text/plain"
+    },
+    {
+      "uri": "monitoring://status",
+      "name": "resource_monitoring",
+      "description": "Provider health and monitoring status.",
+      "mimeType": "text/plain"
+    },
+    {
+      "uri": "updates://pending",
+      "name": "resource_pending_updates",
+      "description": "All pending updates across all clients.",
+      "mimeType": "text/plain"
+    },
+    {
+      "uri": "usage://current",
+      "name": "resource_usage",
+      "description": "Current month usage summary.",
+      "mimeType": "text/plain"
+    }
+  ],
+  "prompts": [
+    {
+      "name": "code_review",
+      "description": "Code review prompt — uses a coding-optimized model.\n\n    Args:\n        code: The code to review\n        language: Programming language (default: python)",
+      "arguments": [
+        {
+          "name": "code",
+          "required": true
+        },
+        {
+          "name": "language",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": "deep_analysis",
+      "description": "Deep analysis prompt — uses a powerful model with structured output.\n\n    Args:\n        topic: The topic or question to analyze in depth",
+      "arguments": [
+        {
+          "name": "topic",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": "quick_chat",
+      "description": "Quick one-shot chat — fast model, no system prompt.\n\n    Args:\n        message: What to ask the LLM\n        model: Model to use (default: Claude Haiku for speed)",
+      "arguments": [
+        {
+          "name": "message",
+          "required": true
+        },
+        {
+          "name": "model",
+          "required": false
+        }
+      ]
+    }
+  ]
+}
