@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Jev `score` answers: TypeSafe rounds the score and each probability to two decimals separately, so the score can differ from the expectation of the probabilities by the rounding (e.g. score 1.0, probabilities 0.99/0.01, expectation 1.01). Those answers were rejected as 502 (and still billed); the check now allows the worst-case rounding only (half a hundredth per value), and a sum of rounded probabilities off by the same margin. Inconsistent answers are still refused. Found by the first live test against `api.typesafe.ai` (jev-1.14.0): 1 score answer in 4 was refused.
+
 ### Security
 
 - **Breaking with admin MFA enforced**: the `ADMIN_KEY` alone is refused (401) on admin routes (`/admin/*`, `/providers*`, `/metrics*`, `/docs`, dashboard); add a fresh code in `X-Plugboard-Admin-TOTP` or use a session ([admin API with MFA](docs/guide/monitoring.md#admin-api-with-mfa)). Without enforced MFA nothing changes. TOTP codes are single-use. Admin sessions are now recorded server-side (`data/admin_sessions.json`): logout revokes the session, enrolling, rotating or disabling MFA revokes all of them, and a session opened without a code stops working once MFA is enforced. Existing sessions end at upgrade: sign in again.

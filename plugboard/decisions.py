@@ -171,11 +171,18 @@ def _number(value, low=0.0, high=1.0):
     return value
 
 
+# Half of the 0.01 step to which Jev rounds scores and probabilities
+# (observed on the live API, jev-1.14.0).
+_ROUNDING = 0.005
+
+
 def _probabilities(raw, expected):
     if type(raw) is not dict or set(raw) != set(expected):
         raise DecisionUpstreamError()
     result = {key: _number(raw[key]) for key in expected}
-    if abs(math.fsum(result.values()) - 1.0) > 1e-5:
+    # Jev rounds each probability to two decimals on its own: the sum may be
+    # off by half a hundredth per entry, never more.
+    if abs(math.fsum(result.values()) - 1.0) > _ROUNDING * len(result) + 1e-9:
         raise DecisionUpstreamError()
     return result
 
@@ -229,7 +236,10 @@ def validate_answers(request: DecisionRequest | dict, upstream: dict) -> dict:
         probabilities = _probabilities(raw["probabilities"], legend)
         score = _number(raw["score"], 0, len(legend) - 1)
         expectation = math.fsum(i * probabilities[str(i)] for i in range(len(legend)))
-        if abs(score - expectation) > 1e-5:
+        # The score and the probabilities are rounded separately (two
+        # decimals): bound the gap by the worst-case rounding of both.
+        levels = range(len(legend))
+        if abs(score - expectation) > _ROUNDING * (1 + sum(levels)) + 1e-9:
             raise DecisionUpstreamError()
         answers[identifier] = {
             "type": "score",
