@@ -63,3 +63,18 @@ regexes = [
   '''^ya29\.a0Abc_ZyXwVuTsRqPoNmLkJiHgFeDcBa0123456789$''',
   '''^secret123456789abcdef$''',
 ]
+
+# Synthetic secrets that the final-audit tests write to a temporary .env to
+# prove the network MCP process drops them (tests/test_final_audit_*.py).
+[[allowlists]]
+description = "Final audit synthetic env secrets"
+condition = "AND"
+paths = ['''(?:^|/)tests/test_final_audit_(?:parent|v9)\.py$''']
+regexes = ['''^synthetic-[a-z-]+$''', '''^synthetic-[a-z-]+-[0-9a-f]+$''']
+
+# Prose in the OpenClaw migration guide that the generic rule reads as a key.
+[[allowlists]]
+description = "OpenClaw removal guide prose"
+condition = "AND"
+paths = ['''(?:^|/)docs/guide/openclaw-removal\.md$''']
+regexes = ['''^decryption/reuse$''']

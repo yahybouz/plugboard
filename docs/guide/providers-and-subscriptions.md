@@ -24,7 +24,8 @@ A model is addressed as `<provider-id>:<model>`, for example `anthropic-direct:c
 
 - With an explicit provider prefix, the request goes to that provider only. Plugboard retries it on `429`, `500`, `502`, `503` and `529` with backoff, but does not switch provider.
 - Without a matching prefix, Plugboard tries the active providers in turn, ordered by a score that combines latency, error rate and requests in flight.
-- `/v1/models` shows short display prefixes for the CLI providers: `claude-code:` for the Claude CLI, `Codex:` for the Codex CLI, `Gemini:` for the Gemini CLI, and `ollama:` for Ollama. Every other provider is listed under its own ID. These prefixes are accepted in requests, but they are not provider IDs, so such a request goes through the fallback path. To target a provider directly, use its ID, for example `claude-via-claude-cli:`, `chatgpt-via-codex-cli:` or `antigravity-via-agy-cli:` for the CLI presets.
+- `/v1/models` uses short display prefixes for the CLI providers: `claude-code:`, `Codex:` and `Gemini:`. A registered provider ID takes precedence over a display alias; when multiple registered prefixes match, the longest wins. The catalogue checks each display alias and its canonical fallback against **all registered owners**, including inactive and quarantined legacy records. It uses the canonical spelling when an alias is reserved by another owner.
+- If neither existing spelling identifies the exact provider and native model, the catalogue omits that model until the configuration is unambiguous. For example, `owner` with native model `qwen3:latest` cannot publish `owner:qwen3:latest` when `owner:qwen3` is also registered: that ID selects the longer owner. This limit uses the existing grammar; no new separator or encoding is introduced. Unaffected models remain listed. Namespace additions, removals, quarantine and activity changes refresh cached publication on the next catalogue request.
 
 ### How models are listed
 
@@ -40,10 +41,10 @@ In every mode:
 
 - Per model family, only the `PLUGBOARD_MODEL_EXPOSE_VERSIONS` newest versions are listed (default 2); `PLUGBOARD_MODEL_EXPOSE=all` lists every model. A provider's default model and models already used stay listed.
 - `PLUGBOARD_TOP_N_PER_PROVIDER` can also cap each provider (default `0`, no cap), ranked by benchmark score and recency. Ollama models are grouped by family and not truncated.
-- Every model keeps its provider's ID (`anthropic-direct:claude-opus-5-5`). Only the Claude, Codex and Gemini CLI providers use the short `claude-code:`, `Codex:` and `Gemini:` prefixes.
+- Every published model keeps its provider's ID (`anthropic-direct:claude-opus-5-5`), except for safe Claude, Codex and Gemini CLI display aliases described above.
 - Models in `PLUGBOARD_MODEL_DENYLIST` are hidden. Quarantined models and models that failed their last connectivity probe stay listed with `"connected": false`.
 
-A model hidden from the list can still be called with its explicit `<provider-id>:<model>` ID, for example `ollama:llama3.2` for a locally pulled Ollama model.
+A model hidden by exposure filters can still be called with its unambiguous explicit `<provider-id>:<model>` ID, for example `ollama:llama3.2` for a locally pulled Ollama model. An identity omitted because of a namespace collision has no guaranteed address until the configuration is unambiguous.
 
 ## Add a provider from the dashboard
 
@@ -162,7 +163,7 @@ The presets *GitHub Models (OAuth via dashboard)* and *GitHub Copilot (OAuth via
 
 ## Add providers from `.env` or scripts
 
-- **Bootstrap one provider at startup.** When `data/providers.json` contains no provider at startup, Plugboard creates one from `OPENCLAW_URL` and `OPENCLAW_KEY` (both required), with `OPENCLAW_MODEL` as default model and `OPENCLAW_NAME` as name. The variables are named after the OpenClaw gateway, but any OpenAI-compatible endpoint works. If the provider ID contains `openclaw`, unprefixed model names are rewritten to OpenClaw's `openclaw/<vendor>--<model>` format, so pick another name for other gateways.
+- **Existing OpenClaw installations:** the connector and its environment bootstrap have been removed. Its old variables are ignored and recognizable legacy requests are refused without fallback. [Migrate manually to direct providers](openclaw-removal.md); changing an old provider's name is not a migration.
 - **Ollama**: `OLLAMA_URL`, `OLLAMA_ENABLED`, `OLLAMA_TIMEOUT`.
 - **API key presets on a remote instance**: `scripts/setup_railway_providers.py` reads `SETUP_ANTHROPIC_API_KEY`, `SETUP_OPENAI_API_KEY`, `SETUP_GEMINI_API_KEY` and `SETUP_GITHUB_PAT` and creates the matching presets through the admin API (`PLUGBOARD_URL` and `PLUGBOARD_ADMIN_KEY` point it at the instance). Unset variables are skipped, and presets that already exist are left untouched.
 - **Admin API**: everything the dashboard does is available over HTTP with `Authorization: Bearer $ADMIN_KEY`:

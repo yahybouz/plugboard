@@ -71,19 +71,33 @@ Then, in the dashboard:
 
 Next steps: [Getting started](docs/guide/getting-started.md) · [Providers and subscriptions](docs/guide/providers-and-subscriptions.md) · [Deployment](docs/guide/deployment.md).
 
+The OpenClaw connector has been removed. Existing installations should follow
+the [manual migration guide](docs/guide/openclaw-removal.md) before changing
+callers; recognizable legacy requests are refused without fallback. Direct
+providers and the separate Jev API / hosted Laya decision paths remain available.
+
 ## Use it from your app
+
+Inject the client key into `PLUGBOARD_API_KEY` through your shell or secret manager
+before running these commands. For an interactive Bash session, enter it without
+echoing it or placing it in shell history:
+
+```bash
+read -r -s -p "Plugboard API key: " PLUGBOARD_API_KEY; printf '\n'
+export PLUGBOARD_API_KEY
+```
 
 List the models your key can use:
 
 ```bash
-curl -s http://localhost:8765/v1/models -H "Authorization: Bearer pb_your_key" | jq '.data[].id'
+curl -s http://localhost:8765/v1/models -H "Authorization: Bearer ${PLUGBOARD_API_KEY:?Set PLUGBOARD_API_KEY}" | jq '.data[].id'
 ```
 
 Send a chat completion with curl:
 
 ```bash
 curl -s http://localhost:8765/v1/chat/completions \
-  -H "Authorization: Bearer pb_your_key" \
+  -H "Authorization: Bearer ${PLUGBOARD_API_KEY:?Set PLUGBOARD_API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{
         "model": "anthropic-direct:claude-haiku-5-5",
@@ -170,6 +184,7 @@ Choose **Plugboard** if you want one small self-hosted gateway for a handful of 
 - [Configuration reference](docs/guide/configuration.md)
 - [Deployment](docs/guide/deployment.md)
 - [MCP server](docs/guide/mcp.md)
+- [Typed decisions (Jev API, hosted Laya)](docs/guide/decisions.md)
 - [Troubleshooting](docs/guide/troubleshooting.md)
 - [Architecture](docs/ARCHITECTURE.md), [decision records](docs/adr/README.md), [runbooks](docs/runbooks/README.md)
 

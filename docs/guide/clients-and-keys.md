@@ -38,6 +38,8 @@ curl -s -X POST http://localhost:8765/admin/keys \
       }'
 ```
 
+When admin MFA is enforced, add `-H "X-Plugboard-Admin-TOTP: <code>"` with a fresh code from the authenticator (each code works once); see [admin API with MFA](monitoring.md#admin-api-with-mfa).
+
 The response contains the record and, once, the plaintext key in `"key"`.
 
 | Field | Default when omitted | Effect |
@@ -55,9 +57,32 @@ Checks run in this order on each chat request:
 2. **Global concurrency cap** (optional): with `PLUGBOARD_MAX_INFLIGHT_CHAT` above 0, extra concurrent chat requests wait up to `PLUGBOARD_INFLIGHT_WAIT_S` seconds, then get `503` with `Retry-After: 5`.
 3. **Monthly budget**: the key's spend for the current month is summed from the usage records. When it is greater than or equal to the limit the request is refused with `429 Monthly spending limit exceeded`. The check happens before the call, so the last request of a month can take the spend slightly over the limit.
 4. **Allowed models**: a model outside the list returns `403`.
-5. **RPM limit**: a sliding 60-second window per key; exceeding it returns `429 Client rate limit exceeded`.
+5. **Known price** (keys with a monthly budget only): a model without a known price returns `402 Model price unavailable for this key`, before any provider call, streamed or not. Such a call would be recorded at 0 and the budget could never stop it. Every provider the request may fall back to is checked. The refusal is logged (key, provider, model; never the prompt). Keys with `monthly_limit_usd` 0 are not affected.
+6. **RPM limit**: a sliding 60-second window per key; exceeding it returns `429 Client rate limit exceeded`.
 
-Requests made with the `ADMIN_KEY` (or from the dashboard Playground) are not subject to budgets, model restrictions or RPM limits.
+Requests made with the `ADMIN_KEY` (or from the dashboard Playground) are not subject to budgets, model restrictions, price checks or RPM limits.
+
+`POST /v1/preflight` runs the same checks for each pair before its ping, inside the same concurrency cap, and accepts at most 10 pairs (`422` beyond). Each ping counts towards the RPM limit and is billed like a chat call. A refused or failed pair answers `"ok": false` with a closed `error` code, never the provider's message: `unknown_model`, `forbidden_model`, `budget_exceeded`, `price_unavailable`, `rate_limited` or `upstream_error` (details stay in the server log).
+
+### Which models have a known price
+
+For a budgeted key, a model counts as priced when the [pricing grid](pricing.md), the official price table or the built-in table gives it a price, 0 included. With an empty grid (a fresh install, or `PRICING_SCHEDULER_DISABLED=1`):
+
+| Class | Price today | Budgeted key |
+|---|---|---|
+| Ollama local model (not `-cloud` / `:cloud`, any case) on a self-hosted Ollama provider (`base_url` on `localhost`, a loopback or a private IP literal; see [pricing](pricing.md#how-a-model-finds-its-price)) | 0, explicit (`local`) | allowed |
+| The same model on an Ollama reached by a DNS name (`host.docker.internal`) or a public host | not free | `402` unless priced (a `manual` 0 in the `ollama` space is a price) |
+| Ollama cloud model (`*-cloud`, `*:cloud`) with an `ollama` price, or a vendor price (`gpt-oss:20b-cloud`) | that price | allowed |
+| Ollama cloud model whose only match is a built-in local 0 (`gemma4:31b-cloud`), or not priced at all | unknown | `402` |
+| A local model name (`llama3`, `qwen3:8b`) on any other provider | not free: a local 0 by name (built-in, or written in a grid by a source) applies to Ollama providers only; an admin's `manual` 0 is a price | `402` unless priced |
+| Subscription CLIs (Claude Code, Codex, Gemini, Antigravity) and OAuth/broker providers | API price of the model when known (`claude-haiku-4-5`, `gpt-5.5`) | allowed |
+| Official price table (checked 2026-10-24, dated) | Claude Fable 5.1 10/50, Opus 5.5 4/20, Sonnet 5.5 2/10, Haiku 5.5 0.10/0.50; agy `-medium` variants as their base model; `gemini-4-argon-*` 2/10 through November 2026, 4/20 from December 2026; `gemini-3.8-flash-*` 0.75/3.75 through December 2026, 1.50/7.50 from January 2027; `gpt-4o-mini` 0.15/0.60 (USD per million tokens, input/output) | allowed |
+| No official price: `gpt-oss-120b-medium` (agy), `meta-llama-3.1-405b-instruct` (GitHub broker), and any model the grid and the table do not price | unknown | `402` |
+| Custom provider, model not in the grid | unknown | `402` |
+
+A subscription is not treated as free: Plugboard has no rule that says so, and a budget set on a key is meant to hold. To let a budgeted key use such a model, give it a price in the grid (0 if you decide it costs nothing), or remove the key's monthly limit.
+
+Limits of the official table: prices change by grid month (the price in force on the first day of the month), and there are no price tiers: Haiku 5.5 prompts above 100k tokens (0.50/2.50 for the whole request) are billed at the standard rate. The price refresh writes the table into each month's grid; see [pricing sources](pricing.md#sources).
 
 When `ALERT_WEBHOOK_URL` is set, every billed request from a client at or above 80 % of its monthly limit posts a `spending_alert` (`"status": "warning"`, or `"exceeded"` from 100 %). There is no deduplication, so expect one alert per request in that range. See [Monitoring](monitoring.md#alerts-and-webhooks).
 
@@ -106,6 +131,7 @@ Cache hits are not billed again. Streaming responses (`"stream": true`) are serv
 | Status | Typical cause |
 |---|---|
 | `401` | Missing, unknown or revoked key |
+| `402` | The key has a monthly budget and the model has no known price |
 | `403` | Model not in the key's `allowed_models` |
 | `413` | Request body larger than `MAX_BODY_BYTES` (10 MB) |
 | `429` | IP rate limit, key RPM limit or monthly budget reached |

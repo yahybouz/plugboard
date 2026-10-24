@@ -47,9 +47,11 @@ WORKDIR /app
 COPY requirements.lock ./
 RUN pip install --require-hashes -r requirements.lock
 
-# Only what the server needs at runtime: the package, the dashboard,
-# the job scripts it can launch, and the entry point.
+# Only what the server needs at runtime: the package, the decision
+# manifests it loads, the dashboard, the job scripts it can launch, and
+# the entry point.
 COPY --chown=app:app plugboard/ plugboard/
+COPY --chown=app:app manifests/ manifests/
 COPY --chown=app:app static/ static/
 COPY --chown=app:app scripts/ scripts/
 COPY --chown=app:app run.py VERSION ./

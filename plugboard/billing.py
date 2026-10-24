@@ -17,6 +17,7 @@ Cost formula: (prompt_tokens/1_000_000 × input_price) + (completion_tokens/1_00
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import re
@@ -202,6 +203,12 @@ class PriceMatch:
         return self.key if self.space == "models" else f"{self.space}|{self.key}"
 
 
+def _at_boundary(name: str, i: int) -> bool:
+    """A key matches the end of ``name`` from ``i`` only after a separator
+    (``vendor/``, ``host:``, ``openclaw--``): ``himalaya`` is not ``laya``."""
+    return i == 0 or name[i - 1] in "/:" or name[i - 2 : i] == "--"
+
+
 class _KeyIndex:
     """Exact and normalised lookups over one map of prices."""
 
@@ -221,7 +228,7 @@ class _KeyIndex:
         for c in candidates:
             if c in self.keys:
                 return c
-        # 2. Longest pricing key that a candidate ends with
+        # 2. Longest pricing key that a candidate ends with, after a separator
         #    (`openclaw/anthropic--claude-sonnet-4-6` -> `claude-sonnet-4-6`).
         best: Optional[str] = None
         for c in candidates:
@@ -229,7 +236,7 @@ class _KeyIndex:
                 suffix = c[i:]
                 if best is not None and len(suffix) <= len(best):
                     break
-                if suffix in self.keys:
+                if suffix in self.keys and _at_boundary(c, i):
                     best = suffix
                     break
         if best is not None:
@@ -240,6 +247,8 @@ class _KeyIndex:
             if norm in self.keys:
                 return norm
             for i in range(len(norm)):
+                if not _at_boundary(norm, i):
+                    continue
                 original = self.norm.get(norm[i:])
                 if original is not None and (best is None or len(original) > len(best)):
                     best = original
@@ -358,18 +367,101 @@ def _builtin_match(candidates: List[str]) -> Optional[PriceMatch]:
     # add on its next run. Hitting this path means the grid is stale; the
     # request is still billed and the next update persists the entry.
     try:
-        from plugboard.pricing_scraper import _KNOWN_PRICES, _match_known_price
+        from plugboard.pricing_scraper import (
+            _KNOWN_PRICES,
+            OLLAMA_LOCAL_FREE,
+            _match_known_price,
+        )
+
+        def builtin(key: str, price: Dict[str, Any]) -> PriceMatch:
+            entry = dict(price)
+            if any(price is _KNOWN_PRICES[k] for k in OLLAMA_LOCAL_FREE):
+                entry["source"] = "local"  # see _local_zero_misapplied
+            return PriceMatch(entry, key, "builtin")
 
         for c in candidates:
             if c in _KNOWN_PRICES:
-                return PriceMatch(dict(_KNOWN_PRICES[c]), c, "builtin")
+                return builtin(c, _KNOWN_PRICES[c])
         for c in candidates:
             match = _match_known_price(c)
             if match is not None:
-                return PriceMatch(dict(match), c, "builtin")
+                return builtin(c, match)
     except Exception as exc:  # pragma: no cover — best-effort fallback
         log.debug("pricing fallback error for %s: %s", candidates[:1], exc)
     return None
+
+
+def _official_match(candidates: List[str], month: str) -> Optional[PriceMatch]:
+    """Price of the dated official table for ``month`` (exact names only).
+
+    Covers a grid the refresh has not written yet; see ``official_prices``.
+    """
+    from plugboard import official_prices
+
+    try:
+        table = official_prices.prices_for_month(month)
+    except ValueError:
+        return None
+    for c in candidates:
+        if c in table:
+            return PriceMatch({**table[c], "source": "official"}, c, "builtin", month)
+    return None
+
+
+def _local_model_name(key: str) -> bool:
+    from plugboard.pricing_scraper import OLLAMA_LOCAL_FREE
+
+    name = key.removeprefix("ollama:")
+    return name in OLLAMA_LOCAL_FREE or name.split(":", 1)[0] in OLLAMA_LOCAL_FREE
+
+
+def _is_local_zero(match: PriceMatch) -> bool:
+    """A 0/0 that stands for "runs on the gateway host": the built-in local
+    entries, or a grid entry not set by an admin that prices a local Ollama
+    model (``llama3``, ``qwen3:8b``) at 0 by name, estimates from one included."""
+    if match.space == "builtin":
+        return match.source == "local"
+    entry = match.entry
+    if (
+        match.source == "manual"
+        or entry.get("input_price")
+        or entry.get("output_price")
+    ):
+        return False
+    return _local_model_name(str(entry.get("estimated_from") or match.key))
+
+
+def _local_zero_misapplied(
+    match: Optional[PriceMatch], provider: Any, real_model: str
+) -> bool:
+    """True for a local-Ollama 0 matched for anything but a self-hosted
+    Ollama model: another provider (``llama3`` on a paid host), an Ollama
+    reached through a public or named host, or an Ollama cloud model, which
+    spends real credits. An admin's ``manual`` 0 is a price."""
+    return (
+        match is not None
+        and _is_local_zero(match)
+        and (not _is_self_hosted_ollama(provider) or _is_ollama_cloud(real_model))
+    )
+
+
+def _decision_price(match: PriceMatch) -> bool:
+    """A price of a decision engine (``jev``, ``laya``): read only by
+    ``/v1/decisions``, never applied to a chat model, estimates included."""
+    from plugboard.decisions import DECISION_MODELS
+
+    source = str(match.entry.get("estimated_from") or match.key)
+    return match.key in DECISION_MODELS or source in DECISION_MODELS
+
+
+def _unusable(
+    match: Optional[PriceMatch], provider: Any, real_model: str, decision: bool
+) -> bool:
+    if match is None:
+        return False
+    if not decision and _decision_price(match):
+        return True
+    return _local_zero_misapplied(match, provider, real_model)
 
 
 def resolve_model_price(
@@ -380,13 +472,22 @@ def resolve_model_price(
     With ``provider`` (a provider record or id), its price space is searched
     first, then the vendor prices; see ``provider_spaces``. Within a map the
     first hit wins: exact key of any candidate form, longest key that a
-    candidate ends with, then normalised forms. The built-in table is the
-    last resort.
+    candidate ends with after a separator, then normalised forms. The
+    official table for the grid's month, then the built-in table, are the
+    last resort. A local-Ollama 0 found by name is skipped unless a
+    self-hosted Ollama serves the model; decision engine prices are skipped.
     """
+    if _is_ollama(provider):
+        real_model = _canonical_model(real_model)
     candidates = _candidate_keys(real_model)
     match = match_in_grid(pricing, provider_spaces(provider), candidates)
+    if _unusable(match, provider, real_model, False):
+        match = None
     if match is None:
-        match = _builtin_match(candidates)
+        month = str(pricing.get("month") or current_pricing_month())
+        match = _official_match(candidates, month) or _builtin_match(candidates)
+        if _unusable(match, provider, real_model, False):
+            match = None
     return match.entry if match else None
 
 
@@ -447,25 +548,82 @@ def _is_ollama(provider: Any) -> bool:
     return ident.startswith("ollama") or ":11434" in base
 
 
+# Hosts where an Ollama runs on the gateway's own machine or private network:
+# loopback, RFC 1918 and unique local IPv6 addresses, written as literals.
+_LOCAL_NETWORKS = tuple(
+    ipaddress.ip_network(net)
+    for net in (
+        "127.0.0.0/8",
+        "::1/128",
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "fc00::/7",
+    )
+)
+
+
+def _is_local_host(base_url: str) -> bool:
+    """``localhost`` or a loopback / private IP literal; never a DNS name
+    (``localhost.evil.com``, ``127.0.0.1.nip.io``), which anyone can point
+    anywhere."""
+    from urllib.parse import urlsplit
+
+    try:
+        host = urlsplit(base_url).hostname or ""
+    except ValueError:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip in net for net in _LOCAL_NETWORKS)
+
+
+def _is_self_hosted_ollama(provider: Any) -> bool:
+    """An Ollama provider whose ``base_url`` is local (``_is_local_host``):
+    the only one whose local models are free. Neither the id nor the 11434
+    port alone qualifies."""
+    return (
+        isinstance(provider, dict)
+        and _is_ollama(provider)
+        and _is_local_host(str(provider.get("base_url") or ""))
+    )
+
+
+def _canonical_model(model: str) -> str:
+    """Ollama resolves names whatever their case or surrounding spaces
+    (``GPT-OSS:20B-Cloud`` runs ``gpt-oss:20b-cloud``): price that form. The
+    name sent upstream is left as the client wrote it."""
+    return model.strip().casefold()
+
+
 def _is_ollama_cloud(model: str) -> bool:
-    bare = model.split(":", 1)[1] if model.startswith("ollama:") else model
+    bare = _canonical_model(model).removeprefix("ollama:")
     return bare.endswith(":cloud") or bare.endswith("-cloud")
 
 
 def _ollama_price(
-    real_model: str, spaces: List[str], month: str, max_months_back: int
+    real_model: str,
+    spaces: List[str],
+    month: str,
+    max_months_back: int,
+    local: bool,
 ) -> Optional[PriceMatch]:
-    """Price of a model served by Ollama.
+    """Price of a model served by Ollama (``real_model`` canonical).
 
     A cloud model takes the price Ollama publishes (the ``ollama`` space, filled
     from ollama.com/pricing by the pricing refresh, or set by an admin): its own
     id first (``gpt-oss:120b-cloud``), then its family (``gemma4:cloud`` for
-    ``gemma4:31b-cloud``). A local model runs on the gateway host: 0. A cloud
-    model Ollama does not list returns None and goes through the usual lookup.
+    ``gemma4:31b-cloud``). A local model of a self-hosted Ollama (``local``)
+    runs on the gateway's machine or network: 0. Anything else returns None
+    and goes through the usual lookup.
     """
-    bare = (
-        real_model.split(":", 1)[1] if real_model.startswith("ollama:") else real_model
-    )
+    bare = real_model.removeprefix("ollama:")
     keys = [bare]
     if ":" in bare:
         keys.append(bare.split(":", 1)[0] + ":cloud")
@@ -478,9 +636,9 @@ def _ollama_price(
             for key in keys:
                 if key in sub:
                     return PriceMatch(sub[key], key, space, m)
-    if not _is_ollama_cloud(bare):
-        local = {"input_price": 0.0, "output_price": 0.0, "source": "local"}
-        return PriceMatch(local, bare, "ollama", month)
+    if local and not _is_ollama_cloud(bare):
+        zero = {"input_price": 0.0, "output_price": 0.0, "source": "local"}
+        return PriceMatch(zero, bare, "ollama", month)
     return None
 
 
@@ -489,21 +647,33 @@ def resolve_price(
     month: Optional[str] = None,
     provider: Any = None,
     max_months_back: int = 12,
+    *,
+    decision: bool = False,
 ) -> Optional[PriceMatch]:
     """Price of ``real_model`` served by ``provider``, with the key that matched.
 
     Walks back up to ``max_months_back`` monthly grids when the current one
     cannot price the model (a grid left in a sentinel state must not bill a
-    new model at 0), then tries the built-in table. Returns None only when
-    every lookup fails.
+    new model at 0), then tries the official table for ``month``, then the
+    built-in table. A local-Ollama 0 found by name is skipped unless a
+    self-hosted Ollama serves the model. Decision engine prices (``jev``,
+    ``laya``) are read only with ``decision=True`` (``/v1/decisions``), never
+    for a chat model. Returns None only when every lookup fails.
     """
     month = month or current_pricing_month()
     spaces = provider_spaces(provider)
-    candidates = _candidate_keys(real_model)
     if _is_ollama(provider):
-        ollama_match = _ollama_price(real_model, spaces, month, max_months_back)
+        real_model = _canonical_model(real_model)
+        ollama_match = _ollama_price(
+            real_model,
+            spaces,
+            month,
+            max_months_back,
+            local=_is_self_hosted_ollama(provider),
+        )
         if ollama_match is not None:
             return ollama_match
+    candidates = _candidate_keys(real_model)
     miss_key = (tuple(spaces), real_model)
     for m in _walk_months(month, max_months_back):
         record = _cached_grid(m)
@@ -511,14 +681,19 @@ def resolve_price(
             continue
         match = match_in_grid(record["grid"], spaces, candidates)
         if match is not None:
+            if _unusable(match, provider, real_model, decision):
+                continue
             match.month = m
             return match
         with _grid_guard:
             if len(record["miss"]) >= _MAX_MISSES:
                 record["miss"].clear()  # model names come from clients: keep it bounded
             record["miss"].add(miss_key)
+    official = _official_match(candidates, month)
+    if official is not None and not _unusable(official, provider, real_model, decision):
+        return official
     builtin = _builtin_match(candidates)
-    if builtin is not None:
+    if builtin is not None and not _unusable(builtin, provider, real_model, decision):
         return builtin
     # Last resort: the closest version of the same family, flagged for review.
     for m in _walk_months(month, max_months_back):
@@ -526,7 +701,9 @@ def resolve_price(
         if not grid:
             continue
         estimate = nearest_price(real_model, grid, spaces)
-        if estimate is not None:
+        if estimate is not None and not _unusable(
+            estimate, provider, real_model, decision
+        ):
             estimate.month = m
             _notify_estimate(estimate, month)
             return estimate
@@ -644,6 +821,22 @@ def _notify_estimate(match: PriceMatch, month: str) -> None:
         batch.flush_in_background()
     except Exception as exc:  # noqa: BLE001 - billing never fails on a notification
         log.warning("estimate notification for %s failed: %s", match.key, exc)
+
+
+def budget_price_unknown(real_model: str, match: Optional[PriceMatch]) -> bool:
+    """True when calls to ``real_model`` cannot be held to a monetary budget.
+
+    No price at all, or a cloud model (``*-cloud``, ``:cloud``) priced 0 only
+    by the built-in table or an estimate: that 0 is the local-model price
+    (``gemma4``), while an Ollama Cloud call spends real credits. A 0 written
+    in a grid (the ``ollama`` space, an admin entry) is a price and counts.
+    """
+    if match is None:
+        return True
+    if not _is_ollama_cloud(_bare_model(real_model)):
+        return False
+    free = not match.entry.get("input_price") and not match.entry.get("output_price")
+    return free and (match.space == "builtin" or match.source == "estimate")
 
 
 def resolve_model_price_with_fallback(

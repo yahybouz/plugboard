@@ -18,6 +18,10 @@ import time
 from typing import Any, Dict
 
 import aiohttp
+from plugboard.legacy_connectors import (
+    require_supported_model,
+    require_supported_provider,
+)
 
 # Explicit URL overrides for providers without a /health endpoint.
 # Keep in sync with app.py (single source of truth lives here).
@@ -92,6 +96,11 @@ async def _probe_http(
 
 async def probe_provider(provider: Dict[str, Any]) -> Dict[str, Any]:
     """Unified health probe honouring the provider's auth_source."""
+    try:
+        require_supported_provider(provider)
+        require_supported_model(provider.get("default_model", ""), effective_name=True)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "latency_ms": 0.0}
     auth_source = provider.get("auth_source", "") or ""
 
     # Case 1: subprocess providers have no HTTP endpoint at all.

@@ -9,9 +9,11 @@ Public surface:
     generate_secret() -> str           # new base32 secret
     provisioning_uri(secret, ...)      # otpauth:// URI for authenticator apps
     is_enrolled() -> bool              # secret exists on disk
-    enroll(secret) -> None             # persist a secret (one call closes it)
-    verify(code) -> bool               # validate a 6-digit code
-    disable() -> None                  # delete the stored secret
+    enroll(secret, used_step) -> None  # persist a secret, revoke admin sessions
+    setup_code_step(secret, code)      # time-step of a code confirming a secret
+    verify(code) -> bool               # validate a 6-digit code, once
+    disable() -> None                  # delete the secret, revoke admin sessions
+    generation() -> Optional[str]      # changes on every enroll and disable
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ import logging
 import os
 import secrets as _secrets
 import struct
+import threading
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -40,6 +43,7 @@ _MFA_FILE = _DATA_DIR / "admin_mfa.json"
 _DIGITS = 6
 _PERIOD = 30
 _WINDOW = 1  # accept codes from ±_WINDOW time steps (±30 s)
+_STEP_LOCK = threading.Lock()
 
 
 # ── TOTP primitives (RFC 6238 / HOTP RFC 4226) ──────────────────────────────
@@ -88,14 +92,24 @@ def provisioning_uri(secret: str, account: str, issuer: str = "Plugboard") -> st
 # ── Persistence ─────────────────────────────────────────────────────────────
 
 
-def _read() -> dict:
+def _load() -> tuple[dict, bool]:
+    """(stored data, readable): a missing file is readable and empty."""
     if not _MFA_FILE.exists():
-        return {}
+        return {}, True
     try:
-        return json.loads(_MFA_FILE.read_text(encoding="utf-8"))
+        data = json.loads(_MFA_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
-        log.error("Failed to read %s: %s", _MFA_FILE, exc)
-        return {}
+        # The type only: a decoding error can quote the file's bytes.
+        log.error("Failed to read %s: %s", _MFA_FILE, type(exc).__name__)
+        return {}, False
+    if not isinstance(data, dict):
+        log.error("Failed to read %s: not a JSON object", _MFA_FILE)
+        return {}, False
+    return data, True
+
+
+def _read() -> dict:
+    return _load()[0]
 
 
 def _write(data: dict) -> None:
@@ -106,23 +120,52 @@ def is_enrolled() -> bool:
     return bool(_read().get("secret_enc"))
 
 
-def enroll(secret: str) -> None:
-    """Persist the Fernet-encrypted secret. Overwrites any existing secret."""
-    _write(
-        {
-            "secret_enc": _encrypt_token(secret),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "last_used_at": None,
-        }
-    )
+def generation() -> Optional[str]:
+    """Identifier of the current MFA state; every enroll and disable changes it.
+
+    Admin sessions record it when they are opened and are refused once it
+    differs, so a session never outlives the secret it was opened under, even
+    when the session store cannot be rewritten.
+    """
+    value = _read().get("generation")
+    return value if isinstance(value, str) else None
+
+
+def _revoke_admin_sessions() -> None:
+    from plugboard import admin_sessions
+
+    admin_sessions.revoke_all()
+
+
+def enroll(secret: str, *, used_step: Optional[int] = None) -> None:
+    """Persist the Fernet-encrypted secret. Overwrites any existing secret.
+
+    ``used_step`` is the time-step of the code that confirmed the secret: it
+    is recorded as used, so that code cannot be replayed. Every admin session
+    is revoked: they were opened under the old factor. A failure to rewrite
+    the session store is raised after the new secret is in place; older
+    sessions are already refused by their generation.
+    """
+    data = {
+        "secret_enc": _encrypt_token(secret),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "last_used_at": None,
+        "generation": _secrets.token_hex(16),
+    }
+    if used_step is not None:
+        data["last_step"] = used_step
+    _write(data)
+    _revoke_admin_sessions()
 
 
 def disable() -> None:
-    """Remove the stored secret and its metadata. Idempotent."""
-    try:
-        _MFA_FILE.unlink()
-    except FileNotFoundError:
-        pass
+    """Remove the stored secret and its metadata, revoke every admin session.
+
+    Only a new generation is kept, so no earlier session becomes valid again.
+    Idempotent.
+    """
+    _write({"generation": _secrets.token_hex(16)})
+    _revoke_admin_sessions()
 
 
 def _stored_secret() -> Optional[str]:
@@ -141,7 +184,9 @@ def verify(code: str, at: Optional[float] = None) -> bool:
     """Constant-time compare the supplied code against the stored secret.
 
     Accepts codes from the current, previous, and next time-step to tolerate
-    small clock skew between the admin's device and the server.
+    small clock skew between the admin's device and the server. A code is
+    single-use: the last accepted time-step is stored and no step at or before
+    it is accepted again (login, machine header and debug helper alike).
     """
     if not code or not code.isdigit() or len(code) != _DIGITS:
         return False
@@ -153,15 +198,37 @@ def verify(code: str, at: Optional[float] = None) -> bool:
     for step in range(-_WINDOW, _WINDOW + 1):
         candidate = _hotp(secret_bytes, t_now + step)
         if hmac.compare_digest(candidate, code):
-            # Update last_used_at (best effort — failure must not reject)
-            try:
-                data = _read()
-                data["last_used_at"] = datetime.now(timezone.utc).isoformat()
-                _write(data)
-            except Exception:  # pragma: no cover
-                pass
-            return True
+            return _consume_step(t_now + step)
     return False
+
+
+def setup_code_step(secret: str, code: str) -> Optional[int]:
+    """The current time-step when ``code`` is the current code of ``secret``.
+
+    Used to confirm a secret before it is stored (enrolment or rotation).
+    """
+    counter = int(time.time() // _PERIOD)
+    candidate = _hotp(_b32_normalize(secret), counter)
+    return counter if hmac.compare_digest(candidate, code) else None
+
+
+def _consume_step(counter: int) -> bool:
+    """Record ``counter`` as used; False if it (or a later step) already was."""
+    with _STEP_LOCK:
+        data = _read()
+        last = data.get("last_step")
+        if isinstance(last, int) and counter <= last:
+            log.warning("Admin TOTP code replayed (time-step already used)")
+            return False
+        data["last_step"] = counter
+        data["last_used_at"] = datetime.now(timezone.utc).isoformat()
+        try:
+            _write(data)
+        except Exception as exc:
+            # Without the record the code could be replayed: refuse it.
+            log.error("Failed to record admin TOTP use: %s", exc)
+            return False
+    return True
 
 
 def is_required() -> bool:
@@ -169,6 +236,11 @@ def is_required() -> bool:
 
     Requiring enrolment before enforcement prevents a foot-gun: setting
     the flag on a fresh deploy with no secret would lock the admin out.
+    With the flag set, a store that exists but cannot be read counts as
+    enrolled: no code verifies, so admin access is refused until the file is
+    repaired or removed (never MFA silently off).
     """
-    flag = os.environ.get("PLUGBOARD_ADMIN_MFA_REQUIRED", "").strip() == "1"
-    return flag and is_enrolled()
+    if os.environ.get("PLUGBOARD_ADMIN_MFA_REQUIRED", "").strip() != "1":
+        return False
+    data, readable = _load()
+    return not readable or bool(data.get("secret_enc"))

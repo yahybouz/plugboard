@@ -61,13 +61,21 @@ class TokenBundle:
 # ── Base class ───────────────────────────────────────────────────────────────
 
 
+# A token without expires_at is re-read from its source after this delay, so
+# a revocation made elsewhere (another process, a manual edit) is seen.
+NO_EXPIRY_CACHE_TTL = 300.0
+
+
 class CLIAuthLoader:
     """Base class for all CLI auth loaders."""
 
     source_id: str = ""
+    # Credential-store source this loader reads ("" for external CLIs).
+    _broker_source: str = ""
 
     def __init__(self) -> None:
         self._cache: Optional[TokenBundle] = None
+        self._cached_at = 0.0
 
     def available(self) -> Dict[str, Any]:
         """Return availability info: {ok: bool, account: str, error: str}."""
@@ -77,15 +85,38 @@ class CLIAuthLoader:
         """Read fresh token from source. Override in subclass."""
         raise NotImplementedError
 
+    def _store(self, bundle: Optional[TokenBundle]) -> Optional[TokenBundle]:
+        self._cache = bundle
+        self._cached_at = time.monotonic()
+        return bundle
+
+    def _cached(self, skew: int = 60) -> Optional[TokenBundle]:
+        """The cached token while it is valid and, without expiry, fresh."""
+        cache = self._cache
+        if not cache or not cache.is_valid(skew=skew):
+            return None
+        if (
+            cache.expires_at is None
+            and time.monotonic() - self._cached_at >= NO_EXPIRY_CACHE_TTL
+        ):
+            return None
+        return cache
+
+    def invalidate(self) -> None:
+        """Forget the cached token: the next call reads the source again."""
+        self._cache = None
+        self._cached_at = 0.0
+
     async def get_token(self) -> Optional[TokenBundle]:
         """Return a valid token, refreshing if expired. Cached in memory."""
-        if self._cache and self._cache.is_valid():
-            return self._cache
-        self._cache = self._fetch_token()
+        cached = self._cached()
+        if cached:
+            return cached
+        self._store(self._fetch_token())
         if self._cache and not self._cache.is_valid():
             refreshed = await self._refresh(self._cache)
             if refreshed:
-                self._cache = refreshed
+                self._store(refreshed)
         return self._cache if (self._cache and self._cache.is_valid()) else None
 
     async def _refresh(self, expired: TokenBundle) -> Optional[TokenBundle]:
@@ -336,8 +367,9 @@ class GHCopilotAuthLoader(GHAuthLoader):
 
     async def get_token(self) -> Optional[TokenBundle]:
         """Override to always exchange PAT for fresh Copilot token."""
-        if self._cache and self._cache.is_valid(skew=60):
-            return self._cache
+        cached = self._cached(skew=60)
+        if cached:
+            return cached
         # Get GH PAT first
         pat = self._fetch_token()
         if not pat:
@@ -375,16 +407,17 @@ class GHCopilotAuthLoader(GHAuthLoader):
                     if not copilot_token:
                         return None
                     expires_at = data.get("expires_at", time.time() + 1800)
-                    self._cache = TokenBundle(
-                        access_token=copilot_token,
-                        expires_at=float(expires_at),
-                        account=pat.account,
-                        meta={
-                            "refresh_in": data.get("refresh_in", 1500),
-                            "endpoints": data.get("endpoints", {}),
-                        },
+                    return self._store(
+                        TokenBundle(
+                            access_token=copilot_token,
+                            expires_at=float(expires_at),
+                            account=pat.account,
+                            meta={
+                                "refresh_in": data.get("refresh_in", 1500),
+                                "endpoints": data.get("endpoints", {}),
+                            },
+                        )
                     )
-                    return self._cache
         except AuthError:
             raise
         except Exception as exc:
@@ -481,8 +514,9 @@ class StoredOAuthCopilotLoader(StoredOAuthLoader):
 
     async def get_token(self) -> Optional[TokenBundle]:
         """Exchange stored GitHub OAuth token for Copilot ephemeral token."""
-        if self._cache and self._cache.is_valid(skew=60):
-            return self._cache
+        cached = self._cached(skew=60)
+        if cached:
+            return cached
         from plugboard.oauth_store import get_credential
         from plugboard.oauth_manager import refresh
 
@@ -524,14 +558,20 @@ class StoredOAuthCopilotLoader(StoredOAuthLoader):
             copilot_token = data.get("token")
             if not copilot_token:
                 return None
+            # The credential may have been saved or deleted while the exchange
+            # was in flight: never keep a token derived from a stale one.
+            current = get_credential("github")
+            if current is None or current.access_token != cred.access_token:
+                return None
             expires_at = data.get("expires_at", time.time() + 1800)
-            self._cache = TokenBundle(
-                access_token=copilot_token,
-                expires_at=float(expires_at),
-                account=cred.account,
-                meta={"refresh_in": data.get("refresh_in", 1500)},
+            return self._store(
+                TokenBundle(
+                    access_token=copilot_token,
+                    expires_at=float(expires_at),
+                    account=cred.account,
+                    meta={"refresh_in": data.get("refresh_in", 1500)},
+                )
             )
-            return self._cache
         except AuthError:
             raise
         except Exception as exc:
@@ -586,3 +626,15 @@ def get_loader(source: str) -> Optional[CLIAuthLoader]:
 def reset_loaders() -> None:
     """Clear loader cache (useful for tests)."""
     _LOADERS.clear()
+
+
+def invalidate_broker_source(source: str) -> None:
+    """Drop cached tokens read from one credential-store source.
+
+    Called on every write to the store, so a disconnect or a new account is
+    used at once by ``broker:<source>`` and the loaders derived from it
+    (``broker:github+copilot`` for ``github``). Other sources keep their cache.
+    """
+    for loader in list(_LOADERS.values()):
+        if loader._broker_source == source:
+            loader.invalidate()

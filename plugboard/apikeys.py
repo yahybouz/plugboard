@@ -172,12 +172,20 @@ def create_key(
     allowed_models: Optional[List[str]] = None,
     rpm_limit: int = 0,
     org_id: str = "",
+    allowed_decision_models: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Generate a new random key, persist its hash, return record with plaintext key.
 
     The plaintext key is included in the returned dict under ``"key"`` so the
     caller can show it once.  Only the hash is persisted to disk.
     """
+    if allowed_decision_models is not None:
+        from plugboard.decisions import DECISION_MODELS
+
+        if not isinstance(allowed_decision_models, list) or any(
+            model not in DECISION_MODELS for model in allowed_decision_models
+        ):
+            raise ValueError("Invalid decision policy")
     key_id = uuid.uuid4().hex
     raw_key = KEY_PREFIX + secrets.token_hex(32)
     key_hash = _hash_key(raw_key)
@@ -195,6 +203,7 @@ def create_key(
         "monthly_limit_usd": monthly_limit_usd,
         "allowed_models": allowed_models or [],
         "rpm_limit": rpm_limit,
+        "allowed_decision_models": allowed_decision_models,
     }
     with _lock():
         data = _read()
@@ -288,6 +297,7 @@ def rotate_key(key_id: str) -> Optional[Dict[str, Any]]:
         allowed_models=old.get("allowed_models"),
         rpm_limit=old.get("rpm_limit", 0),
         org_id=old.get("org_id", ""),
+        allowed_decision_models=old.get("allowed_decision_models"),
     )
 
 

@@ -1,0 +1,14 @@
+# OPTIONAL: install with --require-hashes from the lock into a new isolated ML env.
+# Never modify the gateway/shared environment or an existing qualified ML env.
+# Official Laya sources are downloaded/hash-verified from manifests/decisions.json.
+# Direct inference dependencies, exact versions. Not installed during producer pass.
+# Python 3.12 / macOS arm64; Torch 2.14.1 requires macOS >=14 (previous resolver default: 13).
+# OS floor change is explicit and pending acceptance; macOS 13 is NOT covered.
+# Closure projected offline from the prior macOS arm64 lock using wheel metadata.
+# Every retained version/hash is unchanged; this lock has not been installed.
+# Torch upgrade remediates fixed advisories; CVE-2026-4538 remains an open reserve.
+torch==2.14.1
+transformers==5.20.2
+numpy==2.5.4
+safetensors==0.8.0
+huggingface-hub==2.3.0

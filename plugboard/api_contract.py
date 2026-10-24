@@ -21,11 +21,13 @@ adding optional fields or routes is a minor one.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional, Tuple, Type, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, Type, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CONTRACT_VERSION = "1.0.0"
+from plugboard.decisions import DecisionRequest
+
+CONTRACT_VERSION = "1.1.0"
 _JSON = "application/json"
 
 
@@ -177,7 +179,8 @@ class ModelEntry(_Open):
     variant: Optional[str] = None
     internet_access: Optional[bool] = None
     connected: Optional[bool] = Field(
-        default=None, description="false when the last probe could not reach it."
+        default=None,
+        description="true only for a successful connectivity observation; false for failed, quarantined or unknown connectivity. last_probed_at is null when never probed.",
     )
     last_probed_at: Optional[str] = None
     account_compatible: Optional[bool] = Field(
@@ -229,6 +232,101 @@ class ModelInfo(ModelProfile):
     info_source: str
 
 
+# ── Typed decisions ─────────────────────────────────────────────────────────
+
+
+class DecisionPricing(BaseModel):
+    """Price per million tokens; Jev: official input price, output free; Laya: 0."""
+
+    input_usd_per_mtok: float = Field(ge=0, allow_inf_nan=False)
+    output_usd_per_mtok: float = Field(ge=0, allow_inf_nan=False)
+    unit: Literal["token"]
+
+
+class DecisionModelEntry(BaseModel):
+    id: Literal["jev", "laya", "laya-multilingual"]
+    provider: str
+    revision: str
+    available: bool
+    unavailable_reason: Optional[str]
+    languages: List[str]
+    primitives: List[Literal["choice", "noul", "score"]]
+    limits: Dict[str, Any] = Field(
+        description=(
+            "Effective engine limits: timeout_seconds is the local worker budget "
+            "(30 seconds, including startup/hash/load); api_timeout_seconds is the "
+            "separate 45-second API envelope. Laya head_tokens and "
+            "question_branch_tokens share a total head budget of 192 (English) "
+            "or 256 (multilingual) from pinned configs. instruction_tokens is null: "
+            "instructions share that head with options and separators, and their "
+            "remaining budget is checked per request."
+        )
+    )
+    pricing: DecisionPricing
+    confidence_semantics: str
+    limitations: List[str]
+
+
+class DecisionModelList(BaseModel):
+    object: Literal["list"] = "list"
+    data: List[DecisionModelEntry]
+
+
+Probability = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+
+
+class DecisionChoiceAnswer(BaseModel):
+    type: Literal["choice"]
+    choice: str
+    confidence: Probability
+    probabilities: Dict[str, Probability]
+
+
+class DecisionNoulAnswer(BaseModel):
+    type: Literal["noul"]
+    noul: Probability
+
+
+class DecisionScoreAnswer(BaseModel):
+    type: Literal["score"]
+    score: float = Field(ge=0, le=15, allow_inf_nan=False)
+    confidence: Probability
+    probabilities: Dict[str, Probability]
+    legend: Dict[str, str]
+
+
+class DecisionBilled(BaseModel):
+    """Cost recorded against the key. `billed`: Jev from the reported input
+    tokens, or Laya (free, 0); `estimated`: Jev usage missing or invalid, billed
+    at the 64,000-token default context."""
+
+    status: Literal["billed", "estimated"]
+    cost_usd: float = Field(ge=0, le=100, allow_inf_nan=False)
+
+
+class DecisionUnrecorded(BaseModel):
+    """The engine answered but the usage ledger could not record the call."""
+
+    status: Literal["unrecorded"]
+    cost_usd: None
+
+
+class DecisionResponse(BaseModel):
+    """Answers retain engine-specific confidence; a cost is null only when unrecorded."""
+
+    model: Literal["jev", "laya", "laya-multilingual"]
+    answers: Dict[
+        str,
+        Annotated[
+            Union[DecisionChoiceAnswer, DecisionNoulAnswer, DecisionScoreAnswer],
+            Field(discriminator="type"),
+        ],
+    ]
+    billing: Annotated[
+        Union[DecisionBilled, DecisionUnrecorded], Field(discriminator="status")
+    ]
+
+
 # ── Preflight ────────────────────────────────────────────────────────────────
 
 
@@ -238,7 +336,10 @@ class PreflightItem(BaseModel):
 
 
 class PreflightRequest(BaseModel):
-    items: List[PreflightItem]
+    items: List[PreflightItem] = Field(
+        max_length=10,
+        description="At most 10 pairs; each ping counts as one chat call (rpm, budget).",
+    )
 
 
 class PreflightResult(BaseModel):
@@ -246,7 +347,24 @@ class PreflightResult(BaseModel):
     model: str
     ok: bool
     latency_ms: int
-    error: Optional[str] = None
+    error: Optional[
+        Literal[
+            "unknown_model",
+            "forbidden_model",
+            "budget_exceeded",
+            "price_unavailable",
+            "rate_limited",
+            "upstream_error",
+        ]
+    ] = Field(
+        default=None,
+        description=(
+            "Why the pair failed (closed code, never the provider's text): "
+            "the model does not resolve, is not allowed for the key, the "
+            "monthly budget is spent, the key has a budget and the model no "
+            "known price, the key's rpm limit is reached, or the provider failed."
+        ),
+    )
 
 
 class PreflightResponse(BaseModel):
@@ -338,6 +456,7 @@ _AUTH_ERRORS = {
 }
 _CHAT_ERRORS = {
     **_AUTH_ERRORS,
+    "402": "The key has a monthly budget and the model no known price; nothing was called.",
     "403": "The key may not use this model.",
     "413": "Request body larger than MAX_BODY_BYTES (10 MB by default).",
     "502": "The provider failed or answered with an error.",
@@ -356,6 +475,19 @@ _Route = Tuple[
     str, str, str, Optional[Type[BaseModel]], Type[BaseModel], Dict[str, str], bool
 ]
 _ROUTES: List[_Route] = [
+    ("get", "/v1/decisions/models", "List decision engines, availability and capabilities",
+     None, DecisionModelList, _AUTH_ERRORS, True),
+    ("post", "/v1/decisions", "Answer named typed questions (never chat)",
+     DecisionRequest, DecisionResponse,
+     {**_AUTH_ERRORS,
+      "403": "The client key may not use this decision engine.",
+      "413": "Decision request exceeds the byte limit.",
+      "422": "Invalid typed question or unsupported engine capability.",
+      "429": "Key already has a decision in flight, queue full or wait over, "
+             "or a key limit exceeded.",
+      "502": "Invalid response from the decision engine.",
+      "503": "Decision engine unavailable.",
+      "504": "Decision engine timed out."}, True),
     ("post", "/v1/chat/completions", "Create a chat completion (OpenAI-compatible)",
      ChatCompletionRequest, ChatCompletion, _CHAT_ERRORS, True),
     ("post", "/v2/chat/completions", "Same as v1, with the X-API-Version: 2 header",
@@ -371,7 +503,10 @@ _ROUTES: List[_Route] = [
     ("get", "/v1/models/{model_id}/info", "Profile of one model",
      None, ModelInfo, {**_AUTH_ERRORS, "404": "No profile for this model."}, True),
     ("post", "/v1/preflight", "Check that provider/model pairs answer",
-     PreflightRequest, PreflightResponse, _AUTH_ERRORS, True),
+     PreflightRequest, PreflightResponse,
+     {**_AUTH_ERRORS,
+      "422": "More than 10 items, or an invalid item.",
+      "503": "Too many concurrent chat requests."}, True),
     ("get", "/v1/me", "The calling key: limits and this month's usage",
      None, ClientInfo, _AUTH_ERRORS, True),
     ("get", "/v1/me/keys", "The calling client's keys (masked)",

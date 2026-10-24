@@ -3,6 +3,8 @@ Pricing scraper — fetch LLM prices from several sources into the current month
 
 Sources, in the order set by PLUGBOARD_PRICING_SOURCES (see pricing_merge):
 - external: PLUGBOARD_PRICING_SOURCE_URL, a JSON grid the operator controls;
+- official: the curated, dated vendor table in plugboard.official_prices (no
+  fetch: it applies even when every network source fails);
 - provider_native: prices published by a configured provider (OpenRouter);
 - models_dev: the models.dev catalogue (already downloaded by models_dev);
 - litellm: LiteLLM's public price file;
@@ -25,7 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
 
-from plugboard import pricing_merge
+from plugboard import official_prices, pricing_merge
 from plugboard.billing import (
     PricingFileError,
     current_pricing_month,
@@ -112,6 +114,8 @@ _KNOWN_PRICES: Dict[str, Dict[str, float]] = {
     "gemini-2.0-flash": {"input_price": 0.10, "output_price": 0.40},
     "gemini-3-flash-preview": {"input_price": 0.10, "output_price": 0.40},
     "gemini-3-1-flash-lite-preview": {"input_price": 0.05, "output_price": 0.20},
+    # Official vendor prices (Claude 5.x, Gemini 4 Argon / 3.8 Flash, gpt-4o-mini,
+    # Jev, Laya) live in plugboard/official_prices.py, dated; never here.
     # ── Ollama — Local models (inference on user hardware, free) ──────────
     "llama3": {"input_price": 0.0, "output_price": 0.0},
     "llama3:8b": {"input_price": 0.0, "output_price": 0.0},
@@ -245,6 +249,35 @@ _KNOWN_PRICES: Dict[str, Dict[str, float]] = {
     "ai21-labs/ai21-jamba-1.5-large": {"input_price": 2.0, "output_price": 8.0},
     "ai21-labs/ai21-jamba-1.5-mini": {"input_price": 0.20, "output_price": 0.40},
 }
+
+# The zeros above for models run on the gateway host. Billing applies them to
+# self-hosted Ollama providers only: never by name to another provider, nor to
+# an Ollama cloud model (`*-cloud`, `:cloud`).
+OLLAMA_LOCAL_FREE = frozenset(
+    {
+        "llama3",
+        "llama3:8b",
+        "llama3:70b",
+        "llama3.1:8b",
+        "llama3.1:70b",
+        "llama3.2:3b",
+        "llama3.3:70b",
+        "mistral",
+        "mixtral",
+        "codellama",
+        "phi3",
+        "phi3:mini",
+        "gemma2",
+        "gemma2:9b",
+        "gemma2:27b",
+        "qwen2.5:7b",
+        "deepseek-coder-v2",
+        "gemma3",
+        "gemma4",
+        "deepseek-r1",
+        "qwen3",
+    }
+)
 
 
 def _pricing_dir_path(month: str):
@@ -773,8 +806,9 @@ def _merge_spaces(
 
 
 def _legacy_source_label(sources: Dict[str, Dict[str, Any]], order: List[str]) -> str:
+    # ``official`` answers on every pass; like ``known`` it is a built-in table.
     for name in order:
-        if sources.get(name):
+        if name != "official" and sources.get(name):
             return "known_prices" if name == "known" else name
     return "known_prices"
 
@@ -799,6 +833,17 @@ async def update_current_pricing(
     month = current_pricing_month()
     order = pricing_merge.source_order(external_configured=bool(_source_url()))
     sources, by_space = await _fetch_sources(order)
+    if "official" in order:
+        sources["official"] = official_prices.prices_for_month(month)
+        freshness = official_prices.status()
+        if freshness["stale"]:
+            log.warning(
+                "Official price table checked %s is older than %d days: check the "
+                "vendors' pages and update plugboard/official_prices.py. See "
+                "docs/runbooks/pricing-scheduler.md#official-price-table",
+                freshness["checked"],
+                freshness["max_age_days"],
+            )
     drift_pct = pricing_merge.drift_threshold_pct()
     action = pricing_merge.drift_action()
 
@@ -859,6 +904,7 @@ async def update_current_pricing(
             reviewed=reviewed_all.setdefault("", {}),
         )
         models = merged.models
+        _set_official_urls(models, sources.get("official") or {})
         spaces, space_drifts, space_added, space_updated, space_rejected = (
             _merge_spaces(
                 spaces_in, by_space, models, order, drift_pct, action, reviewed_all
@@ -958,6 +1004,18 @@ async def update_current_pricing(
     return summary
 
 
+def _set_official_urls(
+    models: Dict[str, Dict[str, Any]], official: Dict[str, Dict[str, Any]]
+) -> None:
+    """An official entry names its vendor page; another source's entry does not."""
+    for model, entry in models.items():
+        source = entry.get("source")
+        if source == "official" and model in official:
+            entry["source_url"] = official[model]["source_url"]
+        elif source in pricing_merge.STRUCTURED_SOURCES:
+            entry.pop("source_url", None)
+
+
 def price_change_events(
     month: str,
     updated: List[Dict[str, Any]],
@@ -1025,6 +1083,8 @@ def revert_model(month: str, model: str, space: str = "") -> Optional[Dict[str, 
             if model in prices
         }
         merged = pricing_merge.merge_sources({}, cached, order, action="apply")
+        if not space:
+            _set_official_urls(merged.models, cache.get("official") or {})
         new = merged.models.get(model)
         if (
             new is not None

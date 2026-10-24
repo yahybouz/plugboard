@@ -20,12 +20,15 @@ Cost of a request = `prompt_tokens / 1,000,000 × input_price + completion_token
 A call is priced with the grid of the current month and **the provider that actually served it** (after any fallback to another provider). The lookup, first hit wins:
 
 1. **The provider's own prices**, in `models_by_provider` (see [Prices per provider](#prices-per-provider)).
-2. **The vendor price**, in `models`, using the model name sent to the provider (without the `<provider-id>:` prefix), with normalisation and suffix matching so that names such as `openai/gpt-4o` or `anthropic--claude-sonnet-4-6` still match. Suffix matching never jumps from one provider's prices to another's.
-3. If the current grid cannot price the model, the same lookup in up to twelve previous monthly grids, then a small table of built-in prices.
+2. **The vendor price**, in `models`, using the model name sent to the provider (without the `<provider-id>:` prefix), with normalisation and suffix matching so that names such as `openai/gpt-4o` or `anthropic--claude-sonnet-4-6` still match. A suffix matches only after `/`, `:` or `--` (`himalaya` never takes `laya`'s price); an id whose prefix is joined by `.`, `_` or `-` (`vendor-claude-sonnet-4-6`) therefore misses the vendor entry, so give that provider its own prices. The built-in table of step 3 still matches suffixes without a boundary. Suffix matching never jumps from one provider's prices to another's. The decision engine entries (`jev`, `laya`, `laya-multilingual`) price [decisions](decisions.md) only, never a chat model.
+3. If the current grid cannot price the model, the same lookup in up to twelve previous monthly grids, then the [official price table](#sources) for the month being billed (exact names only), then a small table of built-in prices.
    Ollama models are priced by Ollama's own grid: a cloud model (`gpt-oss:120b-cloud`) takes the price published on [ollama.com/pricing](https://ollama.com/pricing), read at each pricing refresh into the `ollama` price space (its own id, then its family such as `gemma4:cloud`); a local model costs 0. A cloud model Ollama does not list goes through the usual lookup.
+   A 0 that prices a local Ollama model by name (`llama3`, `qwen3:8b`), in a grid or in the built-in table, applies only to a self-hosted Ollama provider serving a non-cloud model; elsewhere it is skipped, estimates from it included. Only a 0 an admin set (`source: manual`) is a price for every provider.
+   Self-hosted means an Ollama provider whose `base_url` host is `localhost`, a loopback address (`127.0.0.0/8`, `::1`) or a private IP literal (`10/8`, `172.16/12`, `192.168/16`, IPv6 `fc00::/7`). A DNS name (`host.docker.internal`, `ollama`, `localhost.example.com`), the provider id or port 11434 alone never qualifies: for an Ollama reached by name, use its IP, or set a `manual` 0 for the model in the `ollama` price space.
+   Ollama model names are priced without regard to case or surrounding spaces (`GPT-OSS:20B-Cloud` is priced, and treated, as `gpt-oss:20b-cloud`); the name is still sent to Ollama as written.
 4. **The closest version of the same family.** A new `claude-opus-5-6` with no price yet is billed at `claude-opus-5-5`'s price (effort suffixes such as `-high` and date suffixes are ignored; on a tie the newer version wins; families are never mixed). The price is marked `source: estimate`, logged, sent as a `price.estimated` webhook and queued in **Review** as a suggestion of type `estimate`. Applying it makes the price the model's own; until then each call keeps being billed at the estimate.
 
-When nothing matches, the request is recorded with a cost of 0. Each usage entry records the provider that served it and the grid entry that priced it (`price_key`, `price_source`); an admin key also receives that entry in the `X-Price-Key` response header. Client keys never see it.
+When nothing matches, a key with a monthly budget is refused with `402` before any provider call ([which models have a known price](clients-and-keys.md#which-models-have-a-known-price)); a key without a budget has the request recorded with a cost of 0. Each usage entry records the provider that served it and the grid entry that priced it (`price_key`, `price_source`); an admin key also receives that entry in the `X-Price-Key` response header. Client keys never see it.
 
 `GET /admin/coverage/pricing` lists the advertised models that have a price, those that are free (price 0, typically local Ollama models) and those that are missing:
 
@@ -62,12 +65,13 @@ Set `PRICING_SCHEDULER_DISABLED=1` to turn it off. If the scheduler looks stuck,
 `PLUGBOARD_PRICING_SOURCES` lists the sources to use, highest priority first. The default is:
 
 ```
-PLUGBOARD_PRICING_SOURCES=external,provider_native,models_dev,litellm,known
+PLUGBOARD_PRICING_SOURCES=external,official,provider_native,models_dev,litellm,known
 ```
 
 | Source | What it reads |
 |---|---|
 | `external` | Your own JSON document at `PLUGBOARD_PRICING_SOURCE_URL` (`{"models": {...}}` or a bare model map in the format above), over https (http only for `localhost`). It is your source, so its changes are never held for review. |
+| `official` | The vendors' published prices, checked by hand and dated, shipped in `plugboard/official_prices.py` (Claude 5.x, Gemini 4 Argon and 3.8 Flash, `gpt-4o-mini`, the decision engines Jev and Laya). Nothing is fetched, so it applies even when every network source fails. Each refresh writes the prices in force on the **first day of the grid's month** (a vendor change dated mid-month applies from the next month), with `source: official` and the vendor page in `source_url`. Its changes are never held for review and are announced as `pricing.changed` (`applied`). `GET /admin/pricing/scheduler/status` reports its age under `official`; past `PLUGBOARD_OFFICIAL_PRICES_MAX_AGE_DAYS` (35) it reads `stale` and each refresh logs a warning. Updating it: [runbook](../runbooks/pricing-scheduler.md#official-price-table). |
 | `provider_native` | Prices a configured provider publishes itself. Today: OpenRouter's model list (`pricing.prompt` / `pricing.completion`, per token, converted to per million), fetched only when an OpenRouter provider is configured. |
 | `models_dev` | The [models.dev](https://models.dev) catalog (MIT) that Plugboard already downloads for presets. A bare model id takes the price of its vendor (OpenAI, Anthropic, Google, Mistral, DeepSeek, xAI, Moonshot...), not of a reseller. |
 | `litellm` | The public price list of the LiteLLM project (chat models only). |
@@ -75,7 +79,7 @@ PLUGBOARD_PRICING_SOURCES=external,provider_native,models_dev,litellm,known
 
 Every price is checked before it is used: between 0 and 1000 USD per million tokens, and an output price between 0.1 and 20 times the input price. A price outside these bounds is ignored and logged.
 
-**Upgrading with `PLUGBOARD_PRICING_SOURCE_URL` (or the older `PRICING_SOURCE_URL`) set and `PLUGBOARD_PRICING_SOURCES` unset**: nothing changes, only `external` then `known` are used, and the server logs *Pricing sources unchanged (external, known). Set PLUGBOARD_PRICING_SOURCES to add models.dev and LiteLLM.* An unknown name in `PLUGBOARD_PRICING_SOURCES` is logged as an error and the default order is used.
+**Upgrading with `PLUGBOARD_PRICING_SOURCE_URL` (or the older `PRICING_SOURCE_URL`) set and `PLUGBOARD_PRICING_SOURCES` unset**: only `external`, then `official`, then `known` are used, and the server logs *Pricing sources unchanged (external, official, known). Set PLUGBOARD_PRICING_SOURCES to add models.dev and LiteLLM.* An unknown name in `PLUGBOARD_PRICING_SOURCES` is logged as an error and the default order is used. An explicit list without `official` is respected: refreshes do not write official prices, but billing still uses the table for a model the grid does not price.
 
 ## Prices per provider
 
@@ -159,7 +163,7 @@ A rejected price is not asked again until the model's catalog entry changes. **P
 
 1. **Find the request.** In **Usage & Billing → Recent requests** (or `GET /admin/usage/{month}`), each entry has `provider_id` (the provider that served the call, after any fallback), `price_key` and `price_source`.
 2. **Read the price key.** `gpt-4o` is a vendor price from `models`; `openrouter|openai/gpt-4o` is the price of the `openrouter` space in `models_by_provider`. An empty key means no price matched and the call was recorded at $0 (see `GET /admin/coverage/pricing`).
-3. **Read the source.** `manual` is an admin edit; `provider_native`, `models_dev`, `litellm`, `external` and `known` are the automatic sources above; `llm` is a suggestion applied by an admin.
+3. **Read the source.** `manual` is an admin edit; `external`, `official`, `provider_native`, `models_dev`, `litellm` and `known` are the automatic sources above; `llm` is a suggestion applied by an admin.
 4. **Check the grid.** `GET /admin/pricing/{month}` shows the entry. A price change waiting in the review queue was not used: the previous price was.
 
 An admin key also gets the price key of each call in the `X-Price-Key` response header.
@@ -222,7 +226,8 @@ Things to know about manual edits:
 | `PLUGBOARD_PRICING_REFRESH_INTERVAL_H` | `6` | Hours between updates (1 to 24); `0` = daily at `PRICING_DAILY_HOUR_UTC` |
 | `PRICING_UPDATE_TIMEOUT_S` | `120` | Timeout of one update |
 | `PRICING_CB_COOLDOWN_S` | `3600` | Circuit breaker pause after 3 failures |
-| `PLUGBOARD_PRICING_SOURCES` | `external,provider_native,models_dev,litellm,known` | Sources to use, highest priority first (see [Sources](#sources)) |
+| `PLUGBOARD_PRICING_SOURCES` | `external,official,provider_native,models_dev,litellm,known` | Sources to use, highest priority first (see [Sources](#sources)) |
+| `PLUGBOARD_OFFICIAL_PRICES_MAX_AGE_DAYS` | `35` | Days after the official table's last check before it is reported `stale` |
 | `PLUGBOARD_PRICING_SOURCE_URL` | empty | Your own JSON price document (the `external` source). `PRICING_SOURCE_URL` is still read |
 | `PLUGBOARD_PRICE_DRIFT_PCT` | `20` | Change, in percent, above which a price is held for review |
 | `PLUGBOARD_PRICE_DRIFT_ACTION` | `review` | `review` queues large changes; `apply` writes them |

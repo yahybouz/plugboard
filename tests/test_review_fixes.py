@@ -550,14 +550,23 @@ async def test_catalog_test_connects_only_to_the_checked_address(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("caller, sees_price_key", [("acme", False), ("admin", True)])
 async def test_completion_billing_shows_the_price_key_to_admins_only(
-    client, caller, sees_price_key
+    client, caller, sees_price_key, tmp_path, monkeypatch
 ):
     """`billing.price_key` reveals provider routing, like X-Price-Key and the
     entries of /usage/me: admins see it, client keys do not."""
     from aioresponses import aioresponses
 
     from plugboard import app as app_mod
+    from plugboard import billing
     from tests.factories import FAKE_COMPLETION
+
+    # A key of this client may carry a monthly budget (the key store is shared
+    # across tests); a budgeted key is refused an unpriced model (402).
+    pricing = tmp_path / "pricing"
+    pricing.mkdir()
+    monkeypatch.setattr(billing, "_PRICING_DIR", pricing)
+    grid = {"models": {"fake:model-v1": {"input_price": 1.0, "output_price": 2.0}}}
+    (pricing / f"{billing.current_pricing_month()}.json").write_text(json.dumps(grid))
 
     async def as_caller():
         return caller

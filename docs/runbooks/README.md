@@ -4,7 +4,9 @@ Step-by-step procedures for operators running Plugboard. Each runbook helps
 you confirm a problem in a few minutes, mitigate it, and know when to
 escalate. Commands assume a local instance at `http://localhost:8765`, are
 run from the installation directory, and send admin calls with
-`Authorization: Bearer $ADMIN_KEY`.
+`Authorization: Bearer $ADMIN_KEY`. When admin MFA is enforced, add a fresh
+TOTP code or use a session: see
+[admin API with MFA](../guide/monitoring.md#admin-api-with-mfa).
 
 ## Index
 

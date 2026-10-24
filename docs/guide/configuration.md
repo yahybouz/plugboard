@@ -15,7 +15,7 @@ Boolean flags accept `1`, `true`, `yes`, `on` unless stated otherwise. Values be
 | `ENCRYPTION_KEY` | empty | Key used to encrypt provider tokens, OAuth credentials and the MFA secret at rest. Empty: a key is generated once in `data/.encryption_key`. Changing it makes stored credentials unreadable. |
 | `PLUGBOARD_DEV` | empty | `1` marks a development instance: the server may start without `ADMIN_KEY`, and the empty-`API_KEY` warning is logged once instead of repeated. |
 | `PLUGBOARD_LOCAL_AUTO_LOGIN` | `auto` | Dashboard auto-login. `auto`: only when `run.py` listens on a loopback address. `1`: also when listening on another interface (personal workstation). `0`: never. Unknown values count as `0`. See [Security notes](../../README.md#security-notes). |
-| `PLUGBOARD_ADMIN_MFA_REQUIRED` | empty | `1` requires a TOTP code at admin login once a secret is enrolled (`POST /admin/mfa/begin`, then `POST /admin/mfa/setup`, or `make admin-mfa-setup`). Without an enrolled secret it has no effect, so it cannot lock you out. |
+| `PLUGBOARD_ADMIN_MFA_REQUIRED` | empty | `1` requires a TOTP code at admin login, and refuses the admin key alone as a bearer ([admin API with MFA](monitoring.md#admin-api-with-mfa)), once a secret is enrolled (`POST /admin/mfa/begin`, then `POST /admin/mfa/setup`, or `make admin-mfa-setup`). Without an enrolled secret it has no effect, so it cannot lock you out. |
 | `ADMIN_SESSION_MAX_AGE` | `28800` | Lifetime of the admin session cookie, in seconds. |
 | `COOKIE_SECURE` | `auto` | `auto` marks the session cookie `Secure` unless the host is `localhost`, `127.0.0.1` or `::1`; `true` or `false` force it. |
 | `PLUGBOARD_ALLOW_PERMISSIVE` | empty | `1` disables strict tenant isolation: cache entries may be shared by anonymous requests. Leave empty unless you run without client keys on purpose. |
@@ -81,12 +81,12 @@ The server refuses to start when `API_KEY` or `ADMIN_KEY` holds comment text cop
 
 ## Providers bootstrapped from the environment
 
+The removed connector's `OPENCLAW_URL`, `OPENCLAW_KEY`, `OPENCLAW_MODEL` and
+`OPENCLAW_NAME` variables are ignored; they create no provider. See the
+[manual migration guide](openclaw-removal.md) for existing installations.
+
 | Variable | Default | Description |
 |---|---|---|
-| `OPENCLAW_URL` | empty | Base URL of a standard chat API endpoint, registered when no provider exists yet. |
-| `OPENCLAW_KEY` | empty | Its bearer token; both URL and key are required. |
-| `OPENCLAW_MODEL` | `claude-sonnet-4-6` | Its default model. |
-| `OPENCLAW_NAME` | `OpenClaw` | Its name; the provider ID is derived from it. |
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama daemon URL. |
 | `OLLAMA_ENABLED` | `auto` | `auto` registers Ollama if it answers, `true` also warns if it does not, `false` never registers it. |
 | `OLLAMA_TIMEOUT` | `30` | Timeout of Ollama management calls, in seconds. |
@@ -123,7 +123,8 @@ The unprefixed `EMBED_PROVIDER_ID`, `EMBED_MODEL`, `EMBED_SIMILARITY_THRESHOLD` 
 | `PRICING_CB_COOLDOWN_S` | `3600` | Pause after 3 consecutive failures. |
 | `PRICING_PROVIDERS_READY_MAX_RETRIES` | `3` | Startup retries while waiting for providers to load. |
 | `PRICING_PROVIDERS_READY_BACKOFF_S` | `2` | Delay between those retries. |
-| `PLUGBOARD_PRICING_SOURCES` | `external,provider_native,models_dev,litellm,known` | Price sources, highest priority first. An unknown name is logged as an error and the default is used. Unset with a source URL set: `external,known` (previous behaviour). See [pricing sources](pricing.md#sources). |
+| `PLUGBOARD_PRICING_SOURCES` | `external,official,provider_native,models_dev,litellm,known` | Price sources, highest priority first. An unknown name is logged as an error and the default is used. Unset with a source URL set: `external,official,known`. See [pricing sources](pricing.md#sources). |
+| `PLUGBOARD_OFFICIAL_PRICES_MAX_AGE_DAYS` | `35` | Days after the official price table's last check before the scheduler status reports it `stale` (each refresh then logs a warning). A value that is not a positive integer falls back to 35. |
 | `PLUGBOARD_PRICING_SOURCE_URL` | empty | https URL of your own JSON price document (the `external` source; http is refused except for localhost). The older `PRICING_SOURCE_URL` is still read, with a deprecation warning. |
 | `PLUGBOARD_PRICE_DRIFT_PCT` | `20` | Percent change above which a price from a third-party source is held for review. A value that is not a positive number falls back to 20. |
 | `PLUGBOARD_PRICE_DRIFT_ACTION` | `review` | `review` queues large changes as suggestions (not billed until applied); `apply` writes them. Any other value falls back to `review`. |
@@ -179,12 +180,11 @@ The catalog is downloaded with each price update. A download that fails, is inva
 |---|---|---|
 | `WATCHDOG_INTERVAL` | `30` | Seconds between two health checks. |
 | `WATCHDOG_FAILURES` | `3` | Consecutive failures before a restart attempt. |
-| `WATCHDOG_RESTART_COOLDOWN` | `120` | Minimum seconds between two restarts of a provider. |
-| `WATCHDOG_MAX_RESTARTS` | `5` | Maximum restarts per provider per hour. |
+| `WATCHDOG_RESTART_COOLDOWN` | `120` | Minimum seconds between two restart attempts (native restart is unsupported). |
+| `WATCHDOG_MAX_RESTARTS` | `5` | Maximum restart attempts per provider per hour. |
 | `WATCHDOG_HEALTH_TIMEOUT` | `10` | Timeout of a shallow check. |
 | `WATCHDOG_DEEP_TIMEOUT` | `60` | Timeout of a deep check (real completion). |
 | `WATCHDOG_DEEP_INTERVAL` | `3` | Run a deep check every N checks. |
-| `WATCHDOG_RESTART_TIMEOUT` | `120` | Timeout of the launcher script. |
 
 ## Alerts and webhooks
 
@@ -213,9 +213,12 @@ These are read by `scripts/run_mcp.py` and the maintenance scripts, not by the s
 |---|---|---|
 | `PLUGBOARD_URL` | `http://localhost:8765` | URL of the Plugboard instance to call. |
 | `PLUGBOARD_API_KEY` | empty | Client key used by the MCP server for chat and usage. |
-| `PLUGBOARD_ADMIN_KEY` | empty | Admin key used by the MCP server for provider status, and by `scripts/setup_railway_providers.py`. |
+| `PLUGBOARD_ADMIN_KEY` | empty | Admin key used by the MCP server for provider status (stdio only), and by `scripts/setup_railway_providers.py`. |
 | `PLUGBOARD_MCP_TIMEOUT` | `900` | Timeout of MCP chat calls, in seconds. |
+| `PLUGBOARD_MCP_TOKEN` | empty | Bearer token the MCP server requires in SSE or HTTP mode (32+ characters); it refuses to start without it. |
+| `MCP_HOST` | `127.0.0.1` | Bind address of the MCP server in SSE or HTTP mode. |
 | `MCP_PORT` | `8766` | Port of the MCP server in SSE or HTTP mode. |
+| `PLUGBOARD_MCP_ALLOWED_HOSTS`, `PLUGBOARD_MCP_ALLOWED_ORIGINS` | loopback | Comma-separated `Host` and `Origin` values the MCP server accepts in SSE or HTTP mode. |
 | `SETUP_ANTHROPIC_API_KEY`, `SETUP_OPENAI_API_KEY`, `SETUP_GEMINI_API_KEY`, `SETUP_GITHUB_PAT` | empty | Keys that `scripts/setup_railway_providers.py` turns into providers. |
 
 

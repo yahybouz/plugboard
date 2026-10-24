@@ -44,7 +44,7 @@ About the image:
 - A health check calls `/health` every 30 seconds.
 - **Auto-login does not apply in Docker**: requests reach the server from the Docker network, so sign in with `ADMIN_KEY`.
 - **CLI subscriptions in a container** (`full` image only): sign in from inside the container (`docker compose exec <service> claude`, `codex login`, `gemini`) and keep `/home/app` on a volume, otherwise the login is lost when the container is recreated.
-- **Ollama on the host**: `localhost` inside the container is the container itself. Set `OLLAMA_URL` to an address the container can reach, for example `http://host.docker.internal:11434` on Docker Desktop.
+- **Ollama on the host**: `localhost` inside the container is the container itself. Set `OLLAMA_URL` to an address the container can reach, for example `http://host.docker.internal:11434` on Docker Desktop. Local models are free for budgeted keys only on a loopback or private IP literal: with a DNS name, use the host's private IP or set a `manual` 0 in the `ollama` price space ([pricing](pricing.md#how-a-model-finds-its-price)).
 
 ## Without Docker (systemd)
 
@@ -138,4 +138,4 @@ With HTTPS in place, the admin session cookie is marked `Secure` automatically (
 
 ## MCP server
 
-The MCP server is a separate process; see [MCP server](mcp.md). In SSE or HTTP mode it listens on `MCP_PORT` (8766); put it behind the same reverse proxy if remote clients need it.
+The MCP server is a separate process; see [MCP server](mcp.md). In SSE or HTTP mode it requires `PLUGBOARD_MCP_TOKEN` and listens on `127.0.0.1:MCP_PORT` (8766). Never expose it, through a reverse proxy or a non-loopback `MCP_HOST`, without that token: every caller would act with its client key. When remote clients need it, keep the token secret, serve it over TLS, and list the public name in `PLUGBOARD_MCP_ALLOWED_HOSTS` and `PLUGBOARD_MCP_ALLOWED_ORIGINS` ([network transports](mcp.md#network-transports-sse-http)). The admin key is never used in these modes.

@@ -32,9 +32,11 @@ import aiohttp
 from plugboard.oauth_store import (
     OAuthCredential,
     OAuthFlow,
+    credential_version,
     delete_flow,
     get_credential,
     get_flow,
+    replace_credential,
     save_credential,
     save_flow,
 )
@@ -317,7 +319,13 @@ async def poll_device(state: str) -> Dict[str, Any]:
 
 
 async def refresh(source: str) -> Optional[OAuthCredential]:
-    """Refresh an expired access_token using refresh_token."""
+    """Refresh an expired access_token using refresh_token.
+
+    The result is saved only if the stored credential did not change during
+    the request: a disconnect or a new account wins over a refresh in flight.
+    """
+    # Version first: a write between the two reads makes the refresh discarded.
+    version = credential_version(source)
     cred = get_credential(source)
     if cred is None or not cred.refresh_token:
         return None
@@ -351,7 +359,9 @@ async def refresh(source: str) -> Optional[OAuthCredential]:
     # Some providers don't return a new refresh_token on refresh — preserve old one
     tokens.setdefault("refresh_token", cred.refresh_token)
     new_cred = _build_credential(source, cred.account, tokens)
-    save_credential(new_cred)
+    if not replace_credential(new_cred, version):
+        log.info("Refresh for %s discarded: the credential changed meanwhile", source)
+        return None
     return new_cred
 
 

@@ -6,6 +6,47 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **Breaking with admin MFA enforced**: the `ADMIN_KEY` alone is refused (401) on admin routes (`/admin/*`, `/providers*`, `/metrics*`, `/docs`, dashboard); add a fresh code in `X-Plugboard-Admin-TOTP` or use a session ([admin API with MFA](docs/guide/monitoring.md#admin-api-with-mfa)). Without enforced MFA nothing changes. TOTP codes are single-use. Admin sessions are now recorded server-side (`data/admin_sessions.json`): logout revokes the session, enrolling, rotating or disabling MFA revokes all of them, and a session opened without a code stops working once MFA is enforced. Existing sessions end at upgrade: sign in again.
+- MCP server: `--sse` and `--http` refuse to start without `PLUGBOARD_MCP_TOKEN` (32+ characters), require it as bearer, listen on `127.0.0.1` by default (`MCP_HOST`), keep DNS-rebinding protection (`PLUGBOARD_MCP_ALLOWED_HOSTS`, `PLUGBOARD_MCP_ALLOWED_ORIGINS`), and never load `PLUGBOARD_ADMIN_KEY` (`provider_status` refuses). stdio is unchanged.
+- OAuth broker: saving or deleting a credential (connect, refresh, `DELETE /admin/oauth/{source}`) drops the cached tokens of that source at once, including the derived Copilot token; a token without expiry is re-read after 5 minutes at most. Disconnecting keeps the broker provider records (the endpoint description said otherwise).
+- OVH compose: the gateway no longer bind-mounts the host account's `.codex` and `.claude`; CLI logins live in the `cli-home` volume. [Migration](deploy/ovh/README.md#cli-homes): log in again inside the container.
+- Residuals: admin sessions are bound to the MFA generation, so an MFA enrolment, rotation or disable refuses older sessions even if `admin_sessions.json` is read-only (the write error is still returned); the `/admin/mfa/setup` code is consumed; MCP `--sse`/`--http` also drops the admin key that importing the package reloads from `.env`; a Copilot token derived during a GitHub save or disconnect is not cached.
+- MCP `--sse`/`--http` keep only their own variables (`PLUGBOARD_URL`, `PLUGBOARD_API_KEY`, `PLUGBOARD_MCP_*`, `MCP_HOST`, `MCP_PORT`, data paths, system variables): `ADMIN_KEY`, `ENCRYPTION_KEY`, provider keys and `PLUGBOARD_JEV_API_KEY` are dropped, from `.env` too.
+- With `PLUGBOARD_ADMIN_MFA_REQUIRED=1`, an unreadable `admin_mfa.json` refuses admin access (401) instead of turning MFA off.
+- An OAuth refresh in flight no longer brings back a credential disconnected or replaced meanwhile.
+
+### Removed
+
+- OpenClaw connector: environment bootstrap (`OPENCLAW_URL`, `OPENCLAW_KEY`, `OPENCLAW_MODEL`, `OPENCLAW_NAME`), wrapper model encoding, connector aliases and watchdog launcher execution. Those variables are ignored. Recognizable legacy provider IDs/markers and requests are refused as an unsupported removed connector, before transport and without fallback. Existing usage, historical price lookup, invoices and attribution notices are preserved.
+
+### Changed
+
+- Configure direct providers explicitly and update callers and ACLs manually to their advertised native IDs; see [migration](docs/guide/openclaw-removal.md). Claude Code, Codex, Ollama and generic compatible HTTP providers remain available. Typed decisions remain Jev through TypeSafe API and hosted Laya English/multilingual, with Kev absent. No release or deployment qualification is implied.
+- Typed decisions are recorded in the usage ledger (`decision:<id>`) and count towards the key's monthly limit. Jev is billed at TypeSafe's official price, $0.042 per million input tokens (output free), from the `usage` its answer reports; missing or invalid usage is billed at its 64,000-token default context (`billing.status: "estimated"`). Laya is free (`billed`, 0). `GET /v1/decisions/models` lists each engine's `pricing`. Decisions are never refused with 402. A Jev call TypeSafe answered but whose answer is rejected (502), or that timed out after it was sent (504), is billed: reported usage, else the ceiling; other failed calls, and a call the 45-second API deadline ends before TypeSafe answers, are not recorded. `PLUGBOARD_JEV_PRICE_PER_CALL_USD` is removed: ignored with one warning if still set.
+- Built-in prices from the vendors' official pages (2026-10-24): Claude Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5 and the agy `-medium` variants, `gemini-4-argon-*`, `gemini-3.8-flash-*`, `gpt-4o-mini`. `gpt-oss-120b-medium` and `meta-llama-3.1-405b-instruct` stay unpriced (no official price): 402 for budgeted keys.
+- Official prices go through the pricing scheduler: a dated official table (`plugboard/official_prices.py`, new source `official`, ranked right after `external`) is written into each month's grid at every refresh, with no fetch, so it applies when every network source fails. Google's increases apply by themselves: `gemini-4-argon-*` 4/20 from the 2026-12 grid, `gemini-3.8-flash-*` 1.50/7.50 from the 2027-01 grid (`pricing.changed`, `applied`). Admin `manual` prices still win. Default `PLUGBOARD_PRICING_SOURCES` gains `official` (`external,official,known` with only a source URL). The scheduler status reports the table's age under `official` (`PLUGBOARD_OFFICIAL_PRICES_MAX_AGE_DAYS`, 35). Decisions (Jev, Laya) are priced from the grid too; `GET /v1/decisions/models` shows the price applied. [Updating the table](docs/runbooks/pricing-scheduler.md#official-price-table).
+- Decision admission: one decision in flight per key (429 for a second one); other keys wait in arrival order (8 waiting at most, 15 seconds each) instead of being refused at once.
+
+### Fixed
+
+- `POST /v1/preflight` now applies the chat checks to each pair before its ping (allowed models, monthly budget, known price, key RPM limit; the concurrency cap covers the batch), accepts at most 10 pairs (422 beyond, `maxItems` in the contract), bills each ping like a chat call, and reports failures as closed codes (`unknown_model`, `forbidden_model`, `budget_exceeded`, `price_unavailable`, `rate_limited`, `upstream_error`) instead of the provider's error text.
+- A key with a monthly budget is refused with 402 a model without a known price, streamed or not and in preflight, before any provider call: such calls were recorded at 0 and never reached the limit. Ollama cloud models (`*-cloud`, `:cloud`) priced only by the built-in local 0 count as unpriced. Keys without a budget are unchanged. See [which models have a known price](docs/guide/clients-and-keys.md#which-models-have-a-known-price).
+- CLI providers run in their own process group: on a timeout, a cancellation or any error the CLI and its descendants are killed and reaped before the concurrency slot and the private Gemini home are released, including for `agy models`. Previously a timeout killed only the CLI itself and a cancellation killed nothing.
+- The `spawn CLI` log line no longer contains command-line arguments, which carried the prompt for Antigravity; it records the CLI, the model and the prompt length.
+- Python SDK: the synchronous client no longer follows HTTP redirects, which sent the `Authorization` key to the redirect target; a 3xx now raises `PlugboardError` with that status. The async client already did not follow them.
+- Docker image: `manifests/` (the decision manifests the gateway loads) is now copied beside the package.
+- The built-in 0 for local Ollama models applies to self-hosted Ollama providers only: a local model name (`llama3`) on another provider, or an Ollama cloud model, is no longer free by name.
+- The same holds for a 0 written by name in a grid by a source (or an entry without source), and for estimates from it; an admin's `manual` 0 stays a price for every provider.
+- Typed decisions: time waiting in the queue is deducted from the engine's allowance, so queue plus engine stay within the published 45-second `api_timeout_seconds` (504 beyond). A success whose usage cannot be recorded now returns its answers with `billing.status: "unrecorded"` and an error log without the request, instead of a 500.
+- **Breaking for Ollama reached by a DNS name** (`host.docker.internal`, a compose service): the local 0 now needs an Ollama `base_url` on `localhost` or a loopback/private IP literal; elsewhere set a `manual` 0 in the `ollama` price space, or budgeted keys get 402. The id or port 11434 alone no longer qualifies.
+- Ollama names are priced case- and space-insensitively (`gpt-oss:20b-CLOUD` is a cloud model, never free) and still sent upstream as written.
+- Decision engine prices (`jev`, `laya`) no longer price chat models, and a price key matches the end of a model id only after `/`, `:` or `--` (`himalaya` no longer takes `laya`'s price).
+- Decisions: when a usage write fails, budgeted keys are refused (503) until a write succeeds; one probe call every 60 seconds. Keys without a budget are unchanged.
+- `/v1/chat/completions`: a non-string `model` or a non-object body returns 400 instead of 500.
+- Claude Code CLI model discovery no longer picks up the agy effort variants (`claude-opus-5-5-medium`, any `-low`/`-medium`/`-high` row) that the official price table writes into the grid; agy keeps them.
+
 ## [4.2.0] — 2026-10-23
 
 ### Added

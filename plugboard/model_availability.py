@@ -11,6 +11,12 @@ fresh without touching billing history.
 
 from __future__ import annotations
 
+from plugboard.legacy_connectors import (
+    is_removed_provider,
+    require_supported_model,
+    require_supported_provider,
+)
+
 import asyncio
 import json
 import logging
@@ -22,6 +28,7 @@ import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 from plugboard.config import is_cli_provider as _is_cli_provider
 from plugboard.storage import atomic_write_text, data_dir
+from plugboard.model_identity import observation_owner
 
 _DATA_DIR = data_dir()
 _MARKER_FILE = _DATA_DIR / "last_model_availability_run.txt"
@@ -197,6 +204,14 @@ async def probe_subprocess_model(
     timeout_s: float,
 ) -> Dict[str, Any]:
     """Probe one subprocess model and classify the result."""
+    try:
+        require_supported_model(model_id, effective_name=True)
+    except ValueError as exc:
+        return {"ok": False, "terminal": False, "reason": str(exc)}
+    from plugboard.decisions import is_decision_model
+
+    if is_decision_model(model_id, effective_name=True):
+        return {"ok": False, "terminal": False, "reason": "decision_model_not_chat"}
     from plugboard import cli_subprocess
     from plugboard.model_quarantine import (
         is_account_unsupported_error,
@@ -242,6 +257,14 @@ async def probe_ollama_model(
 
     Returns a dict with ``ok`` bool and ``reason`` string.
     """
+    try:
+        require_supported_model(model_id, effective_name=True)
+    except ValueError as exc:
+        return {"ok": False, "reason": str(exc)}
+    from plugboard.decisions import is_decision_model
+
+    if is_decision_model(model_id, effective_name=True):
+        return {"ok": False, "reason": "decision_model_not_chat"}
     import aiohttp
 
     url = (base_url or os.environ.get("OLLAMA_URL", "http://localhost:11434")).rstrip(
@@ -446,7 +469,38 @@ async def run_connectivity_probes(
         log.warning("connectivity_probes: cannot load providers (%s)", exc)
         return previous
 
-    active_providers = [p for p in providers if p.get("is_active", True)]
+    active_providers = [
+        p for p in providers if p.get("is_active", True) and not is_removed_provider(p)
+    ]
+    provider_ids = tuple(p["id"] for p in providers)
+    # Previously successful snapshots must not advertise a removed connector as up.
+    for provider in providers:
+        if not is_removed_provider(provider):
+            continue
+        pid = str(provider.get("id", ""))
+        known_keys = {
+            key
+            for key, entry in new_models.items()
+            if observation_owner(key, entry, provider_ids) == pid
+        }
+        known_keys.update(
+            f"{pid}:{model['id']}"
+            for model in provider.get("models", []) or []
+            if isinstance(model, dict) and model.get("id")
+        )
+        for key in known_keys:
+            entry = new_models.get(key, {})
+            if observation_owner(key, entry, provider_ids) != pid:
+                continue
+            new_models[key] = {
+                **entry,
+                "connected": False,
+                "provider": pid,
+                "reason": "legacy_connector_removed",
+                # Policy quarantine is not a connectivity probe. Preserve the
+                # historical observation time; never invent one for an overlay.
+                "last_probed_at": entry.get("last_probed_at"),
+            }
 
     # Shared semaphore limits concurrent subprocess probes across all providers.
     semaphore = asyncio.Semaphore(_PROBE_SUBPROCESS_CONCURRENCY)
@@ -524,6 +578,7 @@ async def refresh_subprocess_provider_models(
     Returns a report with the new model entries. The caller decides whether
     to persist it with ``config.update_provider``.
     """
+    require_supported_provider(provider)
     auth_source = provider.get("auth_source", "") or ""
     if not auth_source.startswith("subprocess:"):
         return {
@@ -693,7 +748,7 @@ async def refresh_all_subprocess_providers(
     reports: List[Dict[str, Any]] = []
     persisted = 0
     for provider in load_providers():
-        if not provider.get("is_active", True):
+        if not provider.get("is_active", True) or is_removed_provider(provider):
             continue
         if not (provider.get("auth_source", "") or "").startswith("subprocess:"):
             continue
@@ -742,6 +797,7 @@ async def refresh_native_provider_models(provider: Dict[str, Any]) -> Dict[str, 
     these lists hides missing/deleted models from future `/v1/models` calls
     while leaving historical usage and billing rows untouched.
     """
+    require_supported_provider(provider)
     if not _is_native_catalog_provider(provider):
         return {
             "provider": provider.get("id"),
@@ -837,6 +893,8 @@ async def discover_openai_models(
     list; anything else is (None, reason), which model_diff treats as "no
     information" rather than "every model disappeared".
     """
+    require_supported_provider(provider)
+    require_supported_model(provider.get("default_model", ""), effective_name=True)
     import aiohttp
 
     from plugboard import router as router_mod
@@ -946,9 +1004,18 @@ async def refresh_all_model_catalogs(
     batch = change_events.ChangeBatch()
     persisted = 0
     for provider in all_providers:
-        if not provider.get("is_active", True):
+        if not provider.get("is_active", True) or is_removed_provider(provider):
             continue
         pid = str(provider.get("id"))
+        try:
+            require_supported_model(
+                provider.get("default_model", ""), effective_name=True
+            )
+        except ValueError as exc:
+            error = {"provider": pid, "error": str(exc)}
+            reports.append({**error, "models": []})
+            errors.append(error)
+            continue
         auth_source = provider.get("auth_source", "") or ""
         is_cli = _is_cli_provider(provider)
         if (

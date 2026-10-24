@@ -43,9 +43,18 @@ const reply = await client.chat.completions.create({
 });
 ```
 
+Inject the client key into `PLUGBOARD_API_KEY` through your shell or secret manager.
+For an interactive Bash session, enter it without echoing it or placing it in shell
+history:
+
+```bash
+read -r -s -p "Plugboard API key: " PLUGBOARD_API_KEY; printf '\n'
+export PLUGBOARD_API_KEY
+```
+
 ```bash
 curl http://localhost:8765/v1/chat/completions \
-  -H "Authorization: Bearer pb_your_key" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${PLUGBOARD_API_KEY:?Set PLUGBOARD_API_KEY}" -H "Content-Type: application/json" \
   -d '{"model": "anthropic-direct:claude-sonnet-5-5", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
@@ -57,13 +66,68 @@ The repository also ships a small Python client, [`sdk/python`](../../sdk/python
 |---|---|
 | `POST /v1/chat/completions` | Chat completion, streamed or not |
 | `GET /v1/models` | Models the gateway serves, with `account_compatible` for your key |
+| `GET /v1/decisions/models` | Permitted decision engines, availability, limits and confidence semantics |
+| `POST /v1/decisions` | Named typed questions; requires an explicitly permitted client key |
 | `GET /v1/models/benchmarks`, `GET /v1/models/{model_id}/info` | Model profiles: capabilities, benchmarks, cost tier |
-| `POST /v1/preflight` | Check that provider/model pairs answer before a long run |
+| `POST /v1/preflight` | Check that provider/model pairs answer before a long run (10 pairs at most; each ping is checked, counted and billed like a chat call; `error` is a closed code) |
 | `GET /v1/me`, `GET /v1/me/keys`, `GET /usage/me` | Your key: limits, spend this month, usage entries |
 | `GET /health` | Liveness, no key needed |
 | `/v2/...` | Same as `/v1`, with `api_version` / `X-API-Version: 2` |
 
 Schemas, status codes and headers of each route are in `openapi.json`.
+
+## Typed decisions
+
+Decision engines use a dedicated API and are absent from the chat catalogue and
+Playground. Only client keys with explicit `allowed_decision_models` permissions
+can use them; instance and admin keys do not grant access. The exact supported
+IDs are `jev` (TypeSafe API), `laya` (English) and `laya-multilingual` (the same
+locally hostable Laya family). Kev was removed by decision 72 on 24 October 2026;
+legacy Kev IDs are rejected in chat without a generative fallback and confer no
+capability. An absent or empty
+policy grants no decision models. Use the exact IDs returned by the catalogue.
+
+```json
+{
+  "model": "jev",
+  "state": "A synthetic parcel arrived intact.",
+  "questions": {
+    "route": {
+      "type": "choice",
+      "instructions": "Choose the next step.",
+      "criteria": {"accept": "Parcel intact", "inspect": "Damage suspected"}
+    },
+    "intact": {"type": "noul", "instructions": "The parcel is intact."},
+    "condition": {
+      "type": "score",
+      "instructions": "Rate the parcel condition.",
+      "criteria": ["damaged", "intact"]
+    }
+  }
+}
+```
+
+`choice` criteria are named options mapped to descriptions (or null); `noul`
+returns a probability of true; `score` criteria are ordered levels and its
+answer is their zero-based expected index. Responses contain `model`, `answers`
+keyed by question ID, and `billing`: `{"status": "billed", "cost_usd": <cost>}`
+(Jev at its official $0.042 per million input tokens from the usage it
+reports; Laya free, 0), `{"status": "estimated", "cost_usd": 0.002688}` when
+Jev reports no valid usage (64,000-token default context), or
+`{"status": "unrecorded", "cost_usd": null}` when the answer could not be
+written to the usage ledger. `GET /v1/decisions/models` lists each engine's
+`pricing` per million tokens. A second concurrent decision from one key gets
+429, and other keys queue briefly; queue plus engine stay within
+`api_timeout_seconds` (see [Typed decisions](../guide/decisions.md)). Consult each engine's catalogue
+limits and confidence semantics before comparing confidence values.
+
+Missing credentials, incomplete local assets or an unconfigured worker are
+reported as unavailable (503), including Jev without its server-side API key.
+This documentation's examples are synthetic requests, not evidence of real model
+inference. No inference request downloads weights. The optional ML runtime is
+qualified only on macOS arm64 ≥14; Linux/OVH hosting remains unproven. Historical
+multilingual smoke remains 2/3 and the Torch pt2 reserve remains open. UI, pentest
+and final reviews are not validated by these examples.
 
 ## What Plugboard adds to the OpenAI API
 
@@ -83,6 +147,7 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 | Status | Meaning | What to do |
 |---|---|---|
 | `401` | Missing, unknown or revoked key | Check the key |
+| `402` | The key has a monthly budget and the model has no known price; nothing was called | Ask the operator to price the model, or use a priced one |
 | `403` | The key may not use this model | Pick a model where `account_compatible` is true |
 | `413` | Body over `MAX_BODY_BYTES` (10 MB) | Send less |
 | `429` | IP rate limit, key RPM limit or monthly budget | Back off; `GET /v1/me` shows the budget left |
@@ -91,7 +156,7 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 
 ## MCP
 
-The MCP server (stdio, SSE or streamable HTTP) wraps the same API for MCP clients: `chat`, `chat_stream`, `list_models`, `check_usage`, `provider_status`, plus the update-registry tools. [`mcp.json`](mcp.json) gives each tool's input schema; [MCP server](../guide/mcp.md) explains how to install, configure and connect it.
+The MCP server (stdio, SSE or streamable HTTP) wraps the same API for MCP clients: `chat`, `chat_stream`, `list_models`, `list_decision_models`, `decide`, `check_usage`, `provider_status`, plus the update-registry tools. [`mcp.json`](mcp.json) gives each tool's input schema; [MCP server](../guide/mcp.md) explains how to install, configure and connect it.
 
 ## Versioning
 

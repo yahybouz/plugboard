@@ -1083,9 +1083,17 @@ async def test_admin_mfa_status_reports_enrolment_and_enforcement(
     body = resp.json()
     assert body == {"enrolled": False, "enforced": False, "flag_set": False}
 
-    _mfa.enroll(_mfa.generate_secret())
+    secret = _mfa.generate_secret()
+    _mfa.enroll(secret)
     monkeypatch.setenv("PLUGBOARD_ADMIN_MFA_REQUIRED", "1")
-    resp = await admin_client.get("/admin/mfa/status", headers=ADMIN_AUTH)
+    bearer_only = await admin_client.get("/admin/mfa/status", headers=ADMIN_AUTH)
+    assert bearer_only.status_code == 401
+    # With MFA enforced the admin key alone is refused: send a fresh code.
+    resp = await admin_client.get(
+        "/admin/mfa/status",
+        headers={**ADMIN_AUTH, "X-Plugboard-Admin-TOTP": _mfa._generate_code(secret)},
+    )
+    assert resp.status_code == 200
     body = resp.json()
     assert body["enrolled"] is True
     assert body["enforced"] is True

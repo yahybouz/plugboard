@@ -23,7 +23,7 @@ from tests.factories import PROVIDER_A, FAKE_COMPLETION
 
 
 def test_build_auth_header_default_bearer():
-    """Default behavior: Authorization: Bearer <token> (OpenClaw compat)."""
+    """Default behavior: Authorization: Bearer <token> for direct compatible endpoints."""
     from plugboard.router import _build_auth_header
 
     provider = {"bearer_token": "abc123"}
@@ -331,8 +331,8 @@ async def test_forward_uses_xapikey_for_anthropic(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_forward_uses_bearer_for_existing_openclaw(tmp_path, monkeypatch):
-    """Existing OpenClaw provider (no auth_header_* fields) still uses Bearer."""
+async def test_forward_uses_bearer_for_existing_direct_provider(tmp_path, monkeypatch):
+    """Direct provider without auth_header_* fields still uses Bearer."""
     _setup_providers(tmp_path, monkeypatch, [PROVIDER_A])
 
     from plugboard.router import forward

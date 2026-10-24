@@ -107,6 +107,55 @@ def _conn() -> Iterator[sqlite3.Connection]:
 # ── Credentials CRUD ─────────────────────────────────────────────────────────
 
 
+def credential_version(source: str) -> Optional[tuple]:
+    """Opaque version of the stored credential; every write changes it."""
+    with _conn() as c:
+        row = c.execute(
+            "SELECT updated_at, refresh_token FROM oauth_credentials WHERE source = ?",
+            (source,),
+        ).fetchone()
+    return (row["updated_at"], row["refresh_token"]) if row else None
+
+
+def replace_credential(cred: OAuthCredential, version: Optional[tuple]) -> bool:
+    """Overwrite the credential only if it is still at ``version``.
+
+    A refresh started before a disconnect or a reconnection must not bring
+    the old account back: False, nothing written, when the row changed or
+    was deleted meanwhile.
+    """
+    if version is None:
+        return False
+    now = datetime.now(timezone.utc).isoformat()
+    extra_json = json.dumps(cred.extra) if cred.extra else "{}"
+    enc_access = _encrypt_token(cred.access_token) if cred.access_token else ""
+    enc_refresh = _encrypt_token(cred.refresh_token) if cred.refresh_token else ""
+    with _conn() as c:
+        cur = c.execute(
+            """
+            UPDATE oauth_credentials SET
+                account = ?, access_token = ?, refresh_token = ?, expires_at = ?,
+                scope = ?, extra = ?, updated_at = ?
+            WHERE source = ? AND updated_at = ? AND refresh_token = ?
+            """,
+            (
+                cred.account,
+                enc_access,
+                enc_refresh,
+                cred.expires_at,
+                cred.scope,
+                extra_json,
+                now,
+                cred.source,
+                *version,
+            ),
+        )
+        replaced = cur.rowcount == 1
+    if replaced:
+        _invalidate_loaders(cred.source)
+    return replaced
+
+
 def save_credential(cred: OAuthCredential) -> None:
     """Upsert a credential. Encrypts access + refresh tokens."""
     now = datetime.now(timezone.utc).isoformat()
@@ -146,6 +195,14 @@ def save_credential(cred: OAuthCredential) -> None:
                 now,
             ),
         )
+    _invalidate_loaders(cred.source)
+
+
+def _invalidate_loaders(source: str) -> None:
+    """A store write makes every cached token of that source stale."""
+    from plugboard.cli_auth import invalidate_broker_source
+
+    invalidate_broker_source(source)
 
 
 def get_credential(source: str) -> Optional[OAuthCredential]:
@@ -179,7 +236,9 @@ def delete_credential(source: str) -> bool:
     """Delete a credential. Returns True if existed."""
     with _conn() as c:
         cur = c.execute("DELETE FROM oauth_credentials WHERE source = ?", (source,))
-        return cur.rowcount > 0
+        deleted = cur.rowcount > 0
+    _invalidate_loaders(source)
+    return deleted
 
 
 def list_credentials() -> List[Dict[str, Any]]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import inspect
+import sys
 from types import SimpleNamespace
 from typing import Any
 
@@ -49,6 +50,24 @@ from httpx import AsyncClient, ASGITransport  # noqa: E402
 from tests.factories import PROVIDER_A, PROVIDER_B  # noqa: E402
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "live: calls external services; requires PLUGBOARD_RUN_LIVE_TESTS=1"
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Keep real service calls opt-in regardless of their test directory."""
+    if os.environ.get("PLUGBOARD_RUN_LIVE_TESTS", "0") == "1":
+        return
+    skip_live = pytest.mark.skip(
+        reason="Live tests skipped — set PLUGBOARD_RUN_LIVE_TESTS=1 to enable."
+    )
+    for item in items:
+        if item.get_closest_marker("live") is not None:
+            item.add_marker(skip_live)
+
+
 def _install_aioresponses_aiohttp_compat() -> None:
     """Let aioresponses build responses for aiohttp requiring stream_writer."""
     stream_writer = inspect.signature(aiohttp.ClientResponse).parameters.get(
@@ -91,6 +110,24 @@ async def _close_http_pool():
         await reset_for_tests()
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _restore_process_state():
+    """Undo process-wide state a test can leave behind.
+
+    ``scripts/run_mcp.py`` run in-process in network mode keeps only the MCP
+    variables in ``os.environ`` (here, the pytest process), and an unrecorded
+    decision opens the per-process usage breaker of ``plugboard.decision_api``.
+    """
+    environ = dict(os.environ)
+    yield
+    if dict(os.environ) != environ:
+        os.environ.clear()
+        os.environ.update(environ)
+    decision_api = sys.modules.get("plugboard.decision_api")
+    if decision_api is not None:
+        decision_api._usage_down_since = None
 
 
 def _setup_providers(

@@ -298,7 +298,7 @@ def test_auth_header_carries_preset_extra_headers():
         # The historical aliases still apply to the providers they stand for.
         ("claude-via-claude-cli:claude-opus-5-5", "claude-code:claude-opus-5-5"),
         ("chatgpt-via-codex-cli:gpt-6.1-sol", "Codex:gpt-6.1-sol"),
-        ("openclaw/anthropic--claude-haiku-4-5", "claude-code:claude-haiku-4-5"),
+        ("direct:anthropic--claude-haiku-4-5", "direct:anthropic--claude-haiku-4-5"),
     ],
 )
 def test_clean_model_id_never_reassigns_a_configured_provider(raw, clean):

@@ -66,9 +66,9 @@ class TestConfigEncryption:
 
 
 class TestConfigBootstrap:
-    """Bootstrap from env vars (lines 104-114, 123)."""
+    """Removed connector environment cannot bootstrap a provider."""
 
-    def test_bootstrap_from_env(self, tmp_path, monkeypatch):
+    def test_removed_env_is_ignored_without_store_write(self, tmp_path, monkeypatch):
         import plugboard.config as cfg
 
         data_dir = tmp_path / "data"
@@ -86,12 +86,8 @@ class TestConfigBootstrap:
         monkeypatch.setenv("OPENCLAW_NAME", "My OpenClaw")
 
         providers = cfg.load_providers()
-        assert len(providers) == 1
-        assert providers[0]["name"] == "My OpenClaw"
-        assert providers[0]["base_url"] == "http://openclaw.test/v1"
-        assert providers[0]["bearer_token"] == "sk-test-key-123"
-        assert providers[0]["default_model"] == "claude-sonnet-4-6"
-        assert providers[0]["id"] == "my-openclaw"
+        assert providers == []
+        assert json.loads(pfile.read_text()) == {"providers": []}
 
 
 class TestConfigSlugCollision:

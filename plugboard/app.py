@@ -49,7 +49,7 @@ import re
 import secrets
 import time
 import uuid
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -65,6 +65,7 @@ from contextlib import asynccontextmanager
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from plugboard import __version__
+from plugboard import admin_sessions
 from plugboard import billing as _billing
 from plugboard import usage as _usage
 from plugboard.alerts import check_and_alert as _check_and_alert
@@ -96,6 +97,15 @@ from plugboard.config import (
 from plugboard.logging_config import _request_id_var, setup_logging
 from plugboard.metrics import get_stats
 from plugboard.ratelimit import check_client_rate_limit, check_rate_limit
+from plugboard.decision_api import router as decision_router
+from plugboard.legacy_connectors import (
+    REMOVED_CONNECTOR_ERROR,
+    is_removed_provider,
+    is_removed_model,
+    require_supported_model,
+    require_supported_provider,
+)
+from plugboard.decisions import is_decision_model
 from plugboard.cli_auth import AuthError
 from plugboard.cli_subprocess import CliSubprocessError
 from plugboard.router import (
@@ -467,6 +477,7 @@ app = FastAPI(
     openapi_url=None,  # disable default /openapi.json
     lifespan=_lifespan,
 )
+app.include_router(decision_router)
 
 
 # ── SEC-001 violation handler ───────────────────────────────────────────────
@@ -741,11 +752,15 @@ def _is_admin_key(token: str) -> bool:
     )
 
 
-def _create_admin_session_token() -> str:
+def _create_admin_session_token(mfa: bool = False) -> str:
+    """Sign a new session and register it server-side (revocable).
+
+    ``mfa`` records that a TOTP code was checked to open it.
+    """
     effective_admin = _effective_admin_key()
     if not effective_admin:
         return ""
-    issued_at = str(int(time.time()))
+    issued_at = int(time.time())
     nonce = secrets.token_urlsafe(18)
     payload = f"{issued_at}.{nonce}"
     signature = hmac.new(
@@ -753,20 +768,30 @@ def _create_admin_session_token() -> str:
         payload.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
+    from plugboard import admin_mfa as _mfa
+
+    admin_sessions.register(
+        nonce,
+        issued_at,
+        mfa=mfa,
+        max_age=_ADMIN_SESSION_MAX_AGE,
+        mfa_generation=_mfa.generation(),
+    )
     return f"{payload}.{signature}"
 
 
-def _is_admin_session(token: str) -> bool:
+def _admin_session_nonce(token: str) -> str:
+    """The nonce of a correctly signed, unexpired session token, else ""."""
     effective_admin = _effective_admin_key()
     if not token or not effective_admin:
-        return False
+        return ""
     try:
         issued_at_raw, nonce, signature = token.split(".", 2)
         issued_at = int(issued_at_raw)
     except (ValueError, TypeError):
-        return False
+        return ""
     if not nonce or not signature:
-        return False
+        return ""
 
     payload = f"{issued_at_raw}.{nonce}"
     expected_signature = hmac.new(
@@ -775,12 +800,29 @@ def _is_admin_session(token: str) -> bool:
         hashlib.sha256,
     ).hexdigest()
     if not hmac.compare_digest(signature, expected_signature):
-        return False
+        return ""
 
     now = int(time.time())
-    if issued_at > now + 60:
+    if issued_at > now + 60 or now - issued_at > _ADMIN_SESSION_MAX_AGE:
+        return ""
+    return nonce
+
+
+def _is_admin_session(token: str) -> bool:
+    """Signed, unexpired, still registered, opened under the current MFA
+    generation, and opened with TOTP when MFA is required (a session from
+    before enforcement does not count)."""
+    nonce = _admin_session_nonce(token)
+    if not nonce:
         return False
-    return now - issued_at <= _ADMIN_SESSION_MAX_AGE
+    record = admin_sessions.lookup(nonce)
+    if record is None:
+        return False
+    from plugboard import admin_mfa as _mfa
+
+    if record.get("mfa_generation") != _mfa.generation():
+        return False
+    return bool(record.get("mfa")) or not _mfa.is_required()
 
 
 def _should_use_secure_cookie(request: Request) -> bool:
@@ -819,19 +861,17 @@ def _get_request_key_record(
     return None
 
 
-def _apply_key_record(
-    request: Request, rec: Dict[str, Any], *, dev_mode: bool, token_prefix: str
-) -> str:
+def _apply_key_record(request: Request, rec: Dict[str, Any], *, dev_mode: bool) -> str:
     """ARCH-DEBT-028 closed: stash key_id + key_record on request.state and
     log a structured success line. Was duplicated across the two lle_ paths
     in `_resolve_client`. Returns the resolved client_id."""
     request.state.key_id = rec.get("key_id", "")
     request.state.key_record = rec
     log.debug(
-        "auth resolved client_id=%s via=lle_token dev_mode=%s token_prefix=%s",
+        "auth resolved client_id=%s via=lle_token dev_mode=%s key_id=%s",
         rec["client_id"],
         dev_mode,
-        token_prefix,
+        request.state.key_id,
     )
     return rec["client_id"]
 
@@ -844,16 +884,15 @@ def _resolve_client(request: Request) -> Optional[str]:
     Raises 401 if token is invalid.
 
     ARCH-DEBT-030 (closes v2.9.1) : every resolution outcome is logged
-    structurally — DEBUG on success, WARNING on rejection. Token contents
-    are never logged; only the prefix (8 chars) and a one-word ``method``
-    that locates which branch decided the identity.
+    structurally — DEBUG on success, WARNING on rejection. Successful key
+    resolution logs the nonsecret key_id; rejections use closed reason codes.
+    Bearer contents, including prefixes, are never passed to the logger.
     """
     auth = request.headers.get("Authorization", "")
     token = auth.removeprefix("Bearer ").strip()
     request.state.key_id = ""
     request.state.key_record = None
 
-    token_prefix = token[:8] if token else ""
     dev_mode = not _API_KEY
 
     # SEC-001 v2.8.4 MF3: an explicit lle_* bearer takes precedence over an
@@ -895,13 +934,8 @@ def _resolve_client(request: Request) -> Optional[str]:
         if token.startswith(KEY_PREFIXES):
             rec = get_key_record(token)
             if rec:
-                return _apply_key_record(
-                    request, rec, dev_mode=True, token_prefix=token_prefix
-                )
-            log.warning(
-                "auth rejected reason=invalid_lle dev_mode=True token_prefix=%s",
-                token_prefix,
-            )
+                return _apply_key_record(request, rec, dev_mode=True)
+            log.warning("auth rejected reason=invalid_lle dev_mode=True")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid API key",
@@ -917,21 +951,56 @@ def _resolve_client(request: Request) -> Optional[str]:
 
     rec = get_key_record(token)
     if rec:
-        return _apply_key_record(
-            request, rec, dev_mode=False, token_prefix=token_prefix
-        )
+        return _apply_key_record(request, rec, dev_mode=False)
 
-    log.warning(
-        "auth rejected reason=invalid_bearer dev_mode=False token_prefix=%s",
-        token_prefix,
-    )
+    log.warning("auth rejected reason=invalid_bearer dev_mode=False")
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key"
     )
 
 
+_ADMIN_TOTP_HEADER = "X-Plugboard-Admin-TOTP"
+
+
+def _admin_request_auth(request: Request) -> str:
+    """Admin authentication of a request: "ok", "denied", "mfa_required"
+    (admin key without a valid TOTP header while MFA is required) or
+    "locked" (too many wrong codes from this address)."""
+    if _is_admin_session(request.cookies.get(_ADMIN_COOKIE_NAME, "")):
+        return "ok"
+    auth = request.headers.get("Authorization", "")
+    token = auth.removeprefix("Bearer ").strip()
+    if not _is_admin_key(token):
+        return "denied"
+    from plugboard import admin_mfa as _mfa
+
+    if not _mfa.is_required():
+        return "ok"
+    code = request.headers.get(_ADMIN_TOTP_HEADER, "").strip()
+    if not code:
+        return "mfa_required"
+    from plugboard.ratelimit import check_auth_rate_limit, record_auth_failure
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not check_auth_rate_limit(client_ip):
+        return "locked"
+    if _mfa.verify(code):
+        return "ok"
+    locked = record_auth_failure(client_ip)
+    _audit(
+        "auth.mfa_failed",
+        details=f"header IP: {client_ip}, locked={locked}",
+        ip=client_ip,
+    )
+    return "mfa_required"
+
+
 def _require_admin(request: Request) -> None:
-    """Dependency for admin-only endpoints."""
+    """Dependency for admin-only endpoints.
+
+    With MFA required the admin key alone is refused: use a session opened
+    with TOTP, or send a fresh code in ``X-Plugboard-Admin-TOTP``.
+    """
     # Auth fully disabled when BOTH keys are empty (dev/localhost mode)
     if not _API_KEY and not _ADMIN_KEY:
         return
@@ -939,14 +1008,18 @@ def _require_admin(request: Request) -> None:
     if not _effective_admin_key():
         raise HTTPException(status_code=503, detail="ADMIN_KEY is not configured")
 
-    auth = request.headers.get("Authorization", "")
-    token = auth.removeprefix("Bearer ").strip()
-    if _is_admin_key(token):
+    outcome = _admin_request_auth(request)
+    if outcome == "ok":
         return
-
-    session_token = request.cookies.get(_ADMIN_COOKIE_NAME, "")
-    if _is_admin_session(session_token):
-        return
+    if outcome == "locked":
+        raise HTTPException(
+            status_code=429, detail="Too many failed attempts. Try again later."
+        )
+    if outcome == "mfa_required":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Admin MFA required: sign in, or send {_ADMIN_TOTP_HEADER}",
+        )
 
     # v3.0.0 BREAKING (ADR-033): legacy `llm_admin_key` cookie removed.
     # Use POST /auth/admin/login to get the modern session cookie.
@@ -958,22 +1031,26 @@ def _require_admin(request: Request) -> None:
 # -- Spending limit -----------------------------------------------------------
 
 
+def _spending_scope(
+    client_id: str, key_record: Optional[Dict[str, Any]] = None
+) -> tuple:
+    """(monthly_limit_usd, key_id) that applies to the caller; 0 = unlimited."""
+    if key_record:
+        return (
+            float(key_record.get("monthly_limit_usd", 0) or 0),
+            key_record.get("key_id", ""),
+        )
+    for k in load_keys():
+        if k.get("client_id") == client_id and k.get("monthly_limit_usd", 0) > 0:
+            return float(k["monthly_limit_usd"]), k.get("key_id", "")
+    return 0.0, ""
+
+
 def _check_spending_limit(
     client_id: str, key_record: Optional[Dict[str, Any]] = None
 ) -> float:
     """Raise 429 if caller exceeded their monthly spending limit. Returns current total spend."""
-    limit = 0.0
-    key_id = ""
-    if key_record:
-        key_id = key_record.get("key_id", "")
-        limit = float(key_record.get("monthly_limit_usd", 0) or 0)
-    else:
-        for k in load_keys():
-            if k.get("client_id") == client_id and k.get("monthly_limit_usd", 0) > 0:
-                limit = float(k["monthly_limit_usd"])
-                key_id = k.get("key_id", "")
-                break
-
+    limit, key_id = _spending_scope(client_id, key_record)
     if limit <= 0:
         return 0.0  # unlimited
     month = _billing.current_pricing_month()
@@ -988,6 +1065,58 @@ def _check_spending_limit(
             detail=f"Monthly spending limit exceeded for {scope} (${total:.4f} >= ${limit:.4f})",
         )
     return total
+
+
+_UNPRICED_DETAIL = "Model price unavailable for this key"
+
+
+def _check_price_known(
+    client_id: str, model_str: str, key_record: Optional[Dict[str, Any]] = None
+) -> None:
+    """Raise 402 when a budgeted caller asks for a model without a known price.
+
+    An unpriced call is recorded at 0, so monthly_limit_usd would never stop
+    it. Every route forward() may try is checked, before any provider call.
+    Callers without a monthly limit are not affected.
+    """
+    from plugboard.router import _resolve_all_providers
+
+    limit, key_id = _spending_scope(client_id, key_record)
+    if limit <= 0:
+        return
+    try:
+        routes = _resolve_all_providers(model_str)
+    except ValueError:
+        return  # forward() stops on the same routing error, before any call
+    month = _billing.current_pricing_month()
+    for provider, real_model in routes:
+        match = _billing.resolve_price(real_model, month, provider=provider)
+        if _billing.budget_price_unknown(real_model, match):
+            log.warning(
+                "Refused unpriced model for budgeted %s: provider=%s model=%s",
+                f"key '{key_id}'" if key_id else f"client '{client_id}'",
+                provider.get("id", ""),
+                real_model,
+            )
+            raise HTTPException(status_code=402, detail=_UNPRICED_DETAIL)
+
+
+def _check_client_rpm(
+    client_id: str, key_record: Optional[Dict[str, Any]] = None
+) -> None:
+    """Raise 429 when the caller's key exceeded its rpm_limit; counts one call."""
+    rpm = 0
+    if key_record:
+        rpm = int(key_record.get("rpm_limit", 0) or 0)
+        scope = key_record.get("key_id", client_id)
+    else:
+        scope = client_id
+        for k in load_keys():
+            if k.get("client_id") == client_id:
+                rpm = int(k.get("rpm_limit", 0) or 0)
+                break
+    if rpm and not check_client_rate_limit(scope, rpm):
+        raise HTTPException(429, f"Client rate limit exceeded ({rpm} req/min)")
 
 
 # -- Streaming billing -------------------------------------------------------
@@ -1058,6 +1187,49 @@ def _bill_streaming(
         "cost_usd": round(cost, 6),
         "model": real_model,
         "upstream_usage_present": bool(upstream_usage),
+    }
+
+
+def _bill_completion(
+    client_id: str, key_id: str, body: Dict[str, Any], result: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Record the usage of a non-streamed completion; return the billing dict."""
+    provider, real_model = _billing_target(body)
+    usage_data = result.get("usage") or {}
+    prompt_tokens = usage_data.get("prompt_tokens", 0)
+    completion_tokens = usage_data.get("completion_tokens", 0)
+
+    # Estimate tokens if backend returned 0
+    if prompt_tokens == 0:
+        prompt_tokens = estimate_prompt_tokens(body.get("messages", []))
+    if completion_tokens == 0:
+        completion_tokens = estimate_completion_tokens(result)
+
+    pricing_month = _billing.current_pricing_month()
+    match = _billing.resolve_price(real_model, pricing_month, provider=provider)
+    cost = _billing.calculate_cost(
+        prompt_tokens, completion_tokens, match.entry if match else None
+    )
+    _usage.append_usage(
+        client_id=client_id,
+        model=real_model,
+        provider_id=provider["id"],
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        pricing_month=pricing_month,
+        cost_usd=cost,
+        key_id=key_id,
+        price_key=match.price_key if match else "",
+        price_source=match.source if match else "",
+    )
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
+        "cost_usd": cost,
+        "model": real_model,
+        "pricing_month": pricing_month,
+        "price_key": match.price_key if match else "",
     }
 
 
@@ -1214,6 +1386,32 @@ async def chat_completions(
     # deployments via PLUGBOARD_CACHE_RESPONSE_FLOOR_MS.
     _request_t0 = time.perf_counter()
     body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "Request body must be a JSON object")
+    if not isinstance(body.get("model", ""), str):
+        raise HTTPException(400, "model must be a string")
+    providers = load_providers()
+    try:
+        require_supported_model(
+            body.get("model", ""), provider_ids=(p["id"] for p in providers)
+        )
+        for provider in sorted(providers, key=lambda p: len(p["id"]), reverse=True):
+            if body.get("model", "").startswith(provider["id"] + ":"):
+                require_supported_provider(provider)
+                break
+        # Validate the effective default/dated alias before a cached answer can
+        # bypass routing. Other admission errors keep their existing handling.
+        try:
+            resolve_provider_and_model(body.get("model", ""))
+        except ValueError as exc:
+            if str(exc) == REMOVED_CONNECTOR_ERROR:
+                raise
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    if is_decision_model(
+        body.get("model", ""), provider_ids=(p["id"] for p in load_providers())
+    ):
+        raise HTTPException(400, "Use /v1/decisions for decision models")
     # Pre-resolve once: downstream spending/model/rpm checks all receive
     # the same record and skip their own load_keys() fallback scans.
     key_record = _get_request_key_record(request, client_id=client_id)
@@ -1241,20 +1439,13 @@ async def chat_completions(
     if client_id and client_id != "admin":
         _check_model_access(client_id, body.get("model", ""), key_record=key_record)
 
+    # A budget cannot hold a call whose price is unknown (402, nothing called)
+    if client_id and client_id != "admin":
+        _check_price_known(client_id, body.get("model", ""), key_record=key_record)
+
     # Per-client rate limit (rpm_limit on key record)
     if client_id and client_id != "admin":
-        rpm = 0
-        if key_record:
-            rpm = int(key_record.get("rpm_limit", 0) or 0)
-            scope = key_record.get("key_id", client_id)
-        else:
-            scope = client_id
-            for k in load_keys():
-                if k.get("client_id") == client_id:
-                    rpm = int(k.get("rpm_limit", 0) or 0)
-                    break
-        if rpm and not check_client_rate_limit(scope, rpm):
-            raise HTTPException(429, f"Client rate limit exceeded ({rpm} req/min)")
+        _check_client_rpm(client_id, key_record=key_record)
 
     # Response cache — disabled only when caller sets cache=false.
     # For streaming requests we still check the cache; on HIT we replay the
@@ -1714,51 +1905,16 @@ async def chat_completions(
     billing_info = {}
     try:
         if client_id:
-            provider, real_model = _billing_target(body)
-            usage_data = result.get("usage") or {}
-            prompt_tokens = usage_data.get("prompt_tokens", 0)
-            completion_tokens = usage_data.get("completion_tokens", 0)
-
-            # Estimate tokens if backend returned 0
-            if prompt_tokens == 0:
-                prompt_tokens = estimate_prompt_tokens(body.get("messages", []))
-            if completion_tokens == 0:
-                completion_tokens = estimate_completion_tokens(result)
-
-            pricing_month = _billing.current_pricing_month()
-            match = _billing.resolve_price(real_model, pricing_month, provider=provider)
-            cost = _billing.calculate_cost(
-                prompt_tokens, completion_tokens, match.entry if match else None
+            billing_info = _bill_completion(
+                client_id, getattr(request.state, "key_id", ""), body, result
             )
-            _key_id = getattr(request.state, "key_id", "")
-            _usage.append_usage(
-                client_id=client_id,
-                model=real_model,
-                provider_id=provider["id"],
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                pricing_month=pricing_month,
-                cost_usd=cost,
-                key_id=_key_id,
-                price_key=match.price_key if match else "",
-                price_source=match.source if match else "",
-            )
-            billing_info = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
-                "cost_usd": cost,
-                "model": real_model,
-                "pricing_month": pricing_month,
-                "price_key": match.price_key if match else "",
-            }
             # Spending alert (non-blocking)
             if client_id != "admin":
                 _send_spending_alert(
                     client_id,
-                    pricing_month,
+                    billing_info["pricing_month"],
                     key_record=key_record,
-                    current_total_usd=spending_total + cost,
+                    current_total_usd=spending_total + billing_info["cost_usd"],
                 )
     except Exception as exc:
         log.warning("Billing error (non-fatal): %s", exc)
@@ -1835,7 +1991,19 @@ async def chat_completions(
 
 @app.get("/v1/models")
 async def models(request: Request, client_id: Optional[str] = Depends(_resolve_client)):
+    from plugboard.legacy_connectors import is_removed_catalogue_model
+    from plugboard.model_identity import catalogue_native_model
+
     items = await list_models()
+    provider_ids = tuple(p["id"] for p in load_providers())
+    items = [
+        item
+        for item in items
+        if not is_decision_model(
+            catalogue_native_model(item, provider_ids=provider_ids), effective_name=True
+        )
+        and not is_removed_catalogue_model(item)
+    ]
     key_record = _get_request_key_record(request, client_id=client_id)
     for item in items:
         item["account_compatible"] = _model_is_compatible(
@@ -1849,48 +2017,89 @@ class _PreflightItem(BaseModel):
     model: str
 
 
+_PREFLIGHT_MAX_ITEMS = 10
+
+
 class _PreflightRequest(BaseModel):
-    items: List[_PreflightItem]
+    items: List[_PreflightItem] = Field(max_length=_PREFLIGHT_MAX_ITEMS)
 
 
-@app.post("/v1/preflight")
+def _preflight_refusal(
+    client_id: str, model_str: str, key_record: Optional[Dict[str, Any]]
+) -> Optional[str]:
+    """Closed error code of the first chat admission check the item fails."""
+    checks = (
+        ("budget_exceeded", lambda: _check_spending_limit(client_id, key_record)),
+        (
+            "forbidden_model",
+            lambda: _check_model_access(client_id, model_str, key_record=key_record),
+        ),
+        (
+            "price_unavailable",
+            lambda: _check_price_known(client_id, model_str, key_record),
+        ),
+        ("rate_limited", lambda: _check_client_rpm(client_id, key_record)),
+    )
+    for code, check in checks:
+        try:
+            check()
+        except HTTPException:
+            return code
+    return None
+
+
+@app.post("/v1/preflight", dependencies=[Depends(_inflight_chat_dep)])
 async def preflight(
+    request: Request,
     body: _PreflightRequest,
     client_id: Optional[str] = Depends(_resolve_client),
 ):
-    """Smoke-test a batch of provider+model pairs before a long benchmark."""
+    """Smoke-test a batch of provider+model pairs before a long benchmark.
+
+    Each ping goes through the chat admission checks (allowed_models, budget,
+    known price, rpm; the inflight cap holds for the whole batch) and is billed
+    like a chat call. Errors are closed codes, never the provider's text.
+    """
+    key_record = _get_request_key_record(request, client_id=client_id)
+    key_id = getattr(request.state, "key_id", "")
     results: List[Dict[str, Any]] = []
     for item in body.items:
         t0 = time.perf_counter()
+        model_str = f"{item.provider}:{item.model}"
+        error: Optional[str] = None
         try:
-            resolve_provider_and_model(f"{item.provider}:{item.model}")
+            resolve_provider_and_model(model_str)
+        except Exception:
+            error = "unknown_model"
+        if error is None and client_id and client_id != "admin":
+            error = _preflight_refusal(client_id, model_str, key_record)
+        if error is None:
             # Minimal ping to verify the pipe is open
             ping_body = {
-                "model": f"{item.provider}:{item.model}",
+                "model": model_str,
                 "messages": [{"role": "user", "content": "ping"}],
                 "max_tokens": 1,
             }
-            await forward(ping_body, timeout=10.0)
-            latency_ms = int((time.perf_counter() - t0) * 1000)
-            results.append(
-                {
-                    "provider": item.provider,
-                    "model": item.model,
-                    "ok": True,
-                    "latency_ms": latency_ms,
-                }
-            )
-        except Exception as exc:
-            latency_ms = int((time.perf_counter() - t0) * 1000)
-            results.append(
-                {
-                    "provider": item.provider,
-                    "model": item.model,
-                    "ok": False,
-                    "error": str(exc),
-                    "latency_ms": latency_ms,
-                }
-            )
+            try:
+                result = await forward(ping_body, timeout=10.0)
+            except Exception as exc:
+                log.warning("preflight error | model=%s | %s", model_str, exc)
+                error = "upstream_error"
+            else:
+                if client_id:
+                    try:
+                        _bill_completion(client_id, key_id, ping_body, result)
+                    except Exception as exc:
+                        log.warning("Preflight billing error (non-fatal): %s", exc)
+        entry: Dict[str, Any] = {
+            "provider": item.provider,
+            "model": item.model,
+            "ok": error is None,
+            "latency_ms": int((time.perf_counter() - t0) * 1000),
+        }
+        if error is not None:
+            entry["error"] = error
+        results.append(entry)
     return {"results": results}
 
 
@@ -1950,7 +2159,11 @@ async def models_benchmarks_v2(client_id: Optional[str] = Depends(_resolve_clien
 @app.get("/health")
 async def health():
     providers = load_providers()
-    active = [p["id"] for p in providers if p.get("is_active", True)]
+    active = [
+        p["id"]
+        for p in providers
+        if p.get("is_active", True) and not is_removed_provider(p)
+    ]
     payload = {
         "ok": True,
         "version": __version__,
@@ -1975,6 +2188,13 @@ async def health_detailed(_: None = Depends(_require_admin)):
     all_ok = True
     for p in providers:
         if not p.get("is_active", True):
+            continue
+        try:
+            require_supported_provider(p)
+            require_supported_model(p.get("default_model", ""), effective_name=True)
+        except ValueError as exc:
+            results.append({"provider": p["id"], "ok": False, "error": str(exc)})
+            all_ok = False
             continue
         url = p["base_url"].rstrip("/") + "/health"
         try:
@@ -2722,7 +2942,12 @@ class ProviderUpdate(BaseModel):
 
 
 def _mask(p: Dict[str, Any]) -> Dict[str, Any]:
-    return {**p, "bearer_token": mask_token(p.get("bearer_token", ""))}
+    masked = {**p, "bearer_token": mask_token(p.get("bearer_token", ""))}
+    if is_removed_provider(p):
+        masked.update(
+            is_active=False, migration_required=True, error=REMOVED_CONNECTOR_ERROR
+        )
+    return masked
 
 
 @app.get("/providers")
@@ -2758,6 +2983,8 @@ async def add_provider(body: ProviderCreate, _: None = Depends(_require_admin)):
             ),
         )
         raise HTTPException(400, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
     invalidate_models_cache()
     _audit(
         "provider.create",
@@ -2787,6 +3014,8 @@ async def patch_provider(
             ),
         )
         raise HTTPException(400, str(exc))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
     if record is None:
         raise HTTPException(404, f"Provider '{provider_id}' not found")
     invalidate_models_cache()
@@ -2823,6 +3052,10 @@ async def provider_health(provider_id: str, _: None = Depends(_require_admin)):
     provider = get_provider(provider_id)
     if provider is None:
         raise HTTPException(404, f"Provider '{provider_id}' not found")
+    try:
+        require_supported_provider(provider)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
     from plugboard.health_probe import probe_provider
 
     result = await probe_provider(provider)
@@ -2843,6 +3076,10 @@ async def discover_provider_models(
     provider = get_provider(provider_id)
     if provider is None:
         raise HTTPException(404, f"Provider '{provider_id}' not found")
+    try:
+        require_supported_provider(provider)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
     extra: Dict[str, Any] = {}
     default_model = None
     if (provider.get("auth_source", "") or "").startswith("subprocess:"):
@@ -3084,7 +3321,13 @@ async def oauth_connections(_: None = Depends(_require_admin)):
 
 @app.delete("/admin/oauth/{source}", status_code=204)
 async def oauth_disconnect(source: str, _: None = Depends(_require_admin)):
-    """Revoke an OAuth connection + remove related broker providers."""
+    """Revoke an OAuth connection.
+
+    The cached tokens of that source (and of ``broker:github+copilot`` for
+    ``github``) are dropped at once. Related broker provider records are kept:
+    their requests fail with "Auth not available" until the source is
+    connected again.
+    """
     from plugboard.oauth_store import delete_credential
 
     deleted = delete_credential(source)
@@ -3247,11 +3490,29 @@ async def _test_openai_endpoint(
                 else "Key valid, 0 models",
             }
             if send_test_token and models:
+                chat_model = next(
+                    (
+                        mid
+                        for mid in models
+                        if not is_decision_model(mid, effective_name=True)
+                        and not is_removed_model(mid, effective_name=True)
+                    ),
+                    None,
+                )
+                if chat_model is None:
+                    result["completion_skipped"] = (
+                        "removed_legacy_connector"
+                        if any(
+                            is_removed_model(mid, effective_name=True) for mid in models
+                        )
+                        else "decision_model"
+                    )
+                    return result
                 async with session.post(
                     openai_url(base_url, "chat/completions"),
                     headers={**headers, "Content-Type": "application/json"},
                     json={
-                        "model": models[0],
+                        "model": chat_model,
                         "messages": [{"role": "user", "content": "ping"}],
                         "max_tokens": 1,
                     },
@@ -3531,6 +3792,9 @@ class KeyCreate(BaseModel):
     # Explicit 0 / 0.0 means "opt out — truly unlimited".
     monthly_limit_usd: Optional[float] = None
     allowed_models: Optional[List[str]] = None
+    allowed_decision_models: Optional[
+        List[Literal["jev", "laya", "laya-multilingual"]]
+    ] = None
     rpm_limit: Optional[int] = None  # requests per minute
     org_id: str = ""  # organisation (empty = no org)
 
@@ -3578,6 +3842,7 @@ async def create_api_key(body: KeyCreate, _: None = Depends(_require_admin)):
         allowed_models=body.allowed_models,
         rpm_limit=rpm,
         org_id=body.org_id,
+        allowed_decision_models=body.allowed_decision_models,
     )
     _audit(
         "key.create",
@@ -4407,17 +4672,7 @@ def _check_dashboard_auth(request: Request) -> bool:
     # Auth fully disabled in dev mode (API_KEY and ADMIN_KEY both empty)
     if not _API_KEY and not _ADMIN_KEY:
         return True
-    # Check Authorization header
-    auth = request.headers.get("Authorization", "")
-    token = auth.removeprefix("Bearer ").strip()
-    if _is_admin_key(token):
-        return True
-
-    session_token = request.cookies.get(_ADMIN_COOKIE_NAME, "")
-    if _is_admin_session(session_token):
-        return True
-
-    return False
+    return _admin_request_auth(request) == "ok"
 
 
 @app.get("/", include_in_schema=False)
@@ -4670,7 +4925,8 @@ async def admin_login(body: AdminLogin, request: Request):
     # a secret is already enrolled, so a fresh deploy can't lock itself out.
     from plugboard import admin_mfa as _mfa
 
-    if _mfa.is_required():
+    mfa_checked = _mfa.is_required()
+    if mfa_checked:
         code = (body.totp_code or "").strip()
         if not code:
             # Distinct 401 shape so the login UI knows to prompt for the
@@ -4699,7 +4955,7 @@ async def admin_login(body: AdminLogin, request: Request):
             )
         _audit("auth.mfa_success", details=f"IP: {client_ip}", ip=client_ip)
 
-    session_token = _create_admin_session_token()
+    session_token = _create_admin_session_token(mfa=mfa_checked)
     if not session_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin key required"
@@ -4722,7 +4978,11 @@ async def admin_login(body: AdminLogin, request: Request):
 
 
 @app.post("/auth/admin/logout", include_in_schema=False, status_code=204)
-async def admin_logout():
+async def admin_logout(request: Request):
+    """Revoke this browser's session server-side, then clear its cookie."""
+    nonce = _admin_session_nonce(request.cookies.get(_ADMIN_COOKIE_NAME, ""))
+    if nonce and admin_sessions.revoke(nonce):
+        _audit("auth.logout", details="admin session revoked")
     resp = Response(status_code=204)
     resp.delete_cookie(_ADMIN_COOKIE_NAME, path="/")
     resp.delete_cookie("llm_admin_key", path="/")
@@ -4773,11 +5033,11 @@ async def admin_mfa_setup(
 
     # Validate the code matches the *submitted* secret (not any previously
     # stored one — we might be rotating). We don't call _mfa.verify() here
-    # because that reads from disk.
-    candidate = _mfa._generate_code(body.secret)
-    if not hmac.compare_digest(candidate, (body.code or "").strip()):
+    # because that reads from disk. The code is then recorded as used.
+    step = _mfa.setup_code_step(body.secret, (body.code or "").strip())
+    if step is None:
         raise HTTPException(400, "TOTP code does not match the secret")
-    _mfa.enroll(body.secret)
+    _mfa.enroll(body.secret, used_step=step)
     _audit(
         "admin.mfa.enrolled",
         target_type="admin",

@@ -7,10 +7,16 @@ import json
 import pytest
 from aioresponses import aioresponses
 
-from plugboard import billing, pricing_merge, pricing_scraper, pricing_suggestions
+from plugboard import (
+    billing,
+    official_prices,
+    pricing_merge,
+    pricing_scraper,
+    pricing_suggestions,
+)
 from plugboard.pricing_merge import merge_sources
 
-ORDER = ["external", "provider_native", "models_dev", "litellm", "known"]
+ORDER = ["external", "official", "provider_native", "models_dev", "litellm", "known"]
 AUTH = {"Authorization": "Bearer testkey"}
 
 
@@ -165,8 +171,8 @@ def test_default_order(fresh_warnings):
 def test_legacy_url_keeps_old_behaviour_and_warns(fresh_warnings, monkeypatch, caplog):
     monkeypatch.setenv("PRICING_SOURCE_URL", "https://prices.example/p.json")
     assert pricing_merge.pricing_source_url() == "https://prices.example/p.json"
-    assert pricing_merge.source_order() == ["external", "known"]
-    assert "Pricing sources unchanged (external, known)" in caplog.text
+    assert pricing_merge.source_order() == ["external", "official", "known"]
+    assert "Pricing sources unchanged (external, official, known)" in caplog.text
     assert "deprecated" in caplog.text
 
 
@@ -234,7 +240,9 @@ async def test_refresh_uses_models_dev_and_tags_source(grid, monkeypatch):
     models = billing.load_pricing(month)["models"]
     assert models["new-model"] == p(2, 6, source="models_dev")
     assert models["old"] == p(1, 2)
-    assert result["sources"] == ["models_dev"] and result["added"] == 1
+    official = official_prices.prices_for_month(month)
+    assert result["sources"] == ["official", "models_dev"]
+    assert result["added"] == 1 + len(official)
 
 
 @pytest.mark.asyncio
@@ -300,7 +308,11 @@ async def test_refresh_never_touches_manual_or_past_month(grid, monkeypatch):
 @pytest.mark.asyncio
 async def test_refresh_without_change_does_not_write(grid, monkeypatch):
     month, seed = grid
-    seed({"m": p(2, 6, source="models_dev")})
+    official = {
+        model: {**e, "source": "official"}
+        for model, e in official_prices.prices_for_month(month).items()
+    }
+    seed({"m": p(2, 6, source="models_dev"), **official})
     monkeypatch.setattr(
         pricing_scraper, "_models_dev_pricing", lambda: ({"m": p(2, 6)}, {})
     )

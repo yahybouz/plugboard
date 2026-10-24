@@ -181,7 +181,7 @@ async def test_preflight_success(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_preflight_failure(client, monkeypatch):
-    """Preflight returns ok=False with error when forward raises."""
+    """Preflight returns ok=False with a closed error code when forward raises."""
     from plugboard import app as app_mod
 
     async def _fake_forward(body, timeout=None):
@@ -202,7 +202,8 @@ async def test_preflight_failure(client, monkeypatch):
     body = resp.json()
     r = body["results"][0]
     assert r["ok"] is False
-    assert "provider down" in r["error"]
+    assert r["error"] == "upstream_error"
+    assert "provider down" not in resp.text
     assert isinstance(r["latency_ms"], int)
 
 

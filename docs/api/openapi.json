@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
@@ -483,6 +483,43 @@
         "title": "ChatMessage",
         "type": "object"
       },
+      "ChoiceQuestion": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "choice",
+            "title": "Type",
+            "type": "string"
+          },
+          "instructions": {
+            "title": "Instructions",
+            "type": "string"
+          },
+          "criteria": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxProperties": 16,
+            "minProperties": 2,
+            "title": "Criteria",
+            "type": "object"
+          }
+        },
+        "required": [
+          "type",
+          "instructions",
+          "criteria"
+        ],
+        "title": "ChoiceQuestion",
+        "type": "object"
+      },
       "ChunkChoice": {
         "additionalProperties": true,
         "properties": {
@@ -720,6 +757,416 @@
         "title": "ClientUsage",
         "type": "object"
       },
+      "DecisionBilled": {
+        "description": "Cost recorded against the key. `billed`: Jev from the reported input\ntokens, or Laya (free, 0); `estimated`: Jev usage missing or invalid, billed\nat the 64,000-token default context.",
+        "properties": {
+          "status": {
+            "enum": [
+              "billed",
+              "estimated"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "cost_usd": {
+            "maximum": 100,
+            "minimum": 0,
+            "title": "Cost Usd",
+            "type": "number"
+          }
+        },
+        "required": [
+          "status",
+          "cost_usd"
+        ],
+        "title": "DecisionBilled",
+        "type": "object"
+      },
+      "DecisionChoiceAnswer": {
+        "properties": {
+          "type": {
+            "const": "choice",
+            "title": "Type",
+            "type": "string"
+          },
+          "choice": {
+            "title": "Choice",
+            "type": "string"
+          },
+          "confidence": {
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "probabilities": {
+            "additionalProperties": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "title": "Probabilities",
+            "type": "object"
+          }
+        },
+        "required": [
+          "type",
+          "choice",
+          "confidence",
+          "probabilities"
+        ],
+        "title": "DecisionChoiceAnswer",
+        "type": "object"
+      },
+      "DecisionModelEntry": {
+        "properties": {
+          "id": {
+            "enum": [
+              "jev",
+              "laya",
+              "laya-multilingual"
+            ],
+            "title": "Id",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "revision": {
+            "title": "Revision",
+            "type": "string"
+          },
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          },
+          "languages": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Languages",
+            "type": "array"
+          },
+          "primitives": {
+            "items": {
+              "enum": [
+                "choice",
+                "noul",
+                "score"
+              ],
+              "type": "string"
+            },
+            "title": "Primitives",
+            "type": "array"
+          },
+          "limits": {
+            "additionalProperties": true,
+            "description": "Effective engine limits: timeout_seconds is the local worker budget (30 seconds, including startup/hash/load); api_timeout_seconds is the separate 45-second API envelope. Laya head_tokens and question_branch_tokens share a total head budget of 192 (English) or 256 (multilingual) from pinned configs. instruction_tokens is null: instructions share that head with options and separators, and their remaining budget is checked per request.",
+            "title": "Limits",
+            "type": "object"
+          },
+          "pricing": {
+            "$ref": "#/components/schemas/DecisionPricing"
+          },
+          "confidence_semantics": {
+            "title": "Confidence Semantics",
+            "type": "string"
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Limitations",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "provider",
+          "revision",
+          "available",
+          "unavailable_reason",
+          "languages",
+          "primitives",
+          "limits",
+          "pricing",
+          "confidence_semantics",
+          "limitations"
+        ],
+        "title": "DecisionModelEntry",
+        "type": "object"
+      },
+      "DecisionModelList": {
+        "properties": {
+          "object": {
+            "const": "list",
+            "default": "list",
+            "title": "Object",
+            "type": "string"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/DecisionModelEntry"
+            },
+            "title": "Data",
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "DecisionModelList",
+        "type": "object"
+      },
+      "DecisionNoulAnswer": {
+        "properties": {
+          "type": {
+            "const": "noul",
+            "title": "Type",
+            "type": "string"
+          },
+          "noul": {
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Noul",
+            "type": "number"
+          }
+        },
+        "required": [
+          "type",
+          "noul"
+        ],
+        "title": "DecisionNoulAnswer",
+        "type": "object"
+      },
+      "DecisionPricing": {
+        "description": "Price per million tokens; Jev: official input price, output free; Laya: 0.",
+        "properties": {
+          "input_usd_per_mtok": {
+            "minimum": 0,
+            "title": "Input Usd Per Mtok",
+            "type": "number"
+          },
+          "output_usd_per_mtok": {
+            "minimum": 0,
+            "title": "Output Usd Per Mtok",
+            "type": "number"
+          },
+          "unit": {
+            "const": "token",
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "input_usd_per_mtok",
+          "output_usd_per_mtok",
+          "unit"
+        ],
+        "title": "DecisionPricing",
+        "type": "object"
+      },
+      "DecisionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "enum": [
+              "jev",
+              "laya",
+              "laya-multilingual"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "questions": {
+            "maxProperties": 8,
+            "minProperties": 1,
+            "patternProperties": {
+              "^[A-Za-z0-9_-]+$": {
+                "discriminator": {
+                  "mapping": {
+                    "choice": "#/components/schemas/ChoiceQuestion",
+                    "noul": "#/components/schemas/NoulQuestion",
+                    "score": "#/components/schemas/ScoreQuestion"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ChoiceQuestion"
+                  },
+                  {
+                    "$ref": "#/components/schemas/NoulQuestion"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ScoreQuestion"
+                  }
+                ]
+              }
+            },
+            "propertyNames": {
+              "maxLength": 64,
+              "minLength": 1
+            },
+            "title": "Questions",
+            "type": "object"
+          }
+        },
+        "required": [
+          "model",
+          "state",
+          "questions"
+        ],
+        "title": "DecisionRequest",
+        "type": "object"
+      },
+      "DecisionResponse": {
+        "description": "Answers retain engine-specific confidence; a cost is null only when unrecorded.",
+        "properties": {
+          "model": {
+            "enum": [
+              "jev",
+              "laya",
+              "laya-multilingual"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "answers": {
+            "additionalProperties": {
+              "discriminator": {
+                "mapping": {
+                  "choice": "#/components/schemas/DecisionChoiceAnswer",
+                  "noul": "#/components/schemas/DecisionNoulAnswer",
+                  "score": "#/components/schemas/DecisionScoreAnswer"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/DecisionChoiceAnswer"
+                },
+                {
+                  "$ref": "#/components/schemas/DecisionNoulAnswer"
+                },
+                {
+                  "$ref": "#/components/schemas/DecisionScoreAnswer"
+                }
+              ]
+            },
+            "title": "Answers",
+            "type": "object"
+          },
+          "billing": {
+            "discriminator": {
+              "mapping": {
+                "billed": "#/components/schemas/DecisionBilled",
+                "estimated": "#/components/schemas/DecisionBilled",
+                "unrecorded": "#/components/schemas/DecisionUnrecorded"
+              },
+              "propertyName": "status"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/DecisionBilled"
+              },
+              {
+                "$ref": "#/components/schemas/DecisionUnrecorded"
+              }
+            ],
+            "title": "Billing"
+          }
+        },
+        "required": [
+          "model",
+          "answers",
+          "billing"
+        ],
+        "title": "DecisionResponse",
+        "type": "object"
+      },
+      "DecisionScoreAnswer": {
+        "properties": {
+          "type": {
+            "const": "score",
+            "title": "Type",
+            "type": "string"
+          },
+          "score": {
+            "maximum": 15,
+            "minimum": 0,
+            "title": "Score",
+            "type": "number"
+          },
+          "confidence": {
+            "maximum": 1,
+            "minimum": 0,
+            "title": "Confidence",
+            "type": "number"
+          },
+          "probabilities": {
+            "additionalProperties": {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            "title": "Probabilities",
+            "type": "object"
+          },
+          "legend": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Legend",
+            "type": "object"
+          }
+        },
+        "required": [
+          "type",
+          "score",
+          "confidence",
+          "probabilities",
+          "legend"
+        ],
+        "title": "DecisionScoreAnswer",
+        "type": "object"
+      },
+      "DecisionUnrecorded": {
+        "description": "The engine answered but the usage ledger could not record the call.",
+        "properties": {
+          "status": {
+            "const": "unrecorded",
+            "title": "Status",
+            "type": "string"
+          },
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "null"
+          }
+        },
+        "required": [
+          "status",
+          "cost_usd"
+        ],
+        "title": "DecisionUnrecorded",
+        "type": "object"
+      },
       "ErrorResponse": {
         "additionalProperties": true,
         "description": "FastAPI's error body. Upstream timeouts (503) add `retry_after` and a\nRetry-After header; a failing CLI provider (502) adds its exit details.",
@@ -901,7 +1348,7 @@
               }
             ],
             "default": null,
-            "description": "false when the last probe could not reach it.",
+            "description": "true only for a successful connectivity observation; false for failed, quarantined or unknown connectivity. last_probed_at is null when never probed.",
             "title": "Connected"
           },
           "last_probed_at": {
@@ -1389,7 +1836,7 @@
               }
             ],
             "default": null,
-            "description": "false when the last probe could not reach it.",
+            "description": "true only for a successful connectivity observation; false for failed, quarantined or unknown connectivity. last_probed_at is null when never probed.",
             "title": "Connected"
           },
           "last_probed_at": {
@@ -1435,6 +1882,26 @@
         "title": "ModelWithProfile",
         "type": "object"
       },
+      "NoulQuestion": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "noul",
+            "title": "Type",
+            "type": "string"
+          },
+          "instructions": {
+            "title": "Instructions",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "instructions"
+        ],
+        "title": "NoulQuestion",
+        "type": "object"
+      },
       "PreflightItem": {
         "properties": {
           "provider": {
@@ -1456,9 +1923,11 @@
       "PreflightRequest": {
         "properties": {
           "items": {
+            "description": "At most 10 pairs; each ping counts as one chat call (rpm, budget).",
             "items": {
               "$ref": "#/components/schemas/PreflightItem"
             },
+            "maxItems": 10,
             "title": "Items",
             "type": "array"
           }
@@ -1506,6 +1975,14 @@
           "error": {
             "anyOf": [
               {
+                "enum": [
+                  "unknown_model",
+                  "forbidden_model",
+                  "budget_exceeded",
+                  "price_unavailable",
+                  "rate_limited",
+                  "upstream_error"
+                ],
                 "type": "string"
               },
               {
@@ -1513,6 +1990,7 @@
               }
             ],
             "default": null,
+            "description": "Why the pair failed (closed code, never the provider's text): the model does not resolve, is not allowed for the key, the monthly budget is spent, the key has a budget and the model no known price, the key's rpm limit is reached, or the provider failed.",
             "title": "Error"
           }
         },
@@ -1523,6 +2001,36 @@
           "latency_ms"
         ],
         "title": "PreflightResult",
+        "type": "object"
+      },
+      "ScoreQuestion": {
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "const": "score",
+            "title": "Type",
+            "type": "string"
+          },
+          "instructions": {
+            "title": "Instructions",
+            "type": "string"
+          },
+          "criteria": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 16,
+            "minItems": 2,
+            "title": "Criteria",
+            "type": "array"
+          }
+        },
+        "required": [
+          "type",
+          "instructions",
+          "criteria"
+        ],
+        "title": "ScoreQuestion",
         "type": "object"
       },
       "StreamUsage": {
@@ -1838,6 +2346,16 @@
               }
             }
           },
+          "402": {
+            "description": "The key has a monthly budget and the model no known price; nothing was called.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "403": {
             "description": "The key may not use this model.",
             "content": {
@@ -1870,6 +2388,162 @@
           },
           "503": {
             "description": "Provider timeout (retry_after) or too many concurrent requests.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/decisions": {
+      "post": {
+        "summary": "Answer named typed questions (never chat)",
+        "operationId": "post_v1_decisions",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Key already has a decision in flight, queue full or wait over, or a key limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The client key may not use this decision engine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Decision request exceeds the byte limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid typed question or unsupported engine capability.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Invalid response from the decision engine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Decision engine unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Decision engine timed out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/decisions/models": {
+      "get": {
+        "summary": "List decision engines, availability and capabilities",
+        "operationId": "get_v1_decisions_models",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DecisionModelList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit or monthly spending limit exceeded.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2188,6 +2862,26 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "More than 10 items, or an invalid item.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Too many concurrent chat requests.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -2272,6 +2966,16 @@
           },
           "429": {
             "description": "Rate limit or monthly spending limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "The key has a monthly budget and the model no known price; nothing was called.",
             "content": {
               "application/json": {
                 "schema": {

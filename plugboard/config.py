@@ -13,8 +13,8 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from cryptography.fernet import Fernet
+from plugboard.legacy_connectors import is_removed_provider, require_supported_provider
 from plugboard.storage import (
-    StoreUnreadableError,
     atomic_write_json,
     atomic_write_text,
     data_dir,
@@ -200,7 +200,7 @@ def _slugify(name: str) -> str:
 #   - bare hostname         → exact match
 #   - leading-dot wildcard  → matches the domain and any subdomain
 #   - localhost / 127.0.0.1 must be listed explicitly if you run local
-#     providers (e.g. OpenClaw on :18789, Ollama on :11434).
+#     providers (e.g. Ollama on :11434).
 #
 # Empty/unset → feature disabled (backward compatible default).
 
@@ -266,41 +266,8 @@ def load_providers() -> List[Dict[str, Any]]:
     with _lock():
         data = _read()
         providers = data.get("providers", [])
-        if not providers:
-            oc_url = os.environ.get("OPENCLAW_URL", "").strip()
-            oc_key = os.environ.get("OPENCLAW_KEY", "").strip()
-            if oc_url and oc_key:
-                oc_model = (
-                    os.environ.get("OPENCLAW_MODEL") or "claude-sonnet-4-6"
-                ).strip()
-                oc_name = (
-                    os.environ.get("OPENCLAW_NAME", "OpenClaw").strip() or "OpenClaw"
-                )
-                record: Dict[str, Any] = {
-                    "id": _slugify(oc_name),
-                    "name": oc_name,
-                    "base_url": oc_url.rstrip("/"),
-                    "bearer_token": _encrypt_token(oc_key) if oc_key else "",
-                    "default_model": oc_model,
-                    "is_active": True,
-                    "provider_type": "cloud",
-                    "auth_header_name": "Authorization",
-                    "auth_header_prefix": "Bearer",
-                    "auth_source": "",
-                    "timeout": 60.0,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                }
-                data["providers"] = [record]
-                try:
-                    _write(data)
-                except StoreUnreadableError:
-                    # providers.json exists but cannot be parsed: keep it for
-                    # the operator to fix and serve the bootstrap provider from
-                    # memory instead of failing every request.
-                    pass
-                providers = data["providers"]
         for p in providers:
-            if "bearer_token" in p:
+            if "bearer_token" in p and not is_removed_provider(p):
                 p["bearer_token"] = _decrypt_token(p["bearer_token"])
         return providers
 
@@ -324,8 +291,11 @@ def create_provider(
     auth_header_prefix: str = "Bearer",
     auth_source: str = "",
 ) -> Dict[str, Any]:
-    check_provider_domain_allowed(base_url)
     provider_id = _slugify(name)
+    require_supported_provider(
+        {"id": provider_id, "provider_type": provider_type, "auth_source": auth_source}
+    )
+    check_provider_domain_allowed(base_url)
     with _lock():
         data = _read()
         existing = {p["id"] for p in data.get("providers", [])}
@@ -364,6 +334,8 @@ def update_provider(
         data = _read()
         for i, p in enumerate(data.get("providers", [])):
             if p["id"] == provider_id:
+                require_supported_provider(p)
+                require_supported_provider({**p, **updates, "id": provider_id})
                 for k, v in updates.items():
                     if k not in _IMMUTABLE:
                         if k == "base_url" and isinstance(v, str):
@@ -397,8 +369,10 @@ def modify_provider(
         for i, p in enumerate(data.get("providers", [])):
             if p.get("id") != provider_id:
                 continue
+            require_supported_provider(p)
             updates = fn(dict(p))
             if updates:
+                require_supported_provider({**p, **updates, "id": provider_id})
                 for k, v in updates.items():
                     if k not in {"id", "created_at", "bearer_token", "base_url"}:
                         data["providers"][i][k] = v

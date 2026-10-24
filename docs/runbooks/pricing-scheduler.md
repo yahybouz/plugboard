@@ -6,15 +6,21 @@ scheduler refreshes that grid: once at startup ("bootstrap"), then daily at
 every `PLUGBOARD_PRICING_REFRESH_INTERVAL_H` hours (default 6, plus up to 5
 minutes of jitter), or daily at `PRICING_DAILY_HOUR_UTC` when it is `0`. Each refresh
 reads the sources listed in `PLUGBOARD_PRICING_SOURCES` (your own document at
-`PLUGBOARD_PRICING_SOURCE_URL`, OpenRouter, models.dev, LiteLLM, built-in
-prices) and merges them model by model; see `docs/guide/pricing.md#sources`.
+`PLUGBOARD_PRICING_SOURCE_URL`, the dated official price table shipped with
+Plugboard, OpenRouter, models.dev, LiteLLM, built-in prices) and merges them
+model by model; see `docs/guide/pricing.md#sources`.
 
 ## Symptom
 
 - `GET /admin/coverage/pricing` lists models under `missing`, or
-  `coverage_pct` drops. Billing falls back to the previous 12 monthly grids
-  and to built-in prices; a model priced nowhere is billed at 0 USD, so usage
-  costs are under-reported.
+  `coverage_pct` drops. Billing falls back to the previous 12 monthly grids,
+  then to the official table and the built-in prices. A model priced nowhere
+  is refused with `402 Model price unavailable for this key` when the key has a
+  monthly budget, before any provider call; for a key without a budget it is
+  recorded at 0 USD, so usage costs are under-reported.
+- `GET /admin/pricing/scheduler/status` shows `"official": {"stale": true}`,
+  and the logs contain `Official price table checked <date> is older than <n>
+  days` once per refresh: see [Official price table](#official-price-table).
 - `GET /admin/pricing/scheduler/status` shows `"cb_state": "OPEN"` or
   `"DEGRADED"`, `"running": false`, or `"disabled": true`.
 - Logs contain `PricingScheduler circuit breaker → OPEN until ...`,
@@ -29,7 +35,8 @@ prices) and merges them model by model; see `docs/guide/pricing.md#sources`.
 |---|---|
 | Grid stale or a few models missing, requests still served | P2 |
 | `cb_state` `OPEN` for longer than one cooldown (`cb_cooldown_s`, set by `PRICING_CB_COOLDOWN_S`, default 3600 s) | P2 |
-| No grid file at all in `data/pricing/` after startup | P1 (requests billed at built-in prices or 0 USD) |
+| No grid file at all in `data/pricing/` after startup | P1 (requests billed at official or built-in prices; unpriced models get 402 for budgeted keys, 0 USD otherwise) |
+| `official.stale` is `true` | P3 (prices still applied; check the vendors' pages) |
 
 ## Quick diagnosis
 
@@ -58,10 +65,15 @@ export ADMIN_KEY=$(grep '^ADMIN_KEY=' .env | cut -d= -f2-)
      "cb_state": "CLOSED",
      "cb_consecutive_failures": 0,
      "cb_open_until": null,
-     "cb_cooldown_s": 3600
+     "cb_cooldown_s": 3600,
+     "official": {"checked": "2026-10-24", "stale": false, "max_age_days": 35}
    }
    ```
 
+   - `official`: date the official price table was last checked against the
+     vendors' pages, and whether that is older than
+     `PLUGBOARD_OFFICIAL_PRICES_MAX_AGE_DAYS` (default 35). A stale table is
+     still applied.
    - `disabled: true`: `PRICING_SCHEDULER_DISABLED` is set to a true value.
    - `running: false` with `disabled: false`: the background task stopped.
    - `cb_state: "DEGRADED"`: at least one recent refresh failed.
@@ -121,11 +133,14 @@ Check that the new value shows up as `update_timeout_s` in the status output.
 
 ### Price sources unreachable
 
-A refresh that cannot reach any source does not fail: it falls back to the
-built-in prices and logs `Failed to fetch LiteLLM pricing`,
-`LiteLLM pricing endpoint returned <code>` or
-`Failed to fetch external pricing source`. A manual refresh then reports
-`"source": "known_prices"`, and recently released models stay in `missing`.
+A refresh that cannot reach any source does not fail: the official table (no
+fetch) and the built-in prices still apply, and it logs `Pricing source <name>
+failed`, `Failed to fetch LiteLLM pricing`, `LiteLLM pricing endpoint returned
+<code>` or `Failed to fetch external pricing source`. A manual refresh then
+reports `"source": "known_prices"` and `"sources": ["official"]` (plus `"known"`
+when the built-in table filled a gap), and recently released models stay in
+`missing`. Such a pass does not count as a successful
+refresh: the scheduler turns `stale` after two intervals without one.
 
 Check outbound access from the Plugboard host:
 
@@ -175,6 +190,39 @@ grid but does not close the breaker. To close it:
 2. If you need a clean slate, stop Plugboard, delete `data/cb_state.json`,
    then start it again.
 
+## Official price table
+
+`plugboard/official_prices.py` holds the vendors' published prices (USD per
+million tokens), each with its `source_url`, the date it was `checked`, and
+optional `effective_from` / `effective_until` dates. Every refresh writes the
+prices in force on the **first day of the grid's month** as `source: official`
+with their `source_url`; a vendor change dated mid-month therefore applies from
+the next month's grid. An official price replaces a built-in or inherited one
+without review (it is curated vendor data) and sends `pricing.changed` with
+`status: applied` when it moves, for example at a month rollover. An admin's
+`manual` price is never replaced; `external` still wins over `official`.
+
+When a vendor changes its prices:
+
+1. Check the vendor's official pricing page (not a reseller's).
+2. In `plugboard/official_prices.py`, keep the current entry and give it
+   `effective_until` (last day of the old price); add an entry with the new
+   price, the same `source_url` and `effective_from` (first day of the new
+   price). Update `CHECKED` to the day you checked the pages. A model with no
+   official price stays out of the table.
+3. Run `make test` (`tests/test_official_prices_v6c.py` refuses two prices in
+   force on the same day), ship a release, and deploy it.
+4. The next refresh applies the price in force for the current month; past
+   months are not rewritten. Check `GET /admin/pricing/<YYYY_MM>`.
+
+If the new price must apply before a release, `PATCH /admin/pricing/<YYYY_MM>`
+with the new price (it becomes `manual`) and revert it once the release carries
+the table update.
+
+A stale table (`official.stale: true`) means nobody has rechecked the pages
+within `PLUGBOARD_OFFICIAL_PRICES_MAX_AGE_DAYS`: recheck them, then update
+`CHECKED` (and the prices if they changed) as above.
+
 ## Mitigation and rollback
 
 1. Trigger a refresh now (collects the current model list, then updates the
@@ -216,7 +264,7 @@ grid but does not close the breaker. To close it:
 - Breaker `OPEN` for more than 24 hours despite the steps above: escalate to
   the deployment owner with the status output and the `PricingScheduler` log
   lines.
-- Confirmed billing drift (clients charged at 0 USD or at stale prices):
+- Confirmed billing drift (unbudgeted clients charged at 0 USD, or at stale prices):
   inform whoever owns client invoicing; export the affected month with
   `GET /admin/usage/<YYYY_MM>/export?format=csv` to recompute charges.
 - Crash or unexplained exception in the scheduler: open an issue in the

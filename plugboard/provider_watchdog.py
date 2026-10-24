@@ -3,7 +3,7 @@ Provider Watchdog — monitors provider health and auto-restarts if down.
 
 Provides:
 - Background health check loop (configurable interval)
-- Auto-restart via launcher script when provider is detected down
+- Explicit restart refusal: native provider lifecycle is managed externally
 - Watchdog status tracking (last check, restart count, uptime)
 - History of restart events in SQLite
 - Integration with alerts.py for webhook notifications
@@ -16,7 +16,7 @@ import logging
 import os
 import secrets
 import sqlite3
-import subprocess
+import subprocess  # noqa: F401 — compatibility hook; restarts never launch commands
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -25,6 +25,11 @@ from typing import Any, Dict, List, Optional
 import aiohttp
 
 from plugboard.config import get_provider, load_providers
+from plugboard.legacy_connectors import (
+    is_removed_provider,
+    require_supported_model,
+    require_supported_provider,
+)
 from plugboard.storage import data_dir
 from plugboard.endpoints import openai_url
 
@@ -32,6 +37,7 @@ log = logging.getLogger(__name__)
 
 _DATA_DIR = data_dir()
 _DB_PATH = _DATA_DIR / "watchdog.db"
+# Inert project locator retained for integrations; restarts never inspect it.
 _PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 # Configuration (overridable via env)
@@ -44,7 +50,6 @@ _DEEP_CHECK_TIMEOUT = int(os.environ.get("WATCHDOG_DEEP_TIMEOUT", "60"))  # seco
 _DEEP_CHECK_INTERVAL = int(
     os.environ.get("WATCHDOG_DEEP_INTERVAL", "3")
 )  # every N checks
-_RESTART_TIMEOUT = int(os.environ.get("WATCHDOG_RESTART_TIMEOUT", "120"))  # seconds
 
 # --- SQLite setup ---
 
@@ -137,7 +142,7 @@ class _ProviderState:
         self.restart_count_hour = 0
         self.restart_hour_start = time.monotonic()
         self.total_restarts = 0
-        self.is_healthy = True
+        self.is_healthy = False
 
     def record_healthy(self) -> None:
         self.consecutive_failures = 0
@@ -262,6 +267,12 @@ async def ping_provider(provider_id: str, force_deep: bool = False) -> Dict[str,
             "check": "none",
         }
 
+    try:
+        require_supported_provider(provider)
+        require_supported_model(provider.get("default_model", ""), effective_name=True)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "latency_ms": 0, "check": "none"}
+
     base_url = provider["base_url"].rstrip("/")
     provider_type = provider.get("provider_type", "cloud")
     auth_source = provider.get("auth_source", "") or ""
@@ -330,6 +341,14 @@ async def _deep_health(
     base_url: str, bearer_token: str, model: str = ""
 ) -> Dict[str, Any]:
     """Send a real LLM completion to verify the full pipeline works. Uses max_tokens=1."""
+    try:
+        require_supported_model(model, effective_name=True)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "latency_ms": 0.0}
+    from plugboard.decisions import is_decision_model
+
+    if is_decision_model(model, effective_name=True):
+        return {"ok": False, "error": "decision_model_not_chat", "latency_ms": 0.0}
     url = openai_url(base_url, "chat/completions")
     body = {
         "model": model or "default",
@@ -379,85 +398,28 @@ async def _deep_health(
 # --- Restart logic ---
 
 
-def _find_launcher_script() -> Optional[Path]:
-    """Return the launcher script path when present and executable-ish."""
-    candidates = (
-        _PROJECT_DIR / "scripts" / "openclaw_launcher.sh",
-        _PROJECT_DIR / "openclaw_launcher.sh",
-    )
-    for path in candidates:
-        if path.exists() and path.is_file():
-            return path
-    return None
-
-
-def _load_dotenv_env() -> Dict[str, str]:
-    """Best-effort .env parser from project root for launcher subprocess."""
-    env_file = _PROJECT_DIR / ".env"
-    loaded: Dict[str, str] = {}
-    if not env_file.exists():
-        return loaded
-    try:
-        for raw in env_file.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            k = key.strip()
-            if not k:
-                continue
-            v = value.strip()
-            if len(v) >= 2 and (
-                (v[0] == "'" and v[-1] == "'") or (v[0] == '"' and v[-1] == '"')
-            ):
-                v = v[1:-1]
-            loaded[k] = v
-    except OSError as exc:
-        log.warning("Watchdog: failed reading .env (%s)", exc)
-    return loaded
-
-
 def restart_provider(provider_id: str) -> Dict[str, Any]:
-    """Restart provider via launcher script when available."""
-    script = _find_launcher_script()
-    if script is None:
-        msg = "Launcher script not found"
-        _log_event(provider_id, "restart", success=False, details=msg)
-        return {"success": False, "error": msg}
-
-    env = os.environ.copy()
-    env.update(_load_dotenv_env())
+    """Native provider restarts are managed externally, never by a host launcher."""
     try:
-        proc = subprocess.run(
-            ["bash", str(script)],
-            cwd=str(_PROJECT_DIR),
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=_RESTART_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired as exc:
-        msg = f"restart timeout after {exc.timeout}s"
+        require_supported_provider({"id": provider_id})
+    except ValueError as exc:
+        msg = str(exc)
         _log_event(provider_id, "restart", success=False, details=msg)
         return {"success": False, "error": msg}
-    except Exception as exc:
-        msg = f"restart failed: {exc}"
-        _log_event(provider_id, "restart", success=False, details=msg)
-        return {"success": False, "error": msg}
-
-    output = (proc.stdout or "").strip()
-    err = (proc.stderr or "").strip()
-    success = proc.returncode == 0
-    details = output if success else (err or output or f"exit {proc.returncode}")
-    _log_event(provider_id, "restart", success=success, details=details)
-    if success:
-        return {"success": True, "exit_code": proc.returncode, "output": output}
-    return {
-        "success": False,
-        "exit_code": proc.returncode,
-        "error": err or output or f"exit {proc.returncode}",
-        "output": output,
-    }
+    provider = get_provider(provider_id)
+    if provider is None:
+        msg = "Provider not found"
+    else:
+        try:
+            require_supported_provider(provider)
+        except ValueError as exc:
+            msg = str(exc)
+        else:
+            msg = (
+                "Provider restart not supported; native lifecycle is managed externally"
+            )
+    _log_event(provider_id, "restart", success=False, details=msg)
+    return {"success": False, "error": msg}
 
 
 # --- Watchdog loop ---
@@ -478,6 +440,9 @@ async def _watchdog_loop() -> None:
         try:
             providers = load_providers()
             for p in providers:
+                if is_removed_provider(p):
+                    _get_state(p["id"]).record_failure()
+                    continue
                 if not p.get("is_active", True):
                     continue
 
@@ -593,7 +558,25 @@ def stop_watchdog() -> None:
 
 
 def get_watchdog_status() -> Dict[str, Any]:
-    """Get current watchdog status and all provider states."""
+    """Get current states, without advertising a retired route as healthy."""
+    providers = {p["id"]: p for p in load_providers()}
+    states = {}
+    for pid, state in _states.items():
+        view = state.to_dict()
+        provider = providers.get(pid, {"id": pid})
+        try:
+            require_supported_provider(provider)
+            require_supported_model(
+                provider.get("default_model", ""), effective_name=True
+            )
+        except ValueError as exc:
+            view.update(
+                is_healthy=False,
+                can_restart=False,
+                migration_required=True,
+                error=str(exc),
+            )
+        states[pid] = view
     return {
         "running": _running
         and _watchdog_task is not None
@@ -602,7 +585,7 @@ def get_watchdog_status() -> Dict[str, Any]:
         "failure_threshold": _FAILURE_THRESHOLD,
         "restart_cooldown_s": _RESTART_COOLDOWN,
         "max_restarts_per_hour": _MAX_RESTARTS,
-        "providers": {pid: st.to_dict() for pid, st in _states.items()},
+        "providers": states,
     }
 
 

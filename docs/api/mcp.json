@@ -1,6 +1,6 @@
 {
   "server": "plugboard",
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "transport": [
     "stdio",
     "sse",
@@ -118,6 +118,42 @@
       }
     },
     {
+      "name": "decide",
+      "description": "Answer named typed questions through the dedicated decision API.\n\n    Args:\n        model: Exact engine ID from list_decision_models.\n        state: Bounded state text the engine evaluates.\n        questions: Mapping of answer IDs to typed questions. Each has type and\n            instructions. choice has criteria mapping labels to descriptions or\n            null; score has an ordered criteria list; noul has no criteria.\n\n    The gateway validates input and engine capabilities. Probabilities and\n    confidence retain each engine's documented semantics. No chat fallback.\n    Requires PLUGBOARD_API_KEY; an admin key is never substituted.",
+      "inputSchema": {
+        "properties": {
+          "model": {
+            "enum": [
+              "jev",
+              "laya",
+              "laya-multilingual"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "questions": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Questions",
+            "type": "object"
+          }
+        },
+        "required": [
+          "model",
+          "state",
+          "questions"
+        ],
+        "title": "decideArguments",
+        "type": "object"
+      }
+    },
+    {
       "name": "get_update_prompt",
       "description": "Get the full technical prompt for a specific update.\n\n    Returns the complete instructions: what changed in Plugboard,\n    which files to modify in your project, exact code changes,\n    and how to verify it works.\n\n    Apply the changes, then call mark_applied(client_id, prompt_id).\n\n    Args:\n        prompt_id: The update ID (e.g. CP-001, CP-002)",
       "inputSchema": {
@@ -148,6 +184,15 @@
           "client_id"
         ],
         "title": "list_appliedArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_decision_models",
+      "description": "List typed decision engines, availability, limits and confidence semantics.\n\n    These engines accept named questions through decide and cannot be used for chat.\n    Requires PLUGBOARD_API_KEY; an admin key is never substituted.",
+      "inputSchema": {
+        "properties": {},
+        "title": "list_decision_modelsArguments",
         "type": "object"
       }
     },

@@ -1,13 +1,13 @@
 """Pytest fixtures shared across the live-test framework.
 
-Loads catalog.yaml + eval_config.yaml once per session, exposes them as
-fixtures, and skips the suite by default so it never runs on the normal
-``pytest`` invocation (only when ``PLUGBOARD_RUN_LIVE_TESTS=1``).
+Loads catalog.yaml + eval_config.yaml once per session. Framework unit tests
+run on normal ``pytest`` invocations. Tests calling real external services
+must use ``@pytest.mark.live`` (or module-level ``pytestmark``); the shared
+tests/conftest.py requires ``PLUGBOARD_RUN_LIVE_TESTS=1`` for that marker.
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -15,18 +15,6 @@ import yaml
 
 _CATALOG_PATH = Path(__file__).parent / "catalog.yaml"
 _EVAL_CONFIG_PATH = Path(__file__).parent / "eval_config.yaml"
-
-
-def pytest_collection_modifyitems(config, items):
-    """Skip every live-test by default unless explicitly enabled."""
-    if os.environ.get("PLUGBOARD_RUN_LIVE_TESTS", "0") == "1":
-        return
-    skip_live = pytest.mark.skip(
-        reason="Live tests skipped — set PLUGBOARD_RUN_LIVE_TESTS=1 to enable."
-    )
-    for item in items:
-        if "live_model_tests" in str(item.fspath):
-            item.add_marker(skip_live)
 
 
 @pytest.fixture(scope="session")

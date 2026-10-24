@@ -38,6 +38,15 @@ def _needs_admin(route: APIRoute) -> bool:
     return False
 
 
+def _api_routes(routes):
+    """FastAPI may retain included routers rather than flattening app.routes."""
+    for route in routes:
+        if isinstance(route, APIRoute):
+            yield route
+        elif (included := getattr(route, "original_router", None)) is not None:
+            yield from _api_routes(included.routes)
+
+
 def test_every_public_route_is_in_the_contract_and_nothing_else():
     """Routes a client key reaches == routes the contract documents.
 
@@ -48,10 +57,8 @@ def test_every_public_route_is_in_the_contract_and_nothing_else():
 
     public = {
         (method, route.path.replace("{model_id:path}", "{model_id}"))
-        for route in app.routes
-        if isinstance(route, APIRoute)
-        and route.include_in_schema
-        and not _needs_admin(route)
+        for route in _api_routes(app.routes)
+        if route.include_in_schema and not _needs_admin(route)
         for method in route.methods - {"HEAD"}
     }
     missing = public - api_contract.PUBLIC_ROUTES
@@ -98,10 +105,19 @@ def test_contract_is_a_consistent_openapi_document():
 
 
 @pytest.fixture
-def client_key(client) -> str:
-    """A real client key (pb_...), so the answers are the ones clients get."""
-    from plugboard import apikeys
+def client_key(client, tmp_path, monkeypatch) -> str:
+    """A real client key (pb_...), so the answers are the ones clients get.
 
+    The key has a monthly budget, so the test model gets a (synthetic) price:
+    a budgeted key is refused a model without one (402).
+    """
+    from plugboard import apikeys, billing
+
+    pricing = tmp_path / "contract-pricing"
+    pricing.mkdir()
+    monkeypatch.setattr(billing, "_PRICING_DIR", pricing)
+    grid = {"models": {"fake:model-v1": {"input_price": 1.0, "output_price": 2.0}}}
+    (pricing / f"{billing.current_pricing_month()}.json").write_text(json.dumps(grid))
     return apikeys.create_key("acme", "contract", monthly_limit_usd=5.0)["key"]
 
 
@@ -119,6 +135,7 @@ def _validate(path: str, body, method: str = "GET"):
     [
         "/health",
         "/v1/models",
+        "/v1/decisions/models",
         "/v2/models",
         "/v1/models/benchmarks",
         "/v2/models/benchmarks",
@@ -144,6 +161,38 @@ async def test_model_info_answers_as_the_contract_says(client, client_key):
     missing = await client.get("/v1/models/no-such-model-xyz/info", headers=auth)
     if missing.status_code == 404:
         api_contract.ErrorResponse.model_validate(missing.json())
+
+
+@pytest.mark.asyncio
+async def test_decision_routes_answer_as_the_contract_says(client, monkeypatch):
+    """HTTP and contract are real; the engine port is a synthetic fake."""
+    from plugboard import apikeys, decision_api
+
+    record = apikeys.create_key("contract-synthetic", allowed_decision_models=["jev"])
+    auth = {"Authorization": f"Bearer {record['key']}"}
+    catalogue = await client.get("/v1/decisions/models", headers=auth)
+    assert catalogue.status_code == 200
+    models = _validate("/v1/decisions/models", catalogue.json())
+    assert [model.id for model in models.data] == ["jev"]
+
+    async def fake_engine(model, payload):
+        return {"answers": {"intact": {"type": "noul", "noul": 0.75}}}
+
+    monkeypatch.setattr(decision_api, "dispatch", fake_engine)
+    response = await client.post(
+        "/v1/decisions",
+        headers=auth,
+        json={
+            "model": "jev",
+            "state": "A synthetic intact parcel.",
+            "questions": {
+                "intact": {"type": "noul", "instructions": "Is the parcel intact?"}
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    answer = _validate("/v1/decisions", response.json(), method="POST")
+    assert answer.answers["intact"].noul == 0.75
 
 
 @pytest.mark.asyncio

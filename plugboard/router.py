@@ -3,7 +3,7 @@ Request router — forward /v1/chat/completions to the right backend.
 
 Model format: "provider_id:real_model_name"
 Examples:
-  "openclaw-llm-proxy:openclaw/anthropic--claude-sonnet-4-6"
+  "claude-via-claude-cli:claude-sonnet-4-6"
   "my-openai:gpt-4o"
   "anthropic-direct:claude-3-5-sonnet-20241022"
 
@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 import logging
 import os
 import re
@@ -30,11 +31,24 @@ from plugboard.alerts import record_provider_failure, record_provider_success
 from plugboard.config import load_providers
 from plugboard.logging_config import _request_id_var
 from plugboard.endpoints import openai_url
+from plugboard.legacy_connectors import (
+    is_removed_catalogue_model,
+    is_removed_model,
+    is_removed_provider,
+    require_supported_model,
+    require_supported_provider,
+)
+from plugboard.model_identity import (
+    catalogue_native_model,
+    observation_owner,
+    published_model_id,
+    registered_model_owner,
+)
 
 log = logging.getLogger(__name__)
 
 _RETRYABLE = {429, 500, 502, 503, 529}
-_TIMEOUT = float(900)  # 15 min — OpenClaw agents with sub-agents can be slow
+_TIMEOUT = float(900)  # Allow long-running direct CLI requests.
 
 
 # BENCH-006 closed: OpenAI's o-series (o1/o3/o4-mini/...) deprecated
@@ -217,95 +231,122 @@ def _provider_lb_score(provider_id: str, stats: Dict[str, Dict[str, Any]]) -> fl
     )
 
 
-def resolve_provider_and_model(model_str: str) -> tuple[Dict[str, Any], str]:
-    """
-    Parse "provider_id:model_name" and return (provider_dict, real_model_name).
-    Falls back to the first active provider if no prefix matches.
-    """
+def _chat_candidate(
+    provider: Dict[str, Any], real_model: str
+) -> tuple[Dict[str, Any], str]:
+    """Guard the actual selected model, including defaults and normalized aliases."""
+    from plugboard.decisions import is_decision_model
+
+    require_supported_provider(provider)
+    require_supported_model(
+        real_model or provider.get("default_model", ""), effective_name=True
+    )
+    if is_decision_model(
+        real_model or provider.get("default_model", ""),
+        provider_ids=(provider["id"],),
+        effective_name=True,
+    ):
+        raise ValueError("Use /v1/decisions for decision models")
+    return provider, real_model
+
+
+@dataclass(frozen=True)
+class _ModelRoute:
+    """A selected owner and its opaque native model name."""
+
+    provider: Dict[str, Any]
+    native_model: str
+
+    def candidate(self) -> tuple[Dict[str, Any], str]:
+        return self.provider, self.native_model
+
+
+def _model_route(provider: Dict[str, Any], native_model: str) -> _ModelRoute:
+    # The selected provider never comes from an alias target. Catalogue hints
+    # are owner-qualified native IDs, captured before display cleaning.
+    native_model = native_model or provider.get("default_model", "")
+    _chat_candidate(provider, native_model)
+    owner_prefix = provider["id"] + ":"
+    promoted = _resolve_model_alias(owner_prefix + native_model)
+    if promoted.startswith(owner_prefix):
+        native_model = promoted[len(owner_prefix) :]
+    else:
+        # Keep the final decision defense for malformed/legacy cache hints,
+        # without using their display syntax to select another owner.
+        _chat_candidate(provider, promoted)
+    _chat_candidate(provider, native_model)
+    return _ModelRoute(provider, native_model)
+
+
+def _select_request(
+    model_str: str,
+) -> tuple[List[Dict[str, Any]], Optional[_ModelRoute]]:
+    """Select from the original request before any promotion or display alias."""
+    from plugboard.decisions import is_decision_model
+
+    if not isinstance(model_str, str):
+        raise ValueError("model must be a string")
+    # Unambiguous native decisions and removed IDs never require a private
+    # provider-store read. Colons may belong to a registered owner or native tag.
+    require_supported_model(model_str, effective_name=True)
+    if ":" not in model_str.partition("/")[0] and is_decision_model(
+        model_str, effective_name=True
+    ):
+        raise ValueError("Use /v1/decisions for decision models")
     providers = load_providers()
-    active = [p for p in providers if p.get("is_active", True)]
+    require_supported_model(model_str, provider_ids=(p["id"] for p in providers))
+    owner = registered_model_owner(model_str, (p["id"] for p in providers))
+    if owner is not None:
+        require_supported_provider(next(p for p in providers if p["id"] == owner))
+    active = [
+        p for p in providers if p.get("is_active", True) and not is_removed_provider(p)
+    ]
+    owner = registered_model_owner(model_str, (p["id"] for p in active))
+    if owner is not None:
+        provider = next(p for p in active if p["id"] == owner)
+        return active, _model_route(provider, model_str[len(owner) + 1 :])
+    if is_decision_model(model_str, effective_name=True):
+        raise ValueError("Use /v1/decisions for decision models")
     if not active:
+        for provider in providers:
+            if is_removed_provider(provider):
+                require_supported_provider(provider)
         raise ValueError("No active providers configured")
 
-    # 1. Exact model scan: if the requested model (cleaned) matches a configured model (cleaned), route directly
+    # Presentation/legacy aliases apply only when no registered ID matched.
+    for alias, canonical in _CLEAN_ALIAS_TO_PROVIDER.items():
+        if model_str.startswith(alias):
+            for provider in active:
+                if provider["id"] == canonical:
+                    return active, _model_route(provider, model_str[len(alias) :])
+    prefix, sep, native_model = model_str.partition(":")
+    wanted_auth = _LEGACY_PROVIDER_PREFIX_TO_AUTH_SOURCE.get(prefix)
+    if sep and wanted_auth and native_model:
+        for provider in active:
+            if provider.get("auth_source") == wanted_auth:
+                return active, _model_route(provider, native_model)
+    return active, None
+
+
+def resolve_provider_and_model(model_str: str) -> tuple[Dict[str, Any], str]:
+    """Resolve one route; registered provider identity precedes all rewrites."""
+    active, selected = _select_request(model_str)
+    if selected is not None:
+        return selected.candidate()
+
+    # Preserve single-route configured-model lookup, after original selection.
     requested_clean = _clean_model_id(model_str)
-    for p in active:
-        for m in p.get("models") or []:
-            if isinstance(m, dict) and m.get("id"):
-                full_id = f"{p['id']}:{m['id']}"
-                if _clean_model_id(full_id) == requested_clean:
-                    return p, m["id"]
-        for extra_id in p.get("extra_model_ids") or []:
-            full_id = f"{p['id']}:{extra_id}"
-            if _clean_model_id(full_id) == requested_clean:
-                return p, extra_id
+    for provider in active:
+        configured = [
+            m["id"]
+            for m in provider.get("models") or []
+            if isinstance(m, dict) and m.get("id")
+        ] + list(provider.get("extra_model_ids") or [])
+        for native_model in configured:
+            if _clean_model_id(f"{provider['id']}:{native_model}") == requested_clean:
+                return _model_route(provider, native_model).candidate()
 
-    # Map clean aliases back to canonical provider prefixes as a fallback
-    if model_str.startswith("Gemini:"):
-        model_str = model_str.replace("Gemini:", "google-gemini-via-gemini-cli:", 1)
-    elif model_str.startswith("Codex:"):
-        model_str = model_str.replace("Codex:", "chatgpt-via-codex-cli:", 1)
-    elif model_str.startswith("claude-code:"):
-        model_str = model_str.replace("claude-code:", "claude-via-claude-cli:", 1)
-
-    # Rewrite clean aliases to their canonical dated IDs (see
-    # `_resolve_model_alias`). Safe no-op when the cache is empty.
-    model_str = _resolve_model_alias(model_str)
-
-    # Try matching provider_id prefix (greedy: longest match first)
-    provider_ids = sorted([p["id"] for p in active], key=len, reverse=True)
-    for pid in provider_ids:
-        if model_str.startswith(pid + ":"):
-            real_model = model_str[len(pid) + 1 :]
-            provider = next(p for p in active if p["id"] == pid)
-            return provider, real_model
-
-    # Legacy subprocess aliases: route directly to matching subprocess provider
-    # instead of falling back to the first active provider (often Ollama),
-    # which adds a guaranteed failed hop and latency.
-    if ":" in model_str:
-        prefix, real_model = model_str.split(":", 1)
-        wanted_auth = _LEGACY_PROVIDER_PREFIX_TO_AUTH_SOURCE.get(prefix)
-        if wanted_auth and real_model:
-            for p in active:
-                if p.get("auth_source") == wanted_auth:
-                    return p, real_model
-
-    # No prefix match — use default provider with model as-is
-    provider = active[0]
-    real_model = model_str or provider.get("default_model", "")
-
-    # For OpenClaw providers, transparently format model ID back to openclaw/{provider}--{model}
-    if "openclaw" in provider["id"] and not real_model.startswith("openclaw/"):
-        cleaned = _clean_model_id(real_model)
-        if ":" in cleaned:
-            prov, mname = cleaned.split(":", 1)
-            prov_map = {
-                "claude-code": "anthropic",
-                "Codex": "openai",
-                "Gemini": "google",
-                "ollama": "ollama",
-            }
-            mapped_prov = prov_map.get(prov, prov)
-            real_model = f"openclaw/{mapped_prov}--{mname}"
-        else:
-            low = real_model.lower()
-            if "claude" in low or "anthropic" in low:
-                real_model = f"openclaw/anthropic--{real_model}"
-            elif "gpt" in low or "codex" in low:
-                real_model = f"openclaw/openai--{real_model}"
-            elif "gemini" in low:
-                real_model = f"openclaw/google--{real_model}"
-            else:
-                real_model = f"openclaw/ollama--{real_model}"
-
-    log.debug(
-        "No provider prefix in model '%s' — using default: %s (real model: %s)",
-        model_str,
-        provider["id"],
-        real_model,
-    )
-    return provider, real_model
+    return _model_route(active[0], model_str).candidate()
 
 
 def _extra_headers(provider: Dict[str, Any]) -> Dict[str, str]:
@@ -382,7 +423,7 @@ async def _build_auth_header_async(provider: Dict[str, Any]) -> Dict[str, str]:
             )
             raise RuntimeError(f"Auth not available for {auth_source}. {hint}.")
         return _format_auth_header(provider, bundle.access_token)
-    # Fallback: stored bearer_token (OpenClaw, Ollama, API key providers)
+    # Fallback: stored bearer_token (Ollama and API key providers).
     return _format_auth_header(provider, provider.get("bearer_token", ""))
 
 
@@ -394,80 +435,14 @@ _CLEAN_ALIAS_TO_PROVIDER = {
 
 
 def _resolve_all_providers(model_str: str) -> List[tuple[Dict[str, Any], str]]:
-    """Return list of (provider, real_model) pairs to try in order."""
-    providers = load_providers()
-    active = [p for p in providers if p.get("is_active", True)]
-    if not active:
-        raise ValueError("No active providers configured")
-
-    # Rewrite the incoming model string through the alias map (populated by
-    # `list_models`). Lets users send the clean, undated model name
-    # (e.g. `claude-via-claude-cli:claude-3-opus`) and have it resolve to the
-    # canonical dated ID (`claude-via-claude-cli:claude-3-opus-20240229`)
-    # transparently.
-    model_str = _resolve_model_alias(model_str)
-    active_ids = {p["id"] for p in active}
-    # The short aliases listed by /v1/models (Codex:, claude-code:, Gemini:)
-    # name one CLI provider: pin the request to it instead of trying every
-    # provider (claude was sent gpt-* models and quarantined them).
-    for alias, canonical in _CLEAN_ALIAS_TO_PROVIDER.items():
-        if model_str.startswith(alias) and canonical in active_ids:
-            model_str = canonical + ":" + model_str[len(alias) :]
-            break
-
-    results: List[tuple[Dict[str, Any], str]] = []
-
-    # Try matching provider_id prefix (greedy: longest match first)
-    provider_ids = sorted([p["id"] for p in active], key=len, reverse=True)
-
-    # First: try exact prefix match
-    matched_id: Optional[str] = None
-    for pid in provider_ids:
-        if model_str.startswith(pid + ":"):
-            real_model = model_str[len(pid) + 1 :]
-            provider = next(p for p in active if p["id"] == pid)
-            results.append((provider, real_model))
-            matched_id = pid
-            break
-
-    # When the user explicitly prefixed the model with a provider id
-    # (e.g. `chatgpt-via-codex-cli:gpt-5.4-pro`), do NOT cascade to other
-    # providers: `gpt-5.4-pro` exists only on Codex, cross-provider
-    # fallback would send it to Ollama/Gemini/GitHub where it returns
-    # misleading 404s ("Unknown model: /gpt-5.4-pro"). Retries within the
-    # same provider still apply at the HTTP/subprocess layer.
-    if matched_id:
-        return results
-
-    # Fallback: all other active providers (only when no explicit prefix)
-    for p in active:
-        if p["id"] != matched_id:
-            real_model = (
-                results[0][1] if results else (model_str or p.get("default_model", ""))
-            )
-            results.append((p, real_model))
-
-    # If no prefix match and no results yet, use all active providers with model as-is
-    if not results:
-        for p in active:
-            real_model = model_str or p.get("default_model", "")
-            results.append((p, real_model))
-
-    # Intelligent load balancing: sort by score (lower = better)
-    # Score blends latency, error-rate history and in-flight pressure.
+    """Use the same selection/admission contract, retaining unqualified fallback."""
+    active, selected = _select_request(model_str)
+    if selected is not None:
+        return [selected.candidate()]
+    results = [_model_route(provider, model_str).candidate() for provider in active]
     if len(results) > 1:
         stats = metrics.get_stats()
-
-        def _lb_score(item):
-            return _provider_lb_score(item[0]["id"], stats)
-
-        # Keep the first (explicitly matched) provider first, sort the rest
-        if matched_id:
-            rest = sorted(results[1:], key=_lb_score)
-            results = [results[0]] + rest
-        else:
-            results = sorted(results, key=_lb_score)
-
+        results.sort(key=lambda item: _provider_lb_score(item[0]["id"], stats))
     return results
 
 
@@ -521,7 +496,7 @@ async def forward(body: Dict[str, Any], timeout: float = _TIMEOUT) -> Dict[str, 
 
     session = await _get_http_session()
     for provider, real_model in candidates:
-        # Subprocess providers (OpenClaw-style CLI spawn) short-circuit HTTP.
+        # Direct CLI providers short-circuit HTTP.
         auth_source = provider.get("auth_source", "")
         if auth_source.startswith("subprocess:"):
             try:
@@ -598,8 +573,6 @@ async def forward(body: Dict[str, Any], timeout: float = _TIMEOUT) -> Dict[str, 
                     pass
                 continue
 
-        # Timeout: always use the global _TIMEOUT (900s) — OpenClaw agents
-        # with sub-agents need long timeouts, never override with shorter values
         effective_timeout = timeout
         url = openai_url(provider["base_url"], "chat/completions")
         try:
@@ -718,7 +691,7 @@ async def forward_stream(
     """
     model_str = body.get("model", "")
     provider, real_model = resolve_provider_and_model(model_str)
-    effective_timeout = timeout  # always 900s — OpenClaw agents need long timeouts
+    effective_timeout = timeout
     _served_by.set((provider, real_model))
 
     # Subprocess providers don't stream natively (CLIs return the full
@@ -871,6 +844,7 @@ async def forward_stream(
 
 _models_cache: Optional[List[Dict[str, Any]]] = None
 _models_cache_ts: float = 0
+_models_cache_namespace: tuple = ()
 _models_alias_cache: Dict[str, str] = {}
 _MODELS_CACHE_TTL = 30.0  # seconds
 _DISABLED_MODEL_IDS = {"claude-opus-4"}
@@ -897,9 +871,10 @@ _model_status_mtime: int = 0
 
 def invalidate_models_cache() -> None:
     """Clear the models cache (useful for tests and after provider changes)."""
-    global _models_cache, _models_alias_cache
+    global _models_cache, _models_alias_cache, _models_cache_namespace
     _models_cache = None
     _models_alias_cache = {}
+    _models_cache_namespace = ()
 
 
 def _model_status_mtime_changed() -> bool:
@@ -1033,9 +1008,12 @@ def _is_whitelisted_model(m: Dict[str, Any], claude_allowed=None) -> bool:
     mid = m.get("id", "")
     if ":" not in mid:
         return False
-    parts = mid.split(":", 1)
-    provider_id = parts[0]
-    model_name = parts[1]
+    provider_id = m.get("owned_by") or m.get("provider") or mid.split(":", 1)[0]
+    model_name = (
+        catalogue_native_model(m)
+        if m.get("owned_by") or m.get("provider")
+        else mid.split(":", 1)[1]
+    )
 
     # Normalize provider ID
     pid_lower = provider_id.lower()
@@ -1134,22 +1112,8 @@ def _clean_model_id(mid: str) -> str:
     if mid.startswith("claude-via-claude-cli:"):
         return mid.replace("claude-via-claude-cli:", "claude-code:", 1)
 
-    # Clean any OpenClaw-related prefixes
     stripped = mid
-    found_openclaw_prefix = False
-    for prefix in [
-        "openclaw-llm-proxy:openclaw/",
-        "openclaw-llm-proxy:",
-        "openclaw/",
-        "openclaw:",
-    ]:
-        if stripped.startswith(prefix):
-            stripped = stripped.removeprefix(prefix)
-            found_openclaw_prefix = True
-            break
-
-    # If it contains "--" or we stripped openclaw or has provider ID colon
-    if found_openclaw_prefix or ":" in stripped or "--" in stripped:
+    if ":" in stripped or "--" in stripped:
         pfx = ""
         rem = stripped
         if ":" in stripped:
@@ -1161,11 +1125,7 @@ def _clean_model_id(mid: str) -> str:
         # A configured provider keeps its own id: guessing the vendor from the
         # model name sent anthropic-direct / agy / reseller models to the
         # claude-code or Codex alias, which then routed to another provider.
-        if (
-            pfx
-            and not found_openclaw_prefix
-            and pfx_lower not in _LEGACY_ALIAS_PREFIXES
-        ):
+        if pfx and pfx_lower not in _LEGACY_ALIAS_PREFIXES:
             return f"{pfx}:{rem}"
         if pfx_lower in {"anthropic", "claude", "claude-via-claude-cli", "claude-code"}:
             return f"claude-code:{rem}"
@@ -1256,21 +1216,27 @@ def _apply_exposure(
         for p in providers
         if p.get("id") and p.get("default_model")
     }
-    by_provider: Dict[str, List[str]] = {}
+    by_provider: Dict[str, List[Dict[str, Any]]] = {}
+    provider_ids = tuple(p["id"] for p in providers)
     for item in models:
-        mid = item.get("id", "")
-        by_provider.setdefault(mid.split(":", 1)[0], []).append(mid)
+        owner = (
+            item.get("owned_by")
+            or registered_model_owner(item.get("id", ""), provider_ids)
+            or ""
+        )
+        by_provider.setdefault(owner, []).append(item)
     hidden: set = set()
-    for ids in by_provider.values():
-        protected = {
-            mid
-            for mid in ids
-            if mid in defaults or mid in used or mid.split(":", 1)[-1] in used
+    for entries in by_provider.values():
+        bare = {
+            catalogue_native_model(item, provider_ids=provider_ids): item["id"]
+            for item in entries
         }
-        bare = {mid.split(":", 1)[-1]: mid for mid in ids}
-        for name in model_exposure.hidden_ids(
-            list(bare), {m.split(":", 1)[-1] for m in protected}
-        ):
+        protected = {
+            native
+            for native, mid in bare.items()
+            if mid in defaults or mid in used or native in used
+        }
+        for name in model_exposure.hidden_ids(list(bare), protected):
             hidden.add(bare[name])
     return [item for item in models if item.get("id") not in hidden]
 
@@ -1283,17 +1249,29 @@ async def list_models() -> List[Dict[str, Any]]:
     segment, and dated snapshots are dropped when a ``-latest`` alias
     of the same family already exists.
     """
-    global _models_cache, _models_cache_ts, _model_status_mtime
+    from plugboard.decisions import is_decision_model
+
+    global _models_cache, _models_cache_ts, _model_status_mtime, _models_cache_namespace
+    registry = load_providers()
+    provider_ids = tuple(p["id"] for p in registry)
+    namespace = tuple(
+        sorted(
+            (p["id"], bool(p.get("is_active", True)), is_removed_provider(p))
+            for p in registry
+        )
+    )
+    providers = [p for p in registry if not is_removed_provider(p)]
     now = _time.monotonic()
     cache_valid = (
         _models_cache is not None
         and (now - _models_cache_ts) < _MODELS_CACHE_TTL
         and not _model_status_mtime_changed()
     )
-    if cache_valid:
-        return _models_cache
+    if cache_valid and _models_cache_namespace == namespace:
+        return [
+            model for model in _models_cache if not is_removed_catalogue_model(model)
+        ]
 
-    providers = load_providers()
     models = []
     for p in providers:
         if not p.get("is_active", True):
@@ -1348,6 +1326,28 @@ async def list_models() -> List[Dict[str, Any]]:
         enrich,
     )
 
+    models = [
+        m
+        for m in models
+        if not is_removed_model(
+            m.get("id", ""), provider_ids=(p["id"] for p in providers)
+        )
+        and not is_decision_model(
+            m.get("id", ""), provider_ids=(p["id"] for p in providers)
+        )
+    ]
+    # Inexpressible identities must not suppress safe siblings during dedup or
+    # exposure. Keep raw IDs for native metadata, health and promotion helpers;
+    # the owner is part of the key because nested owners can share a raw ID.
+    publication_ids = {
+        (m["owned_by"], m["id"]): published_model_id(
+            m["owned_by"], catalogue_native_model(m), provider_ids
+        )
+        for m in models
+    }
+    models = [
+        m for m in models if publication_ids[(m["owned_by"], m["id"])] is not None
+    ]
     models = dedupe_family_snapshots(enrich(models))
     models = _apply_exposure(models, providers)
 
@@ -1388,28 +1388,38 @@ async def list_models() -> List[Dict[str, Any]]:
         )
         status_models = {}
 
+    native_aliases = build_alias_map(models)
+
     blocked = _model_denylist()  # static + PLUGBOARD_MODEL_DENYLIST
     for m in models:
         raw_id = m.get("id", "")
-        real_suffix = raw_id.split(":", 1)[-1]
+        real_suffix = catalogue_native_model(m)
         # Prefer probed status over quarantine when available
-        if raw_id in status_models:
-            entry = status_models[raw_id]
-            m["connected"] = bool(entry.get("connected", True))
+        entry = status_models.get(raw_id)
+        if (
+            entry is not None
+            and observation_owner(raw_id, entry, provider_ids) == m["owned_by"]
+        ):
+            m["connected"] = bool(entry.get("connected", False))
             m["last_probed_at"] = entry.get("last_probed_at")
-        elif real_suffix not in quarantined:
-            m["connected"] = True
-            m["last_probed_at"] = None
         else:
             m["connected"] = False
             m["last_probed_at"] = None
-        m["id"] = _clean_model_id(raw_id)
+        if real_suffix in quarantined and entry is None:
+            m["reason"] = "quarantined"
+        m["id"] = publication_ids[(m["owned_by"], raw_id)]
 
-    models = [m for m in models if m.get("id", "").split(":", 1)[-1] not in blocked]
+    models = [
+        m
+        for m in models
+        if m["id"] is not None
+        and not is_decision_model(catalogue_native_model(m), effective_name=True)
+        and catalogue_native_model(m) not in blocked
+    ]
     # C1: precompute the dynamic Claude whitelist (N latest per family) once,
     # from the full discovered Claude id set, then filter with it.
     _claude_names = [
-        m.get("id", "").split(":", 1)[-1]
+        catalogue_native_model(m)
         for m in models
         if "claude" in m.get("id", "").lower() or "anthropic" in m.get("id", "").lower()
     ]
@@ -1434,10 +1444,15 @@ async def list_models() -> List[Dict[str, Any]]:
         log.warning("list_models: top-N ranking failed (%s) — surfacing all", exc)
 
     global _models_alias_cache
-    _models_alias_cache = build_alias_map(models)
+    _models_alias_cache = {
+        key: native_aliases[key]
+        for key in build_alias_map(models)
+        if key in native_aliases
+    }
 
     _models_cache = models
     _models_cache_ts = now
+    _models_cache_namespace = namespace
     # Capture current mtime_ns so a future write to model_status.json triggers refresh.
     try:
         import os as _os
@@ -1651,6 +1666,8 @@ async def discover_models(provider: Dict[str, Any]) -> List[Dict[str, str]]:
     2. If that fails (HTML, 404, etc.), ask via chat completion
     """
     _discovery_trusted.set(False)
+    require_supported_provider(provider)
+    require_supported_model(provider.get("default_model", ""), effective_name=True)
     # Subprocess providers don't have an HTTP /v1/models endpoint. Their
     # baseline catalog is declared statically in the preset, but we enrich
     # it with anything LiteLLM has on file for the same vendor (refreshed
@@ -1814,6 +1831,13 @@ async def discover_models(provider: Dict[str, Any]) -> List[Dict[str, str]]:
         log.warning(
             "No default_model for %s — cannot discover via chat", provider["id"]
         )
+        return []
+
+    from plugboard.decisions import is_decision_model
+
+    if is_decision_model(
+        default_model, provider_ids=(provider["id"],), effective_name=True
+    ):
         return []
 
     try:

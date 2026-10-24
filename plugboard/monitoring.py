@@ -20,6 +20,10 @@ from typing import Any, Dict, List, Optional
 import aiohttp  # noqa: F401 — still used by check_model_availability below
 
 from plugboard.config import get_provider, load_providers
+from plugboard.legacy_connectors import (
+    require_supported_model,
+    require_supported_provider,
+)
 from plugboard.metrics import get_stats
 from plugboard.storage import data_dir
 from plugboard.endpoints import openai_url
@@ -81,6 +85,25 @@ async def check_model_availability(
     base_url: str = "http://localhost:8765",
 ) -> Dict[str, Any]:
     """Quick completion test on a model. Returns availability dict."""
+    providers = load_providers()
+    try:
+        require_supported_model(model_id, provider_ids=(p["id"] for p in providers))
+        for provider in sorted(providers, key=lambda p: len(p["id"]), reverse=True):
+            owner = provider["id"]
+            if model_id == owner or model_id.startswith(owner + ":"):
+                require_supported_provider(provider)
+                break
+    except ValueError as exc:
+        return {"model": model_id, "ok": False, "error": str(exc), "latency_ms": 0.0}
+    from plugboard.decisions import is_decision_model
+
+    if is_decision_model(model_id, provider_ids=(p["id"] for p in providers)):
+        return {
+            "model": model_id,
+            "ok": False,
+            "error": "decision_model_not_chat",
+            "latency_ms": 0.0,
+        }
     url = openai_url(base_url, "chat/completions")
     body = {
         "model": model_id,

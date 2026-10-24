@@ -35,6 +35,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional
 
+from plugboard import official_prices
 from plugboard.storage import data_dir
 
 log = logging.getLogger(__name__)
@@ -275,7 +276,12 @@ class PricingScheduler:
             "last_success_at": self.last_success_at,
             "last_result": self.last_result,
             "stale": self.is_stale(),
+            "official": official_prices.status(),
         }
+
+    def status(self) -> Dict[str, Any]:
+        """Same as ``status_dict``; reading it never starts the loop."""
+        return self.status_dict
 
     def is_stale(self) -> bool:
         """No successful update for 2 intervals (48 h in daily mode)."""
@@ -459,11 +465,12 @@ class PricingScheduler:
         self.last_result = result if isinstance(result, dict) else None
         # A pass that wrote nothing because the shrink guard refused it, or in
         # which no source answered, ran but did not refresh prices: it does
-        # not count towards freshness.
+        # not count towards freshness. The official table answers every pass
+        # without a fetch; its own age is reported under ``official``.
         if (
             isinstance(result, dict)
             and not result.get("sentinel_refused")
-            and result.get("sources", ["?"])
+            and [s for s in result.get("sources", ["?"]) if s != "official"]
         ):
             self.last_success_at = self._now().isoformat()
         if had_failures:

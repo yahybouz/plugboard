@@ -1,0 +1,673 @@
+{
+  "version": 1,
+  "models": {
+    "laya": {
+      "repo": "convaiinnovations/laya",
+      "revision": "7b928d828b7b0e022f929d9bd2e44165aa270148",
+      "runtime": "laya",
+      "source_revision": "0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5",
+      "source_repo": "NandhaKishorM/laya",
+      "files": [
+        {
+          "path": "hub/models--convaiinnovations--laya/snapshots/7b928d828b7b0e022f929d9bd2e44165aa270148/encoder/config.json",
+          "url": "https://huggingface.co/convaiinnovations/laya/resolve/7b928d828b7b0e022f929d9bd2e44165aa270148/encoder/config.json",
+          "size": 2083,
+          "sha256": "bf3ab80598fdccf414855a2ce80f22859e4492d06ca8a62ddd1cfb63972f8979"
+        },
+        {
+          "path": "hub/models--convaiinnovations--laya/snapshots/7b928d828b7b0e022f929d9bd2e44165aa270148/model.safetensors",
+          "url": "https://huggingface.co/convaiinnovations/laya/resolve/7b928d828b7b0e022f929d9bd2e44165aa270148/model.safetensors",
+          "size": 842609210,
+          "sha256": "891102d372688fc2a094dac56a384bc537b87c63f21f9f3dac0be2b7cbc8d86c"
+        },
+        {
+          "path": "hub/models--convaiinnovations--laya/snapshots/7b928d828b7b0e022f929d9bd2e44165aa270148/rl_agent_config.json",
+          "url": "https://huggingface.co/convaiinnovations/laya/resolve/7b928d828b7b0e022f929d9bd2e44165aa270148/rl_agent_config.json",
+          "size": 745,
+          "sha256": "ae287b56bbcf5f8c4f4541ae9dfd00c914c4c48b940b8398c3058af37ba92bbd"
+        },
+        {
+          "path": "hub/models--convaiinnovations--laya/snapshots/7b928d828b7b0e022f929d9bd2e44165aa270148/tokenizer/tokenizer.json",
+          "url": "https://huggingface.co/convaiinnovations/laya/resolve/7b928d828b7b0e022f929d9bd2e44165aa270148/tokenizer/tokenizer.json",
+          "size": 3583228,
+          "sha256": "6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30"
+        },
+        {
+          "path": "hub/models--convaiinnovations--laya/snapshots/7b928d828b7b0e022f929d9bd2e44165aa270148/tokenizer/tokenizer_config.json",
+          "url": "https://huggingface.co/convaiinnovations/laya/resolve/7b928d828b7b0e022f929d9bd2e44165aa270148/tokenizer/tokenizer_config.json",
+          "size": 308,
+          "sha256": "50044de60daaa73df97d262e15a40d4faf0160e7d742df64b377877a1320dd12"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/LICENSE",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/LICENSE",
+          "size": 10173,
+          "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/__init__.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/__init__.py",
+          "size": 6272,
+          "sha256": "2669a6900e395d17e4b128f756d9d1d23dd2ad62f7246e5164921805b00068a1"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/_agreement.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/_agreement.py",
+          "size": 17556,
+          "sha256": "d21cc9c0814c6c2b7d9c628a8b89168da2c5733e1a36e00ff2c11c218b9caad3"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/_compile.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/_compile.py",
+          "size": 4469,
+          "sha256": "487cbd1550ef180ece7ec948b99d34eb280930b16f889a5c5b2c4621000a5ede"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/_eval_policy.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/_eval_policy.py",
+          "size": 9147,
+          "sha256": "9788b90c673f20ba1c635169d572fac260eb92f8755b88a5c226421f81078f6c"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/agent.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/agent.py",
+          "size": 123642,
+          "sha256": "2e2a500fdbf58eb22ef10abe13cb6655568f25d0f4bc169c581423461b9da94e"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/__init__.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/__init__.py",
+          "size": 5055,
+          "sha256": "59b3e228d6e7c326072094e44248003af900585f436d717e8afa544798f9c147"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/base.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/base.py",
+          "size": 6576,
+          "sha256": "840783491d33f6b4d66507278c2fd3d2b90b69d4a87da6bb6ff89c8c281d6d28"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/compile.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/compile.py",
+          "size": 6923,
+          "sha256": "4e89543f686c132446593b7f1a95f72c6515fb070c5746d30d636f797e7e5375"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/eager.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/eager.py",
+          "size": 1347,
+          "sha256": "c124f6c8a7062fc30a7368f8cc6c0027ce162316e54fe957330fd26e2efddb34"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/tilelang.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/tilelang.py",
+          "size": 1940,
+          "sha256": "ec039de76453d15a045cf3dfdc89df6a67e6c1e5eaeb5c389073d4cfd9ea0786"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/calibrate.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/calibrate.py",
+          "size": 41973,
+          "sha256": "7a772e27fc00789f3e3a7b2f65a141a39c7c78d286c0e2a13b90dbf0d2e07603"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/cli.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/cli.py",
+          "size": 25949,
+          "sha256": "704119e85e13bc0177701dfd8b32980b783ef76185673829344a0534b2e66796"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/common.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/common.py",
+          "size": 55264,
+          "sha256": "8cb7b9530134dcd5d4392c6c13d1a3d26672a5d4d5097507a01345533a9bc52b"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/confidence.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/confidence.py",
+          "size": 16622,
+          "sha256": "91bb9c267d566f1c7c907200d4c933c6b6a4275ae74093bc33536f59083318f6"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/email.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/email.py",
+          "size": 18563,
+          "sha256": "2b48bfd37a84aff96d062239695809df782748d2a1d062b9bc5325cfce1249ea"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals.py",
+          "size": 78351,
+          "sha256": "78ace363cd2d9b1504bae5c24bfb224ab85c95fb05a38aa2f1c5de41454d3f94"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals_cli.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals_cli.py",
+          "size": 36114,
+          "sha256": "2aa75bf0e2a5ca123893185f6459100a7e367adca75164a760e6d673e8a43567"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals_shortlist.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals_shortlist.py",
+          "size": 7624,
+          "sha256": "c759cf291c98fd46374844488eb1ed311c3c8e326238c2cddcf1046626c6499f"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals_tournament.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals_tournament.py",
+          "size": 6888,
+          "sha256": "2b80993039fb35aefe902ee1de05c3c2bce7a4e01f9fc9b77d18a6ccd9259e8e"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evidence.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evidence.py",
+          "size": 11882,
+          "sha256": "af16b988bf4616fcb068f4a15e476bc237b775dbe6da1a7b482a0e5e6ad207f5"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/fast.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/fast.py",
+          "size": 13767,
+          "sha256": "df722a500cf0074ba01e67fccd510cc1c279c2851594100c7c4ba5755ad08b9c"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/hooks.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/hooks.py",
+          "size": 44552,
+          "sha256": "94935010d1ecfeb199fcbdce52c68c5775d16710bff60300f1555294bed40490"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/__init__.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/__init__.py",
+          "size": 1122,
+          "sha256": "e41ce48e0586c38ea1439a9e1f18bd5d4dd24496e585ffab70a3544378bb0e10"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/_controls.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/_controls.py",
+          "size": 10111,
+          "sha256": "cf7a79772fa09d8de9c53f50627e1d94c1e0fe69b2a2f54556c13295c858ab35"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/_errors.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/_errors.py",
+          "size": 935,
+          "sha256": "76900cabbd75d04ebbefdc9e7cccdc7df1ab3fb870fc76bc93a0d1d42ac4b9f3"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/_guard.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/_guard.py",
+          "size": 2422,
+          "sha256": "c0b38c4b39650a0989681d3f05f59e21f57cbf8a2255d85d39c76f31db87ab8e"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/agno.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/agno.py",
+          "size": 35552,
+          "sha256": "97cad0abeb602d77c0ee358fa787c9fa415627a2426f799918fff9b6011b8cc4"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/crewai.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/crewai.py",
+          "size": 24163,
+          "sha256": "7c291964243ce877f9070cd418af73457b46821faa26b658bc22504b028029a8"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/langchain.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/langchain.py",
+          "size": 50303,
+          "sha256": "6cacddf8d6dc5c291a269a81cb1bb4860cdcbdc663045b442965cfa7c13acc90"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/llamaindex.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/llamaindex.py",
+          "size": 27492,
+          "sha256": "d107563b533d1e0ff576b2adfa125d21ac34eab1d01a0a365bf96094b6c9de5e"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/tools.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/tools.py",
+          "size": 23326,
+          "sha256": "bf7681167711d2b6ca3f5db544b00d94fcadb772f4b26fc0bbbeebf7a391076e"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/lang.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/lang.py",
+          "size": 58813,
+          "sha256": "fbc333b94d4eb5eb586edbf65d1889129e67864041e46ceca790e5ddbf59f978"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/__init__.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/__init__.py",
+          "size": 449,
+          "sha256": "e2ce6a6eb5c441ba60810affc9cacab6ae790fddb02324284b3c4073aac13250"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/device.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/device.py",
+          "size": 9960,
+          "sha256": "444a15d1ba78a9158ebaa5708497b233c031761d7ee2646ab7e65bc75c7ee820"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/remote.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/remote.py",
+          "size": 12488,
+          "sha256": "9ff15cf9e520676ce57503ff311d2fee4a98a6604296d8621d044d8f6a420234"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/server.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/server.py",
+          "size": 29212,
+          "sha256": "a65a6e9ac493fb128b79c0bb72a28e4b71592fb9039f20b11b91949c61f67912"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/tools.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/tools.py",
+          "size": 70910,
+          "sha256": "81c89d08ac5efb729edfd3437a4f36b1dd7dab018ee4c7fc1a8156b3dbd01582"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/onnx_agent.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/onnx_agent.py",
+          "size": 50930,
+          "sha256": "734351b2234061f55fa541b99c11a01b51f9fc5a05a7eb862c77de93fb0c20b5"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/presets.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/presets.py",
+          "size": 8322,
+          "sha256": "40d91d74f5bd585b40f70c34c95cb4fe2aec83a85cfdb93e4c623a5d904defa3"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/revisions.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/revisions.py",
+          "size": 7850,
+          "sha256": "f19f11eab47371281addf64baeedf1bbb83fdc666ab0d7e654367d06485d04c5"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/router.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/router.py",
+          "size": 104992,
+          "sha256": "a798874da5885597ad63476151a83575dc4dbd2641c000a9244150ae95d6cb8e"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/serve.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/serve.py",
+          "size": 84844,
+          "sha256": "d14f0a73afb88a7efb177f43b2bb2e3a2c221feed85d0a70be779f7a34569a19"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/shortlist.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/shortlist.py",
+          "size": 25680,
+          "sha256": "4e05598d0fbdaaf428453fe2bddd03c1a710b968a14aad3e4c8990762651eca2"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/structured.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/structured.py",
+          "size": 23202,
+          "sha256": "28c116b3f764efef0e2027d99238233fe8aeab55235c714488fdbdc7a91bd11b"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/tl_kernels.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/tl_kernels.py",
+          "size": 12498,
+          "sha256": "0fe67c43a066fc9be3bd7136b562c6cb41806e4601136d0da656d35fff20b3f0"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/train.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/train.py",
+          "size": 64317,
+          "sha256": "c325941f275a90b486d00c3ca28dc4ee1ece795218fdaa7c67818d711ee79645"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/train_cli.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/train_cli.py",
+          "size": 7179,
+          "sha256": "c7dce37c946f994ee856dfa1dae3910b6a11f8a91e621f6725e4def0a726f007"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/pyproject.toml",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/pyproject.toml",
+          "size": 4105,
+          "sha256": "c916aa9b467864ecc5bb6578b98cd8c2241e1cabea3b1dee56767ade1457e1d9"
+        }
+      ],
+      "dependencies_note": "Full encoder plus trained decision/action heads are contained in model.safetensors; local encoder config and tokenizer are complete, no pretrained backbone download is used."
+    },
+    "laya-multilingual": {
+      "repo": "convaiinnovations/laya-multilingual",
+      "revision": "1720e3e3357cfe1e281542e223f8273b0890ca34",
+      "runtime": "laya",
+      "source_revision": "0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5",
+      "source_repo": "NandhaKishorM/laya",
+      "files": [
+        {
+          "path": "hub/models--convaiinnovations--laya-multilingual/snapshots/1720e3e3357cfe1e281542e223f8273b0890ca34/encoder/config.json",
+          "url": "https://huggingface.co/convaiinnovations/laya-multilingual/resolve/1720e3e3357cfe1e281542e223f8273b0890ca34/encoder/config.json",
+          "size": 1938,
+          "sha256": "83f6916d13ef0f556ac461f28308dc2bffa7ebeadee8ec9e2db5812020ea5bb4"
+        },
+        {
+          "path": "hub/models--convaiinnovations--laya-multilingual/snapshots/1720e3e3357cfe1e281542e223f8273b0890ca34/model.safetensors",
+          "url": "https://huggingface.co/convaiinnovations/laya-multilingual/resolve/1720e3e3357cfe1e281542e223f8273b0890ca34/model.safetensors",
+          "size": 643835514,
+          "sha256": "9d628fd971b700382ac6f65920a86f149777b2e748e0c955fb3b19695aa8f204"
+        },
+        {
+          "path": "hub/models--convaiinnovations--laya-multilingual/snapshots/1720e3e3357cfe1e281542e223f8273b0890ca34/rl_agent_config.json",
+          "url": "https://huggingface.co/convaiinnovations/laya-multilingual/resolve/1720e3e3357cfe1e281542e223f8273b0890ca34/rl_agent_config.json",
+          "size": 472,
+          "sha256": "25061739243b617ad88d1219ba6f8a9c86c5881ca28df024fa2d9b3b2fcc30c6"
+        },
+        {
+          "path": "hub/models--convaiinnovations--laya-multilingual/snapshots/1720e3e3357cfe1e281542e223f8273b0890ca34/tokenizer/tokenizer.json",
+          "url": "https://huggingface.co/convaiinnovations/laya-multilingual/resolve/1720e3e3357cfe1e281542e223f8273b0890ca34/tokenizer/tokenizer.json",
+          "size": 34363188,
+          "sha256": "609d8f4c067cd3950f88594c5a802616cea245823836ef5848ee4fc40aab5b6f"
+        },
+        {
+          "path": "hub/models--convaiinnovations--laya-multilingual/snapshots/1720e3e3357cfe1e281542e223f8273b0890ca34/tokenizer/tokenizer_config.json",
+          "url": "https://huggingface.co/convaiinnovations/laya-multilingual/resolve/1720e3e3357cfe1e281542e223f8273b0890ca34/tokenizer/tokenizer_config.json",
+          "size": 502,
+          "sha256": "424b69444bf7b5809dc2cd2e36d0bd71b8055124dd24274d6db3c655d38205e7"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/LICENSE",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/LICENSE",
+          "size": 10173,
+          "sha256": "a6cba85bc92e0cff7a450b1d873c0eaa2e9fc96bf472df0247a26bec77bf3ff9"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/__init__.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/__init__.py",
+          "size": 6272,
+          "sha256": "2669a6900e395d17e4b128f756d9d1d23dd2ad62f7246e5164921805b00068a1"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/_agreement.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/_agreement.py",
+          "size": 17556,
+          "sha256": "d21cc9c0814c6c2b7d9c628a8b89168da2c5733e1a36e00ff2c11c218b9caad3"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/_compile.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/_compile.py",
+          "size": 4469,
+          "sha256": "487cbd1550ef180ece7ec948b99d34eb280930b16f889a5c5b2c4621000a5ede"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/_eval_policy.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/_eval_policy.py",
+          "size": 9147,
+          "sha256": "9788b90c673f20ba1c635169d572fac260eb92f8755b88a5c226421f81078f6c"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/agent.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/agent.py",
+          "size": 123642,
+          "sha256": "2e2a500fdbf58eb22ef10abe13cb6655568f25d0f4bc169c581423461b9da94e"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/__init__.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/__init__.py",
+          "size": 5055,
+          "sha256": "59b3e228d6e7c326072094e44248003af900585f436d717e8afa544798f9c147"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/base.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/base.py",
+          "size": 6576,
+          "sha256": "840783491d33f6b4d66507278c2fd3d2b90b69d4a87da6bb6ff89c8c281d6d28"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/compile.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/compile.py",
+          "size": 6923,
+          "sha256": "4e89543f686c132446593b7f1a95f72c6515fb070c5746d30d636f797e7e5375"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/eager.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/eager.py",
+          "size": 1347,
+          "sha256": "c124f6c8a7062fc30a7368f8cc6c0027ce162316e54fe957330fd26e2efddb34"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/tilelang.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/backends/tilelang.py",
+          "size": 1940,
+          "sha256": "ec039de76453d15a045cf3dfdc89df6a67e6c1e5eaeb5c389073d4cfd9ea0786"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/calibrate.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/calibrate.py",
+          "size": 41973,
+          "sha256": "7a772e27fc00789f3e3a7b2f65a141a39c7c78d286c0e2a13b90dbf0d2e07603"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/cli.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/cli.py",
+          "size": 25949,
+          "sha256": "704119e85e13bc0177701dfd8b32980b783ef76185673829344a0534b2e66796"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/common.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/common.py",
+          "size": 55264,
+          "sha256": "8cb7b9530134dcd5d4392c6c13d1a3d26672a5d4d5097507a01345533a9bc52b"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/confidence.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/confidence.py",
+          "size": 16622,
+          "sha256": "91bb9c267d566f1c7c907200d4c933c6b6a4275ae74093bc33536f59083318f6"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/email.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/email.py",
+          "size": 18563,
+          "sha256": "2b48bfd37a84aff96d062239695809df782748d2a1d062b9bc5325cfce1249ea"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals.py",
+          "size": 78351,
+          "sha256": "78ace363cd2d9b1504bae5c24bfb224ab85c95fb05a38aa2f1c5de41454d3f94"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals_cli.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals_cli.py",
+          "size": 36114,
+          "sha256": "2aa75bf0e2a5ca123893185f6459100a7e367adca75164a760e6d673e8a43567"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals_shortlist.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals_shortlist.py",
+          "size": 7624,
+          "sha256": "c759cf291c98fd46374844488eb1ed311c3c8e326238c2cddcf1046626c6499f"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals_tournament.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evals_tournament.py",
+          "size": 6888,
+          "sha256": "2b80993039fb35aefe902ee1de05c3c2bce7a4e01f9fc9b77d18a6ccd9259e8e"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evidence.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/evidence.py",
+          "size": 11882,
+          "sha256": "af16b988bf4616fcb068f4a15e476bc237b775dbe6da1a7b482a0e5e6ad207f5"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/fast.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/fast.py",
+          "size": 13767,
+          "sha256": "df722a500cf0074ba01e67fccd510cc1c279c2851594100c7c4ba5755ad08b9c"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/hooks.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/hooks.py",
+          "size": 44552,
+          "sha256": "94935010d1ecfeb199fcbdce52c68c5775d16710bff60300f1555294bed40490"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/__init__.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/__init__.py",
+          "size": 1122,
+          "sha256": "e41ce48e0586c38ea1439a9e1f18bd5d4dd24496e585ffab70a3544378bb0e10"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/_controls.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/_controls.py",
+          "size": 10111,
+          "sha256": "cf7a79772fa09d8de9c53f50627e1d94c1e0fe69b2a2f54556c13295c858ab35"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/_errors.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/_errors.py",
+          "size": 935,
+          "sha256": "76900cabbd75d04ebbefdc9e7cccdc7df1ab3fb870fc76bc93a0d1d42ac4b9f3"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/_guard.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/_guard.py",
+          "size": 2422,
+          "sha256": "c0b38c4b39650a0989681d3f05f59e21f57cbf8a2255d85d39c76f31db87ab8e"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/agno.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/agno.py",
+          "size": 35552,
+          "sha256": "97cad0abeb602d77c0ee358fa787c9fa415627a2426f799918fff9b6011b8cc4"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/crewai.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/crewai.py",
+          "size": 24163,
+          "sha256": "7c291964243ce877f9070cd418af73457b46821faa26b658bc22504b028029a8"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/langchain.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/langchain.py",
+          "size": 50303,
+          "sha256": "6cacddf8d6dc5c291a269a81cb1bb4860cdcbdc663045b442965cfa7c13acc90"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/llamaindex.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/llamaindex.py",
+          "size": 27492,
+          "sha256": "d107563b533d1e0ff576b2adfa125d21ac34eab1d01a0a365bf96094b6c9de5e"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/tools.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/integrations/tools.py",
+          "size": 23326,
+          "sha256": "bf7681167711d2b6ca3f5db544b00d94fcadb772f4b26fc0bbbeebf7a391076e"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/lang.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/lang.py",
+          "size": 58813,
+          "sha256": "fbc333b94d4eb5eb586edbf65d1889129e67864041e46ceca790e5ddbf59f978"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/__init__.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/__init__.py",
+          "size": 449,
+          "sha256": "e2ce6a6eb5c441ba60810affc9cacab6ae790fddb02324284b3c4073aac13250"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/device.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/device.py",
+          "size": 9960,
+          "sha256": "444a15d1ba78a9158ebaa5708497b233c031761d7ee2646ab7e65bc75c7ee820"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/remote.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/remote.py",
+          "size": 12488,
+          "sha256": "9ff15cf9e520676ce57503ff311d2fee4a98a6604296d8621d044d8f6a420234"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/server.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/server.py",
+          "size": 29212,
+          "sha256": "a65a6e9ac493fb128b79c0bb72a28e4b71592fb9039f20b11b91949c61f67912"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/tools.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/mcp/tools.py",
+          "size": 70910,
+          "sha256": "81c89d08ac5efb729edfd3437a4f36b1dd7dab018ee4c7fc1a8156b3dbd01582"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/onnx_agent.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/onnx_agent.py",
+          "size": 50930,
+          "sha256": "734351b2234061f55fa541b99c11a01b51f9fc5a05a7eb862c77de93fb0c20b5"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/presets.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/presets.py",
+          "size": 8322,
+          "sha256": "40d91d74f5bd585b40f70c34c95cb4fe2aec83a85cfdb93e4c623a5d904defa3"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/revisions.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/revisions.py",
+          "size": 7850,
+          "sha256": "f19f11eab47371281addf64baeedf1bbb83fdc666ab0d7e654367d06485d04c5"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/router.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/router.py",
+          "size": 104992,
+          "sha256": "a798874da5885597ad63476151a83575dc4dbd2641c000a9244150ae95d6cb8e"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/serve.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/serve.py",
+          "size": 84844,
+          "sha256": "d14f0a73afb88a7efb177f43b2bb2e3a2c221feed85d0a70be779f7a34569a19"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/shortlist.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/shortlist.py",
+          "size": 25680,
+          "sha256": "4e05598d0fbdaaf428453fe2bddd03c1a710b968a14aad3e4c8990762651eca2"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/structured.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/structured.py",
+          "size": 23202,
+          "sha256": "28c116b3f764efef0e2027d99238233fe8aeab55235c714488fdbdc7a91bd11b"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/tl_kernels.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/tl_kernels.py",
+          "size": 12498,
+          "sha256": "0fe67c43a066fc9be3bd7136b562c6cb41806e4601136d0da656d35fff20b3f0"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/train.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/train.py",
+          "size": 64317,
+          "sha256": "c325941f275a90b486d00c3ca28dc4ee1ece795218fdaa7c67818d711ee79645"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/train_cli.py",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/laya/train_cli.py",
+          "size": 7179,
+          "sha256": "c7dce37c946f994ee856dfa1dae3910b6a11f8a91e621f6725e4def0a726f007"
+        },
+        {
+          "path": "runtime/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/pyproject.toml",
+          "url": "https://raw.githubusercontent.com/NandhaKishorM/laya/0a05a45052e23ae0b887a490fe8d6d9c8cff2ab5/pyproject.toml",
+          "size": 4105,
+          "sha256": "c916aa9b467864ecc5bb6578b98cd8c2241e1cabea3b1dee56767ade1457e1d9"
+        }
+      ],
+      "dependencies_note": "Full encoder plus trained decision/action heads are contained in model.safetensors; local encoder config and tokenizer are complete, no pretrained backbone download is used."
+    }
+  }
+}

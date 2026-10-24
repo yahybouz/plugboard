@@ -77,7 +77,10 @@ async def test_inherits_full_catalog_when_current_has_one_model(tmp_path, monkey
 
     result = await update_current_pricing()
     assert result["inherited"] == 3
-    assert result["total"] == 4  # 3 inherited + 1 existing
+    from plugboard import official_prices
+
+    official = len(official_prices.prices_for_month(current_month))
+    assert result["total"] == 4 + official  # 3 inherited + 1 existing + official
 
     # Re-read from disk to confirm it was persisted
     reloaded = _billing.load_pricing(current_month)

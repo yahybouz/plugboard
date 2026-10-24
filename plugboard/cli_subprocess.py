@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import shutil
+import signal
 import sys
 import tempfile
 import time
@@ -635,6 +636,18 @@ def parse_agy_models(stdout_text: str) -> List[str]:
     return ids
 
 
+async def _kill_group(proc: asyncio.subprocess.Process) -> None:
+    """Kill the CLI and its descendants (node, sandbox helpers), then reap it.
+
+    Every CLI is started in its own session, so its pid is the group id.
+    """
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    await proc.wait()
+
+
 async def list_agy_models(timeout_s: float = 30.0) -> List[str]:
     """Ask the Antigravity CLI which models the signed-in account can use.
 
@@ -653,13 +666,18 @@ async def list_agy_models(timeout_s: float = 30.0) -> List[str]:
             stderr=asyncio.subprocess.PIPE,
             env=build_child_env("agy"),
             cwd=_clean_spawn_cwd(),
+            start_new_session=True,
         )
+        finished = False
         try:
             stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
+            finished = True
         except asyncio.TimeoutError:
-            proc.kill()
             log.warning("agy models timed out after %.0fs", timeout_s)
             return []
+        finally:
+            if not finished:
+                await _kill_group(proc)
     except Exception as exc:  # noqa: BLE001
         log.warning("agy models failed: %s", exc)
         return []
@@ -1178,10 +1196,9 @@ async def complete(
         # Codex-style: prompt is a trailing positional arg
         argv.append(prompt)
 
+    # Never argv: for arg-mode backends it carries the tenant prompt.
     log.info(
-        "spawn CLI: %s (argv_tail=%s)",
-        backend.command,
-        " ".join(argv[1:4]) + ("..." if len(argv) > 4 else ""),
+        "spawn CLI: %s (model=%s, prompt_chars=%d)", backend.kind, model, len(prompt)
     )
 
     deadline = timeout_s or backend.timeout_s
@@ -1215,6 +1232,9 @@ async def complete(
                     stderr=asyncio.subprocess.PIPE,
                     env=env,
                     cwd=spawn_cwd,
+                    # Own process group: a timeout or a cancellation kills the
+                    # CLI's descendants too, see _kill_group().
+                    start_new_session=True,
                 )
             except FileNotFoundError as exc:
                 # The cached path was stale (binary was removed mid-run). Drop it
@@ -1230,13 +1250,14 @@ async def complete(
             stdin_bytes = (
                 prompt.encode("utf-8") if backend.input_mode == "stdin" else None
             )
+            finished = False
             try:
                 stdout, stderr = await asyncio.wait_for(
                     proc.communicate(stdin_bytes),
                     timeout=deadline,
                 )
+                finished = True
             except asyncio.TimeoutError:
-                proc.kill()
                 raise CliSubprocessError(
                     f"CLI {backend.command!r} timed out after {deadline:.0f}s",
                     exit_code=proc.returncode,
@@ -1245,6 +1266,12 @@ async def complete(
                     provider_name=backend.command,
                     model_id=model,
                 ) from None
+            finally:
+                # Timeout, cancellation or any error: the semaphore slot and
+                # the private gemini home are released only once the child
+                # is dead and reaped.
+                if not finished:
+                    await _kill_group(proc)
 
     elapsed = time.perf_counter() - t0
     stdout_text = (stdout or b"").decode("utf-8", "replace")

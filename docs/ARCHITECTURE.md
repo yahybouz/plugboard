@@ -58,7 +58,7 @@ Streaming requests to HTTP providers are proxied chunk by chunk and billed at th
 | `config.py` | Provider store (`providers.json`), encryption of credentials, provider domain allowlist, `.env` loading |
 | `apikeys.py` | Client key store (`api_keys.json`), hashing, rotation |
 | `billing.py`, `usage.py` | Monthly pricing grids and cost calculation; usage records (SQLite) |
-| `pricing_scraper.py`, `pricing_scheduler.py` | Price sources and the background refresh with its circuit breaker |
+| `pricing_scraper.py`, `pricing_scheduler.py`, `official_prices.py` | Price sources (including the dated official price table) and the background refresh with its circuit breaker |
 | `cache.py`, `semantic_cache.py`, `cache_common.py` | Exact-match and semantic response caches, tenant isolation rules |
 | `circuit_breaker.py`, `metrics.py`, `ratelimit.py` | Per-model breaker, in-memory request metrics, rate limits and login lockout |
 | `direct_providers.py` | Provider presets shown in the dashboard |
@@ -68,7 +68,7 @@ Streaming requests to HTTP providers are proxied chunk by chunk and billed at th
 | `model_availability.py`, `model_quarantine.py`, `model_catalog.py`, `model_ranker.py`, `benchmarks.py` | Connectivity probes, daily catalog refresh, quarantine, aliases, ranking and model metadata |
 | `provider_watchdog.py`, `monitoring.py`, `health_probe.py` | Background health checks, health history, provider probes |
 | `alerts.py`, `webhooks.py`, `audit.py` | Alert webhook, signed event webhooks, admin audit trail |
-| `admin_mfa.py`, `session_store.py`, `log_redact.py`, `logging_config.py`, `http_pool.py` | TOTP for admins, chat sessions, log redaction, JSON logging, shared HTTP pool |
+| `admin_mfa.py`, `admin_sessions.py`, `session_store.py`, `log_redact.py`, `logging_config.py`, `http_pool.py` | TOTP for admins, revocable admin sessions, chat sessions, log redaction, JSON logging, shared HTTP pool |
 | `mcp_server.py` | MCP server and update registry (separate process, started by `scripts/run_mcp.py`) |
 | `static/` | Dashboard and client portal (plain HTML, CSS and JavaScript) |
 
@@ -83,7 +83,7 @@ There is no external database or queue, which keeps the deployment to one proces
 
 ## Security boundaries
 
-- **Admin plane**: `/admin/*`, `/providers*`, `/metrics*`, `/docs` and the dashboard require the `ADMIN_KEY` (bearer) or a signed session cookie obtained by logging in with it. Auto-login only applies to a local install opened from the same machine.
+- **Admin plane**: `/admin/*`, `/providers*`, `/metrics*`, `/docs` and the dashboard require the `ADMIN_KEY` (bearer) or a signed session cookie obtained by logging in with it; the session is also recorded server-side and revoked at logout or on any MFA change. With MFA enforced, the bearer needs a single-use TOTP code (`X-Plugboard-Admin-TOTP`). Auto-login only applies to a local install opened from the same machine.
 - **Client plane**: `/v1/*` and `/v2/*` accept client keys (and the admin key). Cache entries, sessions and usage are scoped to the client.
 - **Secrets at rest**: provider tokens, OAuth credentials and the MFA secret are encrypted with Fernet; client keys are stored as SHA-256 hashes.
 - **CLI execution**: CLIs are resolved to absolute paths once, run without a shell, from a neutral directory, with a concurrency limit; Codex runs in a read-only sandbox.

@@ -269,3 +269,57 @@ def test_branch_cookie_plus_lle_bearer_priority_lle(isolated_app, monkeypatch, i
     req = _make_request(bearer=raw, cookies={"plugboard_admin_session": session})
     # MF3: bearer lle_* takes precedence over admin cookie.
     assert _resolve_client(req) == "eve"
+
+
+@pytest.mark.parametrize("enforced", [False, True])
+@pytest.mark.parametrize("accepted", [False, True])
+@pytest.mark.parametrize("prefix", ["pb_", "lle_"])
+def test_auth_never_sends_bearer_prefix_to_logger(
+    isolated_app, monkeypatch, enforced, accepted, prefix
+):
+    """Capture at the logger boundary, before handler redaction mutates records."""
+    import importlib
+    import logging
+
+    app_module = importlib.import_module("plugboard.app")
+    marker = prefix + "SYNTHETIC_AUTH_LOG_MARKER"
+    record = {"client_id": "synthetic-client", "key_id": "synthetic-key-id"}
+    monkeypatch.setattr(
+        app_module, "_API_KEY", "synthetic-enforcement" if enforced else ""
+    )
+    monkeypatch.setattr(app_module, "_is_admin_key", lambda token: False)
+    monkeypatch.setattr(app_module, "_is_admin_session", lambda token: False)
+    monkeypatch.setattr(
+        app_module, "get_key_record", lambda token: record if accepted else None
+    )
+    messages = []
+
+    class CaptureBeforeRedaction(logging.Handler):
+        def emit(self, log_record):
+            messages.append(log_record.getMessage())
+
+    handler = CaptureBeforeRedaction()
+    app_module.log.addHandler(handler)
+    previous_level = app_module.log.level
+    app_module.log.setLevel(logging.DEBUG)
+    request = _make_request(bearer=marker)
+    try:
+        if accepted:
+            assert app_module._resolve_client(request) == "synthetic-client"
+            assert request.state.key_id == "synthetic-key-id"
+            assert request.state.key_record is record
+        else:
+            with pytest.raises(HTTPException) as error:
+                app_module._resolve_client(request)
+            assert error.value.status_code == 401
+            assert error.value.detail == "Invalid API key"
+            assert request.state.key_id == ""
+            assert request.state.key_record is None
+    finally:
+        app_module.log.removeHandler(handler)
+        app_module.log.setLevel(previous_level)
+
+    assert messages
+    assert all(
+        marker not in message and marker[:8] not in message for message in messages
+    )

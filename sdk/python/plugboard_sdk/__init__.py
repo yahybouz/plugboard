@@ -22,9 +22,11 @@ And streaming:
 from __future__ import annotations
 
 from .client import LLMEnablerClient, LLMEnablerError, PlugboardClient, PlugboardError
+from .async_client import PlugboardAsyncClient
 
 __all__ = [
     "PlugboardClient",
+    "PlugboardAsyncClient",
     "PlugboardError",
     # Deprecated aliases from before the rename.
     "LLMEnablerClient",

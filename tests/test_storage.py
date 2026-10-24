@@ -94,7 +94,7 @@ def test_server_refuses_to_start_without_admin_key_outside_dev_mode():
     _require_admin_key_outside_dev("admin", dev_mode=True)
 
 
-def test_bootstrap_over_corrupt_providers_file_keeps_it_and_serves_from_memory(
+def test_removed_env_over_corrupt_store_keeps_it_and_returns_no_provider(
     tmp_path, monkeypatch
 ):
     import plugboard.config as cfg
@@ -110,5 +110,5 @@ def test_bootstrap_over_corrupt_providers_file_keeps_it_and_serves_from_memory(
 
     providers = cfg.load_providers()
 
-    assert [p["base_url"] for p in providers] == ["http://openclaw.test"]
+    assert providers == []
     assert pfile.read_text() == "{{NOT VALID JSON"

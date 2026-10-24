@@ -47,9 +47,13 @@ _LATEST_RE = re.compile(r"-?latest$", re.IGNORECASE)
 # - ``regional_prefixes``: pricing rows like ``us.anthropic.claude-opus-4-7``
 #   are AWS Bedrock regional copies of the same model; the CLI does not
 #   accept those names, so drop them.
+# - ``excluded_suffixes``: rows ending with one of these belong to another CLI
+#   (``claude-opus-5-5-medium`` is an Antigravity effort variant written by the
+#   official price table), not to this one.
 _SUBPROCESS_DISCOVERY: Dict[str, Dict[str, Any]] = {
     "claude": {
         "prefix": "claude-",
+        "excluded_suffixes": ("-low", "-medium", "-high"),
         "vendor_namespace_prefixes": (
             "azure_ai/",
             "bedrock/",
@@ -188,6 +192,7 @@ def discover_subprocess_models_from_pricing(kind: str) -> List[str]:
 
     vendor_ns: Tuple[str, ...] = tuple(profile.get("vendor_namespace_prefixes") or ())
     regional: Tuple[str, ...] = tuple(profile.get("regional_prefixes") or ())
+    excluded: Tuple[str, ...] = tuple(profile.get("excluded_suffixes") or ())
     allow_re = profile.get("allow_re")
     allow_pattern = re.compile(str(allow_re)) if allow_re else None
 
@@ -208,6 +213,8 @@ def discover_subprocess_models_from_pricing(kind: str) -> List[str]:
         # ``claude-sonnet-4-5-20250929-v1:0`` row). These names are not
         # accepted by the vendor CLIs.
         if re.search(r"-v\d+:\d+$", model_id):
+            continue
+        if model_id.endswith(excluded):
             continue
         if any(model_id.startswith(prefix) for prefix in prefixes):
             if allow_pattern and not allow_pattern.match(model_id):
@@ -252,7 +259,10 @@ def classify(model_id: str, owned_by: str = "") -> Dict[str, Any]:
       - ``github-models-via-gh-cli:openai/gpt-4o`` → display ``openai/gpt-4o``,
         family ``openai/gpt-4o``, variant ``""``.
     """
-    _prefix, rest = _strip_provider_prefix(model_id)
+    if owned_by and model_id.startswith(owned_by + ":"):
+        rest = model_id[len(owned_by) + 1 :]
+    else:
+        _prefix, rest = _strip_provider_prefix(model_id)
     display = rest or model_id
 
     # Ollama-shaped: name:tag. Family = name, variant = tag.

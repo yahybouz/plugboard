@@ -36,7 +36,7 @@ class TestProviderState:
         s = _ProviderState("test-provider")
         assert s.provider_id == "test-provider"
         assert s.consecutive_failures == 0
-        assert s.is_healthy is True
+        assert s.is_healthy is False
         assert s.total_restarts == 0
 
     def test_record_healthy_resets_failures(self):
@@ -456,84 +456,42 @@ class TestDeepCheckState:
 
 
 class TestRestartProvider:
-    """Test provider restart via launcher script."""
+    """Native lifecycle is external; supersedes launcher execution oracles."""
 
-    def test_restart_no_script(self, monkeypatch):
+    def test_restart_unknown_provider(self, monkeypatch):
         import plugboard.provider_watchdog as wd
 
-        monkeypatch.setattr(wd, "_find_launcher_script", lambda: None)
-        result = wd.restart_provider("p1")
+        monkeypatch.setattr(wd, "get_provider", lambda _: None)
+        result = wd.restart_provider("unknown")
         assert result["success"] is False
         assert "not found" in result["error"].lower()
 
-    def test_restart_success(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize(
+        "provider",
+        [
+            {"id": "direct-http", "base_url": "http://direct.test"},
+            {"id": "claude-code", "auth_source": "subprocess:claude"},
+            {"id": "ollama", "provider_type": "sovereign"},
+        ],
+    )
+    def test_restart_native_lifecycle_not_managed(self, provider, monkeypatch):
         import plugboard.provider_watchdog as wd
-
-        # Create a fake launcher script
-        script = tmp_path / "openclaw_launcher.sh"
-        script.write_text("#!/bin/bash\necho 'restarted'\nexit 0\n")
-        script.chmod(0o755)
-        monkeypatch.setattr(wd, "_find_launcher_script", lambda: script)
-        monkeypatch.setattr(wd, "_PROJECT_DIR", tmp_path)
-        monkeypatch.setattr(wd, "_DATA_DIR", tmp_path)
-        monkeypatch.setattr(wd, "_DB_PATH", tmp_path / "watchdog.db")
-
-        result = wd.restart_provider("p1")
-        assert result["success"] is True
-        assert result["exit_code"] == 0
-        assert "restarted" in result["output"]
-
-    def test_restart_failure(self, tmp_path, monkeypatch):
-        import plugboard.provider_watchdog as wd
-
-        script = tmp_path / "openclaw_launcher.sh"
-        script.write_text("#!/bin/bash\necho 'FAILED' >&2\nexit 1\n")
-        script.chmod(0o755)
-        monkeypatch.setattr(wd, "_find_launcher_script", lambda: script)
-        monkeypatch.setattr(wd, "_PROJECT_DIR", tmp_path)
-        monkeypatch.setattr(wd, "_DATA_DIR", tmp_path)
-        monkeypatch.setattr(wd, "_DB_PATH", tmp_path / "watchdog.db")
-
-        result = wd.restart_provider("p1")
-        assert result["success"] is False
-        assert result["exit_code"] == 1
-
-    def test_restart_timeout(self, tmp_path, monkeypatch):
-        import plugboard.provider_watchdog as wd
-
-        script = tmp_path / "openclaw_launcher.sh"
-        script.write_text("#!/bin/bash\nsleep 999\n")
-        script.chmod(0o755)
-        monkeypatch.setattr(wd, "_find_launcher_script", lambda: script)
-        monkeypatch.setattr(wd, "_PROJECT_DIR", tmp_path)
-        monkeypatch.setattr(wd, "_DATA_DIR", tmp_path)
-        monkeypatch.setattr(wd, "_DB_PATH", tmp_path / "watchdog.db")
-
-        # Patch subprocess timeout to be very short
         import subprocess
 
-        original_run = subprocess.run
+        monkeypatch.setattr(wd, "get_provider", lambda _: provider)
 
-        def fast_timeout_run(*args, **kwargs):
-            kwargs["timeout"] = 1
-            return original_run(*args, **kwargs)
+        def reject_process(*args, **kwargs):
+            pytest.fail("restart must not execute a host command")
 
-        monkeypatch.setattr(subprocess, "run", fast_timeout_run)
-        result = wd.restart_provider("p1")
+        monkeypatch.setattr(subprocess, "run", reject_process)
+        result = wd.restart_provider(provider["id"])
         assert result["success"] is False
-        assert (
-            "timeout" in result["error"].lower()
-            or "timed out" in result["error"].lower()
-        )
+        assert "not supported" in result["error"].lower()
 
-    def test_restart_logs_event(self, tmp_path, monkeypatch):
+    def test_restart_logs_failed_event(self, tmp_path, monkeypatch):
         import plugboard.provider_watchdog as wd
 
-        script = tmp_path / "openclaw_launcher.sh"
-        script.write_text("#!/bin/bash\necho 'ok'\nexit 0\n")
-        script.chmod(0o755)
-        monkeypatch.setattr(wd, "_find_launcher_script", lambda: script)
-        monkeypatch.setattr(wd, "_PROJECT_DIR", tmp_path)
+        monkeypatch.setattr(wd, "get_provider", lambda _: {"id": "p1"})
         monkeypatch.setattr(wd, "_DATA_DIR", tmp_path)
         monkeypatch.setattr(wd, "_DB_PATH", tmp_path / "watchdog.db")
 
@@ -541,7 +499,8 @@ class TestRestartProvider:
         events = wd.get_watchdog_events(event_type="restart")
         assert len(events) == 1
         assert events[0]["provider_id"] == "p1"
-        assert events[0]["success"] == 1
+        assert events[0]["success"] == 0
+        assert "not supported" in events[0]["details"].lower()
 
 
 # ── Watchdog status ─────────────────────────────────────────────────────────
@@ -792,33 +751,24 @@ class TestWatchdogLoop:
 
 
 class TestLauncherDetection:
-    """Test _find_launcher_script()."""
+    """Reintroduced retired launchers remain inert in both historical paths."""
 
-    def test_find_launcher_script_exists(self, tmp_path, monkeypatch):
-        """When a launcher script is present at one of the expected paths,
-        the function must locate it. Uses a tmp project root so the test
-        does not depend on an on-disk launcher (commit 9de4c68 removed
-        the real one as obsolete — the function itself must still work
-        when operators reintroduce it for their own deployment)."""
+    @pytest.mark.parametrize("subdir", ["", "scripts"])
+    def test_reintroduced_launcher_is_never_executed(
+        self, subdir, tmp_path, monkeypatch
+    ):
         import plugboard.provider_watchdog as wd
 
+        folder = tmp_path / subdir
+        folder.mkdir(exist_ok=True)
+        sentinel = tmp_path / "launcher-ran"
+        (folder / "openclaw_launcher.sh").write_text(f"#!/bin/sh\ntouch '{sentinel}'\n")
         monkeypatch.setattr(wd, "_PROJECT_DIR", tmp_path)
-        scripts_dir = tmp_path / "scripts"
-        scripts_dir.mkdir()
-        launcher = scripts_dir / "openclaw_launcher.sh"
-        launcher.write_text("#!/bin/sh\necho fake launcher\n")
-
-        script = wd._find_launcher_script()
-        assert script is not None
-        assert script.name == "openclaw_launcher.sh"
-        assert script == launcher
-
-    def test_find_launcher_script_missing(self, tmp_path, monkeypatch):
-        import plugboard.provider_watchdog as wd
-
-        monkeypatch.setattr(wd, "_PROJECT_DIR", tmp_path)
-        script = wd._find_launcher_script()
-        assert script is None
+        monkeypatch.setattr(wd, "get_provider", lambda _: {"id": "p1"})
+        result = wd.restart_provider("p1")
+        assert result["success"] is False
+        assert "not supported" in result["error"].lower()
+        assert not sentinel.exists()
 
 
 # ── API endpoint tests ──────────────────────────────────────────────────────
@@ -990,24 +940,21 @@ class TestEdgeCases:
         assert state.provider_id == "new-provider"
         assert "new-provider" in wd._states
 
-    def test_restart_with_env_file(self, tmp_path, monkeypatch):
+    def test_restart_ignores_env_file(self, tmp_path, monkeypatch):
         import plugboard.provider_watchdog as wd
+        from pathlib import Path
 
-        script = tmp_path / "openclaw_launcher.sh"
-        script.write_text("#!/bin/bash\necho $MY_VAR\nexit 0\n")
-        script.chmod(0o755)
-
-        env_file = tmp_path / ".env"
-        env_file.write_text("MY_VAR=hello_world\n")
-
-        monkeypatch.setattr(wd, "_find_launcher_script", lambda: script)
+        (tmp_path / ".env").write_text("MY_VAR=hello_world\n")
         monkeypatch.setattr(wd, "_PROJECT_DIR", tmp_path)
-        monkeypatch.setattr(wd, "_DATA_DIR", tmp_path)
-        monkeypatch.setattr(wd, "_DB_PATH", tmp_path / "watchdog.db")
+        monkeypatch.setattr(wd, "get_provider", lambda _: {"id": "p1"})
 
+        def reject_read(*args, **kwargs):
+            pytest.fail("restart must not read the retired launcher environment")
+
+        monkeypatch.setattr(Path, "read_text", reject_read)
         result = wd.restart_provider("p1")
-        assert result["success"] is True
-        assert "hello_world" in result["output"]
+        assert result["success"] is False
+        assert "not supported" in result["error"].lower()
 
     @pytest.mark.asyncio
     async def test_loop_handles_exception_gracefully(self, tmp_path, monkeypatch):

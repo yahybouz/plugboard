@@ -5,8 +5,8 @@ and writes the grid; this module decides, model by model, which price wins.
 
 Priority of an entry, highest first::
 
-    manual  >  external > provider_native > models_dev > litellm > known  >  (no source)  >  llm
-    (admin)    (structured sources, in PLUGBOARD_PRICING_SOURCES order)      (old grids)    (suggestion applied)
+    manual  >  external > official > provider_native > models_dev > litellm > known  >  (no source)  >  llm
+    (admin)    (structured sources, in PLUGBOARD_PRICING_SOURCES order)                 (old grids)    (suggestion applied)
 
 Rules:
 - a source only replaces an entry of the same or a lower priority, so a
@@ -15,7 +15,8 @@ Rules:
 - a price change above the drift threshold, or a first price that disagrees
   with a lower-priority source by more than the threshold, is returned as a
   drift to review instead of being written (unless the action is ``apply``);
-- ``external`` is the operator's own source and is never held for review;
+- ``external`` is the operator's own source and ``official`` the curated, dated
+  vendor table (``plugboard.official_prices``): neither is held for review;
 - an entry priced 0/0 by no one in particular (older grids used it as a
   placeholder) is treated as unpriced, so a real price fills it.
 """
@@ -29,14 +30,21 @@ from typing import Any, Dict, List, Mapping, Optional
 
 log = logging.getLogger(__name__)
 
-STRUCTURED_SOURCES = ("external", "provider_native", "models_dev", "litellm", "known")
+STRUCTURED_SOURCES = (
+    "external",
+    "official",
+    "provider_native",
+    "models_dev",
+    "litellm",
+    "known",
+)
 DEFAULT_ORDER = list(STRUCTURED_SOURCES)
 MAX_PRICE = 1000.0  # USD per 1M tokens
 # output / input. Published prices reach 40x (Ollama nemotron-3-super:
 # $0.015 in, $0.60 out), so the ceiling sits at 50.
 MIN_RATIO, MAX_RATIO = 0.1, 50.0
 _EPSILON = 1e-9
-TRUSTED_SOURCES = frozenset({"external"})
+TRUSTED_SOURCES = frozenset({"external", "official"})
 
 _warned: set = set()
 
@@ -62,7 +70,8 @@ def source_order(external_configured: Optional[bool] = None) -> List[str]:
     """Structured sources to use, highest priority first.
 
     Unset ``PLUGBOARD_PRICING_SOURCES`` with an external source configured
-    keeps the behaviour of earlier releases (external, then built-in prices).
+    keeps the behaviour of earlier releases (external, then built-in prices:
+    the official table, then the known one).
     An invalid value falls back to the default order and logs an error.
     """
     raw = os.environ.get("PLUGBOARD_PRICING_SOURCES", "").strip()
@@ -72,10 +81,10 @@ def source_order(external_configured: Optional[bool] = None) -> List[str]:
         if external_configured:
             _warn_once(
                 "unchanged",
-                "Pricing sources unchanged (external, known). Set PLUGBOARD_PRICING_SOURCES "
+                "Pricing sources unchanged (external, official, known). Set PLUGBOARD_PRICING_SOURCES "
                 "to add models.dev and LiteLLM. See docs/guide/pricing.md#sources",
             )
-            return ["external", "known"]
+            return ["external", "official", "known"]
         return list(DEFAULT_ORDER)
     order = [part.strip() for part in raw.split(",") if part.strip()]
     unknown = [part for part in order if part not in STRUCTURED_SOURCES]

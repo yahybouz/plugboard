@@ -180,7 +180,10 @@ class TestUpdatePricingWithExternal:
             mock.get(url, payload=external_payload)
             result = await pricing_scraper.update_current_pricing()
 
-        assert result["added"] == 1  # brand-new-model
+        from plugboard import official_prices
+
+        # brand-new-model, plus the official table's entries in force that month
+        assert result["added"] == 1 + len(official_prices.prices_for_month("2026_04"))
         assert result["updated"] == 1  # existing-model price changed
         assert result["source"] == "external"
         assert result["month"] == "2026_04"

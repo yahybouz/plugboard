@@ -8,9 +8,9 @@ first async call, never forced on sync-only users).
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Iterable, Iterator, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 class PlugboardError(Exception):
@@ -20,6 +20,22 @@ class PlugboardError(Exception):
         super().__init__(f"HTTP {status}: {detail}")
         self.status = status
         self.detail = detail
+
+
+class _RefuseRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # urllib then raises HTTPError with the 3xx status
+
+
+def urlopen(request: Request, timeout: float):
+    """Like urllib's urlopen, but never sends the key to a redirect target."""
+    return build_opener(_RefuseRedirect).open(request, timeout=timeout)
+
+
+def _http_error(exc: HTTPError) -> PlugboardError:
+    if 300 <= exc.code < 400:
+        return PlugboardError(exc.code, "Redirect refused")
+    return PlugboardError(exc.code, exc.read().decode(errors="replace"))
 
 
 class PlugboardClient:
@@ -152,6 +168,38 @@ class PlugboardClient:
         result = self._get_json("/v1/models")
         return result.get("data", [])
 
+    def list_decision_models(self) -> List[Dict[str, Any]]:
+        """List decision engines, including availability and capability limits."""
+        try:
+            return self._get_json("/v1/decisions/models").get("data", [])
+        except TimeoutError:
+            raise PlugboardError(0, "Decision request timed out") from None
+        except PlugboardError as exc:
+            raise PlugboardError(exc.status, "Decision request failed") from None
+
+    def decide(
+        self,
+        model: Literal["jev", "laya", "laya-multilingual"],
+        state: str,
+        questions: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Submit named typed questions. The gateway validates engine capabilities.
+
+        ``choice`` uses a criteria mapping, ``score`` an ordered criteria list,
+        and ``noul`` has no criteria. This operation never calls chat.
+        """
+        if model == "kev-0.8b":
+            raise ValueError("Unsupported decision model")
+        try:
+            return self._post_json(
+                "/v1/decisions",
+                {"model": model, "state": state, "questions": questions},
+            )
+        except TimeoutError:
+            raise PlugboardError(0, "Decision request timed out") from None
+        except PlugboardError as exc:
+            raise PlugboardError(exc.status, "Decision request failed") from None
+
     def usage(self, month: Optional[str] = None) -> Dict[str, Any]:
         path = f"/usage/me?month={month}" if month else "/usage/me"
         return self._get_json(path)
@@ -189,9 +237,7 @@ class PlugboardClient:
             with urlopen(req, timeout=self.timeout) as resp:
                 return json.loads(resp.read().decode())
         except HTTPError as exc:
-            raise PlugboardError(
-                exc.code, exc.read().decode(errors="replace")
-            ) from exc
+            raise _http_error(exc) from exc
         except URLError as exc:
             raise PlugboardError(0, f"connection failed: {exc}") from exc
 
@@ -207,9 +253,7 @@ class PlugboardClient:
             with urlopen(req, timeout=self.timeout) as resp:
                 return json.loads(resp.read().decode())
         except HTTPError as exc:
-            raise PlugboardError(
-                exc.code, exc.read().decode(errors="replace")
-            ) from exc
+            raise _http_error(exc) from exc
         except URLError as exc:
             raise PlugboardError(0, f"connection failed: {exc}") from exc
 
@@ -231,9 +275,7 @@ class PlugboardClient:
                     except json.JSONDecodeError:
                         continue
         except HTTPError as exc:
-            raise PlugboardError(
-                exc.code, exc.read().decode(errors="replace")
-            ) from exc
+            raise _http_error(exc) from exc
         except URLError as exc:
             raise PlugboardError(0, f"connection failed: {exc}") from exc
 

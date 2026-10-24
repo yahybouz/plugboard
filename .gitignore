@@ -10,7 +10,10 @@ __pycache__/
 *.pyo
 *.pyd
 .venv/
-.venv-mcp/
+# Local MCP environment or symlink: never index its contents or link.
+/.venv-mcp
+.venv-decisions/
+.decision-assets/
 .venv-skill/
 venv/
 *.egg-info/

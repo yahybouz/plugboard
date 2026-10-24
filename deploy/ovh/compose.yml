@@ -39,20 +39,10 @@ services:
       - "127.0.0.1:8765:8765"
     volumes:
       - data:/app/data
+      # CLI logins (.codex, .claude, .gemini) live only in this volume: log in
+      # from inside the container. Never bind the host account's CLI homes,
+      # which native host sessions would load (see README, CLI homes).
       - cli-home:/home/app
-      # Reuse the owner's native VPS sessions; auth refreshes stay shared.
-      # Do not mount individual auth files: CLIs replace them atomically.
-      # Missing source directories must fail, not become root-owned stubs.
-      - type: bind
-        source: /home/ubuntu/.codex
-        target: /home/app/.codex
-        bind:
-          create_host_path: false
-      - type: bind
-        source: /home/ubuntu/.claude
-        target: /home/app/.claude
-        bind:
-          create_host_path: false
       - logs:/app/logs
     security_opt:
       - no-new-privileges:true

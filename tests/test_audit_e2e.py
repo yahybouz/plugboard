@@ -76,6 +76,15 @@ def _iso(tmp_path, monkeypatch):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     (data_dir / "pricing").mkdir()
+    # Keys get a monthly budget by default, and a budgeted key is refused a
+    # model without a price (402): give the test model a synthetic one.
+    from plugboard.billing import current_pricing_month
+
+    (data_dir / "pricing" / f"{current_pricing_month()}.json").write_text(
+        json.dumps(
+            {"models": {"fake:model-v1": {"input_price": 1.0, "output_price": 2.0}}}
+        )
+    )
 
     import plugboard.config as cfg
 

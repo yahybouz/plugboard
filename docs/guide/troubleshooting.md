@@ -48,6 +48,10 @@ auth.auto_login refused reason=<reason> peer=<address>
 
 On a deployed instance auto-login is off by design: read `ADMIN_KEY` from the server's `.env` or secret store and type it in the login form.
 
+### Every admin login fails with `MFA code required` and no code works
+
+With `PLUGBOARD_ADMIN_MFA_REQUIRED=1`, an `admin_mfa.json` that exists but cannot be read (corrupted, not JSON, unreadable permissions) refuses admin access instead of turning MFA off; the log says `Failed to read .../admin_mfa.json`. Restore the file from a backup, or remove it (MFA is then not enrolled) and enrol again.
+
 ## Dashboard login problems
 
 - **`Admin key required`**: the key does not match `ADMIN_KEY`. Check the value the server actually loaded (restart after editing `.env`).

@@ -5,7 +5,7 @@ Allows MCP-compatible clients (Claude Code, Cursor, LangGraph agents)
 to consume Plugboard tools, resources, and prompts natively.
 
 Architecture:
-    Client app ──MCP──→ This server ──HTTP──→ Plugboard API ──→ OpenClaw
+    Client app ──MCP──→ This server ──HTTP──→ Plugboard API ──→ Direct providers
 
 Tools:
     - chat: Send a completion request to any available model
@@ -24,17 +24,23 @@ Prompts:
 
 from __future__ import annotations
 
+import asyncio
+import hmac
 import json
 import logging
 import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Literal
 
 import aiohttp
+from mcp.server.auth.provider import AccessToken
+from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
+from plugboard.legacy_connectors import is_removed_model, REMOVED_CONNECTOR_ERROR
 from plugboard.storage import data_dir
 
 log = logging.getLogger(__name__)
@@ -45,14 +51,87 @@ _BASE_URL = os.environ.get("PLUGBOARD_URL", "http://localhost:8765")
 _API_KEY = os.environ.get("PLUGBOARD_API_KEY", "")
 _ADMIN_KEY = os.environ.get("PLUGBOARD_ADMIN_KEY", "")
 _TIMEOUT = int(os.environ.get("PLUGBOARD_MCP_TIMEOUT", "900"))
+_DECISION_TIMEOUT = max(1, min(_TIMEOUT, 45))
+_DECISION_RESPONSE_LIMIT = 512 * 1024
 _HTTP_SESSION: aiohttp.ClientSession | None = None
+
+# Network transports (SSE, streamable HTTP) need a dedicated bearer token;
+# stdio is reached only by the local process that spawned the server.
+MCP_TOKEN_MIN_LENGTH = 32
+LOOPBACK_ALLOWED_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+LOOPBACK_ALLOWED_ORIGINS = [
+    "http://127.0.0.1:*",
+    "http://localhost:*",
+    "http://[::1]:*",
+]
+_NETWORK_TRANSPORT = False
+_NETWORK_ADMIN_REFUSAL = (
+    "Error: provider_status is not available over a network MCP transport: "
+    "PLUGBOARD_ADMIN_KEY is only loaded for stdio."
+)
+
+
+class _StaticBearerVerifier:
+    """FastMCP token verifier for the single PLUGBOARD_MCP_TOKEN.
+
+    With no token configured every bearer is refused, so an HTTP app built
+    from this server without configure_network_transport() stays closed.
+    """
+
+    def __init__(self) -> None:
+        self._token = b""
+
+    def configure(self, token: str) -> None:
+        self._token = token.encode("utf-8")
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        if not self._token or not hmac.compare_digest(
+            token.encode("utf-8"), self._token
+        ):
+            return None
+        return AccessToken(token="plugboard-mcp", client_id="plugboard-mcp", scopes=[])
+
+
+_TOKEN_VERIFIER = _StaticBearerVerifier()
 
 mcp = FastMCP(
     "plugboard",
     instructions="Plugboard: multi-model proxy with billing, routing and monitoring. "
     "Use list_models to discover available models, chat to send completions, "
     "check_usage for billing, provider_status for health monitoring.",
+    token_verifier=_TOKEN_VERIFIER,
+    # Resource-server mode with a static token: no OAuth routes are served.
+    auth=AuthSettings(issuer_url="http://127.0.0.1", resource_server_url=None),
 )
+
+
+def configure_network_transport(
+    token: str,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8766,
+    allowed_hosts: list[str] | None = None,
+    allowed_origins: list[str] | None = None,
+) -> None:
+    """Prepare the server for SSE/HTTP: bearer auth, bind host, rebinding guard.
+
+    The admin key is dropped: a network caller never acts with it.
+    """
+    global _ADMIN_KEY, _NETWORK_TRANSPORT
+    if len(token) < MCP_TOKEN_MIN_LENGTH:
+        raise ValueError(
+            f"PLUGBOARD_MCP_TOKEN must hold at least {MCP_TOKEN_MIN_LENGTH} characters"
+        )
+    _TOKEN_VERIFIER.configure(token)
+    _ADMIN_KEY = ""
+    _NETWORK_TRANSPORT = True
+    mcp.settings.host = host
+    mcp.settings.port = port
+    mcp.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts or LOOPBACK_ALLOWED_HOSTS,
+        allowed_origins=allowed_origins or LOOPBACK_ALLOWED_ORIGINS,
+    )
 
 
 # ── HTTP helpers ─────────────────────────────────────────────────────────────
@@ -117,7 +196,97 @@ async def _api_post(path: str, body: dict, admin: bool = False) -> dict[str, Any
         return {"error": f"HTTP client error: {exc}"}
 
 
+def _decision_error(code: str, message: str) -> dict[str, Any]:
+    return {"error": {"code": code, "message": message}}
+
+
+async def _decision_request(
+    method: str, path: str, body: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Client-only bounded transport; never include raw errors or follow redirects."""
+    if not _API_KEY:
+        return _decision_error("client_key_required", "Configure a client API key")
+    session = await _get_http_session()
+    try:
+        async with session.request(
+            method,
+            f"{_BASE_URL}{path}",
+            headers=_auth_headers(json_body=body is not None),
+            json=body,
+            timeout=aiohttp.ClientTimeout(total=_DECISION_TIMEOUT),
+            allow_redirects=False,
+        ) as response:
+            if response.status != 200:
+                return _decision_error(
+                    "decision_gateway_error",
+                    f"Decision gateway returned HTTP {response.status}",
+                )
+            chunks = bytearray()
+            async for chunk in response.content.iter_chunked(16384):
+                chunks.extend(chunk)
+                if len(chunks) > _DECISION_RESPONSE_LIMIT:
+                    return _decision_error(
+                        "invalid_response", "Invalid decision gateway response"
+                    )
+            result = json.loads(chunks)
+            if not isinstance(result, dict) or "error" in result:
+                return _decision_error(
+                    "invalid_response", "Invalid decision gateway response"
+                )
+            return result
+    except asyncio.TimeoutError:
+        return _decision_error("decision_timeout", "Decision gateway timed out")
+    except aiohttp.ClientError:
+        return _decision_error(
+            "decision_connection_error", "Decision gateway unavailable"
+        )
+    except (ValueError, UnicodeError, RecursionError):
+        return _decision_error("invalid_response", "Invalid decision gateway response")
+
+
 # ── Tools ────────────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def list_decision_models() -> str:
+    """List typed decision engines, availability, limits and confidence semantics.
+
+    These engines accept named questions through decide and cannot be used for chat.
+    Requires PLUGBOARD_API_KEY; an admin key is never substituted.
+    """
+    return json.dumps(await _decision_request("GET", "/v1/decisions/models"))
+
+
+@mcp.tool()
+async def decide(
+    model: Literal["jev", "laya", "laya-multilingual"],
+    state: str,
+    questions: dict[str, dict[str, Any]],
+) -> str:
+    """Answer named typed questions through the dedicated decision API.
+
+    Args:
+        model: Exact engine ID from list_decision_models.
+        state: Bounded state text the engine evaluates.
+        questions: Mapping of answer IDs to typed questions. Each has type and
+            instructions. choice has criteria mapping labels to descriptions or
+            null; score has an ordered criteria list; noul has no criteria.
+
+    The gateway validates input and engine capabilities. Probabilities and
+    confidence retain each engine's documented semantics. No chat fallback.
+    Requires PLUGBOARD_API_KEY; an admin key is never substituted.
+    """
+    if model == "kev-0.8b":
+        return json.dumps(
+            _decision_error("invalid_request", "Unsupported decision model")
+        )
+    return json.dumps(
+        await _decision_request(
+            "POST",
+            "/v1/decisions",
+            {"model": model, "state": state, "questions": questions},
+        )
+    )
 
 
 @mcp.tool()
@@ -145,6 +314,10 @@ async def chat(
             new turn. TTL 24h, 50-turn cap, isolated per API key. Use a UUID
             per conversation.
     """
+    # This client has no registry. Qualified names whose owner is ambiguous
+    # are admitted by the authenticated API, which guards the actual transport.
+    if is_removed_model(model, effective_name=True):
+        return f"Error: {REMOVED_CONNECTOR_ERROR}"
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -205,6 +378,8 @@ async def chat_stream(
         system_prompt: Optional system prompt
         session_id: Optional PERF-1 session ID to preserve history server-side.
     """
+    if is_removed_model(model, effective_name=True):
+        return f"Error: {REMOVED_CONNECTOR_ERROR}"
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -288,16 +463,13 @@ async def list_models() -> str:
     if not isinstance(models, list):
         return f"Unexpected response: {str(result)[:300]}"
 
-    # Group by vendor
+    # Preserve the catalogue's actual owner, including namespaced native IDs.
+    from plugboard.legacy_connectors import is_removed_catalogue_model
+
+    models = [m for m in models if not is_removed_catalogue_model(m)]
     by_vendor: dict[str, list[dict[str, Any]]] = {}
     for m in models:
-        mid = m.get("id", "")
-        # Extract vendor from openclaw-llm-proxy:openclaw/<vendor>--<model>
-        parts = mid.split("/")
-        if len(parts) >= 2 and "--" in parts[-1]:
-            vendor = parts[-1].split("--")[0]
-        else:
-            vendor = m.get("owned_by", m.get("provider", "openclaw"))
+        vendor = m.get("owned_by") or m.get("provider") or "unknown"
         by_vendor.setdefault(vendor, []).append(m)
 
     lines = [f"**{len(models)} models available:**\n"]
@@ -305,11 +477,16 @@ async def list_models() -> str:
         lines.append(f"\n**{vendor}** ({len(by_vendor[vendor])}):")
         for m in sorted(by_vendor[vendor], key=lambda x: x.get("id", "")):
             mid = m.get("id", "")
-            connected = m.get("connected", True)
-            conn_icon = "🟢" if connected else "🔴"
+            connected = m.get("connected", False)
+            last_probed = m.get("last_probed_at")
+            if connected is True:
+                conn_icon = "🟢"
+            elif last_probed or m.get("reason"):
+                conn_icon = "🔴"
+            else:
+                conn_icon = "⚪"
             has_internet = m.get("internet_access", False)
             internet_str = " 🌐" if has_internet else ""
-            last_probed = m.get("last_probed_at")
             probed_str = (
                 f" (probed {last_probed})" if last_probed else " (never probed)"
             )
@@ -366,6 +543,8 @@ async def provider_status() -> str:
     Shows provider health, watchdog status, and recent events.
     Requires admin access.
     """
+    if _NETWORK_TRANSPORT:
+        return _NETWORK_ADMIN_REFUSAL
     # Watchdog status
     wd = await _api_get("/admin/watchdog", admin=True)
     if "error" in wd:
@@ -439,9 +618,7 @@ async def resource_monitoring() -> str:
 
 
 @mcp.prompt()
-def quick_chat(
-    message: str, model: str = "openclaw-llm-proxy:openclaw/anthropic--claude-haiku-4-5"
-) -> str:
+def quick_chat(message: str, model: str = "claude-code:claude-haiku-4-5") -> str:
     """Quick one-shot chat — fast model, no system prompt.
 
     Args:
@@ -460,7 +637,7 @@ def deep_analysis(topic: str) -> str:
     """
     return (
         f"Use the chat tool with:\n"
-        f"- model: openclaw-llm-proxy:openclaw/anthropic--claude-sonnet-4-6\n"
+        f"- model: claude-code:claude-sonnet-4-6\n"
         f"- system_prompt: 'You are an expert analyst. Provide structured, "
         f"thorough analysis with clear sections and evidence-based reasoning.'\n"
         f"- message: '{topic}'\n"
@@ -479,7 +656,7 @@ def code_review(code: str, language: str = "python") -> str:
     """
     return (
         f"Use the chat tool with:\n"
-        f"- model: openclaw-llm-proxy:openclaw/anthropic--claude-sonnet-4-6\n"
+        f"- model: claude-code:claude-sonnet-4-6\n"
         f"- system_prompt: 'You are a senior {language} developer. Review this code "
         f"for bugs, security issues, performance, and best practices. Be specific and actionable.'\n"
         f"- message: '```{language}\\n{code}\\n```'\n"

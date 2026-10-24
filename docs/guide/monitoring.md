@@ -4,6 +4,22 @@ Plugboard monitors itself and its providers without external services: everythin
 
 All `/admin/*` and `/metrics*` routes require `Authorization: Bearer $ADMIN_KEY` (or a dashboard session).
 
+### Admin API with MFA
+
+When MFA is enforced (`PLUGBOARD_ADMIN_MFA_REQUIRED=1` and a secret enrolled), the admin key alone is refused with 401 on every admin route (`/admin/*`, `/providers*`, `/metrics*`, `/docs`, the dashboard). A script either:
+
+- sends a fresh code with each call: `-H "Authorization: Bearer $ADMIN_KEY" -H "X-Plugboard-Admin-TOTP: <code>"`. A code is accepted once, and no older code after it, so this suits one call per 30 seconds; wrong codes count towards the login lockout;
+- or opens a session once and reuses its cookie:
+
+```bash
+curl -s -c admin.cookies -H "Content-Type: application/json" \
+  -d "{\"key\": \"$ADMIN_KEY\", \"totp_code\": \"<code>\"}" http://localhost:8765/auth/admin/login
+curl -s -b admin.cookies http://localhost:8765/admin/watchdog
+curl -s -b admin.cookies -X POST http://localhost:8765/auth/admin/logout
+```
+
+Sessions are stored on the server (`data/admin_sessions.json`) and last `ADMIN_SESSION_MAX_AGE` (8 hours). Logout revokes that session; enrolling, rotating or disabling MFA revokes every session; a session opened without a code stops working once MFA is enforced. Keep the cookie file private and delete it after use. Without enforced MFA the bearer alone works as before.
+
 ## Dashboard pages
 
 | Page | What you see |
@@ -47,19 +63,26 @@ The watchdog starts with the server and checks every active provider every `WATC
 - Ollama and other *sovereign* providers: `GET <base_url>`; no deep check.
 - CLI providers: a lightweight probe of the CLI.
 
-After `WATCHDOG_FAILURES` consecutive failures (default 3) the watchdog tries to restart the provider by running a launcher script, `scripts/openclaw_launcher.sh`, if you provide one (it is not shipped). Restarts are limited by `WATCHDOG_RESTART_COOLDOWN` (120 s) and `WATCHDOG_MAX_RESTARTS` per hour (5). Without the script, the attempt is recorded as a failed restart and the provider stays as it is. Sovereign providers are never restarted.
+The watchdog does not search for or execute a host launcher script and does not
+load a `.env` to restart a connector. An unmanaged direct-provider restart is
+reported as unsupported. Operate Docker-managed services through their deployment
+supervisor; CLI requests still start their native command on demand. Recognizable
+removed legacy providers are rejected before health, discovery or deep-check
+transport, rather than reported healthy. See [migration](openclaw-removal.md).
 
 | Endpoint | Effect |
 |---|---|
 | `GET /admin/watchdog` | Running state and per-provider counters |
 | `POST /admin/watchdog/start`, `POST /admin/watchdog/stop` | Start or stop the loop |
-| `POST /admin/watchdog/{provider_id}/restart` | Run the launcher script now |
+| `POST /admin/watchdog/{provider_id}/restart` | Report restart unsupported for unmanaged providers; reject removed legacy connectors |
 | `GET /admin/watchdog/events?provider_id=&event_type=&limit=` | Check and restart history (`data/watchdog.db`) |
 | `GET /admin/watchdog/restarts?hours=24` | Restart statistics |
 
 ## Model catalog and connectivity
 
 - **At startup**, Plugboard probes the connectivity of each provider's models and writes `data/model_status.json`; `/v1/models` reports the result in each model's `connected` field. Ollama models found offline are probed again every `PLUGBOARD_OLLAMA_RECHECK_INTERVAL_S` seconds (300).
+
+Before any observation, `/v1/models` returns `connected: false` and `last_probed_at: null`. This means connectivity is unknown and does not prevent a first request to a newly configured provider. MCP displays this state with a neutral white icon. A real positive or negative observation retains its result and timestamp. A policy quarantine does not create a probe timestamp and cannot replace an observation belonging to another provider, even when their IDs share a prefix.
 - **Every 6 hours** (`PLUGBOARD_MODEL_AVAILABILITY_INTERVAL_H`; `0` = once a day at `MODEL_AVAILABILITY_DAILY_HOUR_UTC`), a refresh reads each provider's model list: Anthropic, Gemini and Ollama through their own APIs, any provider with `auto_discover: true` (providers created from a catalog preset) through `GET /models`, and the signed-in CLI accounts by probing them, at most every `PLUGBOARD_MODEL_AVAILABILITY_CLI_INTERVAL_H` hours (24), since each probe spawns the CLI. It also quarantines models that keep failing.
 - **How a list changes.** A new model is added at once. A model is removed only after `PLUGBOARD_MODEL_REMOVAL_PASSES` (2) refreshes in a row that answered correctly without it; a refresh that fails, answers in another format or returns an empty list changes nothing; a refresh that would drop more than half of the list is treated as a provider problem, not applied, and reported in `errors`. The `default_model` and the models listed in `pinned_models` are never removed. A removed model disappears from `GET /v1/models`; a request that names `provider:model` explicitly is still forwarded. `POST /providers/{id}/discover` is an explicit admin action and removes at once (`?dry_run=true` shows what would change).
 - `GET /admin/models/scheduler/status` shows the scheduler and `last_changes` (added, removed and pending removals per provider, errors). `stale: true` means no successful refresh for two intervals (48 hours in daily mode).
