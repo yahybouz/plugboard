@@ -311,6 +311,16 @@ def _code(m, secret, step=0):
     return m.mod._generate_code(secret, at=m.clock.t + 30 * step)
 
 
+def _read_only(monkeypatch, module, writer):
+    """Make a store unwritable. A chmod is ignored when the tests run as root
+    (CI containers), so the writer itself fails, as a read-only volume would."""
+
+    def refuse(*args, **kwargs):
+        raise PermissionError("read-only store")
+
+    monkeypatch.setattr(module, writer, refuse)
+
+
 def _enforce(m, monkeypatch):
     secret = m.mod.generate_secret()
     m.mod.enroll(secret)
@@ -377,7 +387,9 @@ async def test_disable_with_read_only_session_store_refuses_old_session(
     secret = _enforce(mfa, monkeypatch)
     session = await _login(admin_client, totp_code=_code(mfa, secret))
     assert await _keys(admin_client, session) == 200
-    mfa.sessions_dir.chmod(0o500)
+    from plugboard import admin_sessions
+
+    _read_only(monkeypatch, admin_sessions, "_save")
     with pytest.raises(OSError):
         mfa.mod.disable()
     assert not mfa.mod.is_enrolled()
@@ -389,7 +401,9 @@ async def test_enroll_with_read_only_session_store_refuses_old_session(
 ):
     secret = _enforce(mfa, monkeypatch)
     session = await _login(admin_client, totp_code=_code(mfa, secret))
-    mfa.sessions_dir.chmod(0o500)
+    from plugboard import admin_sessions
+
+    _read_only(monkeypatch, admin_sessions, "_save")
     rotated = mfa.mod.generate_secret()
     with pytest.raises(OSError):
         mfa.mod.enroll(rotated)
@@ -405,10 +419,14 @@ async def test_enroll_with_read_only_session_store_refuses_old_session(
     )
 
 
-async def test_session_from_before_enrolment_never_revives(admin_client, mfa):
+async def test_session_from_before_enrolment_never_revives(
+    admin_client, mfa, monkeypatch
+):
     session = await _login(admin_client)
     assert await _keys(admin_client, session) == 200
-    mfa.sessions_dir.chmod(0o500)
+    from plugboard import admin_sessions
+
+    _read_only(monkeypatch, admin_sessions, "_save")
     with pytest.raises(OSError):
         mfa.mod.enroll(mfa.mod.generate_secret())
     assert await _keys(admin_client, session) == 401
@@ -420,10 +438,11 @@ async def test_session_from_before_enrolment_never_revives(admin_client, mfa):
 async def test_mfa_store_write_failure_changes_nothing(admin_client, mfa, monkeypatch):
     secret = _enforce(mfa, monkeypatch)
     session = await _login(admin_client, totp_code=_code(mfa, secret))
-    mfa.mfa_dir.chmod(0o500)
+    write = mfa.mod._write
+    _read_only(monkeypatch, mfa.mod, "_write")
     with pytest.raises(OSError):
         mfa.mod.enroll(mfa.mod.generate_secret())
-    mfa.mfa_dir.chmod(0o700)
+    monkeypatch.setattr(mfa.mod, "_write", write)
     assert mfa.mod.is_enrolled()
     assert await _keys(admin_client, session) == 200
     assert (
