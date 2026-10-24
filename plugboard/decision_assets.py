@@ -102,7 +102,9 @@ def open_url(url: str):
         ("https://huggingface.co/", "https://raw.githubusercontent.com/")
     ):
         raise AssetError("invalid_asset_origin")
-    return urllib.request.urlopen(urllib.request.Request(url), timeout=30)
+    # https only, from the two origins checked above (bandit B310 is about file:/ and
+    # custom schemes, which never reach this line).
+    return urllib.request.urlopen(urllib.request.Request(url), timeout=30)  # nosec B310
 
 
 def download_assets(

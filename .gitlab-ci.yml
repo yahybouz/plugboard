@@ -46,10 +46,13 @@ variables:
     key:
       files:
         - requirements-dev.lock
+        - requirements-mcp.lock
     paths:
       - .cache/pip
   before_script:
-    - python -m pip install --require-hashes -r requirements-dev.lock
+    # The MCP lock too: the security tests drive scripts/run_mcp.py and the
+    # MCP server in-process (no version conflict between the two locks).
+    - python -m pip install --require-hashes -r requirements-dev.lock -r requirements-mcp.lock
 
 # ── lint ──────────────────────────────────────────────────────
 
