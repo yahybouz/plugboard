@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.3.0] — 2026-10-24
+
+### Known limitations
+
+- Laya (local decision engine) is qualified on macOS only; Linux/OVH (install, memory) is checked after deployment.
+
 ### Fixed
 
 - Jev `score` answers: TypeSafe rounds the score and each probability to two decimals separately, so the score can differ from the expectation of the probabilities by the rounding (e.g. score 1.0, probabilities 0.99/0.01, expectation 1.01). Those answers were rejected as 502 (and still billed); the check now allows the worst-case rounding only (half a hundredth per value), and a sum of rounded probabilities off by the same margin. Inconsistent answers are still refused. Found by the first live test against `api.typesafe.ai` (jev-1.14.0): 1 score answer in 4 was refused.
