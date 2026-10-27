@@ -3,6 +3,7 @@ from fastapi import HTTPException
 import plugboard.router as router
 from plugboard.app import _check_model_access
 
+
 def test_codex_model_access(monkeypatch):
     provider = {
         "id": "Codex",
