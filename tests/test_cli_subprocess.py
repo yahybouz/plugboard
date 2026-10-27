@@ -737,3 +737,47 @@ async def test_semaphore_limits_concurrent_subprocesses(monkeypatch):
 
     # Restore: drop the shrunk semaphore so other tests get the real limit.
     cli_subprocess._semaphores.pop(kind, None)
+
+
+def test_agy_auth_error_is_explicit():
+    from plugboard.cli_subprocess import AGY_SIGN_IN_HINT, _extract_cli_error
+
+    out = (
+        '{"conversation_id":"","status":"ERROR","response":"",'
+        '"error":"authentication failed or timed out","num_turns":0}'
+    )
+    assert _extract_cli_error(out, "agy") == AGY_SIGN_IN_HINT
+    other = '{"status":"ERROR","response":"","error":"quota exceeded"}'
+    assert _extract_cli_error(other, "agy") == "quota exceeded"
+    ok = '{"status":"SUCCESS","response":"OK"}'
+    assert _extract_cli_error(ok, "agy") == ""
+
+
+@pytest.mark.asyncio
+async def test_agy_unsigned_raises_sign_in_hint(monkeypatch):
+    from plugboard import cli_subprocess as cs
+
+    class _P:
+        returncode = 0
+        pid = 1
+
+        async def communicate(self, _inp=None):
+            return (
+                b'{"status":"ERROR","response":"","error":"authentication failed or timed out"}',
+                b"",
+            )
+
+    async def fake_exec(*_a, **_k):
+        return _P()
+
+    monkeypatch.setattr(cs, "_resolve_binary", lambda _c: "/usr/local/bin/agy")
+    monkeypatch.setattr(cs.asyncio, "create_subprocess_exec", fake_exec)
+    with pytest.raises(cs.CliSubprocessError) as exc:
+        await cs.complete(
+            "agy",
+            {
+                "model": "gemini-3.8-flash-low",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+        )
+    assert "not signed in" in str(exc.value)

@@ -10,7 +10,8 @@
 #           docker build --target api -t plugboard:api .
 #
 #   full  api + the CLIs that the subprocess providers spawn
-#         (gemini, claude, codex via npm; gh via its apt repository).
+#         (gemini, claude, codex via npm; agy from Google's signed release
+#         archive, SHA512-pinned; gh via its apt repository).
 #         It is the LAST stage, so a plain `docker build .` (and the
 #         Railway config, which names no target) still produces it.
 #           docker build --target full -t plugboard:full .
@@ -118,10 +119,26 @@ RUN npm install -g --omit=dev "@google/gemini-cli@${GEMINI_CLI_VERSION}" || echo
 RUN npm install -g --omit=dev "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" || echo "[WARN] claude-code install failed"
 RUN npm install -g --omit=dev "@openai/codex@${CODEX_VERSION}" || echo "[WARN] codex install failed"
 
+# Antigravity CLI (agy): official linux-x64 release archive, pinned and
+# SHA512-verified against the vendor release manifest. Same artifact as
+# deploy/ovh/install-host-tools.sh. Sign-in (Google subscription) is kept in
+# the /home/app volume; agy does not accept an API key.
+ARG AGY_URL=https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.4-4783783166214144/linux-x64/cli_linux_x64.tar.gz
+ARG AGY_SHA512=7ce149d350344c1046c7b59b6659bcc5d659f351bf3a07c6c085887d93427ceb89d927752e4ccd0844b53ffb91d33d6a49f72835ceb276c7cffdd13cfb8023b8
+RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
+        work="$(mktemp -d)" \
+     && curl -fsSL --proto '=https' --tlsv1.2 "$AGY_URL" -o "$work/agy.tar.gz" \
+     && printf '%s  %s\n' "$AGY_SHA512" "$work/agy.tar.gz" | sha512sum -c - \
+     && tar --no-same-owner -xzf "$work/agy.tar.gz" -C "$work" antigravity \
+     && install -m 0755 "$work/antigravity" /usr/local/bin/agy \
+     && rm -rf "$work"; \
+    else echo "[WARN] agy: no official archive for $(dpkg --print-architecture)"; fi
+
 RUN echo "── Installed CLI binaries ──" \
  && (command -v gemini && gemini --version 2>/dev/null | head -1 || echo "gemini: not installed") \
  && (command -v claude && claude --version 2>/dev/null | head -1 || echo "claude: not installed") \
  && (command -v codex && codex --version 2>/dev/null | head -1 || echo "codex: not installed") \
+ && (command -v agy && agy --version 2>/dev/null | head -1 || echo "agy: not installed") \
  && (command -v gh && gh --version | head -1 || echo "gh: not installed")
 
 # CLI version probes can create private state as root during the build.

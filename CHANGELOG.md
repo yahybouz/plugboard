@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The policy is checked on every provider actually dispatched, including failover and circuit-breaker fallbacks, for streaming and non-streaming calls, before any upstream call; a refused candidate returns 403. `/v1/models` `account_compatible` and `/v1/preflight` (`forbidden_model`) use the same check.
 - Restricted keys bypass the response cache, whose entries do not record the serving identity.
 
+### Fixed
+
+- **Antigravity (agy) in the `full` image**: the gateway image now ships the official agy CLI (SHA512-pinned release archive), so the *Antigravity (via agy CLI)* provider can use a Google subscription once signed in (`docker exec -it <gateway> agy`; session kept in `/home/app`). An unsigned agy now returns an explicit "not signed in" error instead of "invalid JSON". API-key access to Gemini stays on *Google Gemini Direct* (agy does not read `GEMINI_API_KEY`).
+
 ## [4.3.0] — 2026-10-24
 
 ### Known limitations

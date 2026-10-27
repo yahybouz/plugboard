@@ -935,6 +935,8 @@ def _extract_cli_error(stdout_text: str, kind: str) -> str:
     the user something actionable instead of "Reading additional input
     from stdin..." (a harmless stderr warning).
     """
+    if kind == "agy":
+        return _extract_agy_error(stdout_text)
     if kind not in {"codex", "claude"}:
         return ""
     for line in stdout_text.splitlines():
@@ -962,6 +964,33 @@ def _extract_cli_error(stdout_text: str, kind: str) -> str:
                     pass
                 return msg[:400]
     return ""
+
+
+AGY_SIGN_IN_HINT = (
+    "agy is not signed in for this server account: run `agy` once in an "
+    "interactive shell of the gateway user and sign in with Google "
+    "(Antigravity subscription). agy does not read GEMINI_API_KEY; use the "
+    "'Google Gemini Direct' provider for API-key access."
+)
+
+
+def _extract_agy_error(stdout_text: str) -> str:
+    """Error carried by agy's ``{"status": "ERROR", "error": ...}`` payload."""
+    try:
+        payload = _parse_gemini_json_stdout(stdout_text)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    if str(payload.get("status", "")).upper() == "SUCCESS":
+        return ""
+    msg = payload.get("error")
+    if not isinstance(msg, str) or not msg:
+        return ""
+    low = msg.lower()
+    if "authentication" in low or "sign in" in low:
+        return AGY_SIGN_IN_HINT
+    return msg[:400]
 
 
 def _extract_text_from_codex_jsonl(lines: List[str]) -> str:
@@ -1334,6 +1363,16 @@ async def complete(
             raise RuntimeError(f"Unsupported output_mode: {backend.output_mode}")
         # JSON decode errors on the happy path produce a CliSubprocessError with
         # context (exit=0 guarantees the CLI thought it succeeded).
+        agy_error = _extract_agy_error(stdout_text) if kind == "agy" else ""
+        if text is None and agy_error:
+            raise CliSubprocessError(
+                f"CLI {backend.command!r} failed: {agy_error}",
+                exit_code=proc.returncode,
+                stderr=stderr_text[:500],
+                pid=proc.pid,
+                provider_name=backend.command,
+                model_id=model,
+            )
         if text is None and backend.output_mode == "json":
             raise CliSubprocessError(
                 f"CLI {backend.command!r} returned invalid JSON. "

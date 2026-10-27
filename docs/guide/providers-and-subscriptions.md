@@ -138,6 +138,7 @@ What to expect:
 - Concurrent processes per CLI are capped by `PLUGBOARD_SUBPROCESS_LIMIT` (default 4).
 - The CLI runs in a neutral temporary working directory, so it does not pick up project files or settings; `PLUGBOARD_SUBPROCESS_CWD` overrides this.
 - Codex runs with `--sandbox read-only`; `PLUGBOARD_CODEX_SANDBOX` changes the mode.
+- Gemini with an **API key** goes through *Google Gemini Direct* (AI Studio key); with a **Google subscription** it goes through *Antigravity (via agy CLI)*. agy ignores `GEMINI_API_KEY`: it only uses its own Google sign-in. In the `full` container image agy is preinstalled; sign in once with `docker exec -it <gateway> agy` (the session is kept in the `/home/app` volume). An unsigned agy returns an explicit "not signed in" error.
 - Antigravity runs in print mode with `--sandbox --mode plan`. Headless `agy` cannot ask for a tool permission, so it refuses every tool call unless your agy `settings.json` pre-allows it: keep that file free of allow rules on the gateway host. Its model list is read from `agy models`; the codex list is read from the catalog cache the codex CLI keeps for your account (`~/.codex/models_cache.json`).
 - The *Google Gemini (via gemini CLI)* preset is no longer offered (the gemini CLI now refuses personal-account sign-ins); providers created with it keep working while the CLI does.
 - The CLIs do not report token counts, so usage is estimated with a tokenizer and billed at the model's price in the [pricing grid](pricing.md).
