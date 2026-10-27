@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.3.1] — 2026-10-27
+
+### Security
+
+- **Breaking for partial `allowed_models` entries**: a restricted key now matches the effective model identity exactly — the native model ID or `<provider>:<native>`. Substring, prefix and family matching no longer grant access (`"fake"` or `"test-provider"` no longer allow `test-provider:fake:model-v1`). An empty list stays unrestricted. Rewrite partial entries as explicit IDs before upgrading ([details](docs/model-access-correction.md)).
+- The policy is checked on every provider actually dispatched, including failover and circuit-breaker fallbacks, for streaming and non-streaming calls, before any upstream call; a refused candidate returns 403. `/v1/models` `account_compatible` and `/v1/preflight` (`forbidden_model`) use the same check.
+- Restricted keys bypass the response cache, whose entries do not record the serving identity.
+
 ## [4.3.0] — 2026-10-24
 
 ### Known limitations
