@@ -508,7 +508,7 @@ async def test_model_access_allowed(admin_client, _providers_file, monkeypatch):
     from plugboard.apikeys import create_key
 
     monkeypatch.setattr("plugboard.ratelimit._LIMIT", 0)
-    key_data = create_key("allowed-client", label="test", allowed_models=["fake:model"])
+    key_data = create_key("allowed-client", label="test", allowed_models=["fake:model-v1"])
     raw_key = key_data["key"]
 
     with aioresponses() as m:

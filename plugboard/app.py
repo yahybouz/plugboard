@@ -1253,34 +1253,36 @@ def _check_model_access(
     model_str: str,
     key_record: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Raise 403 if caller is not allowed to use this model."""
-    if key_record:
-        allowed = key_record.get("allowed_models", [])
-        if not allowed:
-            return  # empty = all allowed
-        for pattern in allowed:
-            if pattern in model_str:
-                return
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"Model '{model_str}' not allowed for key '{key_record.get('key_id', '')}' "
-                f"(client '{client_id}'). Allowed: {allowed}"
-            ),
-        )
+    """Raise 403 unless the resolved effective identity is allowed."""
+    guard = _model_route_guard(client_id, key_record)
+    if guard is not None:
+        guard(*resolve_provider_and_model(model_str))
 
-    for k in load_keys():
-        if k.get("client_id") == client_id:
-            allowed = k.get("allowed_models", [])
-            if not allowed:
-                return  # empty = all allowed
-            for pattern in allowed:
-                if pattern in model_str:
-                    return
+
+def _model_route_guard(client_id, key_record=None):
+    """Snapshot the calling key's policy, never request-body state."""
+    if not client_id or client_id == "admin":
+        return None
+    record = key_record
+    if record is None:
+        record = next((k for k in load_keys() if k.get("client_id") == client_id), None)
+    allowed = tuple((record or {}).get("allowed_models", []))
+    if not allowed:
+        return None
+
+    def guard(provider, native):
+        from plugboard.model_identity import model_access_matches
+
+        if not model_access_matches(allowed, provider["id"], native):
             raise HTTPException(
                 status_code=403,
-                detail=f"Model '{model_str}' not allowed for client '{client_id}'. Allowed: {allowed}",
+                detail=(
+                    f"Model '{provider['id']}:{native}' not allowed for "
+                    f"client '{client_id}'. Allowed: {list(allowed)}"
+                ),
             )
+
+    return guard
 
 
 def _model_is_compatible(
@@ -1288,20 +1290,14 @@ def _model_is_compatible(
     client_id: str,
     key_record: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Return True if client is allowed to use this model."""
-    if client_id == "admin":
+    """Use chat's effective-route policy for catalogue compatibility."""
+    guard = _model_route_guard(client_id, key_record)
+    if guard is None:
         return True
-    if key_record:
-        allowed = key_record.get("allowed_models", [])
-        if not allowed:
-            return True
-        return any(pattern in model_str for pattern in allowed)
-    for k in load_keys():
-        if k.get("client_id") == client_id:
-            allowed = k.get("allowed_models", [])
-            if not allowed:
-                return True
-            return any(pattern in model_str for pattern in allowed)
+    try:
+        guard(*resolve_provider_and_model(model_str))
+    except (HTTPException, ValueError):
+        return False
     return True
 
 
@@ -1436,8 +1432,11 @@ async def chat_completions(
         spending_total = _check_spending_limit(client_id, key_record=key_record)
 
     # Check model access (per-key allowed_models)
-    if client_id and client_id != "admin":
-        _check_model_access(client_id, body.get("model", ""), key_record=key_record)
+    route_guard = _model_route_guard(client_id, key_record)
+    route_options = {}
+    if route_guard is not None:
+        route_guard(*resolve_provider_and_model(body.get("model", "")))
+        route_options["route_guard"] = route_guard
 
     # A budget cannot hold a call whose price is unknown (402, nothing called)
     if client_id and client_id != "admin":
@@ -1455,7 +1454,9 @@ async def chat_completions(
     # non-stream cache when the same prompt was asked non-stream first).
     _cache_enabled = body.pop("cache", True) is not False
     _is_streaming = body.get("stream") is True
-    _use_cache = _cache_enabled
+    # Historical cache entries do not bind the effective serving identity.
+    # Restricted keys must not reuse responses from another route or policy.
+    _use_cache = _cache_enabled and route_guard is None
     _cache_key = None
     if _use_cache:
         from plugboard.cache import compute_cache_key, get_cached
@@ -1599,7 +1600,9 @@ async def chat_completions(
 
         if _stream_bypass:
             try:
-                result = await forward({**body, "stream": False})
+                result = await forward({**body, "stream": False}, **route_options)
+            except HTTPException:
+                raise
             except Exception as exc:
                 log.error("subprocess stream forward error: %s", exc)
                 err_str = str(exc)
@@ -1758,7 +1761,7 @@ async def chat_completions(
             )
 
         try:
-            gen = forward_stream(body)
+            gen = forward_stream(body, **route_options)
             first = await gen.__anext__()
         except StopAsyncIteration:
             return StreamingResponse(
@@ -1766,6 +1769,8 @@ async def chat_completions(
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
+        except HTTPException:
+            raise
         except Exception as exc:
             log.error("stream error: %s", exc)
             err_str = str(exc)
@@ -1872,7 +1877,9 @@ async def chat_completions(
 
     t0 = time.perf_counter()
     try:
-        result = await forward(body)
+        result = await forward(body, **route_options)
+    except HTTPException:
+        raise
     except Exception as exc:
         log.error("forward error: %s", exc)
         err_str = str(exc)
@@ -2062,6 +2069,10 @@ async def preflight(
     """
     key_record = _get_request_key_record(request, client_id=client_id)
     key_id = getattr(request.state, "key_id", "")
+    route_guard = _model_route_guard(client_id, key_record)
+    route_options = {}
+    if route_guard is not None:
+        route_options["route_guard"] = route_guard
     results: List[Dict[str, Any]] = []
     for item in body.items:
         t0 = time.perf_counter()
@@ -2081,7 +2092,9 @@ async def preflight(
                 "max_tokens": 1,
             }
             try:
-                result = await forward(ping_body, timeout=10.0)
+                result = await forward(ping_body, timeout=10.0, **route_options)
+            except HTTPException:
+                error = "forbidden_model"
             except Exception as exc:
                 log.warning("preflight error | model=%s | %s", model_str, exc)
                 error = "upstream_error"

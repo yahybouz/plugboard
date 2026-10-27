@@ -22,7 +22,7 @@ import os
 import re
 import time as _time
 import uuid as _uuid
-from typing import Any, AsyncIterator, Dict, Iterator, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
 
 import aiohttp
 
@@ -460,7 +460,12 @@ def served_by() -> Optional[tuple]:
     return _served_by.get()
 
 
-async def forward(body: Dict[str, Any], timeout: float = _TIMEOUT) -> Dict[str, Any]:
+async def forward(
+    body: Dict[str, Any],
+    timeout: float = _TIMEOUT,
+    *,
+    route_guard: Optional[Callable[[Dict[str, Any], str], None]] = None,
+) -> Dict[str, Any]:
     """
     Forward a /v1/chat/completions request to the resolved provider.
     Retries on transient errors per provider, then falls back to next provider.
@@ -496,6 +501,8 @@ async def forward(body: Dict[str, Any], timeout: float = _TIMEOUT) -> Dict[str, 
 
     session = await _get_http_session()
     for provider, real_model in candidates:
+        if route_guard is not None:
+            route_guard(provider, real_model)
         # Direct CLI providers short-circuit HTTP.
         auth_source = provider.get("auth_source", "")
         if auth_source.startswith("subprocess:"):
@@ -683,7 +690,10 @@ async def forward(body: Dict[str, Any], timeout: float = _TIMEOUT) -> Dict[str, 
 
 
 async def forward_stream(
-    body: Dict[str, Any], timeout: float = _TIMEOUT
+    body: Dict[str, Any],
+    timeout: float = _TIMEOUT,
+    *,
+    route_guard: Optional[Callable[[Dict[str, Any], str], None]] = None,
 ) -> AsyncIterator[bytes]:
     """
     Forward a streaming /v1/chat/completions request, yielding raw SSE chunks.
@@ -691,6 +701,8 @@ async def forward_stream(
     """
     model_str = body.get("model", "")
     provider, real_model = resolve_provider_and_model(model_str)
+    if route_guard is not None:
+        route_guard(provider, real_model)
     effective_timeout = timeout
     _served_by.set((provider, real_model))
 

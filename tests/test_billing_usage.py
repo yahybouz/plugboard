@@ -447,7 +447,7 @@ async def test_model_access_allowed(client, tmp_path, monkeypatch):
     monkeypatch.setattr(ak, "_DATA_DIR", tmp_path)
     monkeypatch.setattr(ak, "KEYS_FILE", tmp_path / "api_keys.json")
     monkeypatch.setattr(ak, "KEYS_LOCK", tmp_path / "api_keys.json.lock")
-    rec = ak.create_key("test-client", "test", allowed_models=["fake"])
+    rec = ak.create_key("test-client", "test", allowed_models=["fake:model-v1"])
 
     with aioresponses() as mock:
         mock.post(
