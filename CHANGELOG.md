@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.3.3] — 2026-10-28
+
+### Fixed
+
+- **Antigravity (agy) account catalog**: the model refresh now reads the signed-in account's `agy models` list even when agy is not in `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS`, and publishes every listed model without an inference probe. New account models (for example a new model family) appear without spending subscription quota; before, they were dropped whenever the availability probe failed, including on an exhausted quota, and repeated failures quarantined them. The refresh report adds `trusted_account_catalog`; `verified_count` stays 0 for this discovery-only path.
+- A listed model is not marked as working: the quarantine state is neither written nor cleared, and an already quarantined model stays hidden. A failed or empty `agy models` answer, or the preset/pricing fallback, keeps the saved models and default and adds nothing unless probes are enabled for agy. Removals still go through the usual two-pass rule. Claude, Codex and Gemini CLI refreshes are unchanged.
+- OVH deployment (`deploy/ovh`): model and pricing jobs enabled, `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS` set to empty (no quota-consuming probes), image `plugboard:private-full-v4.3.3`.
+
 ## [4.3.2] — 2026-10-28
 
 ### Fixed

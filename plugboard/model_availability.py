@@ -197,6 +197,17 @@ def _model_entries(model_ids: List[str]) -> List[Dict[str, str]]:
     return [{"id": mid, "name": mid} for mid in model_ids]
 
 
+def _not_chat_model(model_id: str) -> bool:
+    """The checks a probe applies before any inference (removed, decision)."""
+    from plugboard.decisions import is_decision_model
+
+    try:
+        require_supported_model(model_id, effective_name=True)
+    except ValueError:
+        return True
+    return is_decision_model(model_id, effective_name=True)
+
+
 async def probe_subprocess_model(
     kind: str,
     model_id: str,
@@ -615,7 +626,27 @@ async def refresh_subprocess_provider_models(
     previous_set = set(previous_ids)
     candidate_ids: List[str] = []
     seen: Set[str] = set()
-    if should_probe:
+    # `agy models` is the signed-in account's own list: when it answers, it is
+    # published as is, without spending subscription quota on inference
+    # probes. Fallback (preset/pricing) lists keep the probe rules below.
+    trusted_account_catalog = False
+    if kind == "agy":
+        from plugboard import router as router_mod
+
+        try:
+            discovered = await router_mod.discover_models(provider)
+            trusted = router_mod.last_discovery_trusted()
+        except Exception as exc:  # noqa: BLE001
+            if should_probe:
+                raise
+            log.warning("agy account discovery failed (%s)", exc)
+            discovered, trusted = [], False
+        trusted_account_catalog = bool(trusted and discovered)
+        if trusted_account_catalog or should_probe:
+            source_items = discovered
+        else:
+            source_items = provider.get("models", []) or []
+    elif should_probe:
         from plugboard import router as router_mod
 
         discovered = await router_mod.discover_models(provider)
@@ -643,6 +674,15 @@ async def refresh_subprocess_provider_models(
     skipped = 0
 
     for mid in candidate_ids:
+        if trusted_account_catalog:
+            # Listed is not proven usable: no probe, no quarantine change.
+            if mid in quarantined:
+                dropped.append({"id": mid, "reason": "quarantined"})
+            elif _not_chat_model(mid):
+                dropped.append({"id": mid, "reason": "not_a_chat_model"})
+            else:
+                kept.append(mid)
+            continue
         if not should_probe:
             if mid not in quarantined:
                 kept.append(mid)
@@ -728,6 +768,7 @@ async def refresh_subprocess_provider_models(
         "dropped_count": len(dropped),
         "verified_count": verified,
         "skipped_count": skipped,
+        "trusted_account_catalog": trusted_account_catalog,
         "dropped": dropped,
         "models": _model_entries(kept),
         "default_model": new_default,

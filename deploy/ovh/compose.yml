@@ -10,7 +10,7 @@ services:
         GEMINI_CLI_VERSION: "0.65.0"
         CLAUDE_CODE_VERSION: "2.1.306"
         CODEX_VERSION: "0.163.0"
-    image: plugboard:private-full-v4.3.2
+    image: plugboard:private-full-v4.3.3
     restart: unless-stopped
     env_file:
       - ${PLUGBOARD_ENV_FILE:-/etc/plugboard/runtime.env}
@@ -24,9 +24,14 @@ services:
       PLUGBOARD_MAX_INFLIGHT_CHAT: "1"
       PLUGBOARD_SUBPROCESS_LIMIT: "1"
       PLUGBOARD_CODEX_SANDBOX: read-only
-      MODEL_AVAILABILITY_SCHEDULER_DISABLED: "1"
+      # Model catalog and pricing jobs run on their default cadence (see
+      # README, Model and pricing jobs). No inference probes: the agy account
+      # list (`agy models`) is synced without spending subscription quota, and
+      # the other providers' saved catalogs are retained as they are.
+      MODEL_AVAILABILITY_SCHEDULER_DISABLED: "0"
+      PLUGBOARD_MODEL_REFRESH_PROBE_KINDS: ""
       PLUGBOARD_INTERNET_CHECK_ON_BOOT: "0"
-      PRICING_SCHEDULER_DISABLED: "1"
+      PRICING_SCHEDULER_DISABLED: "0"
       PLUGBOARD_LLM_PRICING: "0"
       OLLAMA_ENABLED: "true"
       OLLAMA_URL: http://172.30.114.1:11434

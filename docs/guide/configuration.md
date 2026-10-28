@@ -159,7 +159,7 @@ The catalog is downloaded with each price update. A download that fails, is inva
 | `PLUGBOARD_MODEL_REMOVAL_PASSES` | `2` | Refreshes in a row without a model before it is removed from a provider's list (minimum 1). |
 | `MODEL_AVAILABILITY_BOOTSTRAP_DELAY_S` | `8` | Delay after startup before the first refresh. |
 | `MODEL_AVAILABILITY_UPDATE_TIMEOUT_S` | `900` | Timeout of one refresh. |
-| `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS` | `codex,claude,gemini,agy,ollama` | Which CLIs and Ollama to probe (`all` for every kind). |
+| `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS` | `codex,claude,gemini,agy,ollama` | Which CLIs and Ollama to probe (`all` for every kind). The agy account list (`agy models`) is synced without a probe even when `agy` is absent; empty disables every probe. |
 | `PLUGBOARD_MODEL_EXPOSE` | `latest` | `latest`: per model family, only the newest versions are listed by `/v1/models` and kept by the model refresh. `all`: every model the provider reports, with no other listing filter (curated list, per-provider cap). Default models and models already used are always kept. |
 | `PLUGBOARD_MODEL_EXPOSE_VERSIONS` | `2` | How many versions per family `latest` keeps (1 to 10). |
 | `PLUGBOARD_MODEL_REFRESH_MAX_PROBES` | `40` | Maximum model probes per CLI per run. |

@@ -21,6 +21,20 @@ One small Ubuntu VPS, Docker `full`, private Tailscale Serve, no public applicat
 - Admin TOTP enrollment and enforcement are verified: an otherwise-valid admin key alone receives `401` with `mfa_required`. A subsequent `auth.mfa_success` audit entry verifies the owner's completed MFA login. The provisioning QR and manual recovery secret stay in private files on the owner's Mac, not in Git, chat or external QR services; the original restoration test predates this enrollment.
 - **Still pending:** actual provider inference through Plugboard after quota-test approval, verification of the owner's Google-account MFA, the CLI-home migration below, and a new restoration test covering the CLI logins made in the `cli-home` volume. Do not describe the entire setup as fully ready until these gates are completed.
 
+The verification list above is a historical record of provisioning; it is not updated by later configuration changes.
+
+## Model and pricing jobs
+
+Provisioning disabled both background jobs. They are now enabled in `compose.yml` (`MODEL_AVAILABILITY_SCHEDULER_DISABLED` and `PRICING_SCHEDULER_DISABLED` set to `"0"`) with the default cadence: prices and model lists every 6 hours, CLI (`subprocess:`) providers at most every 24 hours. The account sync below needs Plugboard 4.3.3: build the `plugboard:private-full-v4.3.3` image, then `docker compose -f deploy/ovh/compose.yml up -d`. The pinned CLI versions are unchanged.
+
+- For the Antigravity provider (`subprocess:agy`), the signed-in account's `agy models` list is the authoritative discovery. It is read without any inference: listing models does not consume the subscription's quota. Every model the account advertises is added to the saved provider list as reported (new IDs included, none hard-coded), the default model is kept, and a model leaves the list only after two consecutive valid passes without it. The unchanged exposure policy (`PLUGBOARD_MODEL_EXPOSE`, default `latest`) can still hide unused older versions of a model family in scheduled passes.
+- A listed model is not a tested one. When the subscription's quota is exhausted, agy refuses the request (`Individual quota reached ... Resets in ...`) until the quota resets, even for a model that appears in the list.
+- A model already quarantined (refused for the account, unavailable, or after repeated failures) stays hidden: the account list never clears a quarantine. If `agy models` fails, returns nothing or Plugboard falls back to its preset list, the saved models and the default stay as they are.
+- `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS` is empty: no CLI model is probed with a completion, neither during the CLI refresh nor at container start, so these jobs use no subscription quota. Claude and Codex keep their saved lists instead of being expanded from pricing data.
+- An admin can refresh at once with `POST /admin/auto-update/run` (all catalogs, CLI interval ignored) or `POST /providers/<id>/discover` (one provider; manual removals apply immediately).
+- Nothing new is signed in: if `agy` already works inside the gateway, no new authentication is needed. There is no API fallback and no Gemini API key is used. If `agy` is signed out, check the scheduler status (`GET /admin/models/scheduler/status`) and sign in again inside the container rather than adding an API key.
+- Prices shown are public API list prices, used for cost estimates. They are not the subscription's invoice.
+
 ## Native SSH tools
 
 The Ubuntu host additionally has native Codex 0.163.0, Claude Code 2.1.306, Antigravity CLI (`agy`) 1.4.4 and Ollama 0.40.8. This is separate from the CLIs embedded in the gateway image. All four version commands work from an ordinary Ubuntu SSH shell; help commands for the three agents pass without inference.
