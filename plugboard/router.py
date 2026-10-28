@@ -460,6 +460,30 @@ def served_by() -> Optional[tuple]:
     return _served_by.get()
 
 
+# True when the last forward() in this context returned token counts the CLI
+# itself reported and complete() validated (agy). Set only from the
+# subprocess path, never from a request body or an upstream HTTP payload, so
+# billing can keep a reported 0 instead of replacing it by an estimate.
+_usage_reported: ContextVar[bool] = ContextVar(
+    "plugboard_usage_reported", default=False
+)
+
+
+def usage_reported() -> bool:
+    """Whether the last forward() in this context returned reported usage."""
+    return _usage_reported.get()
+
+
+_USAGE_DETAIL_KEYS = ("prompt_tokens_details", "completion_tokens_details")
+
+
+def _pop_reported_usage(result: Dict[str, Any]) -> bool:
+    """Remove complete()'s internal marker; True if its usage is reported."""
+    from plugboard.cli_subprocess import USAGE_REPORTED_KEY
+
+    return result.pop(USAGE_REPORTED_KEY, None) is True
+
+
 async def forward(
     body: Dict[str, Any],
     timeout: float = _TIMEOUT,
@@ -477,6 +501,7 @@ async def forward(
     )
 
     _served_by.set(None)
+    _usage_reported.set(False)
     model_str = body.get("model", "")
     candidates = _resolve_all_providers(model_str)
 
@@ -524,13 +549,14 @@ async def forward(
                     )
                     raise
                 metrics.record(provider["id"], _time.perf_counter() - _t_cli)
-                # CLI subprocess returns usage=0,0,0 since the upstream CLIs
-                # don't report token counts. Estimate via tiktoken so clients
-                # see a consistent usage block (identical to the streaming
-                # path in forward_stream()).
+                reported = _pop_reported_usage(result)
+                # Most CLIs return usage=0,0,0 since they don't report token
+                # counts. Estimate via tiktoken so clients see a consistent
+                # usage block (identical to the streaming path in
+                # forward_stream()). Counts agy reported, zeros included, stay.
                 try:
                     usage = result.get("usage") or {}
-                    if not usage.get("total_tokens"):
+                    if not reported and not usage.get("total_tokens"):
                         from plugboard.tokenizer import (
                             estimate_completion_tokens as _est_c,
                             estimate_prompt_tokens as _est_p,
@@ -551,6 +577,7 @@ async def forward(
                 except Exception:
                     pass
                 _served_by.set((provider, real_model))
+                _usage_reported.set(reported)
                 return result
             except Exception as exc:
                 last_err = exc
@@ -705,6 +732,7 @@ async def forward_stream(
         route_guard(provider, real_model)
     effective_timeout = timeout
     _served_by.set((provider, real_model))
+    _usage_reported.set(False)
 
     # Subprocess providers don't stream natively (CLIs return the full
     # response once). Emulate SSE by running the completion and chunking
@@ -762,16 +790,21 @@ async def forward_stream(
             yield f"data: {err_evt}\n\n".encode("utf-8")
             yield b"data: [DONE]\n\n"
             return
+        reported = _pop_reported_usage(result)
+        reported_usage = result.get("usage") or {}
         content = result["choices"][0]["message"]["content"]
         model_name = result.get("model", f"{kind}-cli:{real_model}")
         completion_id = result.get("id", "chatcmpl-subproc")
         created = result.get("created", int(_time.time()))
 
-        # Estimate tokens via tiktoken so the Playground can show them,
-        # and compute cost from the current pricing grid.
+        # Use the counts the CLI reported (agy), else estimate via tiktoken
+        # so the Playground can show them; cost comes from the pricing grid.
         p_tok = 0
         c_tok = 0
         cost_usd = 0.0
+        if reported:
+            p_tok = reported_usage["prompt_tokens"]
+            c_tok = reported_usage["completion_tokens"]
         try:
             from plugboard import billing as _billing_mod
             from plugboard.tokenizer import (
@@ -779,8 +812,9 @@ async def forward_stream(
                 estimate_prompt_tokens as _est_p,
             )
 
-            p_tok = _est_p(body.get("messages", []))
-            c_tok = _est_c(result)
+            if not reported:
+                p_tok = _est_p(body.get("messages", []))
+                c_tok = _est_c(result)
             # Resilient lookup (see billing.resolve_model_price_with_fallback):
             # walks back through previous snapshots if the current month
             # is sentinel or missing the model — avoids 0$ billing on
@@ -808,18 +842,23 @@ async def forward_stream(
             }
             yield f"data: {_json.dumps(evt)}\n\n".encode("utf-8")
         # Final chunk with usage (OpenAI stream_options.include_usage shape)
+        final_usage: Dict[str, Any] = {
+            "prompt_tokens": p_tok,
+            "completion_tokens": c_tok,
+            "total_tokens": p_tok + c_tok,
+            "cost_usd": round(cost_usd, 6),
+        }
+        if reported:
+            for key in _USAGE_DETAIL_KEYS:
+                if isinstance(reported_usage.get(key), dict):
+                    final_usage[key] = reported_usage[key]
         final_evt = {
             "id": completion_id,
             "object": "chat.completion.chunk",
             "created": created,
             "model": model_name,
             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-            "usage": {
-                "prompt_tokens": p_tok,
-                "completion_tokens": c_tok,
-                "total_tokens": p_tok + c_tok,
-                "cost_usd": round(cost_usd, 6),
-            },
+            "usage": final_usage,
         }
         yield f"data: {_json.dumps(final_evt)}\n\n".encode("utf-8")
         yield b"data: [DONE]\n\n"

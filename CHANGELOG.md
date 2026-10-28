@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.3.2] — 2026-10-28
+
+### Fixed
+
+- **Antigravity (agy) token usage**: the counts agy reports (`input_tokens`, `output_tokens`) are now used for the response `usage`, the final SSE usage chunk and the usage ledger (`usage.db`), instead of a tiktoken estimate of the visible text (a 4-token answer to an 11 510-token prompt was billed as about 10 tokens). A reported 0 is kept as a count. Valid `cache_read_tokens` and `thinking_tokens` appear as `prompt_tokens_details.cached_tokens` and `completion_tokens_details.reasoning_tokens` and are never added to the total.
+- A missing or malformed agy usage block (bool, string, fractional, negative or null counter, non-object usage), or a `total_tokens` different from input + output, is not trusted: the tokens are estimated as before. Other CLIs and HTTP providers are unchanged.
+- Existing usage rows and cached responses keep their earlier estimates; no historical count is rewritten or invented.
+
 ## [4.3.1] — 2026-10-27
 
 ### Security

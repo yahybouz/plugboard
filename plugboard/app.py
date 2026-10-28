@@ -116,6 +116,7 @@ from plugboard.router import (
     list_models,
     resolve_provider_and_model,
     served_by as _served_by,
+    usage_reported as _usage_reported,
 )
 from plugboard.tokenizer import (
     count_tokens,
@@ -1199,11 +1200,13 @@ def _bill_completion(
     prompt_tokens = usage_data.get("prompt_tokens", 0)
     completion_tokens = usage_data.get("completion_tokens", 0)
 
-    # Estimate tokens if backend returned 0
-    if prompt_tokens == 0:
-        prompt_tokens = estimate_prompt_tokens(body.get("messages", []))
-    if completion_tokens == 0:
-        completion_tokens = estimate_completion_tokens(result)
+    # Estimate tokens if backend returned 0, unless the CLI reported them
+    # (a reported 0 is a count, see router.usage_reported()).
+    if not _usage_reported():
+        if prompt_tokens == 0:
+            prompt_tokens = estimate_prompt_tokens(body.get("messages", []))
+        if completion_tokens == 0:
+            completion_tokens = estimate_completion_tokens(result)
 
     pricing_month = _billing.current_pricing_month()
     match = _billing.resolve_price(real_model, pricing_month, provider=provider)
@@ -1634,12 +1637,18 @@ async def chat_completions(
                 if client_id:
                     provider, real_model = _billing_target(body)
                     usage_data = result.get("usage") or {}
-                    prompt_tokens = usage_data.get(
-                        "prompt_tokens", 0
-                    ) or estimate_prompt_tokens(body.get("messages", []))
-                    completion_tokens = usage_data.get(
-                        "completion_tokens", 0
-                    ) or estimate_completion_tokens(result)
+                    reported = _usage_reported()
+                    if reported:
+                        # Counts the CLI reported, zeros included.
+                        prompt_tokens = usage_data["prompt_tokens"]
+                        completion_tokens = usage_data["completion_tokens"]
+                    else:
+                        prompt_tokens = usage_data.get(
+                            "prompt_tokens", 0
+                        ) or estimate_prompt_tokens(body.get("messages", []))
+                        completion_tokens = usage_data.get(
+                            "completion_tokens", 0
+                        ) or estimate_completion_tokens(result)
                     pricing_month = _billing.current_pricing_month()
                     match = _billing.resolve_price(
                         real_model, pricing_month, provider=provider
@@ -1671,12 +1680,20 @@ async def chat_completions(
                     result["billing"] = _billing_for_cache
                     # Ensure usage in result matches billing (so cache replay emits
                     # the same numbers).
-                    result["usage"] = {
+                    new_usage = {
                         "prompt_tokens": prompt_tokens,
                         "completion_tokens": completion_tokens,
                         "total_tokens": prompt_tokens + completion_tokens,
                         "cost_usd": round(cost, 6),
                     }
+                    if reported:
+                        for key in (
+                            "prompt_tokens_details",
+                            "completion_tokens_details",
+                        ):
+                            if isinstance(usage_data.get(key), dict):
+                                new_usage[key] = usage_data[key]
+                    result["usage"] = new_usage
             except Exception as exc:
                 log.warning("subprocess stream billing error (non-fatal): %s", exc)
 

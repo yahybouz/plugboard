@@ -993,6 +993,59 @@ def _extract_agy_error(stdout_text: str) -> str:
     return msg[:400]
 
 
+# Key set on complete()'s result when the CLI reported validated token counts.
+# The router pops it before the result leaves the process.
+USAGE_REPORTED_KEY = "_plugboard_usage_reported"
+
+
+def _usage_count(value: Any) -> Optional[int]:
+    """A token counter: a non-negative int (bool, str, float, None rejected)."""
+    if type(value) is not int or value < 0:
+        return None
+    return value
+
+
+def agy_reported_usage(payload: Any) -> Optional[Dict[str, Any]]:
+    """OpenAI usage from agy's ``usage`` block, or None when it cannot be trusted.
+
+    input/output map to prompt/completion. A ``total_tokens`` that is present
+    must equal their sum, otherwise the whole report is rejected. Detail
+    counters (cache reads, thinking) are kept as OpenAI sub-counts only when
+    valid and within their parent counter; they are never added to the total.
+    """
+    if not isinstance(payload, dict):
+        return None
+    usage = payload.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    prompt = _usage_count(usage.get("input_tokens"))
+    completion = _usage_count(usage.get("output_tokens"))
+    if prompt is None or completion is None:
+        return None
+    total = prompt + completion
+    if "total_tokens" in usage and _usage_count(usage["total_tokens"]) != total:
+        # Counters only: never the payload, the reply or the prompt.
+        log.debug(
+            "agy usage rejected: total_tokens (%s) differs from input+output "
+            "(%d); tokens will be estimated",
+            type(usage["total_tokens"]).__name__,
+            total,
+        )
+        return None
+    out: Dict[str, Any] = {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total,
+    }
+    cached = _usage_count(usage.get("cache_read_tokens"))
+    if cached is not None and cached <= prompt:
+        out["prompt_tokens_details"] = {"cached_tokens": cached}
+    thinking = _usage_count(usage.get("thinking_tokens"))
+    if thinking is not None and thinking <= completion:
+        out["completion_tokens_details"] = {"reasoning_tokens": thinking}
+    return out
+
+
 def _extract_text_from_codex_jsonl(lines: List[str]) -> str:
     """Parse Codex CLI JSONL events and extract the final assistant message.
 
@@ -1397,8 +1450,17 @@ async def complete(
             model_id=model,
         )
 
+    # Only agy reports token counts; the other CLIs keep usage=0 and the
+    # router estimates. agy errors raise above, so this is a success payload.
+    reported: Optional[Dict[str, Any]] = None
+    if kind == "agy":
+        try:
+            reported = agy_reported_usage(_parse_gemini_json_stdout(stdout_text))
+        except Exception:  # noqa: BLE001 - malformed usage never fails a reply
+            reported = None
+
     # Wrap into OpenAI chat.completions shape
-    return {
+    result: Dict[str, Any] = {
         "id": "chatcmpl-" + uuid.uuid4().hex[:24],
         "object": "chat.completion",
         "created": int(time.time()),
@@ -1410,7 +1472,8 @@ async def complete(
                 "finish_reason": "stop",
             }
         ],
-        "usage": {
+        "usage": reported
+        or {
             # CLI doesn't reliably report tokens; leave zeros — the billing
             # layer can estimate via tiktoken if needed.
             "prompt_tokens": 0,
@@ -1419,3 +1482,6 @@ async def complete(
         },
         "_cli_elapsed_s": round(elapsed, 3),
     }
+    if reported is not None:
+        result[USAGE_REPORTED_KEY] = True
+    return result
