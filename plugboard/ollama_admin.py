@@ -45,6 +45,9 @@ MANIFEST_TIMEOUT_S = 5.0
 SETTINGS_FILE = "ollama_settings.json"
 MAX_NAME_LEN = 200
 GB = 1024**3
+# A cloud model is a manifest plus a few small layers (template, params,
+# licence): anything bigger is a real local model under a cloud-looking tag.
+CLOUD_MAX_BYTES = 64 * 1024**2
 _DISK_POLL_S = 1.0
 
 _MANIFEST_ACCEPT = ", ".join(
@@ -91,9 +94,20 @@ def validate_model_name(name: str) -> str:
 
 
 def is_cloud_id(name: str) -> bool:
-    """Ollama Cloud id: ``<name>:cloud`` or a tag ending in ``-cloud``."""
-    _, sep, tag = (name or "").rpartition(":")
+    """Ollama Cloud id: ``<name>:cloud`` or a tag ending in ``-cloud``, on the
+    official library only (``name`` or ``library/name``).
+
+    Anyone can push any tag to their own namespace or another registry, so
+    ``user/model:big-cloud`` or ``hf.co/u/m:q4-cloud`` are ordinary local
+    models and stay under the switch and the disk guard.
+    """
+    repo, sep, tag = (name or "").rpartition(":")
     if not sep:
+        return False
+    parts = repo.split("/")
+    if len(parts) == 2 and parts[0] == "library":
+        parts = parts[1:]
+    if len(parts) != 1 or not parts[0]:
         return False
     tag = tag.lower()
     return tag == "cloud" or tag.endswith("-cloud")
@@ -231,7 +245,9 @@ async def resolve_manifest_size(
                 url,
                 headers={"Accept": _MANIFEST_ACCEPT},
                 timeout=aiohttp.ClientTimeout(total=timeout),
-                allow_redirects=True,
+                # The size only steers a pre-check; never follow the
+                # registry elsewhere (unknown size -> stream guard).
+                allow_redirects=False,
             ) as resp:
                 if resp.status != 200:
                     log.info("ollama manifest %s -> HTTP %s", name, resp.status)
@@ -302,6 +318,7 @@ async def guarded_pull(
     pull: Callable[[str], AsyncGenerator[Dict[str, Any], None]],
     delete: Callable[[str], Any],
     free_now: Optional[Callable[[], int]] = None,
+    max_total: Optional[int] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """Relay Ollama pull progress; stop the pull when it no longer fits.
 
@@ -311,6 +328,9 @@ async def guarded_pull(
     (minus the margin), or free space drops below the margin, the stream is
     closed (closing the HTTP response cancels the Ollama pull), an error line
     is emitted and the partial model is deleted (best effort).
+
+    ``max_total`` caps the layer bytes regardless of free space (cloud ids,
+    which must stay manifest-only); ``free_at_start`` None skips disk checks.
     """
     if free_now is None:
 
@@ -326,16 +346,24 @@ async def guarded_pull(
             digest = progress.get("digest") if isinstance(progress, dict) else None
             total = progress.get("total") if isinstance(progress, dict) else None
             if (
-                free_at_start is not None
+                (free_at_start is not None or max_total is not None)
                 and isinstance(digest, str)
                 and isinstance(total, int)
+                and not isinstance(total, bool)
                 and digest not in remaining
             ):
                 done = progress.get("completed")
                 done = done if isinstance(done, int) and 0 <= done <= total else 0
-                remaining[digest] = total - done
+                remaining[digest] = max(total - done, 0)
                 needed = sum(remaining.values())
-                if needed + margin > free_at_start:
+                if max_total is not None and needed > max_total:
+                    reason = (
+                        f"Pull stopped: {name} is not manifest-only "
+                        f"({_fmt_gb(needed)} of layers); cloud ids must stay "
+                        "a few KB on disk."
+                    )
+                    break
+                if free_at_start is not None and needed + margin > free_at_start:
                     reason = (
                         f"Pull stopped: {name} needs at least {_fmt_gb(needed)} plus a "
                         f"{_fmt_gb(margin)} margin, {_fmt_gb(free_at_start)} were free."

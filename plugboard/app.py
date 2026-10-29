@@ -3765,6 +3765,7 @@ async def ollama_cloud_catalog(_: None = Depends(_require_admin)):
 
     Read-only: no inference probe. Some models need a paid Ollama plan.
     """
+    from plugboard import ollama_admin
     from plugboard.ollama import _to_cloud_id, fetch_cloud_catalog
     from plugboard.ollama import list_models as _ollama_list
 
@@ -3781,8 +3782,15 @@ async def ollama_cloud_catalog(_: None = Depends(_require_admin)):
     seen = set()
     models = []
     for base in names:
-        cloud_id = _to_cloud_id(base)
-        if cloud_id in seen:
+        # Untrusted upstream: keep only names the pull route would accept
+        # as cloud ids (official library, valid characters).
+        if not isinstance(base, str):
+            continue
+        try:
+            cloud_id = ollama_admin.validate_model_name(_to_cloud_id(base))
+        except ValueError:
+            continue
+        if not ollama_admin.is_cloud_id(cloud_id) or cloud_id in seen:
             continue
         seen.add(cloud_id)
         models.append(
@@ -3855,7 +3863,14 @@ async def ollama_pull_model(body: OllamaPullRequest, _: None = Depends(_require_
     async def _stream():
         try:
             if guard["cloud"]:
-                progress_iter = pull_model(name)
+                progress_iter = ollama_admin.guarded_pull(
+                    name,
+                    free_at_start=None,
+                    margin=0,
+                    pull=pull_model,
+                    delete=delete_model,
+                    max_total=ollama_admin.CLOUD_MAX_BYTES,
+                )
             else:
                 progress_iter = ollama_admin.guarded_pull(
                     name,

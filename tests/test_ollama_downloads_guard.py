@@ -417,3 +417,88 @@ async def test_cloud_catalog_survives_ollama_down(admin_client, guard_env, monke
     assert resp.status_code == 200
     assert resp.json()["local_list_available"] is False
     assert resp.json()["models"][0]["installed"] is False
+
+
+# -- Regression: cloud ids are library-only and stay manifest-only -------------------
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "user/model:big-cloud",  # anyone can push any tag to their namespace
+        "evil/llama:cloud",
+        "hf.co/u/m:q4-cloud",
+        "registry.ollama.ai/library/m:cloud",
+    ],
+)
+def test_namespaced_cloud_tags_are_not_cloud_ids(name):
+    assert ollama_admin.is_cloud_id(name) is False
+
+
+def test_library_namespace_cloud_id():
+    assert ollama_admin.is_cloud_id("library/gpt-oss:120b-cloud") is True
+
+
+async def test_namespaced_cloud_tag_refused_when_downloads_off(admin_client, guard_env):
+    ollama_admin.set_local_downloads(False)
+    with aioresponses() as m:
+        resp = await admin_client.post(
+            "/admin/ollama/models/pull",
+            json={"name": "user/model:big-cloud"},
+            headers=ADMIN,
+        )
+        assert not any("api/pull" in str(k[1]) for k in m.requests)
+    assert resp.status_code == 403
+
+
+async def test_cloud_pull_stopped_when_layers_are_not_manifest_only(
+    admin_client, guard_env
+):
+    ollama_admin.set_local_downloads(False)
+    progress = b"".join(
+        json.dumps(p).encode() + b"\n"
+        for p in [
+            {"status": "pulling manifest"},
+            {"status": "pulling a", "digest": "sha256:a", "total": 65 * GB},
+            {"status": "success"},
+        ]
+    )
+    with aioresponses() as m:
+        m.post(f"{OLLAMA_URL}/api/pull", body=progress)
+        m.delete(f"{OLLAMA_URL}/api/delete", status=200)
+        resp = await admin_client.post(
+            "/admin/ollama/models/pull",
+            json={"name": "gpt-oss:120b-cloud"},
+            headers=ADMIN,
+        )
+    assert resp.status_code == 200
+    lines = _lines(resp.text)
+    assert lines[-1]["status"] == "error" and lines[-1]["aborted"] is True
+    assert not any(line.get("status") in ("success", "complete") for line in lines)
+
+
+async def test_cloud_catalog_skips_non_library_entries(
+    admin_client, guard_env, monkeypatch
+):
+    async def fake_catalog():
+        return ["gpt-oss:120b", "user/big:q4", "bad name"]
+
+    async def fake_list():
+        return []
+
+    monkeypatch.setattr(ollama, "fetch_cloud_catalog", fake_catalog)
+    monkeypatch.setattr(ollama, "list_models", fake_list)
+    resp = await admin_client.get("/admin/ollama/cloud-catalog", headers=ADMIN)
+    assert [m["id"] for m in resp.json()["models"]] == ["gpt-oss:120b-cloud"]
+
+
+async def test_manifest_redirect_is_not_followed():
+    with aioresponses() as m:
+        m.get(
+            REGISTRY,
+            status=302,
+            headers={"Location": "http://169.254.169.254/latest/meta-data"},
+        )
+        m.get("http://169.254.169.254/latest/meta-data", payload=_manifest(1))
+        assert await ollama_admin.resolve_manifest_size("llama3:8b") is None
+        assert not any("169.254" in str(k[1]) for k in m.requests)

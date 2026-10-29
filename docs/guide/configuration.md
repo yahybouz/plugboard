@@ -92,7 +92,7 @@ The removed connector's `OPENCLAW_URL`, `OPENCLAW_KEY`, `OPENCLAW_MODEL` and
 | `OLLAMA_TIMEOUT` | `30` | Timeout of Ollama management calls, in seconds. |
 | `OLLAMA_CLOUD_CATALOG_URL` | `https://ollama.com/api/tags` | Catalog used to add Ollama cloud models. |
 | `PLUGBOARD_OLLAMA_CLOUD_AUTOSYNC` | `1` | `0` stops adding Ollama cloud models automatically. |
-| `PLUGBOARD_LOCAL_MODEL_DOWNLOADS` | `1` | `0` refuses Ollama pulls of local (non-cloud) models; only `:cloud` / `-cloud` ids can be added. An admin can flip it on the **Ollama** page; that choice is saved in `<data>/ollama_settings.json` and wins over this variable. |
+| `PLUGBOARD_LOCAL_MODEL_DOWNLOADS` | `1` | `0` refuses Ollama pulls of local (non-cloud) models; only `:cloud` / `-cloud` ids of the official library (no `user/` namespace, no other registry) can be added, and such a pull is stopped if its layers exceed 64 MB. An admin can flip it on the **Ollama** page; that choice is saved in `<data>/ollama_settings.json` and wins over this variable. |
 | `PLUGBOARD_OLLAMA_MIN_FREE_GB` | `5` | Free disk space, in GB, that a local pull must leave. A pull whose registry size does not fit is refused with 507; a pull of unknown size is stopped as soon as it would cross this margin. |
 | `PLUGBOARD_OLLAMA_DISK_PATH` | data dir | Path whose filesystem is checked for free space (must be on the same disk as the Ollama models). |
 | `PLUGBOARD_OLLAMA_CLOUD_FAMILIES` | deepseek, kimi, qwen, glm, gemma, nemotron, minimax, gpt-oss, gemini, beam | Ollama cloud model families added automatically (comma-separated, `all` for the whole catalogue). |

@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **Local model downloads switch** (Ollama page, `GET`/`PUT /admin/ollama/settings`, `PLUGBOARD_LOCAL_MODEL_DOWNLOADS`): off, only Ollama cloud models (`:cloud`, `-cloud`) can be pulled; local pulls get 403. The admin choice is saved and wins over the variable.
+- **Local model downloads switch** (Ollama page, `GET`/`PUT /admin/ollama/settings`, `PLUGBOARD_LOCAL_MODEL_DOWNLOADS`): off, only Ollama cloud models (`:cloud`, `-cloud`, official library only, layers capped at 64 MB) can be pulled; local pulls get 403. The admin choice is saved and wins over the variable.
 - **Disk guard on Ollama pulls**: the registry size plus `PLUGBOARD_OLLAMA_MIN_FREE_GB` (default 5) must fit in the free space of `PLUGBOARD_OLLAMA_DISK_PATH` (507 otherwise); a pull of unknown size is stopped and its partial model deleted before it crosses the margin. Model names are validated (422).
 - **Ollama Cloud catalogue** on the Ollama page (`GET /admin/ollama/cloud-catalog`) with one-click add; no inference probe.
 - **MCP embeddings**: tools `embed` and `list_embedding_models`, and client route `GET /v1/embeddings/models`.
