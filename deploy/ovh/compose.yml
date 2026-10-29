@@ -10,7 +10,7 @@ services:
         GEMINI_CLI_VERSION: "0.65.0"
         CLAUDE_CODE_VERSION: "2.1.306"
         CODEX_VERSION: "0.163.0"
-    image: plugboard:private-full-v4.3.3
+    image: plugboard:private-full-v4.4.0
     restart: unless-stopped
     env_file:
       - ${PLUGBOARD_ENV_FILE:-/etc/plugboard/runtime.env}
@@ -37,6 +37,12 @@ services:
       OLLAMA_URL: http://172.30.114.1:11434
       # Publish installed references only, not an unverified paid cloud catalog.
       PLUGBOARD_OLLAMA_CLOUD_AUTOSYNC: "0"
+      # Small VM: only Ollama Cloud models (:cloud, manifest-only) can be
+      # pulled; local pulls must leave 5 GB free (admin can override).
+      PLUGBOARD_LOCAL_MODEL_DOWNLOADS: "0"
+      PLUGBOARD_OLLAMA_MIN_FREE_GB: "5"
+      # Exact identities served by POST /v1/embeddings (client key only).
+      PLUGBOARD_EMBEDDING_MODELS: "ollama:qwen3-embedding:0.6b"
     networks:
       - default
       - ollama-private

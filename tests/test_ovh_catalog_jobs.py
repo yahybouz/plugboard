@@ -81,7 +81,7 @@ def test_compose_keeps_default_cadence():
 def test_compose_protected_restrictions_unchanged():
     gateway = _gateway()
     env = gateway["environment"]
-    assert gateway["image"] == "plugboard:private-full-v4.3.3"
+    assert gateway["image"] == "plugboard:private-full-v4.4.0"
     assert gateway["build"]["target"] == "full"
     assert gateway["build"]["args"] == {
         "GEMINI_CLI_VERSION": "0.65.0",
@@ -122,7 +122,7 @@ def test_readme_documents_jobs_without_free_claim():
     assert "Individual quota reached" in section
     assert "never clears a quarantine" in section
     assert "no Gemini API key" in section
-    assert "plugboard:private-full-v4.3.3" in section
+    assert "plugboard:private-full-v4.4.0" in section
     assert "not the subscription's invoice" in section
 
 
