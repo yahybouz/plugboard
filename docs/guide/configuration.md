@@ -112,6 +112,13 @@ The removed connector's `OPENCLAW_URL`, `OPENCLAW_KEY`, `OPENCLAW_MODEL` and
 
 The unprefixed `EMBED_PROVIDER_ID`, `EMBED_MODEL`, `EMBED_SIMILARITY_THRESHOLD` and `EMBED_TIMEOUT` are still read, with a deprecation warning.
 
+## Embeddings route
+
+| Variable | Default | Description |
+|---|---|---|
+| `PLUGBOARD_EMBEDDING_MODELS` | empty | Comma-separated exact `<provider-id>:<native-model>` identities served by `POST /v1/embeddings` (empty: route closed). Only active `sovereign` providers on a loopback address are served. See [Embeddings](embeddings.md). |
+| `PLUGBOARD_EMBEDDING_TIMEOUT_S` | `60` | Engine timeout for one embeddings call, in seconds. |
+
 ## Pricing
 
 | Variable | Default | Description |

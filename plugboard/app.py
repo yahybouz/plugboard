@@ -3,6 +3,7 @@ Plugboard -- self-hosted LLM gateway: one API for every provider.
 
 Endpoints:
   POST /v1/chat/completions    -- proxy to configured provider (streaming supported)
+  POST /v1/embeddings          -- embeddings from a local engine (client key)
   GET  /v1/models              -- list all available models
   GET  /health                 -- liveness check
   GET  /usage/me               -- token usage for the calling client (current month)
@@ -98,6 +99,7 @@ from plugboard.logging_config import _request_id_var, setup_logging
 from plugboard.metrics import get_stats
 from plugboard.ratelimit import check_client_rate_limit, check_rate_limit
 from plugboard.decision_api import router as decision_router
+from plugboard.embeddings_api import router as embeddings_router
 from plugboard.legacy_connectors import (
     REMOVED_CONNECTOR_ERROR,
     is_removed_provider,
@@ -479,6 +481,7 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 app.include_router(decision_router)
+app.include_router(embeddings_router)
 
 
 # ── SEC-001 violation handler ───────────────────────────────────────────────
