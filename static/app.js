@@ -1382,12 +1382,104 @@ function _initOllamaEvents() {
     if (name) pullOllamaModel(name);
   });
   document.getElementById("btn-refresh-ollama").addEventListener("click", loadOllama);
+  document.getElementById("ollama-local-downloads").addEventListener("change", function (ev) {
+    saveOllamaSettings(ev.target.checked);
+  });
 }
 
 async function loadOllama() {
   _initOllamaEvents();
   await loadOllamaStatus();
+  await loadOllamaSettings();
   await loadOllamaModels();
+  await loadOllamaCloudCatalog();
+}
+
+function _renderOllamaSettings(d) {
+  const box = document.getElementById("ollama-local-downloads");
+  box.checked = !!d.local_downloads_enabled;
+  const disk = d.disk || {};
+  const free = disk.free_bytes == null ? "unknown" : _formatSize(disk.free_bytes);
+  const total = disk.total_bytes == null ? "unknown" : _formatSize(disk.total_bytes);
+  document.getElementById("ollama-disk").textContent =
+    "Disk free: " + free + " of " + total + " (" + (disk.path || "-") + "), " +
+    d.min_free_gb + " GB kept free. Setting from " + (d.source === "admin" ? "the dashboard" : "the environment") + ".";
+  document.getElementById("ollama-pull-hint").textContent = d.local_downloads_enabled
+    ? "Local models are refused when they would leave less than " + d.min_free_gb + " GB free."
+    : "Local downloads are off: only cloud models (name:cloud or a tag ending in -cloud) are accepted.";
+  document.getElementById("ollama-model-name").placeholder = d.local_downloads_enabled
+    ? "e.g. llama3, mistral:7b, gpt-oss:120b-cloud"
+    : "e.g. gpt-oss:120b-cloud, nemotron-3-super:cloud";
+}
+
+async function _errorDetail(res) {
+  try {
+    const d = await res.json();
+    if (typeof d.detail === "string") return d.detail;
+    if (Array.isArray(d.detail) && d.detail.length) return d.detail[0].msg || "invalid request";
+  } catch (e) { console.debug("error body is not JSON:", e); }
+  return "HTTP " + res.status;
+}
+
+async function loadOllamaSettings() {
+  const el = document.getElementById("ollama-disk");
+  try {
+    const res = await api("GET", "/admin/ollama/settings");
+    if (!res.ok) throw new Error(await _errorDetail(res));
+    _renderOllamaSettings(await res.json());
+  } catch (err) {
+    el.textContent = "Failed to load download settings: " + err.message;
+  }
+}
+
+async function saveOllamaSettings(enabled) {
+  try {
+    const res = await api("PUT", "/admin/ollama/settings", { local_downloads_enabled: enabled });
+    if (!res.ok) throw new Error(await _errorDetail(res));
+    _renderOllamaSettings(await res.json());
+    toast("Local model downloads " + (enabled ? "on" : "off"), "success");
+  } catch (err) {
+    toast("Saving failed: " + err.message, "error");
+    await loadOllamaSettings();
+  }
+}
+
+async function loadOllamaCloudCatalog() {
+  const el = document.getElementById("ollama-cloud-container");
+  try {
+    const res = await api("GET", "/admin/ollama/cloud-catalog");
+    if (!res.ok) throw new Error(await _errorDetail(res));
+    const data = await res.json();
+    const models = data.models || [];
+    el.innerHTML = "";
+    if (models.length === 0) {
+      el.appendChild(h("div", { className: "muted", style: "padding:1rem;" }, "The public cloud catalogue is empty or unreachable."));
+      return;
+    }
+    const table = h("table", { className: "data-table" },
+      h("thead", null, h("tr", null, h("th", null, "Cloud model"), h("th", null, "Status"), h("th", null, "Actions")))
+    );
+    const tbody = h("tbody");
+    models.forEach(function (m) {
+      const id = m.id;
+      tbody.appendChild(h("tr", null,
+        h("td", null, h("span", { style: "font-weight:600;" }, id)),
+        h("td", null, h("span", { className: "badge badge-" + (m.installed ? "green" : "muted") }, m.installed ? "installed" : "available")),
+        h("td", null, m.installed ? null : h("button", { className: "btn btn-ghost btn-sm", onClick: function () { _pullFromCatalog(id); } }, "Add"))
+      ));
+    });
+    table.appendChild(tbody);
+    el.appendChild(table);
+  } catch (err) {
+    el.innerHTML = "";
+    el.appendChild(h("div", { className: "alert alert-error" }, "Failed to load the cloud catalogue: " + err.message));
+  }
+}
+
+function _pullFromCatalog(id) {
+  document.getElementById("ollama-pull-form").style.display = "block";
+  document.getElementById("ollama-model-name").value = id;
+  pullOllamaModel(id);
 }
 
 async function loadOllamaStatus() {
@@ -1485,6 +1577,15 @@ async function pullOllamaModel(name) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: name }),
     });
+    if (res.status === 401) { logout(); return; }
+    if (!res.ok) {
+      // 403 (local downloads off), 507 (not enough disk), 422 (invalid name)
+      const detail = await _errorDetail(res);
+      fillEl.style.width = "0%";
+      statusEl.textContent = "Refused: " + detail;
+      toast("Pull refused: " + detail, "error");
+      return;
+    }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = "";
@@ -1520,6 +1621,8 @@ async function pullOllamaModel(name) {
       if (pullDone) break;
     }
     await loadOllamaModels();
+    await loadOllamaSettings();
+    await loadOllamaCloudCatalog();
   } catch (err) {
     statusEl.textContent = "Pull failed: " + err.message;
     toast("Pull failed: " + err.message, "error");

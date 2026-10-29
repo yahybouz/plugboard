@@ -61,7 +61,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from contextlib import asynccontextmanager
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -3725,7 +3725,76 @@ def _schedule_initial_discovery(provider_id: str) -> None:
 
 
 class OllamaPullRequest(BaseModel):
-    name: str  # e.g. "llama3:8b", "mistral"
+    name: str = Field(max_length=256)  # e.g. "llama3:8b", "mistral"
+
+
+class OllamaSettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    local_downloads_enabled: bool
+
+
+@app.get("/admin/ollama/settings")
+async def ollama_get_settings(_: None = Depends(_require_admin)):
+    """Local downloads switch (and its source), disk guard margin, free disk."""
+    from plugboard import ollama_admin
+
+    return ollama_admin.settings_payload()
+
+
+@app.put("/admin/ollama/settings")
+async def ollama_put_settings(
+    body: OllamaSettingsUpdate, _: None = Depends(_require_admin)
+):
+    """Turn local model downloads on or off (persisted, wins over the env)."""
+    from plugboard import ollama_admin
+
+    ollama_admin.set_local_downloads(body.local_downloads_enabled)
+    _audit(
+        "ollama.settings",
+        target_type="setting",
+        target_id="local_downloads_enabled",
+        details=f"value={body.local_downloads_enabled}",
+    )
+    return ollama_admin.settings_payload()
+
+
+@app.get("/admin/ollama/cloud-catalog")
+async def ollama_cloud_catalog(_: None = Depends(_require_admin)):
+    """Public Ollama Cloud catalogue as cloud ids, flagged when installed.
+
+    Read-only: no inference probe. Some models need a paid Ollama plan.
+    """
+    from plugboard.ollama import _to_cloud_id, fetch_cloud_catalog
+    from plugboard.ollama import list_models as _ollama_list
+
+    names = await fetch_cloud_catalog()
+    try:
+        local = await _ollama_list()
+        local_available = True
+    except Exception as exc:  # noqa: BLE001 (catalogue still useful offline)
+        log.warning("ollama cloud catalog: local list unavailable: %s", exc)
+        local, local_available = [], False
+    installed = {
+        str(m.get("name") or m.get("model") or "") for m in local if isinstance(m, dict)
+    }
+    seen = set()
+    models = []
+    for base in names:
+        cloud_id = _to_cloud_id(base)
+        if cloud_id in seen:
+            continue
+        seen.add(cloud_id)
+        models.append(
+            {"name": base, "id": cloud_id, "installed": cloud_id in installed}
+        )
+    return {
+        "models": models,
+        "count": len(models),
+        "local_list_available": local_available,
+        "note": "Some cloud models need a paid Ollama plan; the free plan "
+        "answers with an error when they are used.",
+    }
 
 
 @app.get("/admin/ollama/status")
@@ -3758,13 +3827,44 @@ async def ollama_list_models(_: None = Depends(_require_admin)):
 
 @app.post("/admin/ollama/models/pull")
 async def ollama_pull_model(body: OllamaPullRequest, _: None = Depends(_require_admin)):
-    """Pull (download) an Ollama model. Returns streaming NDJSON progress."""
+    """Pull (download) an Ollama model. Returns streaming NDJSON progress.
+
+    Refused before any streaming when local downloads are off and the name is
+    not an Ollama Cloud id (403), or when the registry size does not fit on
+    disk with the margin (507). An unknown size streams under a disk guard.
+    """
     import json as _json
-    from plugboard.ollama import pull_model
+    from plugboard import ollama_admin
+    from plugboard.ollama import delete_model, pull_model
+
+    try:
+        name = ollama_admin.validate_model_name(body.name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    try:
+        guard = await ollama_admin.precheck_pull(name)
+    except ollama_admin.PullRefused as exc:
+        _audit(
+            "ollama.pull_refused",
+            target_type="model",
+            target_id=name,
+            details=f"status={exc.status}",
+        )
+        raise HTTPException(exc.status, exc.detail)
 
     async def _stream():
         try:
-            async for progress in pull_model(body.name):
+            if guard["cloud"]:
+                progress_iter = pull_model(name)
+            else:
+                progress_iter = ollama_admin.guarded_pull(
+                    name,
+                    free_at_start=guard["free"],
+                    margin=guard["margin"],
+                    pull=pull_model,
+                    delete=delete_model,
+                )
+            async for progress in progress_iter:
                 yield _json.dumps(progress) + "\n"
             # Sync models after pull
             provider = get_provider("ollama")
@@ -3772,11 +3872,13 @@ async def ollama_pull_model(body: OllamaPullRequest, _: None = Depends(_require_
                 from plugboard.ollama import _sync_models
 
                 await _sync_models(provider)
-            yield _json.dumps({"status": "complete", "model": body.name}) + "\n"
+            yield _json.dumps({"status": "complete", "model": name}) + "\n"
+        except ollama_admin.PullAborted:
+            return
         except Exception as exc:
             yield _json.dumps({"status": "error", "error": str(exc)}) + "\n"
 
-    _audit("ollama.pull", target_type="model", target_id=body.name)
+    _audit("ollama.pull", target_type="model", target_id=name)
     return StreamingResponse(_stream(), media_type="application/x-ndjson")
 
 
