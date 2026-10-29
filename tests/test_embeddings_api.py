@@ -560,3 +560,32 @@ def test_operator_public_ollama_url_is_not_trusted(monkeypatch):
     assert not ea._is_loopback_base("http://ollama.example:11434")
     monkeypatch.delenv("OLLAMA_URL")
     assert not ea._is_loopback_base("http://172.30.114.1:11434")
+
+
+# -- Global concurrency cap ----------------------------------------------------
+
+
+def test_concurrency_cap_is_bounded_and_released(monkeypatch):
+    from plugboard import embeddings_api as ea
+
+    monkeypatch.setenv("PLUGBOARD_EMBEDDING_CONCURRENCY", "2")
+    monkeypatch.setattr(ea, "_SLOTS", {})
+    assert ea._try_acquire_slot()
+    assert ea._try_acquire_slot()
+    assert not ea._try_acquire_slot()
+    ea._release_slot()
+    assert ea._try_acquire_slot()
+    ea._release_slot()
+    ea._release_slot()
+    ea._release_slot()
+    assert ea._SLOTS["state"]["busy"] == 0
+
+
+def test_concurrency_env_is_clamped(monkeypatch):
+    from plugboard import embeddings_api as ea
+
+    for raw in ("0", "-3", "999", "abc"):
+        monkeypatch.setenv("PLUGBOARD_EMBEDDING_CONCURRENCY", raw)
+        assert ea._concurrency() == ea.DEFAULT_CONCURRENCY
+    monkeypatch.setenv("PLUGBOARD_EMBEDDING_CONCURRENCY", "4")
+    assert ea._concurrency() == 4

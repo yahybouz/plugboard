@@ -59,6 +59,34 @@ log = logging.getLogger(__name__)
 # Dimensions seen on served calls, per identity (process memory, best effort).
 _KNOWN_DIMENSIONS: dict[str, int] = {}
 
+CONCURRENCY_ENV = "PLUGBOARD_EMBEDDING_CONCURRENCY"
+DEFAULT_CONCURRENCY = 2
+_SLOTS: dict[str, object] = {}
+
+
+def _concurrency() -> int:
+    try:
+        value = int(os.environ.get(CONCURRENCY_ENV, "") or DEFAULT_CONCURRENCY)
+    except ValueError:
+        return DEFAULT_CONCURRENCY
+    return value if 1 <= value <= 64 else DEFAULT_CONCURRENCY
+
+
+def _try_acquire_slot() -> bool:
+    """Global, non-blocking cap on in-flight engine calls (small hosts): a
+    full engine answers 429 instead of queueing CPU/RAM work."""
+    limit = _concurrency()
+    state = _SLOTS.setdefault("state", {"busy": 0})
+    if state["busy"] >= limit:
+        return False
+    state["busy"] += 1
+    return True
+
+
+def _release_slot() -> None:
+    state = _SLOTS.setdefault("state", {"busy": 0})
+    state["busy"] = max(0, state["busy"] - 1)
+
 
 class EmbeddingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -378,6 +406,8 @@ async def create_embeddings(
 
     base = str(provider["base_url"]).rstrip("/")
     started = time.perf_counter()
+    if not _try_acquire_slot():
+        raise HTTPException(429, "Embedding engine busy, retry shortly")
     try:
         timeout = aiohttp.ClientTimeout(total=_timeout())
         async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
@@ -409,6 +439,8 @@ async def create_embeddings(
             (time.perf_counter() - started) * 1000,
         )
         raise HTTPException(exc.status, exc.detail) from None
+    finally:
+        _release_slot()
 
     tokens = _prompt_tokens(raw, inputs)
     recorded = _record_usage(record, native, owner, tokens)

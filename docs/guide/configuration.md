@@ -120,6 +120,7 @@ The unprefixed `EMBED_PROVIDER_ID`, `EMBED_MODEL`, `EMBED_SIMILARITY_THRESHOLD` 
 | Variable | Default | Description |
 |---|---|---|
 | `PLUGBOARD_EMBEDDING_MODELS` | empty | Comma-separated exact `<provider-id>:<native-model>` identities served by `POST /v1/embeddings` (empty: route closed). Only active `sovereign` providers on a loopback address, or exactly at a private-IP `OLLAMA_URL`, are served. See [Embeddings](embeddings.md). |
+| `PLUGBOARD_EMBEDDING_CONCURRENCY` | `2` | Embedding calls served at the same time (1–64); beyond that `POST /v1/embeddings` answers 429. |
 | `PLUGBOARD_EMBEDDING_TIMEOUT_S` | `60` | Engine timeout for one embeddings call, in seconds. |
 
 ## Pricing
