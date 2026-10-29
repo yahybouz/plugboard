@@ -73,6 +73,8 @@ Example client configuration (stdio):
 | `chat` | `model`, `message`, `max_tokens` (4096), `temperature` (0.7), `system_prompt`, `session_id` | One chat completion through `/v1/chat/completions` |
 | `chat_stream` | same as `chat` | The same with `stream: true` |
 | `list_models` | none | Model IDs from `/v1/models` |
+| `embed` | `input` (string or list, ≤ 256), `model`, `include_vectors` (true) | Embeddings through `/v1/embeddings`: model, count, dimensions, usage and vectors |
+| `list_embedding_models` | none | Embedding model IDs the key can use (`/v1/embeddings/models`) |
 | `list_decision_models` | none | Permitted decision engines, availability, capabilities and confidence semantics |
 | `decide` | `model`, `state`, `questions` | Named typed questions through `/v1/decisions`; no chat fallback |
 | `check_usage` | none | Usage, spend and limits of the key (`/v1/me`) |

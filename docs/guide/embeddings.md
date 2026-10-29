@@ -14,7 +14,7 @@ supplied by the caller.
 | The owner is the registered provider whose ID prefixes `model` (no display alias, no single-provider default) | 404 |
 | The native model has no `cloud` tag (Ollama runs those remotely) | 404 |
 | The provider is active and supported | 503 |
-| The provider is `provider_type: sovereign` with a plain loopback `base_url` (`127.0.0.1`, `::1`, `localhost`; no credentials, path or query) | 503 |
+| The provider is `provider_type: sovereign` with a plain loopback `base_url` (`127.0.0.1`, `::1`, `localhost`) or exactly the operator's `OLLAMA_URL` when it is a private IP (container bridge); no credentials, path or query | 503 |
 | The key's `allowed_models` matches the identity exactly (empty list: unrestricted) | 403 |
 | Monthly budget and `rpm_limit` of the key; per-IP `RATE_LIMIT` as for every route | 429 |
 | Body ≤ 2 MiB; `input` is a string or 1–256 strings, each non-blank and ≤ 16 384 characters; `encoding_format` `float` or `base64`; `dimensions` refused; unknown fields refused. Errors never echo the input | 413 / 422 |
@@ -78,3 +78,8 @@ Reuse the existing Ollama chain; do not download a model that is already there.
   on batch composition and concurrent requests (measured cosine ≥ 0.9999 between
   batched and single calls of the same text).
 - No streaming, no `dimensions` reduction, no caching.
+
+## Listing models and MCP
+
+- `GET /v1/embeddings/models` (client key) returns the embedding identities the key may use. `dimensions` is known only after a first served call since the last restart (`null` before).
+- The MCP server exposes `embed(input, model, include_vectors=True)` and `list_embedding_models()`, both with the client key (`PLUGBOARD_API_KEY`). See [MCP server](mcp.md).

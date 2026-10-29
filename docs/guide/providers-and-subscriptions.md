@@ -117,6 +117,10 @@ Start Ollama on the gateway host. At startup Plugboard checks `OLLAMA_URL` (defa
 
 The **Ollama** page pulls, inspects and deletes models. Ollama is a *sovereign* provider: the watchdog monitors it but never tries to restart it. Ollama cloud models are merged into the provider automatically unless `PLUGBOARD_OLLAMA_CLOUD_AUTOSYNC=0`.
 
+**Local model downloads.** On a small machine, switch **Local model downloads** off on the Ollama page (or set `PLUGBOARD_LOCAL_MODEL_DOWNLOADS=0`): pulls of local models are refused with 403 and only cloud ids (`:cloud`, `-cloud`) can be added. When downloads are on, a pull is checked against the free disk space: the size read from the Ollama registry plus `PLUGBOARD_OLLAMA_MIN_FREE_GB` must fit (507 otherwise), and a pull whose size is unknown is stopped, and its partial model deleted, before it crosses the margin. Endpoints: `GET`/`PUT /admin/ollama/settings`.
+
+**Cloud catalogue.** The Ollama page lists the public Ollama Cloud catalogue (`GET /admin/ollama/cloud-catalog`) with an **Add** button that pulls the cloud manifest (a few KB). No inference is run. The Ollama daemon must be signed in to an Ollama account; on the free plan only some cloud models answer, the others return *not included in your free usage*.
+
 ### Subscriptions through an official CLI
 
 Read [the risks](#risks-of-using-subscriptions) first. These presets run the vendor's unmodified CLI on the gateway host, as the operating-system user that runs Plugboard.

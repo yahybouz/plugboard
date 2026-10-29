@@ -6,9 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.4.0] — 2026-10-29
+
 ### Added
 
+- **Local model downloads switch** (Ollama page, `GET`/`PUT /admin/ollama/settings`, `PLUGBOARD_LOCAL_MODEL_DOWNLOADS`): off, only Ollama cloud models (`:cloud`, `-cloud`) can be pulled; local pulls get 403. The admin choice is saved and wins over the variable.
+- **Disk guard on Ollama pulls**: the registry size plus `PLUGBOARD_OLLAMA_MIN_FREE_GB` (default 5) must fit in the free space of `PLUGBOARD_OLLAMA_DISK_PATH` (507 otherwise); a pull of unknown size is stopped and its partial model deleted before it crosses the margin. Model names are validated (422).
+- **Ollama Cloud catalogue** on the Ollama page (`GET /admin/ollama/cloud-catalog`) with one-click add; no inference probe.
+- **MCP embeddings**: tools `embed` and `list_embedding_models`, and client route `GET /v1/embeddings/models`.
+
 - **`POST /v1/embeddings`** (OpenAI-compatible), client keys only, served by a registered local Ollama engine (`sovereign`, loopback `base_url`) for the exact identities listed in `PLUGBOARD_EMBEDDING_MODELS` (empty: closed). No owner guessing, no chat fallback, no caller-supplied destination; the key's `allowed_models`, budget and rpm limit apply. Bounded input (1–256 strings, ≤ 16 384 characters each, 2 MiB), `truncate: false`, vectors checked (count, dimension, finite, non-zero) and the engine's model digest returned. Usage rows `embedding:<model>` at cost 0 (`price_source = local:embeddings`); logs carry the request id, never the text. Chat routes are unchanged ([guide](docs/guide/embeddings.md)).
+
+### Changed
+
+- OVH deployment: image `plugboard:private-full-v4.4.0`, `PLUGBOARD_LOCAL_MODEL_DOWNLOADS=0`, `PLUGBOARD_OLLAMA_MIN_FREE_GB=5`, `PLUGBOARD_EMBEDDING_MODELS=ollama:qwen3-embedding:0.6b`.
 
 ## [4.3.3] — 2026-10-28
 
