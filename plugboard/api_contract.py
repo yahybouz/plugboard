@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from plugboard.decisions import DecisionRequest
 from plugboard.embeddings_api import EmbeddingRequest
 
-CONTRACT_VERSION = "1.1.0"
+CONTRACT_VERSION = "1.2.0"
 _JSON = "application/json"
 
 
@@ -485,6 +485,24 @@ class EmbeddingList(BaseModel):
     plugboard: EmbeddingServed
 
 
+class EmbeddingModel(BaseModel):
+    id: str = Field(description="Exact identity to send as `model`.")
+    provider_id: Optional[str] = None
+    available: bool = Field(
+        description="The route resolves (registered, active, loopback engine); no probe."
+    )
+    dimensions: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Known once a call was served since the restart.",
+    )
+
+
+class EmbeddingModelList(BaseModel):
+    object: Literal["list"] = "list"
+    data: List[EmbeddingModel]
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 _AUTH_ERRORS = {
@@ -538,6 +556,10 @@ _ROUTES: List[_Route] = [
       "502": "Engine error or invalid vectors (count, dimension, values).",
       "503": "Provider inactive, not a loopback local engine, or engine unreachable.",
       "504": "Engine timed out."}, True),
+    ("get", "/v1/embeddings/models", "List the embedding identities this key may use",
+     None, EmbeddingModelList,
+     {**_AUTH_ERRORS, "401": "A client API key is required; the admin key is refused."},
+     True),
     ("post", "/v1/chat/completions", "Create a chat completion (OpenAI-compatible)",
      ChatCompletionRequest, ChatCompletion, _CHAT_ERRORS, True),
     ("post", "/v2/chat/completions", "Same as v1, with the X-API-Version: 2 header",

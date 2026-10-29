@@ -472,3 +472,91 @@ async def test_missing_token_count_is_estimated(emb):
         )
     assert r.status_code == 200
     assert r.json()["usage"]["prompt_tokens"] > 0
+
+
+# -- GET /v1/embeddings/models ------------------------------------------------
+
+
+@pytest.mark.parametrize("auth", [None, "Bearer testkey", "Bearer pb_invalid"])
+async def test_embedding_models_need_a_client_key(emb, auth):
+    client, _ = emb
+    del client.headers["Authorization"]
+    headers = {"Authorization": auth} if auth else {}
+    resp = await client.get("/v1/embeddings/models", headers=headers)
+    assert resp.status_code == 401
+
+
+async def test_embedding_models_lists_only_what_the_key_may_use(emb, monkeypatch):
+    import plugboard.embeddings_api as embeddings_api
+
+    monkeypatch.setattr(embeddings_api, "_KNOWN_DIMENSIONS", {})
+    client, _ = emb
+    resp = await client.get("/v1/embeddings/models")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "object": "list",
+        "data": [
+            {
+                "id": MODEL,
+                "provider_id": "ollama",
+                "available": True,
+                "dimensions": None,
+            }
+        ],
+    }
+    with aioresponses() as mock:
+        _ok(mock, [_vec(0.1, 6)])
+        assert (
+            await client.post("/v1/embeddings", json={"model": MODEL, "input": "x"})
+        ).status_code == 200
+    resp = await client.get("/v1/embeddings/models")
+    assert resp.json()["data"][0]["dimensions"] == 6
+
+
+async def test_embedding_models_flags_unavailable_routes(emb, monkeypatch):
+    import plugboard.apikeys as keys
+
+    client, _ = emb
+    rec = keys.create_key("all-models")
+    client.headers["Authorization"] = f"Bearer {rec['key']}"
+    data = {
+        m["id"]: m["available"]
+        for m in (await client.get("/v1/embeddings/models")).json()["data"]
+    }
+    assert data[MODEL] is True
+    assert data["ollama-lan:" + NATIVE] is False  # not loopback
+    assert data["ollama-off:" + NATIVE] is False  # inactive
+    assert "ghost:" + NATIVE not in data  # unregistered owner
+
+
+async def test_embedding_models_closed_route_is_empty(emb, monkeypatch):
+    client, _ = emb
+    monkeypatch.setenv("PLUGBOARD_EMBEDDING_MODELS", "")
+    resp = await client.get("/v1/embeddings/models")
+    assert resp.status_code == 200 and resp.json()["data"] == []
+
+
+# -- Operator OLLAMA_URL on a private bridge (container deployments) ----------
+
+
+def test_operator_private_ollama_url_is_a_local_engine(monkeypatch):
+    from plugboard import embeddings_api as ea
+
+    monkeypatch.setenv("OLLAMA_URL", "http://172.30.114.1:11434/")
+    assert ea._is_loopback_base("http://172.30.114.1:11434")
+    # Any other private address, port or scheme stays refused.
+    assert not ea._is_loopback_base("http://172.30.114.2:11434")
+    assert not ea._is_loopback_base("http://172.30.114.1:11435")
+    assert not ea._is_loopback_base("https://172.30.114.1:11434")
+    assert not ea._is_loopback_base("http://172.30.114.1:11434/v1")
+
+
+def test_operator_public_ollama_url_is_not_trusted(monkeypatch):
+    from plugboard import embeddings_api as ea
+
+    monkeypatch.setenv("OLLAMA_URL", "http://8.8.8.8:11434")
+    assert not ea._is_loopback_base("http://8.8.8.8:11434")
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.example:11434")
+    assert not ea._is_loopback_base("http://ollama.example:11434")
+    monkeypatch.delenv("OLLAMA_URL")
+    assert not ea._is_loopback_base("http://172.30.114.1:11434")

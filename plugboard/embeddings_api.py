@@ -56,6 +56,9 @@ _LOOPBACK_NAMES = {"localhost"}
 
 log = logging.getLogger(__name__)
 
+# Dimensions seen on served calls, per identity (process memory, best effort).
+_KNOWN_DIMENSIONS: dict[str, int] = {}
+
 
 class EmbeddingRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -104,7 +107,32 @@ def _is_loopback_base(base_url: str) -> bool:
     if host in _LOOPBACK_NAMES:
         return True
     try:
-        return ipaddress.ip_address(host).is_loopback
+        if ipaddress.ip_address(host).is_loopback:
+            return True
+    except ValueError:
+        return False
+    return _is_operator_ollama_url(parts)
+
+
+def _is_operator_ollama_url(parts) -> bool:
+    """The operator's own ``OLLAMA_URL`` (deployment env, not caller input) is
+    also a local engine: in a container the host daemon is reached through a
+    private bridge address, e.g. ``http://172.30.114.1:11434``. Only an exact
+    scheme/host/port match on a private IP literal is accepted."""
+    raw = os.environ.get("OLLAMA_URL", "").strip()
+    if not raw:
+        return False
+    try:
+        ref = urlsplit(raw.rstrip("/"))
+        ref_host = (ref.hostname or "").lower()
+        if not ipaddress.ip_address(ref_host).is_private:
+            return False
+        return (
+            ref.scheme == parts.scheme
+            and ref_host == (parts.hostname or "").lower()
+            and (ref.port or None) == (parts.port or None)
+            and not ref.path.strip("/")
+        )
     except ValueError:
         return False
 
@@ -385,6 +413,7 @@ async def create_embeddings(
     tokens = _prompt_tokens(raw, inputs)
     recorded = _record_usage(record, native, owner, tokens)
     dims = len(vectors[0])
+    _KNOWN_DIMENSIONS[body.model] = dims
     log.info(
         "embeddings served provider=%s model=%s inputs=%d dims=%d tokens=%d key_id=%s elapsed_ms=%d",
         owner,
@@ -409,3 +438,40 @@ async def create_embeddings(
             "usage_recorded": recorded,
         },
     }
+
+
+@router.get("/models")
+async def list_embedding_models(record: dict = Depends(require_embedding_key)):
+    """Identities listed in PLUGBOARD_EMBEDDING_MODELS this key may use.
+
+    Unregistered owners and identities the key may not use are left out.
+    ``available`` says whether the route resolves (owner registered, active,
+    loopback local engine); it does not probe the engine. ``dimensions`` is
+    known once a call was served since the last restart, else null.
+    """
+    from plugboard.config import load_providers
+    from plugboard.model_identity import model_access_matches, registered_model_owner
+
+    provider_ids = [p.get("id", "") for p in load_providers()]
+    allowed = record.get("allowed_models") or []
+    models = []
+    for model in sorted(allowed_identities()):
+        owner = registered_model_owner(model, provider_ids)
+        if owner is None or not model_access_matches(
+            allowed, owner, model[len(owner) + 1 :]
+        ):
+            continue
+        try:
+            resolve_route(model)
+            available = True
+        except HTTPException:
+            available = False
+        models.append(
+            {
+                "id": model,
+                "provider_id": owner,
+                "available": available,
+                "dimensions": _KNOWN_DIMENSIONS.get(model),
+            }
+        )
+    return {"object": "list", "data": models}

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
@@ -1237,6 +1237,74 @@
           "plugboard"
         ],
         "title": "EmbeddingList",
+        "type": "object"
+      },
+      "EmbeddingModel": {
+        "properties": {
+          "id": {
+            "description": "Exact identity to send as `model`.",
+            "title": "Id",
+            "type": "string"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider Id"
+          },
+          "available": {
+            "description": "The route resolves (registered, active, loopback engine); no probe.",
+            "title": "Available",
+            "type": "boolean"
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Known once a call was served since the restart.",
+            "title": "Dimensions"
+          }
+        },
+        "required": [
+          "id",
+          "available"
+        ],
+        "title": "EmbeddingModel",
+        "type": "object"
+      },
+      "EmbeddingModelList": {
+        "properties": {
+          "object": {
+            "const": "list",
+            "default": "list",
+            "title": "Object",
+            "type": "string"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/EmbeddingModel"
+            },
+            "title": "Data",
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "EmbeddingModelList",
         "type": "object"
       },
       "EmbeddingRequest": {
@@ -2866,6 +2934,49 @@
           },
           "504": {
             "description": "Engine timed out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/embeddings/models": {
+      "get": {
+        "summary": "List the embedding identities this key may use",
+        "operationId": "get_v1_embeddings_models",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbeddingModelList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A client API key is required; the admin key is refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit or monthly spending limit exceeded.",
             "content": {
               "application/json": {
                 "schema": {
