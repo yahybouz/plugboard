@@ -4720,13 +4720,14 @@ _PUBLIC_DASHBOARD_HTML = {"portal.html"}
 
 _LOGIN_HTML_TEMPLATE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Plugboard — Login</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Inter',-apple-system,sans-serif;background:#f8fafc;color:#0f172a;
-display:flex;align-items:center;justify-content:center;height:100vh}
-.box{background:#fff;padding:2.5rem;border-radius:18px;width:400px;max-width:92vw;
+display:flex;align-items:center;justify-content:center;min-height:100vh;min-height:100dvh;padding:1rem}
+.box{background:#fff;padding:clamp(1.25rem,6vw,2.5rem);border-radius:18px;width:400px;max-width:100%;margin:auto;flex-shrink:0;
 text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.07),0 8px 28px rgba(0,0,0,.08);
 border:1px solid rgba(0,0,0,.08)}
 .logo{width:52px;height:52px;border-radius:14px;display:inline-grid;place-items:center;
@@ -4742,7 +4743,8 @@ button{width:100%;padding:.6rem;background:#2563eb;color:#fff;border:none;
 border-radius:8px;cursor:pointer;font-size:.9rem;font-weight:600;font-family:inherit;
 margin-top:.25rem;transition:background .18s;box-shadow:0 1px 3px rgba(37,99,235,.2)}
 button:hover{background:#1d4ed8}
-.err{color:#dc2626;font-size:.82rem;min-height:1.2em;margin-top:.25rem}
+.err{color:#dc2626;font-size:.82rem;min-height:1.2em;margin-top:.25rem;overflow-wrap:anywhere}
+@media(max-width:600px),(any-pointer:coarse){input{font-size:1rem}input,button{min-height:44px}}
 </style></head><body>
 <div class="box">
 <div class="logo">E</div>
