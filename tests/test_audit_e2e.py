@@ -735,6 +735,69 @@ class TestCacheBehavior:
         assert r2.headers.get("x-cache") == "HIT"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("param", "first", "second"),
+        [
+            (
+                "tools",
+                [{"type": "function", "function": {"name": "a", "parameters": {}}}],
+                [{"type": "function", "function": {"name": "b", "parameters": {}}}],
+            ),
+            ("tool_choice", "auto", "none"),
+            ("response_format", {"type": "text"}, {"type": "json_object"}),
+            ("seed", 1, 2),
+            ("n", 1, 2),
+            ("reasoning_effort", "low", "high"),
+            ("presence_penalty", 0, 1),
+        ],
+    )
+    async def test_e06b_output_params_are_part_of_the_key(
+        self, api, param, first, second
+    ):
+        """BUG-4 — a different tool list, format, seed, n or effort is a new
+        question: the second call must reach the provider (MISS)."""
+        base = {
+            "model": "test-provider:fake:model-v1",
+            "messages": [{"role": "user", "content": f"Cache key {param}"}],
+        }
+        for value in (first, second):
+            with aioresponses() as mock:
+                mock.post(
+                    "http://fake-llm.test/v1/chat/completions",
+                    payload=FAKE_COMPLETION,
+                    status=200,
+                )
+                resp = await api.post(
+                    "/v1/chat/completions",
+                    headers=ADMIN,
+                    json={**base, param: value},
+                )
+            assert resp.status_code == 200
+            assert resp.headers.get("x-cache") == "MISS", (param, value)
+        # Same value again: now a HIT (the key is stable).
+        again = await api.post(
+            "/v1/chat/completions", headers=ADMIN, json={**base, param: second}
+        )
+        assert again.headers.get("x-cache") == "HIT"
+
+    def test_e06c_key_params_skip_transport_fields_only(self):
+        """Streaming and cache switches do not split the key; any other
+        field, known or not, does."""
+        from plugboard.cache import key_params
+
+        body = {
+            "model": "m",
+            "messages": [],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "temperature": None,
+            "seed": 3,
+            "tools": [],
+            "some_future_param": "x",
+        }
+        assert key_params(body) == {"seed": 3, "tools": [], "some_future_param": "x"}
+
+    @pytest.mark.asyncio
     async def test_e07_cache_false_bypasses_cache(self, api):
         """E-07 — cache=false → X-Cache: MISS systématique."""
         body = {

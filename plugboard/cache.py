@@ -107,8 +107,23 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
+# Request fields that never change the answer: the model and messages are
+# keyed on their own; streaming and cache switches only change delivery.
+# Everything else (tools, response_format, seed, n, reasoning_effort… and
+# fields unknown today) is part of the key: a missed hit costs one call, a
+# wrong hit returns another question's answer.
+_KEY_IGNORED = frozenset({"model", "messages", "stream", "stream_options", "cache"})
+
+
+def key_params(body: Dict[str, Any]) -> Dict[str, Any]:
+    """The request fields that ``compute_cache_key`` must include."""
+    return {k: v for k, v in body.items() if k not in _KEY_IGNORED and v is not None}
+
+
 def compute_cache_key(model: str, messages: list, client_id: str = "", **params) -> str:
     """Compute a deterministic cache key from client + model + messages + params.
+
+    Every non-None param is included (pass ``**key_params(body)``).
 
     SEC-001 v2.8.2: ``client_id`` is folded into the hash so two tenants
     asking the same question never collide on the PRIMARY KEY. Empty
@@ -121,10 +136,9 @@ def compute_cache_key(model: str, messages: list, client_id: str = "", **params)
         "model": model,
         "messages": messages,
     }
-    # Include key params that affect output
-    for k in ("temperature", "max_tokens", "top_p", "stop"):
-        if k in params and params[k] is not None:
-            payload[k] = params[k]
+    for k, v in params.items():
+        if v is not None:
+            payload[k] = v
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=True)
     return hashlib.sha256(raw.encode()).hexdigest()
 
