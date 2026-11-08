@@ -259,6 +259,9 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         # new writes always set the caller's client_id.
         "ALTER TABLE semantic_cache ADD COLUMN client_id TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE semantic_bands ADD COLUMN client_id TEXT NOT NULL DEFAULT ''",
+        # BUG-5: exact fingerprint of the context around the last question.
+        # Old rows get '' and never match: they were keyed on it alone.
+        "ALTER TABLE semantic_cache ADD COLUMN context_key TEXT NOT NULL DEFAULT ''",
     ):
         try:
             conn.execute(ddl)
@@ -289,6 +292,44 @@ def _extract_user_prompt(messages: List[Dict[str, Any]]) -> str:
                 parts = [p.get("text", "") for p in content if p.get("type") == "text"]
                 return " ".join(parts)
     return ""
+
+
+def _context_key(
+    messages: List[Dict[str, Any]], params: Optional[Dict[str, Any]] = None
+) -> str:
+    """Exact fingerprint of everything but the text of the last user message.
+
+    Only that text is compared approximately. The system prompt, earlier
+    turns, messages after it, its non-text parts (images…) and the request
+    params (tools, response_format, seed…) must be identical for a hit.
+    """
+    msgs = list(messages or [])
+    last = max(
+        (
+            i
+            for i, m in enumerate(msgs)
+            if isinstance(m, dict) and m.get("role") == "user"
+        ),
+        default=None,
+    )
+    question: Dict[str, Any] = {}
+    if last is not None:
+        question = dict(msgs[last])
+        content = question.pop("content", "")
+        if isinstance(content, list):
+            question["parts"] = [
+                p
+                for p in content
+                if not (isinstance(p, dict) and p.get("type") == "text")
+            ]
+        msgs = msgs[:last] + msgs[last + 1 :]
+    payload = {
+        "context": msgs,
+        "question": question,
+        "params": {k: v for k, v in (params or {}).items() if v is not None},
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=True, default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def _shingles(text: str, n: int = 3) -> Set[str]:
@@ -360,8 +401,12 @@ def lookup_similar(
     messages: List[Dict[str, Any]],
     threshold: Optional[float] = None,
     client_id: str = "",
+    params: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Return the best cached response whose prompt is semantically similar.
+
+    Only the last user message is compared approximately; its context
+    (``_context_key``: system prompt, history, ``params``) must match.
 
     Returns None if the feature is disabled, the prompt is too short, or no
     candidate clears the similarity threshold. Hits bump the hit_count.
@@ -384,6 +429,7 @@ def lookup_similar(
     sig = _minhash(shingles)
     bands = _band_keys(sig)
     cid = client_id or ""
+    ctx = _context_key(messages, params)
 
     conn = _get_conn()
     try:
@@ -413,11 +459,11 @@ def lookup_similar(
         entries_query = (
             "SELECT cache_key, signature, response, created_at, ttl "  # nosec B608
             "FROM semantic_cache "
-            "WHERE client_id = ? AND cache_key IN (" + ph + ")"
+            "WHERE client_id = ? AND context_key = ? AND cache_key IN (" + ph + ")"
         )
         entries = conn.execute(
             entries_query,
-            (cid, *candidate_keys),
+            (cid, ctx, *candidate_keys),
         ).fetchall()
 
         best_score = 0.0
@@ -458,8 +504,13 @@ def store(
     ttl: int = 0,
     cost_usd: float = 0.0,
     client_id: str = "",
+    params: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Index this prompt/response pair. Returns cache_key on success.
+
+    ``params`` are the request fields that change the answer (see
+    ``cache.key_params``); with the conversation around the last user
+    message they form the exact ``context_key`` a lookup must share.
 
     The MinHash signature + LSH bands are written synchronously. To also
     populate the embedding column (phase 2), call ``store_async`` from an
@@ -485,9 +536,12 @@ def store(
 
     cid = client_id or ""
     prompt_norm = _normalize(prompt)
+    ctx = _context_key(messages, params)
     # SEC-001: client_id is part of the cache_key — same prompt + model from
     # two tenants gets two distinct entries, no PRIMARY KEY collision.
-    cache_key = hashlib.sha256(f"{cid}::{model}::{prompt_norm}".encode()).hexdigest()
+    cache_key = hashlib.sha256(
+        f"{cid}::{model}::{ctx}::{prompt_norm}".encode()
+    ).hexdigest()
     prompt_hash = hashlib.sha256(prompt_norm.encode()).hexdigest()
     clean = {k: v for k, v in response.items() if k != "_cache"}
 
@@ -508,12 +562,13 @@ def store(
         conn.execute("DELETE FROM semantic_cache WHERE cache_key = ?", (cache_key,))
         conn.execute(
             """INSERT INTO semantic_cache
-               (cache_key, client_id, model, signature, band_keys, prompt_hash,
-                response, created_at, ttl, hit_count, cost_saved)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
+               (cache_key, client_id, context_key, model, signature, band_keys,
+                prompt_hash, response, created_at, ttl, hit_count, cost_saved)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)""",
             (
                 cache_key,
                 cid,
+                ctx,
                 model,
                 _pack_signature(sig),
                 json.dumps(bands),
@@ -678,8 +733,9 @@ def _cosine_lookup(
     query_vec: List[float],
     threshold: float,
     client_id: str = "",
+    context_key: str = "",
 ) -> Optional[Dict[str, Any]]:
-    """Linear scan of stored embeddings for the same model + client. numpy required.
+    """Linear scan of stored embeddings for the same model + client + context.
 
     Returns the highest-scoring entry above ``threshold`` or None. Falls back
     to None silently if numpy is missing. ``client_id`` enforces multi-tenant
@@ -694,8 +750,9 @@ def _cosine_lookup(
                FROM semantic_cache
                WHERE model = ?
                  AND client_id = ?
+                 AND context_key = ?
                  AND embedding IS NOT NULL""",
-            (model, cid),
+            (model, cid, context_key),
         ).fetchall()
         if not rows:
             return None
@@ -780,6 +837,7 @@ async def lookup_similar_async(
     threshold: Optional[float] = None,
     embed_threshold: Optional[float] = None,
     client_id: str = "",
+    params: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """MinHash sync first; on miss, fall back to embedding cosine similarity.
 
@@ -792,7 +850,9 @@ async def lookup_similar_async(
       - or the embedding API call fails.
     In all those cases callers see the same result as phase 1.
     """
-    hit = lookup_similar(model, messages, threshold=threshold, client_id=client_id)
+    hit = lookup_similar(
+        model, messages, threshold=threshold, client_id=client_id, params=params
+    )
     if hit is not None:
         return hit
     if not embed_is_enabled():
@@ -804,7 +864,13 @@ async def lookup_similar_async(
     if vec is None:
         return None
     thr = embed_threshold if embed_threshold is not None else _EMBED_THRESHOLD
-    return _cosine_lookup(model, vec, thr, client_id=client_id)
+    return _cosine_lookup(
+        model,
+        vec,
+        thr,
+        client_id=client_id,
+        context_key=_context_key(messages, params),
+    )
 
 
 # Tracks fire-and-forget embedding tasks. Tests use ``flush_pending`` to
@@ -819,6 +885,7 @@ async def store_async(
     ttl: int = 0,
     cost_usd: float = 0.0,
     client_id: str = "",
+    params: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Sync MinHash store + fire-and-forget embedding attach.
 
@@ -827,7 +894,13 @@ async def store_async(
     ``client_id`` is propagated to ``store`` for multi-tenant isolation.
     """
     cache_key = store(
-        model, messages, response, ttl=ttl, cost_usd=cost_usd, client_id=client_id
+        model,
+        messages,
+        response,
+        ttl=ttl,
+        cost_usd=cost_usd,
+        client_id=client_id,
+        params=params,
     )
     if cache_key and embed_is_enabled():
         prompt = _extract_user_prompt(messages)

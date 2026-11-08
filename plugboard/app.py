@@ -1561,6 +1561,7 @@ async def chat_completions(
                         body.get("model", ""),
                         body.get("messages", []),
                         client_id=client_id or "",
+                        params=key_params(body),
                     )
                     if sem_cached:
                         meta = sem_cached.get("_cache") or {}
@@ -1787,6 +1788,7 @@ async def chat_completions(
                     )
                     try:
                         from plugboard import semantic_cache as _sem
+                        from plugboard.cache import key_params as _cache_key_params
 
                         await _sem.store_async(
                             body.get("model", ""),
@@ -1794,6 +1796,7 @@ async def chat_completions(
                             result,
                             cost_usd=_cost,
                             client_id=client_id or "",
+                            params=_cache_key_params(body),
                         )
                     except Exception as exc:
                         log.warning("Semantic cache write error (non-fatal): %s", exc)
@@ -2078,6 +2081,7 @@ async def chat_completions(
             )
             try:
                 from plugboard import semantic_cache as _sem
+                from plugboard.cache import key_params as _cache_key_params
 
                 await _sem.store_async(
                     body.get("model", ""),
@@ -2085,6 +2089,7 @@ async def chat_completions(
                     result,
                     cost_usd=cost,
                     client_id=client_id or "",
+                    params=_cache_key_params(body),
                 )
             except Exception as exc:
                 log.warning("Semantic cache write error (non-fatal): %s", exc)

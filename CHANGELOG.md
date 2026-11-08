@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Semantic cache answered from another conversation**: only the last user message was compared, so the same question under another system prompt, after another history, with other images or other `tools`/`response_format` got the stored reply. Only that last question is now compared approximately; everything around it must be identical. Entries stored before are no longer served.
 - **Response cache served another question's answer**: the cache key covered only `temperature`, `max_tokens`, `top_p` and `stop`, so the same messages with other `tools`, `tool_choice`, `response_format`, `seed`, `n`, `reasoning_effort` or penalties got the first cached reply. Every request field now counts, except `stream`, `stream_options` and `cache`.
 - **Admin MFA with an unreadable secret** (key changed without rotation): codes are refused with a clear log line instead of an HTTP 500.
 - **Usage of an interrupted stream**: a streamed answer cut short by the client or by an upstream read error is now billed from what was received; before, it recorded no usage and escaped `monthly_limit_usd`.
