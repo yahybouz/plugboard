@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **MFA step-up**: once a TOTP secret is enrolled, disabling it (`DELETE /admin/mfa`) or rotating it (`POST /admin/mfa/setup`) needs a current code from it (`X-Plugboard-Admin-TOTP` header, or `current_code` in the setup body), even from an open admin session; before, any session, an auto-login one included, could remove the second factor. A code already checked by the request's own authentication counts ([guide](docs/guide/monitoring.md#admin-api-with-mfa)).
+
 ### Added
 
 - **`ENCRYPTION_KEY` rotation** (`make rotate-encryption-key`, `scripts/rotate_encryption_key.py`): re-encrypts provider tokens, OAuth credentials and the admin MFA secret under a new key, after a backup in `data/backups/rekey-<time>/`. All or nothing: if one secret cannot be read with the current key, nothing is written. Can be run again after an interruption. The new key is generated into a 0600 file and never printed; `data/.encryption_key` is replaced when `ENCRYPTION_KEY` is not set ([guide](docs/guide/configuration.md#changing-encryption_key)).

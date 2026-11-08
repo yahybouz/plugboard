@@ -989,6 +989,9 @@ def _admin_request_auth(request: Request) -> str:
     if not check_auth_rate_limit(client_ip):
         return "locked"
     if _mfa.verify(code):
+        # The code is single-use: remember it was proven in this request, so
+        # an MFA change made with it (step-up) does not ask for it again.
+        request.state.admin_mfa_verified = True
         return "ok"
     locked = record_auth_failure(client_ip)
     _audit(
@@ -997,6 +1000,49 @@ def _admin_request_auth(request: Request) -> str:
         ip=client_ip,
     )
     return "mfa_required"
+
+
+def _require_mfa_step_up(request: Request, code: Optional[str] = None) -> None:
+    """Ask for a current TOTP code before the second factor is changed.
+
+    Once a secret is enrolled, rotating or removing it needs a code from the
+    current secret, even from an open admin session (an auto-login session
+    included): holding a session must not be enough to drop the factor.
+    The code comes from ``code`` (request body) or the TOTP header; a code
+    already verified by this request's authentication counts.
+    """
+    from plugboard import admin_mfa as _mfa
+
+    if not _mfa.is_enrolled():
+        return
+    if getattr(request.state, "admin_mfa_verified", False):
+        return
+    code = (code or request.headers.get(_ADMIN_TOTP_HEADER, "")).strip()
+    client_ip = request.client.host if request.client else "unknown"
+    if not code:
+        _audit("admin.mfa.step_up_missing", details=f"IP: {client_ip}", ip=client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"A current MFA code is required (body or {_ADMIN_TOTP_HEADER})",
+        )
+    from plugboard.ratelimit import check_auth_rate_limit, record_auth_failure
+
+    if not check_auth_rate_limit(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed attempts",
+        )
+    if _mfa.verify(code):
+        return
+    locked = record_auth_failure(client_ip)
+    _audit(
+        "admin.mfa.step_up_failed",
+        details=f"IP: {client_ip}, locked={locked}",
+        ip=client_ip,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN, detail="Invalid MFA code"
+    )
 
 
 def _require_admin(request: Request) -> None:
@@ -4852,6 +4898,8 @@ class AdminMfaSetupRequest(BaseModel):
 
     secret: str
     code: str
+    # Code from the secret being replaced; required once one is enrolled.
+    current_code: Optional[str] = None
 
 
 class AdminMfaVerify(BaseModel):
@@ -5227,9 +5275,11 @@ async def admin_mfa_setup(
     """Step 2 of enrolment: the admin submits the secret from /begin plus a
     code read from their authenticator app. On success the secret is
     Fernet-encrypted and written to disk. Subsequent logins will demand
-    TOTP codes once PLUGBOARD_ADMIN_MFA_REQUIRED=1."""
+    TOTP codes once PLUGBOARD_ADMIN_MFA_REQUIRED=1. Replacing an enrolled
+    secret also needs a current code from it (``current_code``)."""
     from plugboard import admin_mfa as _mfa
 
+    _require_mfa_step_up(request, body.current_code)
     # Validate the code matches the *submitted* secret (not any previously
     # stored one — we might be rotating). We don't call _mfa.verify() here
     # because that reads from disk. The code is then recorded as used.
@@ -5256,9 +5306,14 @@ async def admin_mfa_verify(body: AdminMfaVerify, _: None = Depends(_require_admi
 
 @app.delete("/admin/mfa", include_in_schema=False, status_code=204)
 async def admin_mfa_disable(request: Request, _: None = Depends(_require_admin)):
-    """Remove the stored TOTP secret. Useful for rotation or to disable MFA."""
+    """Remove the stored TOTP secret. Useful for rotation or to disable MFA.
+
+    Needs a current code in the X-Plugboard-Admin-TOTP header while a secret
+    is enrolled (lost authenticator: scripts/admin_mfa_setup.py --rotate on
+    the host)."""
     from plugboard import admin_mfa as _mfa
 
+    _require_mfa_step_up(request)
     _mfa.disable()
     _audit(
         "admin.mfa.disabled",
