@@ -197,12 +197,31 @@ def _wait_health(
     )
 
 
+_E2E_DATA_DIR: "Path | None" = None
+
+
+def login_url(base_url: str, next_path: str = "") -> str:
+    """The local sign-in link ``make dev`` opens: ``/login?token=…``.
+
+    Auto-login needs the single-use token the server writes to
+    ``data/.login_token`` at start; each successful use replaces it, so
+    read it again for every new browser context.
+    """
+    if _E2E_DATA_DIR is None:
+        raise RuntimeError("e2e_server is not running")
+    token = (_E2E_DATA_DIR / ".login_token").read_text(encoding="utf-8").strip()
+    url = f"{base_url}/login?token={token}"
+    return url + (f"&next={next_path}" if next_path else "")
+
+
 @pytest.fixture(scope="session")
 def e2e_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     """Boot an isolated Plugboard server; yield its base URL; tear it down."""
     from cryptography.fernet import Fernet  # local import: only the harness needs it
 
+    global _E2E_DATA_DIR
     data_dir = tmp_path_factory.mktemp("e2e-data")
+    _E2E_DATA_DIR = data_dir
     enc_key = Fernet.generate_key().decode("ascii")
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
@@ -314,7 +333,7 @@ async def _open_logged_in(browser, base_url: str, *, bypass_csp: bool = False):
         lambda msg: console_errors.append(msg.text) if msg.type == "error" else None,
     )
     page.on("pageerror", lambda exc: page_errors.append(str(exc)))
-    await page.goto(base_url, wait_until="domcontentloaded", timeout=20_000)
+    await page.goto(login_url(base_url), wait_until="domcontentloaded", timeout=20_000)
     # Auto-login on localhost reveals #app (app.js strips .hidden once authed).
     await page.wait_for_selector("#app:not(.hidden)", timeout=15_000)
     return context, Dashboard(

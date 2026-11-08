@@ -96,8 +96,8 @@
       ev.preventDefault();
       try {
         await api("POST", "/admin/suivi/tickets/" + ticket.id + "/preuves", { type: type.value, valeur: value.value });
-        say("Preuve ajoutée au ticket #" + ticket.id + ".");
         await load();
+        say("Preuve ajoutée au ticket #" + ticket.id + ".");
       } catch (e) { say(e.message, true); }
     });
     box.appendChild(form);
@@ -164,8 +164,8 @@
     }
     try {
       await api("PATCH", "/admin/suivi/tickets/" + ticket.id, body);
-      say("Ticket #" + ticket.id + " → " + (LABELS[target] || target) + ".");
       await load();
+      say("Ticket #" + ticket.id + " → " + (LABELS[target] || target) + ".");
     } catch (e) {
       select.value = ticket.statut;
       say(e.message, true);
@@ -182,8 +182,8 @@
         type: document.getElementById("new-type").value,
       });
       titre.value = "";
-      say("Ticket #" + t.id + " créé.");
       await load();
+      say("Ticket #" + t.id + " créé.");
     } catch (e) { say(e.message, true); }
   });
 
@@ -192,8 +192,8 @@
     button.disabled = true;
     try {
       const c = await api("POST", "/admin/suivi/import");
-      say("Import : " + c.crees + " créé(s), " + c.mis_a_jour + " passé(s) en revue, " + c.inchanges + " inchangé(s).");
       await load();
+      say("Import : " + c.crees + " créé(s), " + c.mis_a_jour + " passé(s) en revue, " + c.inchanges + " inchangé(s).");
     } catch (e) { say(e.message, true); }
     finally { button.disabled = false; }
   });

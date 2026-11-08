@@ -64,3 +64,34 @@ async def test_tab_has_no_blocking_a11y_violations(a11y_dashboard, axe_script, t
     assert not blocking, (
         f"{tab}: {len(blocking)} blocking a11y violation(s):\n{_format(blocking)}"
     )
+
+
+async def test_suivi_has_no_blocking_a11y_violations(
+    a11y_dashboard, axe_script, e2e_server
+):
+    page = a11y_dashboard.page
+    # Cards in several states, so their tags and reasons are audited too.
+    api = f"{e2e_server}/admin/suivi/tickets"
+    for prio, typ in (("P0", "bug"), ("P1", "securite")):
+        resp = await page.request.post(
+            api,
+            data={
+                "titre": f"a11y {prio}",
+                "priorite": prio,
+                "type": typ,
+                "description": "Description",
+            },
+        )
+        assert resp.ok, await resp.text()
+    blocked = (await resp.json())["id"]
+    resp = await page.request.patch(
+        f"{api}/{blocked}", data={"statut": "bloque", "motif": "Accès admin"}
+    )
+    assert resp.ok, await resp.text()
+    await page.goto(f"{e2e_server}/suivi", wait_until="domcontentloaded")
+    await page.wait_for_selector('#suivi-board[aria-busy="false"]', timeout=15_000)
+    violations = await _audit(page, axe_script)
+    blocking = [v for v in violations if v.get("impact") in _BLOCKING]
+    assert not blocking, (
+        f"/suivi: {len(blocking)} blocking a11y violation(s):\n{_format(blocking)}"
+    )

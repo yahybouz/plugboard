@@ -25,7 +25,7 @@ body.suivi { padding: 1rem; max-width: 100%; overflow-x: hidden; }
 .suivi-new input[type="text"] { flex: 1 1 16rem; min-width: 0; min-height: 44px; }
 .suivi-new select { width: auto; min-height: 44px; }
 
-.suivi-board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(15rem, 1fr); gap: 0.75rem; overflow-x: auto; padding-bottom: 0.5rem; }
+.suivi-board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(11rem, 1fr); gap: 0.75rem; overflow-x: auto; padding-bottom: 0.5rem; }
 
 .suivi-col { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; padding: 0.5rem; min-width: 0; }
 .suivi-col-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-height: 44px; cursor: pointer; list-style: none; padding: 0 0.25rem; }
@@ -33,7 +33,6 @@ body.suivi { padding: 1rem; max-width: 100%; overflow-x: hidden; }
 .suivi-col-head h2 { font-size: 0.95rem; margin: 0; }
 .suivi-count { font-size: 0.8rem; color: var(--text-muted); background: var(--bg-card); border-radius: 999px; padding: 0.05rem 0.55rem; }
 .suivi-col[data-statut="bloque"] .suivi-col-head h2 { color: var(--red); }
-.suivi-col[data-statut="termine"] .suivi-col-head h2 { color: var(--green); }
 
 .suivi-col-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
 .suivi-empty { color: var(--text-muted); font-size: 0.85rem; padding: 0.25rem; }
