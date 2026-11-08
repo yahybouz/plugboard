@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Usage of an interrupted stream**: a streamed answer cut short by the client or by an upstream read error is now billed from what was received; before, it recorded no usage and escaped `monthly_limit_usd`.
+
 ## [4.4.1] — 2026-11-08
 
 ### Fixed

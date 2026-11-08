@@ -1126,6 +1126,32 @@ def _check_client_rpm(
 # -- Streaming billing -------------------------------------------------------
 
 
+async def _aclose_quietly(agen: Any) -> None:
+    """Close an upstream async generator, even inside a cancelled task.
+
+    Starlette cancels the response task when the client disconnects, and
+    keeps cancelling it on every await. The close runs in its own task, so
+    the upstream generator still releases its HTTP connection; if we are
+    cancelled meanwhile, the cancellation propagates and the close finishes
+    on its own.
+    """
+    aclose = getattr(agen, "aclose", None)
+    if aclose is None:
+        return
+    task = _asyncio.ensure_future(aclose())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    # Retrieve the result so an error in a close nobody awaits is not
+    # reported as "exception never retrieved".
+    task.add_done_callback(lambda t: t.cancelled() or t.exception())
+    try:
+        await _asyncio.shield(task)
+    except _asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.debug("Upstream stream close error (ignored): %s", exc)
+
+
 def _bill_streaming(
     client_id: str, body: dict, raw_sse: bytes, key_id: str = ""
 ) -> Dict[str, Any]:
@@ -1839,13 +1865,34 @@ async def chat_completions(
             tail_buf = bytearray(
                 first_chunk[done_in_first:] if done_in_first != -1 else b""
             )
-            async for chunk in rest:
-                accumulated.extend(chunk)
-                tail_buf.extend(chunk)
-                if len(tail_buf) > TAIL:
-                    overflow = bytes(tail_buf[:-TAIL])
-                    yield overflow
-                    del tail_buf[:-TAIL]
+            completed = False
+            try:
+                async for chunk in rest:
+                    accumulated.extend(chunk)
+                    tail_buf.extend(chunk)
+                    if len(tail_buf) > TAIL:
+                        overflow = bytes(tail_buf[:-TAIL])
+                        yield overflow
+                        del tail_buf[:-TAIL]
+                completed = True
+            finally:
+                if not completed:
+                    # Client gone (cancellation or generator close) or upstream
+                    # read error: the provider has already generated these
+                    # tokens, so record them before letting the error through.
+                    if cid:
+                        try:
+                            _bill_streaming(
+                                cid, req_body, bytes(accumulated), key_id=kid
+                            )
+                            log.info(
+                                "Stream interrupted: billed the partial answer "
+                                "(%d bytes)",
+                                len(accumulated),
+                            )
+                        except Exception as exc:
+                            log.warning("Stream billing error (non-fatal): %s", exc)
+                    await _aclose_quietly(rest)
             # At this point `tail_buf` holds the last <=TAIL bytes and has
             # NOT been yielded yet.
 
