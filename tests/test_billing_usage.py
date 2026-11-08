@@ -807,18 +807,31 @@ def test_purge_old_usage(tmp_path, monkeypatch):
     monkeypatch.setattr(u, "_DATA_DIR", tmp_path)
     monkeypatch.setattr(u, "_DB_PATH", tmp_path / "usage.db")
 
-    # Insert entries for old months and a recent month
-    for month_val in ["2024_01", "2024_06", "2026_04"]:
+    from datetime import datetime, timezone
+
+    def months_ago(n):
+        # Relative to today, so the test does not expire with the calendar.
+        now = datetime.now(timezone.utc)
+        y, m = divmod(now.year * 12 + now.month - 1 - n, 12)
+        return f"{y:04d}_{m + 1:02d}"
+
+    very_old, just_too_old, oldest_kept, recent = (
+        months_ago(24),
+        months_ago(7),
+        months_ago(6),
+        months_ago(0),
+    )
+    for month_val in (very_old, just_too_old, oldest_kept, recent):
         monkeypatch.setattr(b, "current_pricing_month", lambda m=month_val: m)
         u.append_usage("c", "m", "p", 10, 5, month_val, 0.0)
 
     deleted = u.purge_old_usage(keep_months=6)
-    assert "2024_01" in deleted
-    assert "2024_06" in deleted
-    assert "2026_04" not in deleted
-    # Verify old entries are gone, recent remain
-    assert len(u.get_usage("2024_01")) == 0
-    assert len(u.get_usage("2026_04")) == 1
+    assert sorted(deleted) == sorted([very_old, just_too_old])
+    # Old entries are gone; a month exactly keep_months old is kept.
+    assert len(u.get_usage(very_old)) == 0
+    assert len(u.get_usage(just_too_old)) == 0
+    assert len(u.get_usage(oldest_kept)) == 1
+    assert len(u.get_usage(recent)) == 1
 
 
 def test_migrate_json_to_sqlite(tmp_path, monkeypatch):
