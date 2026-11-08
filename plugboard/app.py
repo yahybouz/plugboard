@@ -1439,6 +1439,47 @@ def _for_caller(completion: Dict[str, Any], client_id: Optional[str]) -> Dict[st
     }
 
 
+def _cli_error_response(
+    exc: CliSubprocessError, client_id: Optional[str]
+) -> JSONResponse:
+    """502 for a failed CLI provider.
+
+    The CLI's message, stderr, pid and exit code can carry local paths,
+    account names or tokens: only the admin (dashboard Playground, admin
+    key) gets them. A client key gets a reference to the server log entry.
+    """
+    ref = secrets.token_hex(4)
+    log.warning(
+        "cli provider error ref=%s provider=%s model=%s exit=%s pid=%s: %s | stderr=%s",
+        ref,
+        exc.provider_name,
+        exc.model_id,
+        exc.exit_code,
+        exc.pid,
+        exc,
+        exc.stderr,
+    )
+    if client_id == "admin":
+        content = {
+            "detail": str(exc),
+            "exit_code": exc.exit_code,
+            "stderr": exc.stderr,
+            "pid": exc.pid,
+            "provider_name": exc.provider_name,
+            "model_id": exc.model_id,
+            "error_ref": ref,
+        }
+    else:
+        content = {
+            "detail": f"The {exc.provider_name or 'CLI'} provider failed"
+            f" (reference {ref} in the gateway log).",
+            "error_ref": ref,
+            "provider_name": exc.provider_name,
+            "model_id": exc.model_id,
+        }
+    return JSONResponse(status_code=502, content=content)
+
+
 @app.post("/v1/chat/completions", dependencies=[Depends(_inflight_chat_dep)])
 async def chat_completions(
     request: Request,
@@ -1683,6 +1724,9 @@ async def chat_completions(
             except Exception as exc:
                 log.error("subprocess stream forward error: %s", exc)
                 err_str = str(exc)
+                # Before the timeout test: a CLI message quotes its stderr.
+                if isinstance(exc, CliSubprocessError):
+                    return _cli_error_response(exc, client_id)
                 if "timeout" in err_str.lower():
                     return JSONResponse(
                         status_code=503,
@@ -1691,18 +1735,6 @@ async def chat_completions(
                     )
                 if isinstance(exc, AuthError):
                     raise HTTPException(status_code=exc.status_code, detail=err_str)
-                if isinstance(exc, CliSubprocessError):
-                    return JSONResponse(
-                        status_code=502,
-                        content={
-                            "detail": err_str,
-                            "exit_code": exc.exit_code,
-                            "stderr": exc.stderr,
-                            "pid": exc.pid,
-                            "provider_name": exc.provider_name,
-                            "model_id": exc.model_id,
-                        },
-                    )
                 raise HTTPException(status_code=502, detail=err_str)
 
             # Billing + cache (mirror non-stream path)
@@ -1997,6 +2029,9 @@ async def chat_completions(
     except Exception as exc:
         log.error("forward error: %s", exc)
         err_str = str(exc)
+        # Before the timeout test: a CLI message quotes its stderr.
+        if isinstance(exc, CliSubprocessError):
+            return _cli_error_response(exc, client_id)
         # 503 + Retry-After for timeouts (client can retry), 502 for other errors
         if "timeout" in err_str.lower():
             return JSONResponse(
@@ -2006,18 +2041,6 @@ async def chat_completions(
             )
         if isinstance(exc, AuthError):
             raise HTTPException(status_code=exc.status_code, detail=err_str)
-        if isinstance(exc, CliSubprocessError):
-            return JSONResponse(
-                status_code=502,
-                content={
-                    "detail": err_str,
-                    "exit_code": exc.exit_code,
-                    "stderr": exc.stderr,
-                    "pid": exc.pid,
-                    "provider_name": exc.provider_name,
-                    "model_id": exc.model_id,
-                },
-            )
         raise HTTPException(status_code=502, detail=err_str)
     elapsed = time.perf_counter() - t0
     log.info("<- OK | model=%s | %.2fs", body.get("model", "?"), elapsed)

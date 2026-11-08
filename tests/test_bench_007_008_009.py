@@ -101,6 +101,91 @@ async def test_stream_bypass_cli_error_detail(client, monkeypatch):
     assert body["provider_name"] == "gemini"
 
 
+# ── BUG-6: a client key never sees the CLI process details ────────────────
+
+
+_LEAKY = CliSubprocessError(
+    "CLI 'gemini' exited 1: secret-path /home/op/.config token=abc123",
+    exit_code=1,
+    stderr="secret-path /home/op/.config token=abc123",
+    pid=4242,
+    provider_name="gemini",
+    model_id="gemini-2.5-flash",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_cli_error_hides_process_details_from_client_keys(
+    client, tmp_path, monkeypatch, caplog, stream
+):
+    import logging
+
+    import plugboard.apikeys as ak
+    from plugboard import app as app_mod
+    from plugboard.router import resolve_provider_and_model
+
+    monkeypatch.setattr(ak, "_DATA_DIR", tmp_path)
+    monkeypatch.setattr(ak, "KEYS_FILE", tmp_path / "api_keys.json")
+    monkeypatch.setattr(ak, "KEYS_LOCK", tmp_path / "api_keys.json.lock")
+    key = ak.create_key("cli-client", "test")["key"]
+
+    def _fake_resolve(model_str):
+        p, m = resolve_provider_and_model(model_str)
+        p["auth_source"] = "subprocess:gemini"
+        return p, m
+
+    async def _fake_forward(*args, **kwargs):
+        raise _LEAKY
+
+    monkeypatch.setattr(app_mod, "resolve_provider_and_model", _fake_resolve)
+    monkeypatch.setattr(app_mod, "forward", _fake_forward)
+    monkeypatch.setattr(app_mod, "_check_price_known", lambda *a, **k: None)
+
+    with caplog.at_level(logging.WARNING, logger=app_mod.log.name):
+        resp = await client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json={
+                "model": "test-provider:fake:model-v1",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": stream,
+            },
+        )
+    assert resp.status_code == 502
+    body = resp.json()
+    assert set(body) == {"detail", "error_ref", "provider_name", "model_id"}
+    assert "secret-path" not in resp.text and "4242" not in resp.text
+    assert body["error_ref"] in body["detail"]
+    # The operator finds the full error in the log under the same reference.
+    logged = [
+        r.getMessage() for r in caplog.records if body["error_ref"] in r.getMessage()
+    ]
+    assert logged and "secret-path" in logged[0]
+
+
+@pytest.mark.asyncio
+async def test_cli_error_keeps_details_for_admin(client, monkeypatch):
+    from plugboard import app as app_mod
+
+    async def _fake_forward(*args, **kwargs):
+        raise _LEAKY
+
+    monkeypatch.setattr(app_mod, "forward", _fake_forward)
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=AUTH,  # the admin key in this fixture
+        json={
+            "model": "gemini:gemini-2.5-flash",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
+    body = resp.json()
+    assert resp.status_code == 502
+    assert body["stderr"].startswith("secret-path") and body["pid"] == 4242
+    assert body["error_ref"]
+
+
 # ── BENCH-008 ───────────────────────────────────────────────────────────────
 
 
