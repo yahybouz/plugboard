@@ -100,7 +100,7 @@ from plugboard.metrics import get_stats
 from plugboard.ratelimit import check_client_rate_limit, check_rate_limit
 from plugboard.decision_api import router as decision_router
 from plugboard.embeddings_api import router as embeddings_router
-from plugboard.suivi_api import router as suivi_router
+from plugboard.suivi_api import build_router as build_suivi_router
 from plugboard.legacy_connectors import (
     REMOVED_CONNECTOR_ERROR,
     is_removed_provider,
@@ -5477,7 +5477,7 @@ def _safe_next(raw: str) -> str:
 
 # -- /suivi: Kanban of Plugboard tickets (admin only) -------------------------
 
-app.include_router(suivi_router, dependencies=[Depends(_require_admin)])
+app.include_router(build_suivi_router(_require_admin))
 
 
 @app.get("/suivi", include_in_schema=False)
