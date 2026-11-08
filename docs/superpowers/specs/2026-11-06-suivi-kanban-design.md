@@ -1,8 +1,10 @@
 # Page `/suivi` et Kanban des tickets Plugboard — conception
 
-**Statut : PROPOSITION, NON APPROUVÉE.** Aucune implémentation tant que YB n'a pas
-choisi une approche et approuvé ce document (porte Superpowers `brainstorming`,
-étapes 1 à 3). Demande d'origine : registre #674 (6 novembre 2026), rattachée à
+**Statut : APPROUVÉE par YB le 8 novembre 2026** (« ok pour moi ») : approche 1
+et points 1 à 5 tels que proposés. Base de branche : la pile 4.4.1 validée
+(`0530ea6`) plutôt que `d37adfb`, pour hériter de l'outillage CI. Plan :
+`docs/superpowers/plans/2026-11-08-suivi-kanban.md`. Écart retenu : source
+`superpowers-spec` ajoutée pour les tickets « Planifier ». Demande d'origine : registre #674 (6 novembre 2026), rattachée à
 #673 ; constat #675/#678 : « Nouveau Kanban Plugboard à concevoir et faire
 approuver sous Superpowers ».
 
@@ -47,7 +49,7 @@ approuver sous Superpowers ».
 3. **Page statique générée.** Export HTML depuis plans/`TODOS.md`. Simple à
    consulter, mais impossible de créer ou déplacer un ticket durablement.
 
-Choix : **en attente de YB.**
+Choix : **approche 1** (YB, 8 novembre 2026).
 
 ## Conception détaillée (si approche 1)
 
