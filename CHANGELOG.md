@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.4.1] — 2026-11-08
+
+### Fixed
+
+- **Login page on phones**: the page now declares a mobile viewport, so iPhone and Android show it at its real size instead of a zoomed-out desktop page. The card fits the screen width with adaptive padding and stays scrollable when the keyboard opens (`100dvh`). Fields use a 16 px font, which stops iOS from zooming on focus, and fields and button are at least 44 px tall on touch screens. Long error messages wrap instead of overflowing.
+
 ## [4.4.0] — 2026-10-29
 
 ### Added
