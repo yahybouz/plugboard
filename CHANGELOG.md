@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Security
 
+- **Local auto-login needs the operator's secret**: on top of the loopback and browser checks, the dashboard signs in only a browser that opens the single-use token the server writes at each start to `data/.login_token` (0600; `make dev` opens the link), and then remembers that browser for 30 days with a cookie sent only to `/login` (digests in `data/local_devices.json`). A same-machine container or VM, a forwarder in front of a loopback-bound install, or a local process forging headers no longer gets an admin session. New refusal reasons `no_local_secret` and `bad_token` ([troubleshooting](docs/guide/troubleshooting.md#dashboard-auto-login-does-not-happen)).
 - **MFA step-up**: once a TOTP secret is enrolled, disabling it (`DELETE /admin/mfa`) or rotating it (`POST /admin/mfa/setup`) needs a current code from it (`X-Plugboard-Admin-TOTP` header, or `current_code` in the setup body), even from an open admin session; before, any session, an auto-login one included, could remove the second factor. A code already checked by the request's own authentication counts ([guide](docs/guide/monitoring.md#admin-api-with-mfa)).
 
 ### Added

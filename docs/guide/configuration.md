@@ -15,6 +15,7 @@ Boolean flags accept `1`, `true`, `yes`, `on` unless stated otherwise. Values be
 | `ENCRYPTION_KEY` | empty | Key used to encrypt provider tokens, OAuth credentials and the MFA secret at rest. Empty: a key is generated once in `data/.encryption_key`. Changing it makes stored credentials unreadable. |
 | `PLUGBOARD_DEV` | empty | `1` marks a development instance: the server may start without `ADMIN_KEY`, and the empty-`API_KEY` warning is logged once instead of repeated. |
 | `PLUGBOARD_LOCAL_AUTO_LOGIN` | `auto` | Dashboard auto-login. `auto`: only when `run.py` listens on a loopback address. `1`: also when listening on another interface (personal workstation). `0`: never. Unknown values count as `0`. See [Security notes](../../README.md#security-notes). |
+| `PLUGBOARD_OPEN_BROWSER` | empty | `1` (set by `make dev`): once the server answers, `run.py` opens the dashboard with the one-time login token from `data/.login_token`. Loopback bind only. |
 | `PLUGBOARD_ADMIN_MFA_REQUIRED` | empty | `1` requires a TOTP code at admin login, and refuses the admin key alone as a bearer ([admin API with MFA](monitoring.md#admin-api-with-mfa)), once a secret is enrolled (`POST /admin/mfa/begin`, then `POST /admin/mfa/setup`, or `make admin-mfa-setup`). Without an enrolled secret it has no effect, so it cannot lock you out. |
 | `ADMIN_SESSION_MAX_AGE` | `28800` | Lifetime of the admin session cookie, in seconds. |
 | `COOKIE_SECURE` | `auto` | `auto` marks the session cookie `Secure` unless the host is `localhost`, `127.0.0.1` or `::1`; `true` or `false` force it. |

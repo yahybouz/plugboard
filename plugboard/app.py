@@ -308,6 +308,7 @@ if _dotenv_warning:
 @asynccontextmanager
 async def _lifespan(application: FastAPI):  # noqa: ARG001
     """Start background services on startup, stop on shutdown."""
+    _issue_local_login_token()
     # Auto-start provider watchdog
     from plugboard.provider_watchdog import start_watchdog, stop_watchdog
 
@@ -4956,7 +4957,7 @@ _LOCAL_NAVIGATION_SITES = {"none", "same-origin"}
 # Refusals that mean someone claimed to be local without being so: audited,
 # at most once per peer and reason per window, and for at most
 # _REFUSAL_AUDIT_MAX_KEYS peers per window, so they cannot flood the log.
-_SUSPICIOUS_REFUSALS = {"proxied", "non_loopback_peer"}
+_SUSPICIOUS_REFUSALS = {"proxied", "non_loopback_peer", "bad_token"}
 _REFUSAL_AUDIT_WINDOW_S = 600.0
 _REFUSAL_AUDIT_MAX_KEYS = 256
 _refusal_audit_seen: Dict[tuple, float] = {}
@@ -5079,10 +5080,55 @@ log.info(
 )
 
 
+def _local_login_proof(request: Request) -> tuple:
+    """("device" | "token", "") when the browser shows a secret only the
+    operator holds, else ("", refusal reason).
+
+    The loopback and header checks prove nothing against a same-machine
+    container, VM or forwarder; this does: a remembered-browser cookie, or
+    the single-use token from data/.login_token (opened by ``make dev``).
+    """
+    from plugboard import local_login
+
+    if local_login.is_remembered(request.cookies.get(local_login.DEVICE_COOKIE, "")):
+        return "device", ""
+    token = request.query_params.get("token", "")
+    if not token:
+        return "", "no_local_secret"
+    if local_login.consume_token(token):
+        return "token", ""
+    return "", "bad_token"
+
+
+def _issue_local_login_token() -> None:
+    """At startup, write a fresh login token when auto-login can be used."""
+    mode = _auto_login_mode()
+    if mode == "off" or not _effective_admin_key():
+        return
+    if mode == "auto" and not _is_loopback_address(_bind_host()):
+        return
+    from plugboard import local_login
+
+    try:
+        local_login.issue_token()
+    except OSError as exc:
+        log.warning("auth.auto_login cannot write the login token: %s", exc)
+        return
+    log.info(
+        "auth.auto_login sign in once with the link `make dev` opens, or "
+        "/login?token=<content of %s>; the browser is then remembered",
+        local_login.token_path(),
+    )
+
+
 @app.get("/login", include_in_schema=False)
 async def login_page(request: Request):
-    """Public login page. Auto-login only for a local install opened locally."""
+    """Public login page. Auto-login only for a local install opened locally
+    by a browser holding the operator's secret (login token or remembered)."""
     refusal = _auto_login_refusal(request)
+    proof = ""
+    if not refusal:
+        proof, refusal = _local_login_proof(request)
     peer = request.client.host if request.client else ""
     host = _host_header_name(request)
     if refusal:
@@ -5104,7 +5150,7 @@ async def login_page(request: Request):
         if session_token:
             _audit(
                 "auth.auto_login",
-                details=f"localhost auto-login host={host}",
+                details=f"localhost auto-login host={host} via={proof}",
                 ip=peer,
             )
             resp = RedirectResponse(url="/dashboard", status_code=302)
@@ -5119,6 +5165,19 @@ async def login_page(request: Request):
                 secure=False,
                 path="/",
             )
+            if proof == "token":
+                from plugboard import local_login
+
+                # Remember this browser so the next visits need no token.
+                resp.set_cookie(  # NOSONAR
+                    local_login.DEVICE_COOKIE,
+                    local_login.remember_device(),
+                    max_age=local_login.DEVICE_MAX_AGE,
+                    httponly=True,
+                    samesite="strict",
+                    secure=False,
+                    path="/login",
+                )
             return resp
     nonce = request.state.csp_nonce
     html = _LOGIN_HTML_TEMPLATE.replace("__CSP_NONCE__", nonce)

@@ -131,8 +131,8 @@ init:          ## Create .env from .env.example with fresh secrets (never overwr
 
 # ── Run ───────────────────────────────────────────────────────
 
-dev:           ## Run the server with auto-reload (reads .env)
-	RELOAD=true "$(PY)" run.py
+dev:           ## Run the server with auto-reload (reads .env) and open the dashboard signed in
+	RELOAD=true PLUGBOARD_OPEN_BROWSER=1 "$(PY)" run.py
 
 catalog-check: ## Show the presets generated from the live models.dev catalog (needs network)
 	"$(PY)" scripts/catalog_check.py

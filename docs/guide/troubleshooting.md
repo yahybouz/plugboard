@@ -43,8 +43,10 @@ auth.auto_login refused reason=<reason> peer=<address>
 | `not_navigation` | Open the URL directly in the browser's address bar, not through curl, a script or a page served on another port. Safari: use `localhost`, not `127.0.0.1`. |
 | `logged_out` | Normal right after clicking **Logout**: open `http://localhost:8765` again. |
 | `mfa_required` | Admin MFA is enforced: sign in with `ADMIN_KEY` and the TOTP code. |
+| `no_local_secret` | This browser has neither the login token nor a remembered-browser cookie: start with `make dev`, or open `http://localhost:8765/login?token=` followed by the content of `data/.login_token`. |
+| `bad_token` | The token is wrong or was already used (it is single-use and replaced after each sign-in): read the current one from `data/.login_token`, or restart with `make dev`. |
 
-`proxied` and `non_loopback_peer` refusals coming with a loopback `Host` header are also written to the audit log (`auth.auto_login_refused`), at most once per address and reason every ten minutes.
+`proxied`, `non_loopback_peer` and `bad_token` refusals coming with a loopback `Host` header are also written to the audit log (`auth.auto_login_refused`), at most once per address and reason every ten minutes.
 
 On a deployed instance auto-login is off by design: read `ADMIN_KEY` from the server's `.env` or secret store and type it in the login form.
 
