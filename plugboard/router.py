@@ -692,6 +692,26 @@ async def forward(
                     # Continue retries — don't break on timeout, the backend
                     # may have been temporarily overloaded (agents/sub-agents)
                     continue
+                except (aiohttp.ClientError, ValueError) as exc:
+                    # Refused or dropped connection, truncated body, or a 200
+                    # whose body is not JSON. The request may already have
+                    # reached the provider, so it is not replayed here: hand
+                    # over to the next provider instead.
+                    try:
+                        metrics.record(provider["id"], 0.0, error=True)
+                    except Exception:
+                        pass
+                    detail = str(exc) or type(exc).__name__
+                    last_err = RuntimeError(
+                        f"[{provider['id']}] network error: {detail[:200]}"
+                    )
+                    log.warning(
+                        "Network error on %s (%s): %s",
+                        provider["id"],
+                        type(exc).__name__,
+                        detail[:200],
+                    )
+                    provider_failed = True
 
                 if provider_failed:
                     break
