@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import secrets as _secrets
 import shutil
 import signal
@@ -169,7 +170,8 @@ def cmd_services(args) -> int:
         env = dict(os.environ)
         for spec in args.env or []:
             nom, _, modele = spec.partition("=")
-            env[nom] = modele.format(**valeurs)
+            # Gabarit <nom> (les accolades sont réservées aux placeholders qd-ci).
+            env[nom] = re.sub(r"<(\w+)>", lambda m: valeurs[m.group(1)], modele)
         if args.env_file:
             os.makedirs(os.path.dirname(os.path.abspath(args.env_file)), exist_ok=True)
             fd = os.open(args.env_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -253,7 +255,7 @@ def main() -> int:
     s.add_argument("--pg-extra-db", action="append")
     s.add_argument("--redis", help="image Redis")
     s.add_argument("--pull-never", action="store_true")
-    s.add_argument("--env", action="append", help="NOM=modèle, ex. URL=postgresql://{pg_user}:{pg_password}@127.0.0.1:{pg_port}/{pg_db}")
+    s.add_argument("--env", action="append", help="NOM=modèle, ex. URL=postgresql://<pg_user>:<pg_password>@127.0.0.1:<pg_port>/<pg_db>")
     s.add_argument("--env-file", help="écrit aussi les variables dans ce fichier (0600)")
     s.add_argument("commande", nargs=argparse.REMAINDER)
     k = sub.add_parser("gitleaks")
