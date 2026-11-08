@@ -29,7 +29,6 @@ import math
 import os
 import struct
 import time
-from typing import Literal, Optional, Union
 from urllib.parse import urlsplit
 
 import aiohttp
@@ -37,9 +36,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field
 
 from plugboard.apikeys import get_key_record
+from plugboard.embeddings_schema import EmbeddingRequest
 from plugboard.ratelimit import check_client_rate_limit
 
 MODELS_ENV = "PLUGBOARD_EMBEDDING_MODELS"
@@ -86,16 +85,6 @@ def _try_acquire_slot() -> bool:
 def _release_slot() -> None:
     state = _SLOTS.setdefault("state", {"busy": 0})
     state["busy"] = max(0, state["busy"] - 1)
-
-
-class EmbeddingRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    model: str = Field(min_length=1, max_length=256)
-    input: Union[str, list[str]]
-    encoding_format: Literal["float", "base64"] = "float"
-    dimensions: Optional[int] = None
-    user: Optional[str] = Field(default=None, max_length=256)
 
 
 class EngineError(Exception):

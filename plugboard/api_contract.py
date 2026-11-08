@@ -26,7 +26,9 @@ from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, Type, U
 from pydantic import BaseModel, ConfigDict, Field
 
 from plugboard.decisions import DecisionRequest
-from plugboard.embeddings_api import EmbeddingRequest
+
+# Not embeddings_api: it imports FastAPI, absent from the MCP environment.
+from plugboard.embeddings_schema import EmbeddingRequest
 
 CONTRACT_VERSION = "1.2.0"
 _JSON = "application/json"
