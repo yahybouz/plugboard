@@ -927,19 +927,15 @@ async def test_best_effort_fallback_preserves_previous_state(monkeypatch, tmp_pa
 
 @pytest.mark.asyncio
 async def test_probes_run_in_parallel_with_semaphore(monkeypatch, tmp_path: Path):
-    """BLOCKER-1 — 10 slow probes (5s each) must complete in under 15s total.
+    """BLOCKER-1 — slow probes run in parallel, at most N at a time.
 
-    Without parallelism (sequential await) 10×5s = 50s would breach the limit.
-    With asyncio.gather + Semaphore(4) the effective wall time is ≈ceil(10/4)×5=10s.
-    We use a 15s tolerance to stay fast on slow CI machines.
+    Counts the probes in flight instead of timing the run: a wall-clock bound
+    failed on a loaded CI host although the probes did run in parallel.
+    Sequential probes would never have more than one in flight.
     """
-    import time as _time
-
     from plugboard import model_availability as ma
 
-    PROBE_DELAY_S = 0.2  # scaled down from 5s for unit-test speed
-    EXPECTED_MAX_WALL_S = 0.8  # with Sem(4): ceil(10/4)*0.2 = 0.6 + slack
-
+    limit = ma._PROBE_SUBPROCESS_CONCURRENCY
     probe_provider = {
         "id": "slow-provider",
         "is_active": True,
@@ -947,11 +943,23 @@ async def test_probes_run_in_parallel_with_semaphore(monkeypatch, tmp_path: Path
         "models": [{"id": f"m{i}"} for i in range(10)],
     }
 
-    call_times: list[float] = []
+    in_flight = 0
+    peak = 0
+    all_started = asyncio.Event()
+    started = 0
 
     async def slow_probe(_kind: str, _mid: str, *, timeout_s: float):
-        call_times.append(_time.monotonic())
-        await asyncio.sleep(PROBE_DELAY_S)
+        nonlocal in_flight, peak, started
+        in_flight += 1
+        started += 1
+        peak = max(peak, in_flight)
+        if in_flight >= limit or started == 10:
+            all_started.set()
+        # Hold the slot until the batch has filled the semaphore, so the
+        # peak reflects the limit and not how fast this host schedules tasks.
+        await asyncio.wait_for(all_started.wait(), timeout=5)
+        await asyncio.sleep(0)
+        in_flight -= 1
         return {"ok": True, "reason": ""}
 
     monkeypatch.setattr(ma, "probe_subprocess_model", slow_probe)
@@ -960,15 +968,14 @@ async def test_probes_run_in_parallel_with_semaphore(monkeypatch, tmp_path: Path
     monkeypatch.setattr(ma, "_PROBE_TOTAL_TIMEOUT_S", 30)
 
     status_file = tmp_path / "model_status.json"
-    t0 = _time.monotonic()
     result = await ma.run_connectivity_probes(
         probe_kinds={"codex"}, status_path=status_file
     )
-    elapsed = _time.monotonic() - t0
 
-    assert elapsed < EXPECTED_MAX_WALL_S, (
-        f"Probes ran sequentially (elapsed={elapsed:.2f}s > {EXPECTED_MAX_WALL_S}s). "
-        "Expected parallel execution via asyncio.gather + Semaphore."
+    assert limit > 1
+    assert peak == limit, (
+        f"{peak} probe(s) in flight at most; expected {limit} "
+        "(asyncio.gather + Semaphore)."
     )
     models = result.get("models", {})
     assert len(models) == 10, "All 10 model entries should be present"
