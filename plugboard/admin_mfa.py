@@ -174,10 +174,20 @@ def _stored_secret() -> Optional[str]:
     if not enc:
         return None
     try:
-        return _decrypt_token(enc)
+        secret = _decrypt_token(enc)
     except Exception as exc:  # pragma: no cover — decrypt already logs
         log.error("Failed to decrypt admin MFA secret: %s", exc)
         return None
+    if secret.startswith("enc:"):
+        # _decrypt_token hands the ciphertext back when the key cannot read
+        # it (ENCRYPTION_KEY changed without scripts/rotate_encryption_key.py).
+        log.error(
+            "The admin MFA secret cannot be decrypted with the current "
+            "ENCRYPTION_KEY: MFA codes are refused until it is re-enrolled "
+            "or the previous key is restored."
+        )
+        return None
+    return secret
 
 
 def verify(code: str, at: Optional[float] = None) -> bool:
@@ -193,7 +203,11 @@ def verify(code: str, at: Optional[float] = None) -> bool:
     secret = _stored_secret()
     if not secret:
         return False
-    secret_bytes = _b32_normalize(secret)
+    try:
+        secret_bytes = _b32_normalize(secret)
+    except (ValueError, TypeError):
+        log.error("The stored admin MFA secret is not valid base32: codes refused")
+        return False
     t_now = int((at if at is not None else time.time()) // _PERIOD)
     for step in range(-_WINDOW, _WINDOW + 1):
         candidate = _hotp(secret_bytes, t_now + step)

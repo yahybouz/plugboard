@@ -29,7 +29,7 @@ LOCK_OPTS := --universal --python-version 3.12 --generate-hashes --custom-compil
 
 .PHONY: help catalog-check billing-reconcile setup install setup-mcp lock init dev test test-e2e lint format format-check \
         audit check verify secret-scan install-hooks docker-build docker-build-full \
-        compose-up compose-down smoke-models admin-mfa-setup \
+        compose-up compose-down smoke-models admin-mfa-setup rotate-encryption-key \
         sonar-up sonar-token sonar-scan sonar-issues sonar-down \
         contract contract-check \
         mcp mcp-sse mcp-http precommit-install precommit-run live-tests live-tests-mvp
@@ -145,6 +145,8 @@ smoke-models:  ## Ping every model through /v1/chat/completions (ARGS=...)
 
 admin-mfa-setup: ## Enrol an admin TOTP secret
 	"$(PY)" scripts/admin_mfa_setup.py
+rotate-encryption-key: ## Re-encrypt stored secrets under a new ENCRYPTION_KEY; stop the server first (ARGS=...)
+	"$(PY)" scripts/rotate_encryption_key.py $(ARGS)
 
 mcp:           ## Run the MCP server (stdio) from MCP_VENV
 	"$(MCP_VENV)/bin/python" scripts/run_mcp.py
