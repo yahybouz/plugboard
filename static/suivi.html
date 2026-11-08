@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Suivi — Plugboard</title>
+  <link rel="icon" href="/dashboard/favicon.svg">
+  <script src="/dashboard/theme.js?v=2"></script>
+  <link rel="stylesheet" href="/dashboard/style.css?v=11">
+  <link rel="stylesheet" href="/dashboard/suivi.css?v=1">
+</head>
+<body class="suivi">
+  <header class="suivi-head">
+    <a class="suivi-back" href="/dashboard">← Tableau de bord</a>
+    <h1>Suivi des tickets</h1>
+    <button id="suivi-import" class="suivi-btn" type="button">Importer</button>
+  </header>
+
+  <p id="suivi-msg" class="suivi-msg" role="status" aria-live="polite"></p>
+
+  <form id="suivi-new" class="suivi-new" data-testid="suivi-new">
+    <label class="suivi-new-label" for="new-titre">Nouveau ticket</label>
+    <input id="new-titre" name="titre" type="text" required maxlength="200" placeholder="Titre du ticket">
+    <select id="new-priorite" name="priorite" aria-label="Priorité">
+      <option>P0</option><option>P1</option><option selected>P2</option><option>P3</option>
+    </select>
+    <select id="new-type" name="type" aria-label="Type">
+      <option value="fonction" selected>Fonction</option>
+      <option value="bug">Bug</option>
+      <option value="dette">Dette</option>
+      <option value="securite">Sécurité</option>
+    </select>
+    <button class="suivi-btn" type="submit">Créer</button>
+  </form>
+
+  <main id="suivi-board" class="suivi-board" data-testid="suivi-board" aria-busy="true"></main>
+
+  <script src="/dashboard/suivi.js?v=1"></script>
+</body>
+</html>

@@ -1,0 +1,66 @@
+/* /suivi — Kanban layout. Tokens come from style.css (dark/light themes).
+   Wide screens: columns side by side, scrolling inside the board only.
+   Under 768px: columns stacked as <details>, no horizontal page scroll. */
+body.suivi { padding: 1rem; max-width: 100%; overflow-x: hidden; }
+
+.suivi-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+.suivi-head h1 { font-size: 1.35rem; margin: 0; flex: 1 1 auto; }
+.suivi-back { color: var(--text-secondary); text-decoration: none; min-height: 44px; display: inline-flex; align-items: center; }
+.suivi-back:hover { color: var(--accent); }
+
+.suivi-btn {
+  min-height: 44px; padding: 0.5rem 1rem; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--accent-border); background: var(--accent); color: var(--on-accent);
+  font: inherit; font-weight: 600;
+}
+.suivi-btn:hover { background: var(--accent-light); }
+.suivi-btn:disabled { opacity: 0.6; cursor: progress; }
+.suivi-btn-small { padding: 0.35rem 0.75rem; }
+
+.suivi-msg { min-height: 1.5rem; margin: 0 0 0.5rem; color: var(--green); }
+.suivi-msg.is-error { color: var(--red); }
+
+.suivi-new { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; }
+.suivi-new-label { flex: 0 0 100%; font-weight: 600; }
+.suivi-new input[type="text"] { flex: 1 1 16rem; min-width: 0; min-height: 44px; }
+.suivi-new select { width: auto; min-height: 44px; }
+
+.suivi-board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(15rem, 1fr); gap: 0.75rem; overflow-x: auto; padding-bottom: 0.5rem; }
+
+.suivi-col { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; padding: 0.5rem; min-width: 0; }
+.suivi-col-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-height: 44px; cursor: pointer; list-style: none; padding: 0 0.25rem; }
+.suivi-col-head::-webkit-details-marker { display: none; }
+.suivi-col-head h2 { font-size: 0.95rem; margin: 0; }
+.suivi-count { font-size: 0.8rem; color: var(--text-muted); background: var(--bg-card); border-radius: 999px; padding: 0.05rem 0.55rem; }
+.suivi-col[data-statut="bloque"] .suivi-col-head h2 { color: var(--red); }
+.suivi-col[data-statut="termine"] .suivi-col-head h2 { color: var(--green); }
+
+.suivi-col-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.suivi-empty { color: var(--text-muted); font-size: 0.85rem; padding: 0.25rem; }
+
+.suivi-card { background: var(--bg-card); border: 1px solid var(--border-strong); border-radius: 10px; padding: 0.65rem; overflow-wrap: anywhere; }
+.suivi-card p { margin: 0 0 0.4rem; }
+.suivi-card-title { font-weight: 600; }
+.suivi-card-id { color: var(--text-muted); font-weight: 500; }
+.suivi-card-meta { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.suivi-card-desc { color: var(--text-secondary); font-size: 0.85rem; }
+.suivi-card-motif { color: var(--orange-text); font-size: 0.85rem; }
+
+.suivi-tag { font-size: 0.75rem; border: 1px solid var(--border-strong); border-radius: 6px; padding: 0 0.4rem; }
+.suivi-tag-muted { color: var(--text-muted); }
+.suivi-prio-P0 { color: var(--red); border-color: var(--red-border); }
+.suivi-prio-P1 { color: var(--orange-text); border-color: var(--orange-border); }
+
+.suivi-field { display: flex; flex-direction: column; gap: 0.2rem; margin-bottom: 0.4rem; font-size: 0.8rem; color: var(--text-secondary); }
+.suivi-status { min-height: 44px; }
+
+.suivi-proofs summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-size: 0.85rem; color: var(--text-secondary); }
+.suivi-proof-list { margin: 0 0 0.4rem; padding-left: 1.1rem; font-size: 0.8rem; }
+.suivi-proof-form { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.suivi-proof-form select { width: auto; min-height: 44px; }
+.suivi-proof-form input { flex: 1 1 8rem; min-width: 0; min-height: 44px; }
+
+@media (max-width: 767px) {
+  body.suivi { padding: 0.75rem; }
+  .suivi-board { grid-auto-flow: row; grid-auto-columns: auto; grid-template-columns: minmax(0, 1fr); overflow-x: visible; }
+}

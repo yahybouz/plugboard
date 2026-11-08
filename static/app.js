@@ -132,6 +132,7 @@ function switchTab(name) {
 
 function initTabs() {
   navLinks.forEach(function (t) {
+    if (!t.dataset.tab) return; // a real link (e.g. /suivi), not a tab
     t.addEventListener("click", function (e) {
       e.preventDefault();
       location.hash = t.dataset.tab;
