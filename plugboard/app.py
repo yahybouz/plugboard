@@ -1481,6 +1481,27 @@ def _cli_error_response(
     return JSONResponse(status_code=502, content=content)
 
 
+def _require_chat_messages(body: Dict[str, Any]) -> None:
+    """400 for a messages field no provider can answer.
+
+    Without it, an empty or malformed list reached the provider and came back
+    as a 502 carrying the upstream parser error (or the CLI's "Empty prompt").
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list) or not messages:
+        raise HTTPException(400, "messages must be a non-empty array")
+    for i, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            raise HTTPException(400, f"messages[{i}] must be an object")
+        if not isinstance(msg.get("role"), str) or not msg["role"].strip():
+            raise HTTPException(400, f"messages[{i}].role must be a non-empty string")
+        content = msg.get("content")
+        if content is not None and not isinstance(content, (str, list)):
+            raise HTTPException(
+                400, f"messages[{i}].content must be a string or an array of parts"
+            )
+
+
 @app.post("/v1/chat/completions", dependencies=[Depends(_inflight_chat_dep)])
 async def chat_completions(
     request: Request,
@@ -1547,6 +1568,8 @@ async def chat_completions(
         from plugboard.session_store import merge_history_into_body
 
         body = merge_history_into_body(client_id, session_id, body)
+
+    _require_chat_messages(body)
 
     # Issue #5: check spending limit before processing request
     if client_id and client_id != "admin":
