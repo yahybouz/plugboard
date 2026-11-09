@@ -24,6 +24,7 @@ logged in, it doesn't re-run OAuth.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import contextlib
 import json
 import logging
@@ -93,6 +94,9 @@ def _clean_spawn_cwd() -> str:
     # realpath: macOS tempdirs sit behind the /var -> /private/var symlink,
     # and the codex sandbox matches resolved paths.
     path = os.path.realpath(tempfile.mkdtemp(prefix="plugboard-spawn-"))
+    # Removed when the process exits: one directory per process otherwise
+    # piles up in /tmp across restarts and test runs.
+    atexit.register(shutil.rmtree, path, True)
     _SPAWN_CWD_CACHE = path
     return path
 
