@@ -1538,16 +1538,13 @@ async def chat_completions(
     _use_cache = _cache_enabled and route_guard is None
     _cache_key = None
     if _use_cache:
-        from plugboard.cache import compute_cache_key, get_cached
+        from plugboard.cache import compute_cache_key, get_cached, key_params
 
         _cache_key = compute_cache_key(
             body.get("model", ""),
             body.get("messages", []),
             client_id=client_id or "",
-            temperature=body.get("temperature"),
-            max_tokens=body.get("max_tokens"),
-            top_p=body.get("top_p"),
-            stop=body.get("stop"),
+            **key_params(body),
         )
         cached = get_cached(_cache_key, client_id=client_id or "")
         if not cached and not _is_streaming:

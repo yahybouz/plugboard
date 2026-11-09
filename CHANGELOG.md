@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Response cache served another question's answer**: the cache key covered only `temperature`, `max_tokens`, `top_p` and `stop`, so the same messages with other `tools`, `tool_choice`, `response_format`, `seed`, `n`, `reasoning_effort` or penalties got the first cached reply. Every request field now counts, except `stream`, `stream_options` and `cache`.
 - **Admin MFA with an unreadable secret** (key changed without rotation): codes are refused with a clear log line instead of an HTTP 500.
 - **Usage of an interrupted stream**: a streamed answer cut short by the client or by an upstream read error is now billed from what was received; before, it recorded no usage and escaped `monthly_limit_usd`.
 - **Fallback on a network error**: a refused or dropped connection, a truncated body or a non-JSON answer from a provider now hands the request to the next candidate instead of returning 502 at once. A provider-prefixed model keeps its single route.
