@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
@@ -1165,6 +1165,273 @@
           "cost_usd"
         ],
         "title": "DecisionUnrecorded",
+        "type": "object"
+      },
+      "EmbeddingItem": {
+        "properties": {
+          "object": {
+            "const": "embedding",
+            "default": "embedding",
+            "title": "Object",
+            "type": "string"
+          },
+          "index": {
+            "minimum": 0,
+            "title": "Index",
+            "type": "integer"
+          },
+          "embedding": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Floats, or base64 little-endian float32 with encoding_format=base64.",
+            "title": "Embedding"
+          }
+        },
+        "required": [
+          "index",
+          "embedding"
+        ],
+        "title": "EmbeddingItem",
+        "type": "object"
+      },
+      "EmbeddingList": {
+        "properties": {
+          "object": {
+            "const": "list",
+            "default": "list",
+            "title": "Object",
+            "type": "string"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/EmbeddingItem"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "model": {
+            "description": "The exact identity requested.",
+            "title": "Model",
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/EmbeddingUsage"
+          },
+          "plugboard": {
+            "$ref": "#/components/schemas/EmbeddingServed"
+          }
+        },
+        "required": [
+          "data",
+          "model",
+          "usage",
+          "plugboard"
+        ],
+        "title": "EmbeddingList",
+        "type": "object"
+      },
+      "EmbeddingModel": {
+        "properties": {
+          "id": {
+            "description": "Exact identity to send as `model`.",
+            "title": "Id",
+            "type": "string"
+          },
+          "provider_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Provider Id"
+          },
+          "available": {
+            "description": "The route resolves (registered, active, loopback engine); no probe.",
+            "title": "Available",
+            "type": "boolean"
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Known once a call was served since the restart.",
+            "title": "Dimensions"
+          }
+        },
+        "required": [
+          "id",
+          "available"
+        ],
+        "title": "EmbeddingModel",
+        "type": "object"
+      },
+      "EmbeddingModelList": {
+        "properties": {
+          "object": {
+            "const": "list",
+            "default": "list",
+            "title": "Object",
+            "type": "string"
+          },
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/EmbeddingModel"
+            },
+            "title": "Data",
+            "type": "array"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "EmbeddingModelList",
+        "type": "object"
+      },
+      "EmbeddingRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Model",
+            "type": "string"
+          },
+          "input": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "Input"
+          },
+          "encoding_format": {
+            "default": "float",
+            "enum": [
+              "float",
+              "base64"
+            ],
+            "title": "Encoding Format",
+            "type": "string"
+          },
+          "dimensions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Dimensions"
+          },
+          "user": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "User"
+          }
+        },
+        "required": [
+          "model",
+          "input"
+        ],
+        "title": "EmbeddingRequest",
+        "type": "object"
+      },
+      "EmbeddingServed": {
+        "description": "What served the call: the registered local engine and the model digest\nit reported (Ollama /api/tags), so a caller can pin the model of an index.",
+        "properties": {
+          "provider_id": {
+            "title": "Provider Id",
+            "type": "string"
+          },
+          "native_model": {
+            "title": "Native Model",
+            "type": "string"
+          },
+          "digest": {
+            "title": "Digest",
+            "type": "string"
+          },
+          "dimensions": {
+            "minimum": 1,
+            "title": "Dimensions",
+            "type": "integer"
+          },
+          "cost_usd": {
+            "description": "0: local engine.",
+            "minimum": 0,
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "usage_recorded": {
+            "title": "Usage Recorded",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "provider_id",
+          "native_model",
+          "digest",
+          "dimensions",
+          "cost_usd",
+          "usage_recorded"
+        ],
+        "title": "EmbeddingServed",
+        "type": "object"
+      },
+      "EmbeddingUsage": {
+        "properties": {
+          "prompt_tokens": {
+            "minimum": 0,
+            "title": "Prompt Tokens",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "minimum": 0,
+            "title": "Total Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "prompt_tokens",
+          "total_tokens"
+        ],
+        "title": "EmbeddingUsage",
         "type": "object"
       },
       "ErrorResponse": {
@@ -2534,6 +2801,172 @@
           },
           "401": {
             "description": "Missing or invalid API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit or monthly spending limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/embeddings": {
+      "post": {
+        "summary": "Embed texts with a local engine (OpenAI-compatible, never chat)",
+        "operationId": "post_v1_embeddings",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EmbeddingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbeddingList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A client API key is required; the admin key is refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit or monthly spending limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The client key may not use this model.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Model not listed in PLUGBOARD_EMBEDDING_MODELS, owner not registered, or model not installed on the engine.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Embedding request exceeds the byte limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid request, input out of bounds, or input the engine refused (never truncated).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Engine error or invalid vectors (count, dimension, values).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Provider inactive, not a loopback local engine, or engine unreachable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Engine timed out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/embeddings/models": {
+      "get": {
+        "summary": "List the embedding identities this key may use",
+        "operationId": "get_v1_embeddings_models",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmbeddingModelList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A client API key is required; the admin key is refused.",
             "content": {
               "application/json": {
                 "schema": {

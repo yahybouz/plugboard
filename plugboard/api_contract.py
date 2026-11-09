@@ -27,7 +27,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from plugboard.decisions import DecisionRequest
 
-CONTRACT_VERSION = "1.1.0"
+# Not embeddings_api: it imports FastAPI, absent from the MCP environment.
+from plugboard.embeddings_schema import EmbeddingRequest
+
+CONTRACT_VERSION = "1.2.0"
 _JSON = "application/json"
 
 
@@ -448,6 +451,60 @@ class ErrorResponse(_Open):
     retry_after: Optional[int] = None
 
 
+# ── Embeddings ──────────────────────────────────────────────────────────────
+
+
+class EmbeddingItem(BaseModel):
+    object: Literal["embedding"] = "embedding"
+    index: int = Field(ge=0)
+    embedding: Union[List[float], str] = Field(
+        description="Floats, or base64 little-endian float32 with encoding_format=base64."
+    )
+
+
+class EmbeddingUsage(BaseModel):
+    prompt_tokens: int = Field(ge=0)
+    total_tokens: int = Field(ge=0)
+
+
+class EmbeddingServed(BaseModel):
+    """What served the call: the registered local engine and the model digest
+    it reported (Ollama /api/tags), so a caller can pin the model of an index."""
+
+    provider_id: str
+    native_model: str
+    digest: str
+    dimensions: int = Field(ge=1)
+    cost_usd: float = Field(ge=0, allow_inf_nan=False, description="0: local engine.")
+    usage_recorded: bool
+
+
+class EmbeddingList(BaseModel):
+    object: Literal["list"] = "list"
+    data: List[EmbeddingItem]
+    model: str = Field(description="The exact identity requested.")
+    usage: EmbeddingUsage
+    plugboard: EmbeddingServed
+
+
+class EmbeddingModel(BaseModel):
+    id: str = Field(description="Exact identity to send as `model`.")
+    provider_id: Optional[str] = None
+    available: bool = Field(
+        description="The route resolves (registered, active, loopback engine); no probe."
+    )
+    dimensions: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Known once a call was served since the restart.",
+    )
+
+
+class EmbeddingModelList(BaseModel):
+    object: Literal["list"] = "list"
+    data: List[EmbeddingModel]
+
+
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 _AUTH_ERRORS = {
@@ -488,6 +545,23 @@ _ROUTES: List[_Route] = [
       "502": "Invalid response from the decision engine.",
       "503": "Decision engine unavailable.",
       "504": "Decision engine timed out."}, True),
+    ("post", "/v1/embeddings", "Embed texts with a local engine (OpenAI-compatible, never chat)",
+     EmbeddingRequest, EmbeddingList,
+     {**_AUTH_ERRORS,
+      "401": "A client API key is required; the admin key is refused.",
+      "403": "The client key may not use this model.",
+      "404": "Model not listed in PLUGBOARD_EMBEDDING_MODELS, owner not registered, "
+             "or model not installed on the engine.",
+      "413": "Embedding request exceeds the byte limit.",
+      "422": "Invalid request, input out of bounds, or input the engine refused "
+             "(never truncated).",
+      "502": "Engine error or invalid vectors (count, dimension, values).",
+      "503": "Provider inactive, not a loopback local engine, or engine unreachable.",
+      "504": "Engine timed out."}, True),
+    ("get", "/v1/embeddings/models", "List the embedding identities this key may use",
+     None, EmbeddingModelList,
+     {**_AUTH_ERRORS, "401": "A client API key is required; the admin key is refused."},
+     True),
     ("post", "/v1/chat/completions", "Create a chat completion (OpenAI-compatible)",
      ChatCompletionRequest, ChatCompletion, _CHAT_ERRORS, True),
     ("post", "/v2/chat/completions", "Same as v1, with the X-API-Version: 2 header",

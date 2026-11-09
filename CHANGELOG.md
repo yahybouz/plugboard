@@ -6,6 +6,71 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **Local auto-login needs the operator's secret**: on top of the loopback and browser checks, the dashboard signs in only a browser that opens the single-use token the server writes at each start to `data/.login_token` (0600; `make dev` opens the link), and then remembers that browser for 30 days with a cookie sent only to `/login` (digests in `data/local_devices.json`). A same-machine container or VM, a forwarder in front of a loopback-bound install, or a local process forging headers no longer gets an admin session. New refusal reasons `no_local_secret` and `bad_token` ([troubleshooting](docs/guide/troubleshooting.md#dashboard-auto-login-does-not-happen)).
+- **MFA step-up**: once a TOTP secret is enrolled, disabling it (`DELETE /admin/mfa`) or rotating it (`POST /admin/mfa/setup`) needs a current code from it (`X-Plugboard-Admin-TOTP` header, or `current_code` in the setup body), even from an open admin session; before, any session, an auto-login one included, could remove the second factor. A code already checked by the request's own authentication counts ([guide](docs/guide/monitoring.md#admin-api-with-mfa)).
+
+### Added
+
+- **`ENCRYPTION_KEY` rotation** (`make rotate-encryption-key`, `scripts/rotate_encryption_key.py`): re-encrypts provider tokens, OAuth credentials and the admin MFA secret under a new key, after a backup in `data/backups/rekey-<time>/`. All or nothing: if one secret cannot be read with the current key, nothing is written. Can be run again after an interruption. The new key is generated into a 0600 file and never printed; `data/.encryption_key` is replaced when `ENCRYPTION_KEY` is not set ([guide](docs/guide/configuration.md#changing-encryption_key)).
+
+### Fixed
+
+- **Admin MFA with an unreadable secret** (key changed without rotation): codes are refused with a clear log line instead of an HTTP 500.
+- **Usage of an interrupted stream**: a streamed answer cut short by the client or by an upstream read error is now billed from what was received; before, it recorded no usage and escaped `monthly_limit_usd`.
+- **Fallback on a network error**: a refused or dropped connection, a truncated body or a non-JSON answer from a provider now hands the request to the next candidate instead of returning 502 at once. A provider-prefixed model keeps its single route.
+
+## [4.4.1] — 2026-11-08
+
+### Fixed
+
+- **Login page on phones**: the page now declares a mobile viewport, so iPhone and Android show it at its real size instead of a zoomed-out desktop page. The card fits the screen width with adaptive padding and stays scrollable when the keyboard opens (`100dvh`). Fields use a 16 px font, which stops iOS from zooming on focus, and fields and button are at least 44 px tall on touch screens. Long error messages wrap instead of overflowing.
+
+## [4.4.0] — 2026-10-29
+
+### Added
+
+- **Local model downloads switch** (Ollama page, `GET`/`PUT /admin/ollama/settings`, `PLUGBOARD_LOCAL_MODEL_DOWNLOADS`): off, only Ollama cloud models (`:cloud`, `-cloud`, official library only, layers capped at 64 MB) can be pulled; local pulls get 403. The admin choice is saved and wins over the variable.
+- **Disk guard on Ollama pulls**: the registry size plus `PLUGBOARD_OLLAMA_MIN_FREE_GB` (default 5) must fit in the free space of `PLUGBOARD_OLLAMA_DISK_PATH` (507 otherwise); a pull of unknown size is stopped and its partial model deleted before it crosses the margin. Model names are validated (422).
+- **Ollama Cloud catalogue** on the Ollama page (`GET /admin/ollama/cloud-catalog`) with one-click add; no inference probe.
+- **Embedding concurrency cap** (`PLUGBOARD_EMBEDDING_CONCURRENCY`, default 2): extra calls get 429 instead of loading a small host.
+- **MCP embeddings**: tools `embed` and `list_embedding_models`, and client route `GET /v1/embeddings/models`.
+
+- **`POST /v1/embeddings`** (OpenAI-compatible), client keys only, served by a registered local Ollama engine (`sovereign`, loopback `base_url`) for the exact identities listed in `PLUGBOARD_EMBEDDING_MODELS` (empty: closed). No owner guessing, no chat fallback, no caller-supplied destination; the key's `allowed_models`, budget and rpm limit apply. Bounded input (1–256 strings, ≤ 16 384 characters each, 2 MiB), `truncate: false`, vectors checked (count, dimension, finite, non-zero) and the engine's model digest returned. Usage rows `embedding:<model>` at cost 0 (`price_source = local:embeddings`); logs carry the request id, never the text. Chat routes are unchanged ([guide](docs/guide/embeddings.md)).
+
+### Changed
+
+- OVH deployment: image `plugboard:private-full-v4.4.0`, `PLUGBOARD_LOCAL_MODEL_DOWNLOADS=0`, `PLUGBOARD_OLLAMA_MIN_FREE_GB=5`, `PLUGBOARD_EMBEDDING_MODELS=ollama:qwen3-embedding:0.6b`.
+
+## [4.3.3] — 2026-10-28
+
+### Fixed
+
+- **Antigravity (agy) account catalog**: the model refresh now reads the signed-in account's `agy models` list even when agy is not in `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS`, and publishes every listed model without an inference probe. New account models (for example a new model family) appear without spending subscription quota; before, they were dropped whenever the availability probe failed, including on an exhausted quota, and repeated failures quarantined them. The refresh report adds `trusted_account_catalog`; `verified_count` stays 0 for this discovery-only path.
+- A listed model is not marked as working: the quarantine state is neither written nor cleared, and an already quarantined model stays hidden. A failed or empty `agy models` answer, or the preset/pricing fallback, keeps the saved models and default and adds nothing unless probes are enabled for agy. Removals still go through the usual two-pass rule. Claude, Codex and Gemini CLI refreshes are unchanged.
+- OVH deployment (`deploy/ovh`): model and pricing jobs enabled, `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS` set to empty (no quota-consuming probes), image `plugboard:private-full-v4.3.3`.
+
+## [4.3.2] — 2026-10-28
+
+### Fixed
+
+- **Antigravity (agy) token usage**: the counts agy reports (`input_tokens`, `output_tokens`) are now used for the response `usage`, the final SSE usage chunk and the usage ledger (`usage.db`), instead of a tiktoken estimate of the visible text (a 4-token answer to an 11 510-token prompt was billed as about 10 tokens). A reported 0 is kept as a count. Valid `cache_read_tokens` and `thinking_tokens` appear as `prompt_tokens_details.cached_tokens` and `completion_tokens_details.reasoning_tokens` and are never added to the total.
+- A missing or malformed agy usage block (bool, string, fractional, negative or null counter, non-object usage), or a `total_tokens` different from input + output, is not trusted: the tokens are estimated as before. Other CLIs and HTTP providers are unchanged.
+- Existing usage rows and cached responses keep their earlier estimates; no historical count is rewritten or invented.
+
+## [4.3.1] — 2026-10-27
+
+### Security
+
+- **Breaking for partial `allowed_models` entries**: a restricted key now matches the effective model identity exactly — the native model ID or `<provider>:<native>`. Substring, prefix and family matching no longer grant access (`"fake"` or `"test-provider"` no longer allow `test-provider:fake:model-v1`). An empty list stays unrestricted. Rewrite partial entries as explicit IDs before upgrading ([details](docs/model-access-correction.md)).
+- The policy is checked on every provider actually dispatched, including failover and circuit-breaker fallbacks, for streaming and non-streaming calls, before any upstream call; a refused candidate returns 403. `/v1/models` `account_compatible` and `/v1/preflight` (`forbidden_model`) use the same check.
+- Restricted keys bypass the response cache, whose entries do not record the serving identity.
+
+### Fixed
+
+- **Antigravity (agy) in the `full` image**: the gateway image now ships the official agy CLI (SHA512-pinned release archive), so the *Antigravity (via agy CLI)* provider can use a Google subscription once signed in (`docker exec -it <gateway> agy`; session kept in `/home/app`). An unsigned agy now returns an explicit "not signed in" error instead of "invalid JSON". API-key access to Gemini stays on *Google Gemini Direct* (agy does not read `GEMINI_API_KEY`).
+
 ## [4.3.0] — 2026-10-24
 
 ### Known limitations

@@ -13,6 +13,7 @@ from starlette.requests import Request
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from plugboard import app as app_module
+from plugboard import local_login
 
 _COOKIE = app_module._ADMIN_COOKIE_NAME
 _LOGGER = app_module.log.name
@@ -55,7 +56,15 @@ def audit_calls(monkeypatch: pytest.MonkeyPatch) -> list:
     monkeypatch.setenv("PLUGBOARD_BIND_HOST", "127.0.0.1")
     monkeypatch.delenv("PLUGBOARD_LOCAL_AUTO_LOGIN", raising=False)
     monkeypatch.delenv("PLUGBOARD_ADMIN_MFA_REQUIRED", raising=False)
+    # Every request below carries the operator's valid login token, so a
+    # refusal proves the guard under test, not a missing secret.
+    global _TOKEN
+    local_login.forget_devices()
+    _TOKEN = local_login.issue_token()
     return calls
+
+
+_TOKEN = ""
 
 
 async def _get_login(
@@ -64,7 +73,10 @@ async def _get_login(
     headers: dict | None = None,
     app=None,
     path: str = "/login",
+    with_token: bool = True,
 ):
+    if with_token:
+        path += ("&" if "?" in path else "?") + f"token={_TOKEN}"
     transport = ASGITransport(app=app or app_module.app, client=(peer, 50123))
     async with AsyncClient(transport=transport, base_url=base_url) as client:
         return await client.get(path, headers=headers or {}, follow_redirects=False)
@@ -113,17 +125,22 @@ async def test_local_operator_opening_root_lands_on_dashboard(audit_calls):
     # accepted along / -> /dashboard -> /login?next= -> /dashboard (Secure flag,
     # path, name) or ?next= breaks the guard; why_new=other tests stop at the
     # /login 302; seam=none
+    # PB-SEC-02: the first visit uses the token from `make dev`; the browser
+    # is then remembered, so opening / later needs no token.
     transport = ASGITransport(app=app_module.app, client=("127.0.0.1", 50123))
     async with AsyncClient(
         transport=transport, base_url="http://localhost:8765"
     ) as client:
+        first = await client.get(f"/login?token={_TOKEN}", headers=_NAV)
+        assert _granted(first)
+        client.cookies.delete(_COOKIE)  # session gone, browser remembered
         resp = await client.get("/", headers=_NAV, follow_redirects=True)
 
     assert resp.status_code == 200
     assert resp.url.path == "/dashboard"
     assert "/login" in [r.url.path for r in resp.history]
     assert 'id="logout-btn"' in resp.text
-    assert [a for a, _ in audit_calls] == ["auth.auto_login"]
+    assert [a for a, _ in audit_calls] == ["auth.auto_login", "auth.auto_login"]
 
 
 @pytest.mark.parametrize("host", ["localhost", "LOCALHOST", "::1", "127.0.0.2"])
@@ -599,3 +616,156 @@ def test_server_without_admin_key_starts_only_in_dev_mode(tmp_path, dev_env, sta
     else:
         assert proc.returncode != 0
         assert "ADMIN_KEY is not set" in proc.stderr
+
+
+# ── PB-SEC-02: a secret only the operator holds ──────────────────────────────
+
+
+async def test_local_browser_without_secret_gets_key_form(audit_calls, caplog):
+    # A same-machine container or forwarder passes the loopback and header
+    # checks; without the token or a remembered browser it gets the key form.
+    with caplog.at_level("INFO", logger=_LOGGER):
+        resp = await _get_login(
+            "127.0.0.1", "http://localhost:8765", _NAV, with_token=False
+        )
+
+    assert _key_form(resp)
+    assert "reason=no_local_secret" in caplog.text
+    assert audit_calls == []
+
+
+async def test_login_token_is_single_use(audit_calls, caplog):
+    used = _TOKEN
+    assert _granted(await _get_login("127.0.0.1", "http://localhost:8765", _NAV))
+    assert local_login.token_path().read_text().strip() != used
+
+    with caplog.at_level("INFO", logger=_LOGGER):
+        replay = await _get_login(
+            "127.0.0.1",
+            "http://localhost:8765",
+            _NAV,
+            path=f"/login?token={used}",
+            with_token=False,
+        )
+
+    assert _key_form(replay)
+    assert "reason=bad_token" in caplog.text
+    assert [a for a, _ in audit_calls] == ["auth.auto_login", "auth.auto_login_refused"]
+
+
+async def test_wrong_token_is_refused_and_audited(audit_calls):
+    resp = await _get_login(
+        "127.0.0.1",
+        "http://localhost:8765",
+        _NAV,
+        path="/login?token=not-the-token",
+        with_token=False,
+    )
+
+    assert _key_form(resp)
+    assert [a for a, _ in audit_calls] == ["auth.auto_login_refused"]
+    assert local_login.token_path().read_text().strip() == _TOKEN  # not consumed
+
+
+async def test_token_login_remembers_the_browser(audit_calls):
+    first = await _get_login("127.0.0.1", "http://localhost:8765", _NAV)
+    assert _granted(first)
+    raw = [
+        v
+        for k, v in first.headers.multi_items()
+        if k == "set-cookie" and v.startswith(local_login.DEVICE_COOKIE + "=")
+    ]
+    assert len(raw) == 1
+    attrs = raw[0].lower()
+    assert "path=/login" in attrs and "httponly" in attrs
+    assert "samesite=strict" in attrs and "max-age=2592000" in attrs
+    device = first.cookies[local_login.DEVICE_COOKIE]
+    token_after_first = local_login.token_path().read_text().strip()
+
+    transport = ASGITransport(app=app_module.app, client=("127.0.0.1", 50123))
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://localhost:8765",
+        cookies={local_login.DEVICE_COOKIE: device},
+    ) as client:
+        again = await client.get("/login", headers=_NAV, follow_redirects=False)
+
+    assert _granted(again)
+    assert local_login.DEVICE_COOKIE not in again.cookies  # not re-issued
+    assert audit_calls[-1][1]["details"].endswith("via=device")
+    assert local_login.token_path().read_text().strip() == token_after_first
+
+
+async def test_remembered_browser_still_needs_the_local_checks(audit_calls):
+    device = local_login.remember_device()
+    transport = ASGITransport(app=app_module.app, client=("203.0.113.7", 50123))
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://localhost:8765",
+        cookies={local_login.DEVICE_COOKIE: device},
+    ) as client:
+        resp = await client.get("/login", headers=_NAV, follow_redirects=False)
+
+    assert _key_form(resp)
+
+
+async def test_unknown_or_expired_device_cookie_is_refused(audit_calls, monkeypatch):
+    assert not local_login.is_remembered("forged")
+    device = local_login.remember_device()
+    assert local_login.is_remembered(device)
+    later = local_login.time.time() + local_login.DEVICE_MAX_AGE + 1
+    monkeypatch.setattr(local_login.time, "time", lambda: later)
+    assert not local_login.is_remembered(device)
+
+
+async def test_enforced_mfa_keeps_the_token_unused(audit_calls, monkeypatch):
+    from plugboard import admin_mfa
+
+    monkeypatch.setattr(admin_mfa, "is_required", lambda: True)
+    assert _key_form(await _get_login("127.0.0.1", "http://localhost:8765", _NAV))
+    assert local_login.token_path().read_text().strip() == _TOKEN
+
+
+def test_login_token_file_is_owner_only(audit_calls):
+    import stat
+
+    assert stat.S_IMODE(local_login.token_path().stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize(
+    ("bind", "switch", "issued"),
+    [
+        ("127.0.0.1", "", True),
+        ("0.0.0.0", "", False),
+        ("0.0.0.0", "1", True),
+        ("127.0.0.1", "0", False),
+    ],
+)
+def test_startup_writes_a_token_only_where_auto_login_applies(
+    audit_calls, monkeypatch, bind, switch, issued
+):
+    local_login.token_path().unlink()
+    monkeypatch.setenv("PLUGBOARD_BIND_HOST", bind)
+    monkeypatch.setenv("PLUGBOARD_LOCAL_AUTO_LOGIN", switch)
+
+    app_module._issue_local_login_token()
+
+    assert local_login.token_path().exists() is issued
+
+
+def test_make_dev_link_is_local_only():
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "plugboard_run", Path(__file__).resolve().parent.parent / "run.py"
+    )
+    run = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run)
+
+    assert run.login_url("127.0.0.1", 8765, "t0k") == (
+        "http://127.0.0.1:8765/login?token=t0k"
+    )
+    assert run.login_url("::1", 8765, "t0k") == "http://[::1]:8765/login?token=t0k"
+    assert run.login_url("0.0.0.0", 8765, "t0k") is None
+    assert run.login_url("127.0.0.1", 8765, "") is None

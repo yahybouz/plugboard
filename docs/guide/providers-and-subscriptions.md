@@ -117,6 +117,10 @@ Start Ollama on the gateway host. At startup Plugboard checks `OLLAMA_URL` (defa
 
 The **Ollama** page pulls, inspects and deletes models. Ollama is a *sovereign* provider: the watchdog monitors it but never tries to restart it. Ollama cloud models are merged into the provider automatically unless `PLUGBOARD_OLLAMA_CLOUD_AUTOSYNC=0`.
 
+**Local model downloads.** On a small machine, switch **Local model downloads** off on the Ollama page (or set `PLUGBOARD_LOCAL_MODEL_DOWNLOADS=0`): pulls of local models are refused with 403 and only cloud ids (`:cloud`, `-cloud`) of the official library can be added (`user/model:x-cloud` or `hf.co/...` are local models), and a cloud pull whose layers exceed 64 MB is stopped and deleted. When downloads are on, a pull is checked against the free disk space: the size read from the Ollama registry plus `PLUGBOARD_OLLAMA_MIN_FREE_GB` must fit (507 otherwise), and a pull whose size is unknown is stopped, and its partial model deleted, before it crosses the margin. Endpoints: `GET`/`PUT /admin/ollama/settings`.
+
+**Cloud catalogue.** The Ollama page lists the public Ollama Cloud catalogue (`GET /admin/ollama/cloud-catalog`) with an **Add** button that pulls the cloud manifest (a few KB). No inference is run. The Ollama daemon must be signed in to an Ollama account; on the free plan only some cloud models answer, the others return *not included in your free usage*.
+
 ### Subscriptions through an official CLI
 
 Read [the risks](#risks-of-using-subscriptions) first. These presets run the vendor's unmodified CLI on the gateway host, as the operating-system user that runs Plugboard.
@@ -138,9 +142,11 @@ What to expect:
 - Concurrent processes per CLI are capped by `PLUGBOARD_SUBPROCESS_LIMIT` (default 4).
 - The CLI runs in a neutral temporary working directory, so it does not pick up project files or settings; `PLUGBOARD_SUBPROCESS_CWD` overrides this.
 - Codex runs with `--sandbox read-only`; `PLUGBOARD_CODEX_SANDBOX` changes the mode.
+- Gemini with an **API key** goes through *Google Gemini Direct* (AI Studio key); with a **Google subscription** it goes through *Antigravity (via agy CLI)*. agy ignores `GEMINI_API_KEY`: it only uses its own Google sign-in. In the `full` container image agy is preinstalled; sign in once with `docker exec -it <gateway> agy` (the session is kept in the `/home/app` volume). An unsigned agy returns an explicit "not signed in" error.
 - Antigravity runs in print mode with `--sandbox --mode plan`. Headless `agy` cannot ask for a tool permission, so it refuses every tool call unless your agy `settings.json` pre-allows it: keep that file free of allow rules on the gateway host. Its model list is read from `agy models`; the codex list is read from the catalog cache the codex CLI keeps for your account (`~/.codex/models_cache.json`).
 - The *Google Gemini (via gemini CLI)* preset is no longer offered (the gemini CLI now refuses personal-account sign-ins); providers created with it keep working while the CLI does.
-- The CLIs do not report token counts, so usage is estimated with a tokenizer and billed at the model's price in the [pricing grid](pricing.md).
+- Token counts: agy reports them, and Plugboard uses them once validated (non-negative integers, `total_tokens` equal to input + output) for the response `usage`, the final streamed usage chunk and the usage ledger; a reported 0 stays 0. Valid cache-read and thinking counters are exposed as optional `prompt_tokens_details.cached_tokens` and `completion_tokens_details.reasoning_tokens` when they do not exceed their parent counts; they are never added to the total. Nonzero-thinking semantics are not verified for every agy model: inconsistent totals fall back to estimates. When agy's usage is missing, malformed or inconsistent, and for the other CLIs, usage is estimated with a tokenizer as before.
+- Cost is the token counts priced at the model's price in the [pricing grid](pricing.md): an estimate, not the vendor's invoice. The remaining subscription quota is not exposed. Usage rows and cached responses recorded before 4.3.2 keep their estimated counts.
 - Streaming requests are answered in full and then replayed as server-sent events.
 - A daily job checks which models the signed-in account can really use and quarantines the others (see [Monitoring](monitoring.md#model-catalog-and-connectivity)).
 

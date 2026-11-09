@@ -53,6 +53,23 @@ _ADMIN_KEY = os.environ.get("PLUGBOARD_ADMIN_KEY", "")
 _TIMEOUT = int(os.environ.get("PLUGBOARD_MCP_TIMEOUT", "900"))
 _DECISION_TIMEOUT = max(1, min(_TIMEOUT, 45))
 _DECISION_RESPONSE_LIMIT = 512 * 1024
+_EMBEDDING_TIMEOUT = max(1, min(_TIMEOUT, 120))
+_EMBEDDING_RESPONSE_LIMIT = 32 * 1024 * 1024
+_EMBEDDING_MAX_INPUTS = 256
+_EMBEDDING_STATUS = {
+    401: ("client_key_refused", "The gateway refused the client API key"),
+    403: ("model_not_permitted", "This key may not use the embedding model"),
+    404: (
+        "model_not_available",
+        "Embedding model not available (see list_embedding_models)",
+    ),
+    413: ("request_too_large", "Embedding request too large"),
+    422: ("invalid_request", "Invalid embedding request"),
+    429: ("rate_limited", "Rate or spending limit exceeded"),
+    502: ("engine_error", "The embedding engine failed"),
+    503: ("engine_unavailable", "Embedding engine unavailable"),
+    504: ("engine_timeout", "Embedding engine timed out"),
+}
 _HTTP_SESSION: aiohttp.ClientSession | None = None
 
 # Network transports (SSE, streamable HTTP) need a dedicated bearer token;
@@ -244,6 +261,53 @@ async def _decision_request(
         return _decision_error("invalid_response", "Invalid decision gateway response")
 
 
+async def _embedding_request(
+    method: str, path: str, body: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Client-key-only bounded transport for /v1/embeddings (no admin key)."""
+    if not _API_KEY:
+        return _decision_error("client_key_required", "Configure a client API key")
+    session = await _get_http_session()
+    try:
+        async with session.request(
+            method,
+            f"{_BASE_URL}{path}",
+            headers=_auth_headers(json_body=body is not None),
+            json=body,
+            timeout=aiohttp.ClientTimeout(total=_EMBEDDING_TIMEOUT),
+            allow_redirects=False,
+        ) as response:
+            chunks = bytearray()
+            async for chunk in response.content.iter_chunked(65536):
+                chunks.extend(chunk)
+                if len(chunks) > _EMBEDDING_RESPONSE_LIMIT:
+                    return _decision_error(
+                        "invalid_response", "Embedding response too large"
+                    )
+            if response.status != 200:
+                code, message = _EMBEDDING_STATUS.get(
+                    response.status,
+                    ("gateway_error", f"Gateway returned HTTP {response.status}"),
+                )
+                try:
+                    detail = json.loads(chunks).get("detail")
+                except (ValueError, UnicodeError, AttributeError, RecursionError):
+                    detail = None
+                if isinstance(detail, str) and 0 < len(detail) <= 200:
+                    message = f"{message}: {detail}"
+                return _decision_error(code, message)
+            result = json.loads(chunks)
+            if not isinstance(result, dict) or "error" in result:
+                return _decision_error("invalid_response", "Invalid gateway response")
+            return result
+    except asyncio.TimeoutError:
+        return _decision_error("timeout", "Embedding gateway timed out")
+    except aiohttp.ClientError:
+        return _decision_error("connection_error", "Embedding gateway unavailable")
+    except (ValueError, UnicodeError, RecursionError):
+        return _decision_error("invalid_response", "Invalid gateway response")
+
+
 # ── Tools ────────────────────────────────────────────────────────────────────
 
 
@@ -287,6 +351,86 @@ async def decide(
             {"model": model, "state": state, "questions": questions},
         )
     )
+
+
+@mcp.tool()
+async def list_embedding_models() -> str:
+    """List the embedding model ids this client key may use.
+
+    Returns ids (send them as `model` to embed), availability and the vector
+    dimensions once known. Embedding models run on the local engine and cannot
+    chat. Requires PLUGBOARD_API_KEY; an admin key is never substituted.
+    """
+    return json.dumps(await _embedding_request("GET", "/v1/embeddings/models"))
+
+
+@mcp.tool()
+async def embed(
+    input: str | list[str], model: str, include_vectors: bool = True
+) -> str:
+    """Embed one text or a list of texts through POST /v1/embeddings.
+
+    Args:
+        input: A text, or a list of up to 256 texts (never truncated: an input
+            too long for the model is refused).
+        model: Exact id from list_embedding_models, e.g. ollama:qwen3-embedding:0.6b.
+        include_vectors: False returns only model, count, dimensions and usage.
+
+    Returns JSON with model, count, dimensions, usage, provider_id, digest and
+    vectors (ordered like the inputs). Requires PLUGBOARD_API_KEY.
+    """
+    texts = [input] if isinstance(input, str) else input
+    if (
+        not isinstance(texts, list)
+        or not texts
+        or len(texts) > _EMBEDDING_MAX_INPUTS
+        or not all(isinstance(t, str) and t for t in texts)
+    ):
+        return json.dumps(
+            _decision_error(
+                "invalid_request",
+                f"input must be a non-empty text or 1 to {_EMBEDDING_MAX_INPUTS} non-empty texts",
+            )
+        )
+    if not isinstance(model, str) or not model.strip() or len(model) > 256:
+        return json.dumps(_decision_error("invalid_request", "model is required"))
+    result = await _embedding_request(
+        "POST",
+        "/v1/embeddings",
+        {"model": model.strip(), "input": input, "encoding_format": "float"},
+    )
+    if "error" in result:
+        return json.dumps(result)
+    data = result.get("data")
+    if not isinstance(data, list) or len(data) != len(texts):
+        return json.dumps(
+            _decision_error("invalid_response", "Invalid gateway response")
+        )
+    ordered = sorted(
+        (item for item in data if isinstance(item, dict)),
+        key=lambda item: item.get("index", 0),
+    )
+    vectors = [item.get("embedding") for item in ordered]
+    if len(vectors) != len(texts) or not all(
+        isinstance(v, list) and v for v in vectors
+    ):
+        return json.dumps(
+            _decision_error("invalid_response", "Invalid gateway response")
+        )
+    served = (
+        result.get("plugboard") if isinstance(result.get("plugboard"), dict) else {}
+    )
+    out: dict[str, Any] = {
+        "model": result.get("model", model),
+        "count": len(vectors),
+        "dimensions": len(vectors[0]),
+        "usage": result.get("usage", {}),
+        "provider_id": served.get("provider_id"),
+        "digest": served.get("digest"),
+    }
+    if include_vectors:
+        out["vectors"] = vectors
+    return json.dumps(out)
 
 
 @mcp.tool()

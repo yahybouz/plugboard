@@ -44,12 +44,13 @@ The full list is in the [configuration reference](configuration.md).
 
 ## Open the dashboard
 
-Open <http://localhost:8765> in a browser on the same machine. On a local install you are signed in automatically and redirected to `/dashboard`. Auto-login requires all of the following:
+`make dev` opens the dashboard in your browser, already signed in. The link carries a one-time token that the server writes at each start to `data/.login_token` (mode 0600); that browser is then remembered for 30 days, so opening <http://localhost:8765> later signs you in directly. Started another way, open `http://localhost:8765/login?token=` followed by the content of `data/.login_token`. Auto-login requires all of the following:
 
 - the server was started with `python run.py` or `make dev` and listens on a loopback address (`HOST=127.0.0.1`), or `PLUGBOARD_LOCAL_AUTO_LOGIN=1` is set;
 - `ADMIN_KEY` is not empty;
 - the browser runs on the same machine and opens the URL directly (address bar or bookmark), through `localhost`, `127.0.0.1` or `::1`;
 - no proxy sits in front of the server;
+- the browser holds the operator's secret: the login token, or the cookie of a browser remembered after using it (delete `data/local_devices.json` to forget every browser);
 - admin MFA is not enforced.
 
 Otherwise the login page asks for `ADMIN_KEY`. If you expected auto-login, the server log says why it was refused: see [Troubleshooting](troubleshooting.md#dashboard-auto-login-does-not-happen).

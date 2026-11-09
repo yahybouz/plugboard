@@ -29,7 +29,7 @@ LOCK_OPTS := --universal --python-version 3.12 --generate-hashes --custom-compil
 
 .PHONY: help catalog-check billing-reconcile setup install setup-mcp lock init dev test test-e2e lint format format-check \
         audit check verify secret-scan install-hooks docker-build docker-build-full \
-        compose-up compose-down smoke-models admin-mfa-setup \
+        compose-up compose-down smoke-models admin-mfa-setup rotate-encryption-key \
         sonar-up sonar-token sonar-scan sonar-issues sonar-down \
         contract contract-check \
         mcp mcp-sse mcp-http precommit-install precommit-run live-tests live-tests-mvp
@@ -131,8 +131,8 @@ init:          ## Create .env from .env.example with fresh secrets (never overwr
 
 # ── Run ───────────────────────────────────────────────────────
 
-dev:           ## Run the server with auto-reload (reads .env)
-	RELOAD=true "$(PY)" run.py
+dev:           ## Run the server with auto-reload (reads .env) and open the dashboard signed in
+	RELOAD=true PLUGBOARD_OPEN_BROWSER=1 "$(PY)" run.py
 
 catalog-check: ## Show the presets generated from the live models.dev catalog (needs network)
 	"$(PY)" scripts/catalog_check.py
@@ -145,6 +145,8 @@ smoke-models:  ## Ping every model through /v1/chat/completions (ARGS=...)
 
 admin-mfa-setup: ## Enrol an admin TOTP secret
 	"$(PY)" scripts/admin_mfa_setup.py
+rotate-encryption-key: ## Re-encrypt stored secrets under a new ENCRYPTION_KEY; stop the server first (ARGS=...)
+	"$(PY)" scripts/rotate_encryption_key.py $(ARGS)
 
 mcp:           ## Run the MCP server (stdio) from MCP_VENV
 	"$(MCP_VENV)/bin/python" scripts/run_mcp.py
@@ -366,3 +368,11 @@ live-tests-mvp: ## Live test framework, quick subset (D1+D3, 2 canary models)
 	"$(PY)" -m tests.live_model_tests.run_live_tests \
 		--surface api --dimensions d1,d3 --models claude-haiku-4-5,gpt-5.4 \
 		--base-url $${PLUGBOARD_BASE_URL:-http://localhost:8765}
+
+ci: ## CI locale qd-ci sur l'instantané exact du commit HEAD (ci/pipeline.json) ; sur l'UAT : ci lancer
+	@test -z "$$(git status --porcelain --untracked-files=no)" || echo "attention : modifications non commitées IGNORÉES (qd-ci lit le commit $$(git rev-parse --short HEAD))"
+	@d="$$(mktemp -d "$${TMPDIR:-/tmp}/qdci-XXXXXX")" && cp ci/pipeline.json "$$d/pipeline.json" && \
+	  CI_GIT_DIR="$$(cd "$$(git rev-parse --git-common-dir)" && pwd)" CI_COMMIT_SHA="$$(git rev-parse HEAD)" \
+	  qd-ci run --repo "$(CURDIR)" --rev "$$(git rev-parse HEAD)" --pipeline "$$d/pipeline.json" \
+	  --report "$$d/rapport.json" --private-dir "$$d/prive"; s=$$?; \
+	  echo "rapport qd-ci : $$d/rapport.json"; exit $$s

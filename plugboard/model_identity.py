@@ -16,6 +16,12 @@ _DISPLAY_OWNERS = {
 }
 
 
+def model_access_matches(allowed: Iterable[str], owner: str, native: str) -> bool:
+    """Match an effective identity exactly; native names remain opaque."""
+    allowed = tuple(allowed)
+    return not allowed or native in allowed or f"{owner}:{native}" in allowed
+
+
 def registered_model_owner(model: str, provider_ids: Iterable[str]) -> str | None:
     """Return the longest explicitly registered prefix, never a display label."""
     return max(

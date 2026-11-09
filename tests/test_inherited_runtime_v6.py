@@ -85,7 +85,7 @@ async def test_preflight_errors_are_closed_codes(
 ):
     _set_price(monkeypatch, _KNOWN_PRICE)
     fake_forward["exc"] = RuntimeError("upstream 503: body=SYNTH-BODY-77a1")
-    rec = _new_key(keys_env, "pf-codes", allowed_models=["test-provider"])
+    rec = _new_key(keys_env, "pf-codes", allowed_models=[_A[1]])
     resp = await client.post("/v1/preflight", headers=_auth(rec), json=_items(_A, _B))
     assert resp.status_code == 200, resp.text[:200]
     results = resp.json()["results"]

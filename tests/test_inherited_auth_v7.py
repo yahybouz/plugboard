@@ -528,13 +528,15 @@ async def test_admin_logout_revokes_only_its_own_session(admin_client, _mfa):
 
 async def test_admin_mfa_reset_revokes_every_session(admin_client, _mfa, monkeypatch):
     secret = _enforce(_mfa, monkeypatch)
-    first = await _login(admin_client, totp_code=_mfa._generate_code(secret))
-    second = await _login(
-        admin_client, totp_code=_mfa._generate_code(secret, at=time.time() + 30)
+    # Codes are single-use and must go forward: steps -1, 0, then +1.
+    first = await _login(
+        admin_client, totp_code=_mfa._generate_code(secret, at=time.time() - 30)
     )
+    second = await _login(admin_client, totp_code=_mfa._generate_code(secret))
     assert await _get_keys(admin_client, second) == 200
     admin_client.cookies.clear()
-    reset = await admin_client.delete("/admin/mfa", headers=first)
+    step_up = {TOTP_HEADER: _mfa._generate_code(secret, at=time.time() + 30)}
+    reset = await admin_client.delete("/admin/mfa", headers={**first, **step_up})
     assert reset.status_code == 204
     assert await _get_keys(admin_client, first) in (401, 403)
     assert await _get_keys(admin_client, second) in (401, 403)
@@ -553,6 +555,88 @@ async def test_admin_mfa_enrolment_revokes_every_session(admin_client, _mfa):
     assert setup.status_code == 204
     assert await _get_keys(admin_client, first) in (401, 403)
     assert await _get_keys(admin_client, second) in (401, 403)
+
+
+# PB-SEC-03: changing the second factor needs a current code, even from an
+# open session (an auto-login one included).
+
+
+async def test_admin_session_cannot_disable_mfa_without_current_code(
+    admin_client, _mfa
+):
+    _mfa.enroll(_mfa.generate_secret())
+    session = await _login(admin_client)
+    admin_client.cookies.clear()
+    resp = await admin_client.delete("/admin/mfa", headers=session)
+    assert resp.status_code == 403
+    assert _mfa.is_enrolled()
+
+
+async def test_admin_session_cannot_disable_mfa_with_wrong_code(admin_client, _mfa):
+    _mfa.enroll(_mfa.generate_secret())
+    session = await _login(admin_client)
+    admin_client.cookies.clear()
+    resp = await admin_client.delete(
+        "/admin/mfa", headers={**session, TOTP_HEADER: "000000"}
+    )
+    assert resp.status_code == 403
+    assert _mfa.is_enrolled()
+
+
+async def test_admin_session_disables_mfa_with_current_code(admin_client, _mfa):
+    secret = _mfa.generate_secret()
+    _mfa.enroll(secret)
+    session = await _login(admin_client)
+    admin_client.cookies.clear()
+    resp = await admin_client.delete(
+        "/admin/mfa", headers={**session, TOTP_HEADER: _mfa._generate_code(secret)}
+    )
+    assert resp.status_code == 204
+    assert not _mfa.is_enrolled()
+
+
+async def test_admin_bearer_with_totp_header_disables_mfa_when_required(
+    admin_client, _mfa, monkeypatch
+):
+    # The header code proven by the request's authentication is the step-up.
+    secret = _enforce(_mfa, monkeypatch)
+    admin_client.cookies.clear()
+    resp = await admin_client.delete(
+        "/admin/mfa",
+        headers={**ADMIN_BEARER, TOTP_HEADER: _mfa._generate_code(secret)},
+    )
+    assert resp.status_code == 204
+    assert not _mfa.is_enrolled()
+
+
+async def test_admin_mfa_rotation_needs_a_code_from_the_current_secret(
+    admin_client, _mfa
+):
+    old = _mfa.generate_secret()
+    _mfa.enroll(old)
+    session = await _login(admin_client)
+    new = _mfa.generate_secret()
+    admin_client.cookies.clear()
+
+    refused = await admin_client.post(
+        "/admin/mfa/setup",
+        headers=session,
+        json={"secret": new, "code": _mfa._generate_code(new)},
+    )
+    assert refused.status_code == 403
+    assert _mfa._stored_secret() == old
+
+    rotated = await admin_client.post(
+        "/admin/mfa/setup",
+        headers=session,
+        json={
+            "secret": new,
+            "code": _mfa._generate_code(new),
+            "current_code": _mfa._generate_code(old),
+        },
+    )
+    assert rotated.status_code == 204
+    assert _mfa._stored_secret() == new
 
 
 async def test_admin_cli_enrolment_revokes_every_session(admin_client, _mfa):

@@ -185,6 +185,7 @@ Choose **Plugboard** if you want one small self-hosted gateway for a handful of 
 - [Deployment](docs/guide/deployment.md)
 - [MCP server](docs/guide/mcp.md)
 - [Typed decisions (Jev API, hosted Laya)](docs/guide/decisions.md)
+- [Embeddings from a local engine](docs/guide/embeddings.md)
 - [Troubleshooting](docs/guide/troubleshooting.md)
 - [Architecture](docs/ARCHITECTURE.md), [decision records](docs/adr/README.md), [runbooks](docs/runbooks/README.md)
 

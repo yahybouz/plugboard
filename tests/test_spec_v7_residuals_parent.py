@@ -780,9 +780,16 @@ async def test_8_sessions_logout_own_only_then_reset_revokes_all(adm):
     r = await adm.c.post("/auth/admin/logout", cookies={"plugboard_admin_session": s1})
     assert r.status_code == 204
     assert [await _keys(adm, s) for s in (s1, s2, s3)] == [401, 200, 200]
-    # reset = disable + enroll through the API with session s2
+    # reset = disable + enroll through the API with session s2; changing the
+    # factor needs a current code (step-up, PB-SEC-03)
     adm.c.cookies.clear()
     r = await adm.c.delete("/admin/mfa", cookies={"plugboard_admin_session": s2})
+    assert r.status_code == 403
+    r = await adm.c.delete(
+        "/admin/mfa",
+        cookies={"plugboard_admin_session": s2},
+        headers={"X-Plugboard-Admin-TOTP": _code(adm, secret, 1)},
+    )
     assert r.status_code == 204
     assert [await _keys(adm, s) for s in (s2, s3)] == [401, 401]
 

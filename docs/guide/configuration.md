@@ -15,6 +15,7 @@ Boolean flags accept `1`, `true`, `yes`, `on` unless stated otherwise. Values be
 | `ENCRYPTION_KEY` | empty | Key used to encrypt provider tokens, OAuth credentials and the MFA secret at rest. Empty: a key is generated once in `data/.encryption_key`. Changing it makes stored credentials unreadable. |
 | `PLUGBOARD_DEV` | empty | `1` marks a development instance: the server may start without `ADMIN_KEY`, and the empty-`API_KEY` warning is logged once instead of repeated. |
 | `PLUGBOARD_LOCAL_AUTO_LOGIN` | `auto` | Dashboard auto-login. `auto`: only when `run.py` listens on a loopback address. `1`: also when listening on another interface (personal workstation). `0`: never. Unknown values count as `0`. See [Security notes](../../README.md#security-notes). |
+| `PLUGBOARD_OPEN_BROWSER` | empty | `1` (set by `make dev`): once the server answers, `run.py` opens the dashboard with the one-time login token from `data/.login_token`. Loopback bind only. |
 | `PLUGBOARD_ADMIN_MFA_REQUIRED` | empty | `1` requires a TOTP code at admin login, and refuses the admin key alone as a bearer ([admin API with MFA](monitoring.md#admin-api-with-mfa)), once a secret is enrolled (`POST /admin/mfa/begin`, then `POST /admin/mfa/setup`, or `make admin-mfa-setup`). Without an enrolled secret it has no effect, so it cannot lock you out. |
 | `ADMIN_SESSION_MAX_AGE` | `28800` | Lifetime of the admin session cookie, in seconds. |
 | `COOKIE_SECURE` | `auto` | `auto` marks the session cookie `Secure` unless the host is `localhost`, `127.0.0.1` or `::1`; `true` or `false` force it. |
@@ -25,6 +26,17 @@ Boolean flags accept `1`, `true`, `yes`, `on` unless stated otherwise. Values be
 | `CORS_ORIGINS` | empty | Comma-separated allowed origins. Empty: no cross-origin access, or `*` when both `API_KEY` and `ADMIN_KEY` are empty. |
 
 The server refuses to start when `API_KEY` or `ADMIN_KEY` holds comment text copied from `.env.example` (a value that starts with `#` followed by a space), and logs a critical message when `ENCRYPTION_KEY` does.
+
+### Changing `ENCRYPTION_KEY`
+
+Changing the key directly makes the stored provider tokens, OAuth credentials and admin MFA secret unreadable. Rotate it instead, with the server stopped:
+
+```bash
+make rotate-encryption-key ARGS="--new-key-file ~/plugboard-new.key --generate --dry-run"   # check first
+make rotate-encryption-key ARGS="--new-key-file ~/plugboard-new.key --generate"
+```
+
+The command reads every secret with the current key and re-encrypts it with the new one, after copying the files to `data/backups/rekey-<time>/`. If one secret cannot be read, nothing is written and the command lists where it is. The new key is written to the file you name (mode 0600), never printed. When `ENCRYPTION_KEY` is set, put the content of that file in `ENCRYPTION_KEY` before starting the server; when it is empty, the command replaces `data/.encryption_key` itself. Use it to replace a key that held comment text from an older `.env.example`.
 
 ## Server
 
@@ -92,6 +104,9 @@ The removed connector's `OPENCLAW_URL`, `OPENCLAW_KEY`, `OPENCLAW_MODEL` and
 | `OLLAMA_TIMEOUT` | `30` | Timeout of Ollama management calls, in seconds. |
 | `OLLAMA_CLOUD_CATALOG_URL` | `https://ollama.com/api/tags` | Catalog used to add Ollama cloud models. |
 | `PLUGBOARD_OLLAMA_CLOUD_AUTOSYNC` | `1` | `0` stops adding Ollama cloud models automatically. |
+| `PLUGBOARD_LOCAL_MODEL_DOWNLOADS` | `1` | `0` refuses Ollama pulls of local (non-cloud) models; only `:cloud` / `-cloud` ids of the official library (no `user/` namespace, no other registry) can be added, and such a pull is stopped if its layers exceed 64 MB. An admin can flip it on the **Ollama** page; that choice is saved in `<data>/ollama_settings.json` and wins over this variable. |
+| `PLUGBOARD_OLLAMA_MIN_FREE_GB` | `5` | Free disk space, in GB, that a local pull must leave. A pull whose registry size does not fit is refused with 507; a pull of unknown size is stopped as soon as it would cross this margin. |
+| `PLUGBOARD_OLLAMA_DISK_PATH` | data dir | Path whose filesystem is checked for free space (must be on the same disk as the Ollama models). |
 | `PLUGBOARD_OLLAMA_CLOUD_FAMILIES` | deepseek, kimi, qwen, glm, gemma, nemotron, minimax, gpt-oss, gemini, beam | Ollama cloud model families added automatically (comma-separated, `all` for the whole catalogue). |
 
 ## Caching
@@ -111,6 +126,14 @@ The removed connector's `OPENCLAW_URL`, `OPENCLAW_KEY`, `OPENCLAW_MODEL` and
 | `PLUGBOARD_EMBED_TIMEOUT` | `10` | Embedding call timeout, in seconds. |
 
 The unprefixed `EMBED_PROVIDER_ID`, `EMBED_MODEL`, `EMBED_SIMILARITY_THRESHOLD` and `EMBED_TIMEOUT` are still read, with a deprecation warning.
+
+## Embeddings route
+
+| Variable | Default | Description |
+|---|---|---|
+| `PLUGBOARD_EMBEDDING_MODELS` | empty | Comma-separated exact `<provider-id>:<native-model>` identities served by `POST /v1/embeddings` (empty: route closed). Only active `sovereign` providers on a loopback address, or exactly at a private-IP `OLLAMA_URL`, are served. See [Embeddings](embeddings.md). |
+| `PLUGBOARD_EMBEDDING_CONCURRENCY` | `2` | Embedding calls served at the same time (1–64); beyond that `POST /v1/embeddings` answers 429. |
+| `PLUGBOARD_EMBEDDING_TIMEOUT_S` | `60` | Engine timeout for one embeddings call, in seconds. |
 
 ## Pricing
 
@@ -159,7 +182,7 @@ The catalog is downloaded with each price update. A download that fails, is inva
 | `PLUGBOARD_MODEL_REMOVAL_PASSES` | `2` | Refreshes in a row without a model before it is removed from a provider's list (minimum 1). |
 | `MODEL_AVAILABILITY_BOOTSTRAP_DELAY_S` | `8` | Delay after startup before the first refresh. |
 | `MODEL_AVAILABILITY_UPDATE_TIMEOUT_S` | `900` | Timeout of one refresh. |
-| `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS` | `codex,claude,gemini,agy,ollama` | Which CLIs and Ollama to probe (`all` for every kind). |
+| `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS` | `codex,claude,gemini,agy,ollama` | Which CLIs and Ollama to probe (`all` for every kind). The agy account list (`agy models`) is synced without a probe even when `agy` is absent; empty disables every probe. |
 | `PLUGBOARD_MODEL_EXPOSE` | `latest` | `latest`: per model family, only the newest versions are listed by `/v1/models` and kept by the model refresh. `all`: every model the provider reports, with no other listing filter (curated list, per-provider cap). Default models and models already used are always kept. |
 | `PLUGBOARD_MODEL_EXPOSE_VERSIONS` | `2` | How many versions per family `latest` keeps (1 to 10). |
 | `PLUGBOARD_MODEL_REFRESH_MAX_PROBES` | `40` | Maximum model probes per CLI per run. |

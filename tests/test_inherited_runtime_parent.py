@@ -175,7 +175,7 @@ async def test_preflight_witness_allowed_key_ok(
 ):
     _set_price(monkeypatch, _KNOWN_PRICE)
     rec = _new_key(
-        keys_env, "pf-ok", allowed_models=["test-provider"], monthly_limit_usd=5.0
+        keys_env, "pf-ok", allowed_models=["fake:model-v1"], monthly_limit_usd=5.0
     )
     resp = await client.post("/v1/preflight", headers=_auth(rec), json=_items(1))
     assert resp.status_code == 200, resp.text[:200]

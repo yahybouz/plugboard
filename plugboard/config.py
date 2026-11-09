@@ -134,18 +134,21 @@ def _load_or_create_encryption_key() -> str:
 _ENCRYPTION_KEY = _load_or_create_encryption_key()
 
 
+def fernet_for_key(key: str) -> Fernet:
+    """Fernet for an ENCRYPTION_KEY value, as the server derives it."""
+    # If the key isn't already a valid Fernet key (legacy string), derive
+    # one via SHA-256 (same as before). An auto-generated key is already
+    # Fernet-shaped and decodes directly.
+    try:
+        return Fernet(key.encode("ascii"))
+    except Exception:
+        derived = base64.urlsafe_b64encode(hashlib.sha256(key.encode()).digest())
+        return Fernet(derived)
+
+
 def _get_fernet() -> Fernet:
     """Return a Fernet instance. Always non-None post-boot."""
-    # If the env key isn't already a valid Fernet key (legacy string),
-    # derive one via SHA-256 (same as before). An auto-generated key
-    # is already Fernet-shaped and decodes directly.
-    try:
-        return Fernet(_ENCRYPTION_KEY.encode("ascii"))
-    except Exception:
-        derived = base64.urlsafe_b64encode(
-            hashlib.sha256(_ENCRYPTION_KEY.encode()).digest()
-        )
-        return Fernet(derived)
+    return fernet_for_key(_ENCRYPTION_KEY)
 
 
 def _encrypt_token(token: str) -> str:

@@ -1,6 +1,6 @@
 {
   "server": "plugboard",
-  "contract_version": "1.1.0",
+  "contract_version": "1.2.0",
   "transport": [
     "stdio",
     "sse",
@@ -154,6 +154,43 @@
       }
     },
     {
+      "name": "embed",
+      "description": "Embed one text or a list of texts through POST /v1/embeddings.\n\n    Args:\n        input: A text, or a list of up to 256 texts (never truncated: an input\n            too long for the model is refused).\n        model: Exact id from list_embedding_models, e.g. ollama:qwen3-embedding:0.6b.\n        include_vectors: False returns only model, count, dimensions and usage.\n\n    Returns JSON with model, count, dimensions, usage, provider_id, digest and\n    vectors (ordered like the inputs). Requires PLUGBOARD_API_KEY.",
+      "inputSchema": {
+        "properties": {
+          "input": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ],
+            "title": "Input"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "include_vectors": {
+            "default": true,
+            "title": "Include Vectors",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "input",
+          "model"
+        ],
+        "title": "embedArguments",
+        "type": "object"
+      }
+    },
+    {
       "name": "get_update_prompt",
       "description": "Get the full technical prompt for a specific update.\n\n    Returns the complete instructions: what changed in Plugboard,\n    which files to modify in your project, exact code changes,\n    and how to verify it works.\n\n    Apply the changes, then call mark_applied(client_id, prompt_id).\n\n    Args:\n        prompt_id: The update ID (e.g. CP-001, CP-002)",
       "inputSchema": {
@@ -193,6 +230,15 @@
       "inputSchema": {
         "properties": {},
         "title": "list_decision_modelsArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "list_embedding_models",
+      "description": "List the embedding model ids this client key may use.\n\n    Returns ids (send them as `model` to embed), availability and the vector\n    dimensions once known. Embedding models run on the local engine and cannot\n    chat. Requires PLUGBOARD_API_KEY; an admin key is never substituted.",
+      "inputSchema": {
+        "properties": {},
+        "title": "list_embedding_modelsArguments",
         "type": "object"
       }
     },

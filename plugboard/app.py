@@ -3,6 +3,7 @@ Plugboard -- self-hosted LLM gateway: one API for every provider.
 
 Endpoints:
   POST /v1/chat/completions    -- proxy to configured provider (streaming supported)
+  POST /v1/embeddings          -- embeddings from a local engine (client key)
   GET  /v1/models              -- list all available models
   GET  /health                 -- liveness check
   GET  /usage/me               -- token usage for the calling client (current month)
@@ -60,7 +61,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from contextlib import asynccontextmanager
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -98,6 +99,7 @@ from plugboard.logging_config import _request_id_var, setup_logging
 from plugboard.metrics import get_stats
 from plugboard.ratelimit import check_client_rate_limit, check_rate_limit
 from plugboard.decision_api import router as decision_router
+from plugboard.embeddings_api import router as embeddings_router
 from plugboard.legacy_connectors import (
     REMOVED_CONNECTOR_ERROR,
     is_removed_provider,
@@ -116,6 +118,7 @@ from plugboard.router import (
     list_models,
     resolve_provider_and_model,
     served_by as _served_by,
+    usage_reported as _usage_reported,
 )
 from plugboard.tokenizer import (
     count_tokens,
@@ -305,6 +308,7 @@ if _dotenv_warning:
 @asynccontextmanager
 async def _lifespan(application: FastAPI):  # noqa: ARG001
     """Start background services on startup, stop on shutdown."""
+    _issue_local_login_token()
     # Auto-start provider watchdog
     from plugboard.provider_watchdog import start_watchdog, stop_watchdog
 
@@ -478,6 +482,7 @@ app = FastAPI(
     lifespan=_lifespan,
 )
 app.include_router(decision_router)
+app.include_router(embeddings_router)
 
 
 # ── SEC-001 violation handler ───────────────────────────────────────────────
@@ -985,6 +990,9 @@ def _admin_request_auth(request: Request) -> str:
     if not check_auth_rate_limit(client_ip):
         return "locked"
     if _mfa.verify(code):
+        # The code is single-use: remember it was proven in this request, so
+        # an MFA change made with it (step-up) does not ask for it again.
+        request.state.admin_mfa_verified = True
         return "ok"
     locked = record_auth_failure(client_ip)
     _audit(
@@ -993,6 +1001,49 @@ def _admin_request_auth(request: Request) -> str:
         ip=client_ip,
     )
     return "mfa_required"
+
+
+def _require_mfa_step_up(request: Request, code: Optional[str] = None) -> None:
+    """Ask for a current TOTP code before the second factor is changed.
+
+    Once a secret is enrolled, rotating or removing it needs a code from the
+    current secret, even from an open admin session (an auto-login session
+    included): holding a session must not be enough to drop the factor.
+    The code comes from ``code`` (request body) or the TOTP header; a code
+    already verified by this request's authentication counts.
+    """
+    from plugboard import admin_mfa as _mfa
+
+    if not _mfa.is_enrolled():
+        return
+    if getattr(request.state, "admin_mfa_verified", False):
+        return
+    code = (code or request.headers.get(_ADMIN_TOTP_HEADER, "")).strip()
+    client_ip = request.client.host if request.client else "unknown"
+    if not code:
+        _audit("admin.mfa.step_up_missing", details=f"IP: {client_ip}", ip=client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"A current MFA code is required (body or {_ADMIN_TOTP_HEADER})",
+        )
+    from plugboard.ratelimit import check_auth_rate_limit, record_auth_failure
+
+    if not check_auth_rate_limit(client_ip):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed attempts",
+        )
+    if _mfa.verify(code):
+        return
+    locked = record_auth_failure(client_ip)
+    _audit(
+        "admin.mfa.step_up_failed",
+        details=f"IP: {client_ip}, locked={locked}",
+        ip=client_ip,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN, detail="Invalid MFA code"
+    )
 
 
 def _require_admin(request: Request) -> None:
@@ -1122,6 +1173,32 @@ def _check_client_rpm(
 # -- Streaming billing -------------------------------------------------------
 
 
+async def _aclose_quietly(agen: Any) -> None:
+    """Close an upstream async generator, even inside a cancelled task.
+
+    Starlette cancels the response task when the client disconnects, and
+    keeps cancelling it on every await. The close runs in its own task, so
+    the upstream generator still releases its HTTP connection; if we are
+    cancelled meanwhile, the cancellation propagates and the close finishes
+    on its own.
+    """
+    aclose = getattr(agen, "aclose", None)
+    if aclose is None:
+        return
+    task = _asyncio.ensure_future(aclose())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    # Retrieve the result so an error in a close nobody awaits is not
+    # reported as "exception never retrieved".
+    task.add_done_callback(lambda t: t.cancelled() or t.exception())
+    try:
+        await _asyncio.shield(task)
+    except _asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        log.debug("Upstream stream close error (ignored): %s", exc)
+
+
 def _bill_streaming(
     client_id: str, body: dict, raw_sse: bytes, key_id: str = ""
 ) -> Dict[str, Any]:
@@ -1199,11 +1276,13 @@ def _bill_completion(
     prompt_tokens = usage_data.get("prompt_tokens", 0)
     completion_tokens = usage_data.get("completion_tokens", 0)
 
-    # Estimate tokens if backend returned 0
-    if prompt_tokens == 0:
-        prompt_tokens = estimate_prompt_tokens(body.get("messages", []))
-    if completion_tokens == 0:
-        completion_tokens = estimate_completion_tokens(result)
+    # Estimate tokens if backend returned 0, unless the CLI reported them
+    # (a reported 0 is a count, see router.usage_reported()).
+    if not _usage_reported():
+        if prompt_tokens == 0:
+            prompt_tokens = estimate_prompt_tokens(body.get("messages", []))
+        if completion_tokens == 0:
+            completion_tokens = estimate_completion_tokens(result)
 
     pricing_month = _billing.current_pricing_month()
     match = _billing.resolve_price(real_model, pricing_month, provider=provider)
@@ -1253,34 +1332,36 @@ def _check_model_access(
     model_str: str,
     key_record: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Raise 403 if caller is not allowed to use this model."""
-    if key_record:
-        allowed = key_record.get("allowed_models", [])
-        if not allowed:
-            return  # empty = all allowed
-        for pattern in allowed:
-            if pattern in model_str:
-                return
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                f"Model '{model_str}' not allowed for key '{key_record.get('key_id', '')}' "
-                f"(client '{client_id}'). Allowed: {allowed}"
-            ),
-        )
+    """Raise 403 unless the resolved effective identity is allowed."""
+    guard = _model_route_guard(client_id, key_record)
+    if guard is not None:
+        guard(*resolve_provider_and_model(model_str))
 
-    for k in load_keys():
-        if k.get("client_id") == client_id:
-            allowed = k.get("allowed_models", [])
-            if not allowed:
-                return  # empty = all allowed
-            for pattern in allowed:
-                if pattern in model_str:
-                    return
+
+def _model_route_guard(client_id, key_record=None):
+    """Snapshot the calling key's policy, never request-body state."""
+    if not client_id or client_id == "admin":
+        return None
+    record = key_record
+    if record is None:
+        record = next((k for k in load_keys() if k.get("client_id") == client_id), None)
+    allowed = tuple((record or {}).get("allowed_models", []))
+    if not allowed:
+        return None
+
+    def guard(provider, native):
+        from plugboard.model_identity import model_access_matches
+
+        if not model_access_matches(allowed, provider["id"], native):
             raise HTTPException(
                 status_code=403,
-                detail=f"Model '{model_str}' not allowed for client '{client_id}'. Allowed: {allowed}",
+                detail=(
+                    f"Model '{provider['id']}:{native}' not allowed for "
+                    f"client '{client_id}'. Allowed: {list(allowed)}"
+                ),
             )
+
+    return guard
 
 
 def _model_is_compatible(
@@ -1288,20 +1369,14 @@ def _model_is_compatible(
     client_id: str,
     key_record: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Return True if client is allowed to use this model."""
-    if client_id == "admin":
+    """Use chat's effective-route policy for catalogue compatibility."""
+    guard = _model_route_guard(client_id, key_record)
+    if guard is None:
         return True
-    if key_record:
-        allowed = key_record.get("allowed_models", [])
-        if not allowed:
-            return True
-        return any(pattern in model_str for pattern in allowed)
-    for k in load_keys():
-        if k.get("client_id") == client_id:
-            allowed = k.get("allowed_models", [])
-            if not allowed:
-                return True
-            return any(pattern in model_str for pattern in allowed)
+    try:
+        guard(*resolve_provider_and_model(model_str))
+    except (HTTPException, ValueError):
+        return False
     return True
 
 
@@ -1436,8 +1511,11 @@ async def chat_completions(
         spending_total = _check_spending_limit(client_id, key_record=key_record)
 
     # Check model access (per-key allowed_models)
-    if client_id and client_id != "admin":
-        _check_model_access(client_id, body.get("model", ""), key_record=key_record)
+    route_guard = _model_route_guard(client_id, key_record)
+    route_options = {}
+    if route_guard is not None:
+        route_guard(*resolve_provider_and_model(body.get("model", "")))
+        route_options["route_guard"] = route_guard
 
     # A budget cannot hold a call whose price is unknown (402, nothing called)
     if client_id and client_id != "admin":
@@ -1455,7 +1533,9 @@ async def chat_completions(
     # non-stream cache when the same prompt was asked non-stream first).
     _cache_enabled = body.pop("cache", True) is not False
     _is_streaming = body.get("stream") is True
-    _use_cache = _cache_enabled
+    # Historical cache entries do not bind the effective serving identity.
+    # Restricted keys must not reuse responses from another route or policy.
+    _use_cache = _cache_enabled and route_guard is None
     _cache_key = None
     if _use_cache:
         from plugboard.cache import compute_cache_key, get_cached
@@ -1599,7 +1679,9 @@ async def chat_completions(
 
         if _stream_bypass:
             try:
-                result = await forward({**body, "stream": False})
+                result = await forward({**body, "stream": False}, **route_options)
+            except HTTPException:
+                raise
             except Exception as exc:
                 log.error("subprocess stream forward error: %s", exc)
                 err_str = str(exc)
@@ -1631,12 +1713,18 @@ async def chat_completions(
                 if client_id:
                     provider, real_model = _billing_target(body)
                     usage_data = result.get("usage") or {}
-                    prompt_tokens = usage_data.get(
-                        "prompt_tokens", 0
-                    ) or estimate_prompt_tokens(body.get("messages", []))
-                    completion_tokens = usage_data.get(
-                        "completion_tokens", 0
-                    ) or estimate_completion_tokens(result)
+                    reported = _usage_reported()
+                    if reported:
+                        # Counts the CLI reported, zeros included.
+                        prompt_tokens = usage_data["prompt_tokens"]
+                        completion_tokens = usage_data["completion_tokens"]
+                    else:
+                        prompt_tokens = usage_data.get(
+                            "prompt_tokens", 0
+                        ) or estimate_prompt_tokens(body.get("messages", []))
+                        completion_tokens = usage_data.get(
+                            "completion_tokens", 0
+                        ) or estimate_completion_tokens(result)
                     pricing_month = _billing.current_pricing_month()
                     match = _billing.resolve_price(
                         real_model, pricing_month, provider=provider
@@ -1668,12 +1756,20 @@ async def chat_completions(
                     result["billing"] = _billing_for_cache
                     # Ensure usage in result matches billing (so cache replay emits
                     # the same numbers).
-                    result["usage"] = {
+                    new_usage = {
                         "prompt_tokens": prompt_tokens,
                         "completion_tokens": completion_tokens,
                         "total_tokens": prompt_tokens + completion_tokens,
                         "cost_usd": round(cost, 6),
                     }
+                    if reported:
+                        for key in (
+                            "prompt_tokens_details",
+                            "completion_tokens_details",
+                        ):
+                            if isinstance(usage_data.get(key), dict):
+                                new_usage[key] = usage_data[key]
+                    result["usage"] = new_usage
             except Exception as exc:
                 log.warning("subprocess stream billing error (non-fatal): %s", exc)
 
@@ -1758,7 +1854,7 @@ async def chat_completions(
             )
 
         try:
-            gen = forward_stream(body)
+            gen = forward_stream(body, **route_options)
             first = await gen.__anext__()
         except StopAsyncIteration:
             return StreamingResponse(
@@ -1766,6 +1862,8 @@ async def chat_completions(
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
+        except HTTPException:
+            raise
         except Exception as exc:
             log.error("stream error: %s", exc)
             err_str = str(exc)
@@ -1814,13 +1912,34 @@ async def chat_completions(
             tail_buf = bytearray(
                 first_chunk[done_in_first:] if done_in_first != -1 else b""
             )
-            async for chunk in rest:
-                accumulated.extend(chunk)
-                tail_buf.extend(chunk)
-                if len(tail_buf) > TAIL:
-                    overflow = bytes(tail_buf[:-TAIL])
-                    yield overflow
-                    del tail_buf[:-TAIL]
+            completed = False
+            try:
+                async for chunk in rest:
+                    accumulated.extend(chunk)
+                    tail_buf.extend(chunk)
+                    if len(tail_buf) > TAIL:
+                        overflow = bytes(tail_buf[:-TAIL])
+                        yield overflow
+                        del tail_buf[:-TAIL]
+                completed = True
+            finally:
+                if not completed:
+                    # Client gone (cancellation or generator close) or upstream
+                    # read error: the provider has already generated these
+                    # tokens, so record them before letting the error through.
+                    if cid:
+                        try:
+                            _bill_streaming(
+                                cid, req_body, bytes(accumulated), key_id=kid
+                            )
+                            log.info(
+                                "Stream interrupted: billed the partial answer "
+                                "(%d bytes)",
+                                len(accumulated),
+                            )
+                        except Exception as exc:
+                            log.warning("Stream billing error (non-fatal): %s", exc)
+                    await _aclose_quietly(rest)
             # At this point `tail_buf` holds the last <=TAIL bytes and has
             # NOT been yielded yet.
 
@@ -1872,7 +1991,9 @@ async def chat_completions(
 
     t0 = time.perf_counter()
     try:
-        result = await forward(body)
+        result = await forward(body, **route_options)
+    except HTTPException:
+        raise
     except Exception as exc:
         log.error("forward error: %s", exc)
         err_str = str(exc)
@@ -2062,6 +2183,10 @@ async def preflight(
     """
     key_record = _get_request_key_record(request, client_id=client_id)
     key_id = getattr(request.state, "key_id", "")
+    route_guard = _model_route_guard(client_id, key_record)
+    route_options = {}
+    if route_guard is not None:
+        route_options["route_guard"] = route_guard
     results: List[Dict[str, Any]] = []
     for item in body.items:
         t0 = time.perf_counter()
@@ -2081,7 +2206,9 @@ async def preflight(
                 "max_tokens": 1,
             }
             try:
-                result = await forward(ping_body, timeout=10.0)
+                result = await forward(ping_body, timeout=10.0, **route_options)
+            except HTTPException:
+                error = "forbidden_model"
             except Exception as exc:
                 log.warning("preflight error | model=%s | %s", model_str, exc)
                 error = "upstream_error"
@@ -3692,7 +3819,84 @@ def _schedule_initial_discovery(provider_id: str) -> None:
 
 
 class OllamaPullRequest(BaseModel):
-    name: str  # e.g. "llama3:8b", "mistral"
+    name: str = Field(max_length=256)  # e.g. "llama3:8b", "mistral"
+
+
+class OllamaSettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    local_downloads_enabled: bool
+
+
+@app.get("/admin/ollama/settings")
+async def ollama_get_settings(_: None = Depends(_require_admin)):
+    """Local downloads switch (and its source), disk guard margin, free disk."""
+    from plugboard import ollama_admin
+
+    return ollama_admin.settings_payload()
+
+
+@app.put("/admin/ollama/settings")
+async def ollama_put_settings(
+    body: OllamaSettingsUpdate, _: None = Depends(_require_admin)
+):
+    """Turn local model downloads on or off (persisted, wins over the env)."""
+    from plugboard import ollama_admin
+
+    ollama_admin.set_local_downloads(body.local_downloads_enabled)
+    _audit(
+        "ollama.settings",
+        target_type="setting",
+        target_id="local_downloads_enabled",
+        details=f"value={body.local_downloads_enabled}",
+    )
+    return ollama_admin.settings_payload()
+
+
+@app.get("/admin/ollama/cloud-catalog")
+async def ollama_cloud_catalog(_: None = Depends(_require_admin)):
+    """Public Ollama Cloud catalogue as cloud ids, flagged when installed.
+
+    Read-only: no inference probe. Some models need a paid Ollama plan.
+    """
+    from plugboard import ollama_admin
+    from plugboard.ollama import _to_cloud_id, fetch_cloud_catalog
+    from plugboard.ollama import list_models as _ollama_list
+
+    names = await fetch_cloud_catalog()
+    try:
+        local = await _ollama_list()
+        local_available = True
+    except Exception as exc:  # noqa: BLE001 (catalogue still useful offline)
+        log.warning("ollama cloud catalog: local list unavailable: %s", exc)
+        local, local_available = [], False
+    installed = {
+        str(m.get("name") or m.get("model") or "") for m in local if isinstance(m, dict)
+    }
+    seen = set()
+    models = []
+    for base in names:
+        # Untrusted upstream: keep only names the pull route would accept
+        # as cloud ids (official library, valid characters).
+        if not isinstance(base, str):
+            continue
+        try:
+            cloud_id = ollama_admin.validate_model_name(_to_cloud_id(base))
+        except ValueError:
+            continue
+        if not ollama_admin.is_cloud_id(cloud_id) or cloud_id in seen:
+            continue
+        seen.add(cloud_id)
+        models.append(
+            {"name": base, "id": cloud_id, "installed": cloud_id in installed}
+        )
+    return {
+        "models": models,
+        "count": len(models),
+        "local_list_available": local_available,
+        "note": "Some cloud models need a paid Ollama plan; the free plan "
+        "answers with an error when they are used.",
+    }
 
 
 @app.get("/admin/ollama/status")
@@ -3725,13 +3929,51 @@ async def ollama_list_models(_: None = Depends(_require_admin)):
 
 @app.post("/admin/ollama/models/pull")
 async def ollama_pull_model(body: OllamaPullRequest, _: None = Depends(_require_admin)):
-    """Pull (download) an Ollama model. Returns streaming NDJSON progress."""
+    """Pull (download) an Ollama model. Returns streaming NDJSON progress.
+
+    Refused before any streaming when local downloads are off and the name is
+    not an Ollama Cloud id (403), or when the registry size does not fit on
+    disk with the margin (507). An unknown size streams under a disk guard.
+    """
     import json as _json
-    from plugboard.ollama import pull_model
+    from plugboard import ollama_admin
+    from plugboard.ollama import delete_model, pull_model
+
+    try:
+        name = ollama_admin.validate_model_name(body.name)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    try:
+        guard = await ollama_admin.precheck_pull(name)
+    except ollama_admin.PullRefused as exc:
+        _audit(
+            "ollama.pull_refused",
+            target_type="model",
+            target_id=name,
+            details=f"status={exc.status}",
+        )
+        raise HTTPException(exc.status, exc.detail)
 
     async def _stream():
         try:
-            async for progress in pull_model(body.name):
+            if guard["cloud"]:
+                progress_iter = ollama_admin.guarded_pull(
+                    name,
+                    free_at_start=None,
+                    margin=0,
+                    pull=pull_model,
+                    delete=delete_model,
+                    max_total=ollama_admin.CLOUD_MAX_BYTES,
+                )
+            else:
+                progress_iter = ollama_admin.guarded_pull(
+                    name,
+                    free_at_start=guard["free"],
+                    margin=guard["margin"],
+                    pull=pull_model,
+                    delete=delete_model,
+                )
+            async for progress in progress_iter:
                 yield _json.dumps(progress) + "\n"
             # Sync models after pull
             provider = get_provider("ollama")
@@ -3739,11 +3981,13 @@ async def ollama_pull_model(body: OllamaPullRequest, _: None = Depends(_require_
                 from plugboard.ollama import _sync_models
 
                 await _sync_models(provider)
-            yield _json.dumps({"status": "complete", "model": body.name}) + "\n"
+            yield _json.dumps({"status": "complete", "model": name}) + "\n"
+        except ollama_admin.PullAborted:
+            return
         except Exception as exc:
             yield _json.dumps({"status": "error", "error": str(exc)}) + "\n"
 
-    _audit("ollama.pull", target_type="model", target_id=body.name)
+    _audit("ollama.pull", target_type="model", target_id=name)
     return StreamingResponse(_stream(), media_type="application/x-ndjson")
 
 
@@ -4570,13 +4814,14 @@ _PUBLIC_DASHBOARD_HTML = {"portal.html"}
 
 _LOGIN_HTML_TEMPLATE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Plugboard — Login</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:'Inter',-apple-system,sans-serif;background:#f8fafc;color:#0f172a;
-display:flex;align-items:center;justify-content:center;height:100vh}
-.box{background:#fff;padding:2.5rem;border-radius:18px;width:400px;max-width:92vw;
+display:flex;align-items:center;justify-content:center;min-height:100vh;min-height:100dvh;padding:1rem}
+.box{background:#fff;padding:clamp(1.25rem,6vw,2.5rem);border-radius:18px;width:400px;max-width:100%;margin:auto;flex-shrink:0;
 text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.07),0 8px 28px rgba(0,0,0,.08);
 border:1px solid rgba(0,0,0,.08)}
 .logo{width:52px;height:52px;border-radius:14px;display:inline-grid;place-items:center;
@@ -4592,7 +4837,8 @@ button{width:100%;padding:.6rem;background:#2563eb;color:#fff;border:none;
 border-radius:8px;cursor:pointer;font-size:.9rem;font-weight:600;font-family:inherit;
 margin-top:.25rem;transition:background .18s;box-shadow:0 1px 3px rgba(37,99,235,.2)}
 button:hover{background:#1d4ed8}
-.err{color:#dc2626;font-size:.82rem;min-height:1.2em;margin-top:.25rem}
+.err{color:#dc2626;font-size:.82rem;min-height:1.2em;margin-top:.25rem;overflow-wrap:anywhere}
+@media(max-width:600px),(any-pointer:coarse){input{font-size:1rem}input,button{min-height:44px}}
 </style></head><body>
 <div class="box">
 <div class="logo">E</div>
@@ -4653,6 +4899,8 @@ class AdminMfaSetupRequest(BaseModel):
 
     secret: str
     code: str
+    # Code from the secret being replaced; required once one is enrolled.
+    current_code: Optional[str] = None
 
 
 class AdminMfaVerify(BaseModel):
@@ -4709,7 +4957,7 @@ _LOCAL_NAVIGATION_SITES = {"none", "same-origin"}
 # Refusals that mean someone claimed to be local without being so: audited,
 # at most once per peer and reason per window, and for at most
 # _REFUSAL_AUDIT_MAX_KEYS peers per window, so they cannot flood the log.
-_SUSPICIOUS_REFUSALS = {"proxied", "non_loopback_peer"}
+_SUSPICIOUS_REFUSALS = {"proxied", "non_loopback_peer", "bad_token"}
 _REFUSAL_AUDIT_WINDOW_S = 600.0
 _REFUSAL_AUDIT_MAX_KEYS = 256
 _refusal_audit_seen: Dict[tuple, float] = {}
@@ -4832,10 +5080,55 @@ log.info(
 )
 
 
+def _local_login_proof(request: Request) -> tuple:
+    """("device" | "token", "") when the browser shows a secret only the
+    operator holds, else ("", refusal reason).
+
+    The loopback and header checks prove nothing against a same-machine
+    container, VM or forwarder; this does: a remembered-browser cookie, or
+    the single-use token from data/.login_token (opened by ``make dev``).
+    """
+    from plugboard import local_login
+
+    if local_login.is_remembered(request.cookies.get(local_login.DEVICE_COOKIE, "")):
+        return "device", ""
+    token = request.query_params.get("token", "")
+    if not token:
+        return "", "no_local_secret"
+    if local_login.consume_token(token):
+        return "token", ""
+    return "", "bad_token"
+
+
+def _issue_local_login_token() -> None:
+    """At startup, write a fresh login token when auto-login can be used."""
+    mode = _auto_login_mode()
+    if mode == "off" or not _effective_admin_key():
+        return
+    if mode == "auto" and not _is_loopback_address(_bind_host()):
+        return
+    from plugboard import local_login
+
+    try:
+        local_login.issue_token()
+    except OSError as exc:
+        log.warning("auth.auto_login cannot write the login token: %s", exc)
+        return
+    log.info(
+        "auth.auto_login sign in once with the link `make dev` opens, or "
+        "/login?token=<content of %s>; the browser is then remembered",
+        local_login.token_path(),
+    )
+
+
 @app.get("/login", include_in_schema=False)
 async def login_page(request: Request):
-    """Public login page. Auto-login only for a local install opened locally."""
+    """Public login page. Auto-login only for a local install opened locally
+    by a browser holding the operator's secret (login token or remembered)."""
     refusal = _auto_login_refusal(request)
+    proof = ""
+    if not refusal:
+        proof, refusal = _local_login_proof(request)
     peer = request.client.host if request.client else ""
     host = _host_header_name(request)
     if refusal:
@@ -4857,7 +5150,7 @@ async def login_page(request: Request):
         if session_token:
             _audit(
                 "auth.auto_login",
-                details=f"localhost auto-login host={host}",
+                details=f"localhost auto-login host={host} via={proof}",
                 ip=peer,
             )
             resp = RedirectResponse(url="/dashboard", status_code=302)
@@ -4872,6 +5165,19 @@ async def login_page(request: Request):
                 secure=False,
                 path="/",
             )
+            if proof == "token":
+                from plugboard import local_login
+
+                # Remember this browser so the next visits need no token.
+                resp.set_cookie(  # NOSONAR
+                    local_login.DEVICE_COOKIE,
+                    local_login.remember_device(),
+                    max_age=local_login.DEVICE_MAX_AGE,
+                    httponly=True,
+                    samesite="strict",
+                    secure=False,
+                    path="/login",
+                )
             return resp
     nonce = request.state.csp_nonce
     html = _LOGIN_HTML_TEMPLATE.replace("__CSP_NONCE__", nonce)
@@ -5028,9 +5334,11 @@ async def admin_mfa_setup(
     """Step 2 of enrolment: the admin submits the secret from /begin plus a
     code read from their authenticator app. On success the secret is
     Fernet-encrypted and written to disk. Subsequent logins will demand
-    TOTP codes once PLUGBOARD_ADMIN_MFA_REQUIRED=1."""
+    TOTP codes once PLUGBOARD_ADMIN_MFA_REQUIRED=1. Replacing an enrolled
+    secret also needs a current code from it (``current_code``)."""
     from plugboard import admin_mfa as _mfa
 
+    _require_mfa_step_up(request, body.current_code)
     # Validate the code matches the *submitted* secret (not any previously
     # stored one — we might be rotating). We don't call _mfa.verify() here
     # because that reads from disk. The code is then recorded as used.
@@ -5057,9 +5365,14 @@ async def admin_mfa_verify(body: AdminMfaVerify, _: None = Depends(_require_admi
 
 @app.delete("/admin/mfa", include_in_schema=False, status_code=204)
 async def admin_mfa_disable(request: Request, _: None = Depends(_require_admin)):
-    """Remove the stored TOTP secret. Useful for rotation or to disable MFA."""
+    """Remove the stored TOTP secret. Useful for rotation or to disable MFA.
+
+    Needs a current code in the X-Plugboard-Admin-TOTP header while a secret
+    is enrolled (lost authenticator: scripts/admin_mfa_setup.py --rotate on
+    the host)."""
     from plugboard import admin_mfa as _mfa
 
+    _require_mfa_step_up(request)
     _mfa.disable()
     _audit(
         "admin.mfa.disabled",

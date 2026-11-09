@@ -131,19 +131,18 @@ async def test_models_account_compatible_restricted(client, tmp_path, monkeypatc
     monkeypatch.setattr(ak, "_DATA_DIR", tmp_path)
     monkeypatch.setattr(ak, "KEYS_FILE", tmp_path / "api_keys.json")
     monkeypatch.setattr(ak, "KEYS_LOCK", tmp_path / "api_keys.json.lock")
-    rec = ak.create_key("test-client", "test", allowed_models=["fake"])
+    rec = ak.create_key("test-client", "test", allowed_models=["fake:model-v1"])
 
     resp = await client.get(
         "/v1/models", headers={"Authorization": f"Bearer {rec['key']}"}
     )
     assert resp.status_code == 200
     body = resp.json()
-    for item in body["data"]:
-        mid = item.get("id", "")
-        if "fake" in mid:
-            assert item["account_compatible"] is True
-        else:
-            assert item["account_compatible"] is False
+    compat = {item["id"]: item["account_compatible"] for item in body["data"]}
+    assert compat, "catalogue must not be empty"
+    for mid, ok in compat.items():
+        # Exact effective identity only; no substring matching.
+        assert ok is (mid == "test-provider:fake:model-v1"), mid
 
 
 # ── BENCH-009 ───────────────────────────────────────────────────────────────

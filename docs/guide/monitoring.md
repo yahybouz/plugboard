@@ -20,6 +20,8 @@ curl -s -b admin.cookies -X POST http://localhost:8765/auth/admin/logout
 
 Sessions are stored on the server (`data/admin_sessions.json`) and last `ADMIN_SESSION_MAX_AGE` (8 hours). Logout revokes that session; enrolling, rotating or disabling MFA revokes every session; a session opened without a code stops working once MFA is enforced. Keep the cookie file private and delete it after use. Without enforced MFA the bearer alone works as before.
 
+Once a secret is enrolled, changing the second factor needs a current code from it, even from an open session: `DELETE /admin/mfa` takes it in the `X-Plugboard-Admin-TOTP` header, and rotating through `POST /admin/mfa/setup` takes it as `current_code` next to the new `secret` and `code`. Without it the call is refused with 403; wrong codes count towards the login lockout. With a lost authenticator, run `scripts/admin_mfa_setup.py --rotate` on the host.
+
 ## Dashboard pages
 
 | Page | What you see |
@@ -35,7 +37,7 @@ Sessions are stored on the server (`data/admin_sessions.json`) and last `ADMIN_S
 `GET /health` is public and cheap, suitable for load balancers and container health checks:
 
 ```json
-{"ok": true, "version": "4.3.0", "providers": 3, "active": ["anthropic-direct", "ollama", "claude-via-claude-cli"]}
+{"ok": true, "version": "4.4.1", "providers": 3, "active": ["anthropic-direct", "ollama", "claude-via-claude-cli"]}
 ```
 
 When `API_KEY` is empty it also returns `"auth_disabled": true` and `"dev_mode"`, so a deployment gate can refuse an instance whose client authentication is off.
