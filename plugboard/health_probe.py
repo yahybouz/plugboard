@@ -59,7 +59,7 @@ async def _probe_subprocess(auth_source: str) -> Dict[str, Any]:
             "latency_ms": 0.0,
         }
     probe = await probe_cli_version(kind)
-    return {
+    result = {
         "ok": probe["ok"],
         "status": "running" if probe["ok"] else "down",
         "version": probe.get("version"),
@@ -67,6 +67,15 @@ async def _probe_subprocess(auth_source: str) -> Dict[str, Any]:
         "url": f"subprocess://{kind}",
         "latency_ms": round(probe.get("latency_ms", 0), 1),
     }
+    if probe["ok"]:
+        # A CLI that runs but has no account signed in fails every request:
+        # it is not healthy (it used to show "healthy" at 100 % errors).
+        from plugboard.cli_subprocess import probe_cli_signed_in
+
+        account = await probe_cli_signed_in(kind)
+        if account.get("signed_in") is False:
+            result.update(ok=False, status="signed_out", error=account["error"])
+    return result
 
 
 async def _probe_http(
