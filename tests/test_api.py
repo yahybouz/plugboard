@@ -86,7 +86,12 @@ async def test_completions_backend_error_returns_502(client):
         resp = await client.post(
             "/v1/chat/completions",
             headers=AUTH,
-            json={"model": "test-provider:fake:model-v1", "messages": []},
+            # A valid request: an empty messages list is now a 400 before
+            # any provider call (test_chat_messages_validation).
+            json={
+                "model": "test-provider:fake:model-v1",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
         )
     assert resp.status_code == 502
 
