@@ -30,8 +30,8 @@ async def test_sql_injection_usage_month(admin_client):
             f"/admin/usage/{payload}",
             headers=ADMIN_AUTH,
         )
-        # Must not return 500 (server error) -- 200 with empty data or 404 are fine
-        assert resp.status_code in (200, 404), (
+        # Must not return 500 (server error): the month is now validated (422)
+        assert resp.status_code in (200, 404, 422), (
             f"SQL injection payload returned {resp.status_code}: {payload}"
         )
 

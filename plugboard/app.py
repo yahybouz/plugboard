@@ -473,6 +473,24 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
     log.info("HTTP pool closed")
 
 
+_MONTH_RE = re.compile(r"^\d{4}_(0[1-9]|1[0-2])$")
+_MONTH_DASH_RE = re.compile(r"^(\d{4})-(0[1-9]|1[0-2])$")
+
+
+def _month_param(month: str) -> str:
+    """``{month}`` path parameter: ``YYYY_MM`` (storage form) or ``YYYY-MM``.
+
+    ``2026-11`` used to answer an empty month (usage) or a 404 (pricing)
+    because only ``2026_11`` exists in the store. Anything else is a 422.
+    """
+    m = _MONTH_DASH_RE.match(month or "")
+    if m:
+        return f"{m.group(1)}_{m.group(2)}"
+    if not _MONTH_RE.match(month or ""):
+        raise HTTPException(422, "month must look like YYYY_MM or YYYY-MM")
+    return month
+
+
 app = FastAPI(
     title="Plugboard",
     description="Self-hosted LLM gateway -- one standard chat API, every provider behind it",
@@ -4206,6 +4224,7 @@ async def list_org_keys(org_id: str, _: None = Depends(_require_admin)):
 @app.get("/admin/orgs/{org_id}/usage/{month}")
 async def org_usage(org_id: str, month: str, _: None = Depends(_require_admin)):
     """Aggregate usage for all clients in an organisation."""
+    month = _month_param(month)
     keys = get_keys_by_org(org_id)
     client_ids = {k.get("client_id") for k in keys}
     all_entries = []
@@ -4284,9 +4303,6 @@ class PricingRevert(BaseModel):
 
 class SuggestionIds(BaseModel):
     ids: List[str] = Field(min_length=1, max_length=500)
-
-
-_MONTH_RE = re.compile(r"^\d{4}_(0[1-9]|1[0-2])$")
 
 
 def _check_month(month: str) -> None:
@@ -4451,6 +4467,7 @@ async def patch_pricing(
     Other rows are left as they are. A manual price is never replaced by a
     source; ``POST /admin/pricing/{month}/revert`` gives the model back to them.
     """
+    month = _month_param(month)
     _check_month(month)
     changed: List[str] = []
     with _billing.pricing_lock(month):
@@ -4485,6 +4502,7 @@ async def revert_pricing(
     The new price comes from the last update's sources, else the automatic
     price the manual edit replaced, else the previous month (see revert_model).
     """
+    month = _month_param(month)
     from plugboard.pricing_scraper import revert_model
 
     _check_month(month)
@@ -4506,6 +4524,7 @@ async def revert_pricing(
 
 @app.get("/admin/pricing/{month}")
 async def get_pricing(month: str, _: None = Depends(_require_admin)):
+    month = _month_param(month)
     pricing = _billing.load_pricing(month)
     if not pricing:
         raise HTTPException(404, f"No pricing data for month '{month}'")
@@ -4695,6 +4714,7 @@ async def upsert_pricing(
     ``source=manual``. Without ``models_by_provider`` the provider prices
     already in the grid are kept.
     """
+    month = _month_param(month)
     _check_month(month)
     with _billing.pricing_lock(month):
         existing = _load_grid_for_edit(month)
@@ -4722,6 +4742,7 @@ async def upsert_pricing(
 async def admin_usage_month(
     month: str, page: int = 1, limit: int = 100, _: None = Depends(_require_admin)
 ):
+    month = _month_param(month)
     entries, total = _usage.get_usage_paginated(month, page, limit)
     return {
         "month": month,
@@ -4737,6 +4758,7 @@ async def admin_usage_month(
 
 @app.delete("/admin/usage/{month}", status_code=204)
 async def delete_usage_month(month: str, _: None = Depends(_require_admin)):
+    month = _month_param(month)
     if not _usage.delete_usage(month):
         raise HTTPException(404, f"No usage data for month '{month}'")
 
@@ -4746,6 +4768,7 @@ async def export_usage(
     month: str, format: str = "json", _: None = Depends(_require_admin)
 ):
     """Export usage data as CSV or JSON."""
+    month = _month_param(month)
     entries = _usage.get_usage(month)
     if format == "csv":
         import csv
@@ -4772,6 +4795,7 @@ async def export_usage(
 async def admin_usage_by_key(
     month: str, key_id: str, _: None = Depends(_require_admin)
 ):
+    month = _month_param(month)
     entries = _usage.get_usage_by_key(month, key_id)
     return {
         "month": month,
@@ -4799,6 +4823,7 @@ async def migrate_usage(_: None = Depends(_require_admin)):
 async def admin_usage_client(
     month: str, client_id: str, _: None = Depends(_require_admin)
 ):
+    month = _month_param(month)
     entries = _usage.get_usage_by_client(month, client_id)
     return {
         "month": month,
