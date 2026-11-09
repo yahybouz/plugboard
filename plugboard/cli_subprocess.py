@@ -782,6 +782,68 @@ async def probe_cli_version(kind: str, timeout_s: float = 5.0) -> Dict[str, Any]
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
+# Account status commands: no inference, no quota. kind -> argv.
+_SIGN_IN_STATUS_ARGV = {
+    "claude": ["claude", "auth", "status"],
+    "codex": ["codex", "login", "status"],
+}
+
+
+async def _run_status(argv: List[str], kind: str, timeout_s: float):
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=build_child_env(kind),
+        cwd=_clean_spawn_cwd(),
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise
+    return (
+        proc.returncode,
+        (stdout or b"").decode("utf-8", "replace"),
+        (stderr or b"").decode("utf-8", "replace"),
+    )
+
+
+async def probe_cli_signed_in(kind: str, timeout_s: float = 10.0) -> Dict[str, Any]:
+    """Whether a subscription CLI has an account signed in, without a model call.
+
+    ``{"signed_in": True|False|None, "error": str}``; ``None`` when the CLI
+    has no status command (agy) or the check itself failed, so the caller
+    keeps its previous verdict instead of reporting a false outage.
+    """
+    argv = _SIGN_IN_STATUS_ARGV.get(kind)
+    if not argv or shutil.which(argv[0]) is None:
+        return {"signed_in": None, "error": ""}
+    try:
+        rc, out, err = await _run_status(argv, kind, timeout_s)
+    except Exception as exc:  # noqa: BLE001 - the probe never raises
+        return {"signed_in": None, "error": f"{type(exc).__name__}: {exc}"[:200]}
+    text = (out + "\n" + err).lower()
+    if kind == "claude":
+        try:
+            signed_in = bool(json.loads(out).get("loggedIn"))
+        except (ValueError, AttributeError):
+            signed_in = rc == 0 and "not logged in" not in text
+    else:
+        signed_in = rc == 0 and not any(m in text for m in _SIGNED_OUT_MARKERS)
+    if signed_in:
+        return {"signed_in": True, "error": ""}
+    hint = (
+        CODEX_SIGN_IN_HINT
+        if kind == "codex"
+        else (
+            "claude is not signed in for this server account: run `claude` then "
+            "`/login` (or `claude auth login`) in a shell of the gateway user."
+        )
+    )
+    return {"signed_in": False, "error": hint}
+
+
 async def warm_up_cli(kind: str, timeout_s: float = 15.0) -> Dict[str, Any]:
     """Pre-heat a CLI so the first user request is faster.
 
