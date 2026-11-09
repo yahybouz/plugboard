@@ -737,7 +737,7 @@ async def refresh_subprocess_provider_models(
                     terminal_reason=terminal_reason,
                 )
             dropped.append(
-                {"id": mid, "reason": terminal_reason, "detail": reason[:200]}
+                {"id": mid, "reason": terminal_reason, "detail": reason[:400]}
             )
             continue
 
@@ -748,13 +748,27 @@ async def refresh_subprocess_provider_models(
         )
         fails = int(entry.get("consecutive_fails", 0) or 0)
         if fails >= QUARANTINE_THRESHOLD:
-            dropped.append({"id": mid, "reason": "quarantined", "failures": fails})
+            dropped.append(
+                {
+                    "id": mid,
+                    "reason": "quarantined",
+                    "failures": fails,
+                    "detail": reason[:400],
+                }
+            )
         elif mid in previous_set:
             # Keep an already-published model through transient failures until
             # the quarantine threshold is reached.
             kept.append(mid)
         else:
-            dropped.append({"id": mid, "reason": "probe_failed", "failures": fails})
+            dropped.append(
+                {
+                    "id": mid,
+                    "reason": "probe_failed",
+                    "failures": fails,
+                    "detail": reason[:400],
+                }
+            )
 
     current_default = provider.get("default_model", "") or ""
     fallback_default = kept[0] if kept else ""

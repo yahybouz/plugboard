@@ -3215,6 +3215,26 @@ async def provider_health(provider_id: str, _: None = Depends(_require_admin)):
     return {"provider": provider_id, **result}
 
 
+def _no_models_detail(provider_id: str, report: Optional[Dict[str, Any]]) -> str:
+    """502 detail when a discovery kept no model: say why (admin endpoint)."""
+    base = f"Could not discover models from '{provider_id}'"
+    if report is None:
+        return base
+    candidates = int(report.get("candidate_count") or 0)
+    if not candidates:
+        return f"{base}: no candidate model to test."
+    tested = int(report.get("verified_count") or 0)
+    reasons: List[str] = []
+    for item in report.get("dropped") or []:
+        text = str(item.get("detail") or item.get("reason") or "").strip()
+        if text and text not in reasons:
+            reasons.append(text)
+    detail = f"{base}: {tested} of {candidates} models tested, none answered."
+    if reasons:
+        detail += " " + " | ".join(reasons[:2])
+    return detail
+
+
 @app.post("/providers/{provider_id}/discover")
 async def discover_provider_models(
     provider_id: str, dry_run: bool = False, _: None = Depends(_require_admin)
@@ -3235,6 +3255,7 @@ async def discover_provider_models(
         raise HTTPException(400, str(exc)) from None
     extra: Dict[str, Any] = {}
     default_model = None
+    report: Optional[Dict[str, Any]] = None
     if (provider.get("auth_source", "") or "").startswith("subprocess:"):
         from plugboard.model_availability import refresh_subprocess_provider_models
 
@@ -3252,7 +3273,7 @@ async def discover_provider_models(
         models = await discover_models(provider)
         trusted = last_discovery_trusted()
     if not models:
-        raise HTTPException(502, f"Could not discover models from '{provider_id}'")
+        raise HTTPException(502, _no_models_detail(provider_id, report))
     diff = model_diff.apply(
         provider_id,
         models,

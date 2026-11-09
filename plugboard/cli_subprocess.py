@@ -939,6 +939,44 @@ def _extract_cli_error(stdout_text: str, kind: str) -> str:
         return _extract_agy_error(stdout_text)
     if kind not in {"codex", "claude"}:
         return ""
+    msg = _first_jsonl_error(stdout_text)
+    low = msg.lower()
+    if msg and any(marker in low for marker in _SIGNED_OUT_MARKERS):
+        return CLAUDE_SIGN_IN_HINT if kind == "claude" else CODEX_SIGN_IN_HINT
+    return msg
+
+
+CLAUDE_SIGN_IN_HINT = (
+    "claude is not signed in for this server account: run `claude` once in an "
+    "interactive shell of the gateway user and type /login (Claude "
+    "subscription), or use the 'Anthropic Direct' provider for API-key access."
+)
+
+CODEX_SIGN_IN_HINT = (
+    "codex is not signed in for this server account: run `codex login "
+    "--device-auth` in a shell of the gateway user (ChatGPT subscription), or "
+    "use the 'OpenAI Direct' provider for API-key access."
+)
+
+# Lower-case fragments a signed-out claude or codex CLI prints.
+_SIGNED_OUT_MARKERS = (
+    "not logged in",
+    "please run /login",
+    "authentication_failed",
+    "401 unauthorized",
+    "missing bearer",
+)
+
+
+def _first_jsonl_error(stdout_text: str) -> str:
+    """First error carried by a codex/claude JSONL stream, or ``""``.
+
+    An ``error``/``turn.failed`` event wins; otherwise claude's final
+    ``result`` event with ``is_error``, then an ``assistant`` event's
+    ``error`` code (``authentication_failed`` when signed out).
+    """
+    result_error = ""
+    assistant_error = ""
     for line in stdout_text.splitlines():
         line = line.strip()
         if not line:
@@ -963,7 +1001,15 @@ def _extract_cli_error(stdout_text: str, kind: str) -> str:
                 except (json.JSONDecodeError, AttributeError, TypeError):
                     pass
                 return msg[:400]
-    return ""
+        elif etype == "result" and evt.get("is_error") is True:
+            text = evt.get("result")
+            if isinstance(text, str) and text and not result_error:
+                result_error = text[:400]
+        elif etype == "assistant":
+            code = evt.get("error")
+            if isinstance(code, str) and code and not assistant_error:
+                assistant_error = code[:400]
+    return result_error or assistant_error
 
 
 AGY_SIGN_IN_HINT = (
