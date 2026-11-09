@@ -112,6 +112,28 @@ async def test_local_browser_navigation_gets_session(audit_calls, peer, base_url
     assert audit_calls[0][1]["ip"] == peer
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("/suivi", "/suivi"),
+        ("/dashboard/index.html", "/dashboard/index.html"),
+        ("//evil.example/x", "/dashboard"),
+        ("https://evil.example/", "/dashboard"),
+        ("/\\evil.example", "/dashboard"),
+        ("", "/dashboard"),
+    ],
+)
+async def test_auto_login_honours_safe_next(audit_calls, raw, expected):
+    from urllib.parse import quote
+
+    resp = await _get_login(
+        "127.0.0.1", "http://localhost:8765", _NAV, path=f"/login?next={quote(raw)}"
+    )
+
+    assert _granted(resp)
+    assert resp.headers["location"] == expected
+
+
 async def test_same_origin_redirect_gets_session(audit_calls):
     headers = {"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "navigate"}
 

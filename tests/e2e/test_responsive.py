@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import pytest
 
+from tests.e2e.conftest import login_url
+
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 _MOBILE = {"width": 390, "height": 844}  # iPhone 12/13/14 logical size
@@ -20,7 +22,9 @@ async def test_dashboard_usable_at_mobile_width(browser, e2e_server):
     page_errors = []
     page.on("pageerror", lambda exc: page_errors.append(str(exc)))
     try:
-        await page.goto(e2e_server, wait_until="domcontentloaded", timeout=20_000)
+        await page.goto(
+            login_url(e2e_server), wait_until="domcontentloaded", timeout=20_000
+        )
         await page.wait_for_selector("#app:not(.hidden)", timeout=15_000)
         # Content area renders at phone width.
         assert await page.locator("#page-overview").count() == 1

@@ -100,6 +100,7 @@ from plugboard.metrics import get_stats
 from plugboard.ratelimit import check_client_rate_limit, check_rate_limit
 from plugboard.decision_api import router as decision_router
 from plugboard.embeddings_api import router as embeddings_router
+from plugboard.suivi_api import build_router as build_suivi_router
 from plugboard.legacy_connectors import (
     REMOVED_CONNECTOR_ERROR,
     is_removed_provider,
@@ -5178,7 +5179,9 @@ async def login_page(request: Request):
                 details=f"localhost auto-login host={host} via={proof}",
                 ip=peer,
             )
-            resp = RedirectResponse(url="/dashboard", status_code=302)
+            resp = RedirectResponse(
+                url=_safe_next(request.query_params.get("next", "")), status_code=302
+            )
             # Auto-login only serves plain-http localhost (refused otherwise),
             # so the cookie cannot carry the Secure flag.
             resp.set_cookie(  # NOSONAR
@@ -5454,6 +5457,37 @@ async def serve_dashboard(path: str, request: Request):
         content=file_path.read_bytes(),
         media_type=media_types.get(suffix, "application/octet-stream"),
     )
+
+
+def _safe_next(raw: str) -> str:
+    """A local path to go back to after sign-in, else ``/dashboard``.
+
+    Same rule as the login page script: one leading slash only, so
+    ``//host`` and ``/\\host`` (read as other origins) are refused.
+    """
+    if (
+        raw.startswith("/")
+        and not raw.startswith(("//", "/\\"))
+        and len(raw) <= 512
+        and raw.isprintable()
+    ):
+        return raw
+    return "/dashboard"
+
+
+# -- /suivi: Kanban of Plugboard tickets (admin only) -------------------------
+
+app.include_router(build_suivi_router(_require_admin))
+
+
+@app.get("/suivi", include_in_schema=False)
+async def suivi_page(request: Request):
+    if not _check_dashboard_auth(request):
+        return RedirectResponse("/login?next=/suivi")
+    file_path = _STATIC_DIR / "suivi.html"
+    if not file_path.is_file():
+        raise HTTPException(404, "Not found")
+    return Response(content=file_path.read_bytes(), media_type="text/html")
 
 
 @app.get("/dashboard", include_in_schema=False)
