@@ -107,13 +107,19 @@
 
   <!-- Main content -->
   <div class="main-content">
+    <!-- Phone bar: the sidebar is off-screen below 768 px, so every page
+         needs a way to open it (the button used to live on Overview only). -->
+    <header class="mobile-bar">
+      <button type="button" class="btn btn-sm mobile-menu-btn" id="mobile-menu-btn"
+              aria-label="Open menu" aria-controls="sidebar" aria-expanded="false">&#9776;</button>
+      <span class="mobile-bar-title">Plugboard</span>
+    </header>
 
     <!-- Overview -->
     <section id="page-overview" class="page active">
       <div class="topbar">
         <h2>Overview</h2>
         <div class="topbar-actions">
-          <button class="btn btn-sm mobile-menu-btn" id="mobile-menu-btn">&#9776;</button>
         </div>
       </div>
       <div class="content">
