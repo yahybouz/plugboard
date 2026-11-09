@@ -1689,6 +1689,7 @@ async def _discover_ollama_models(
     try:
         async with session.get(
             f"{base}/api/tags",
+            headers=_build_auth_header(provider),
             timeout=aiohttp.ClientTimeout(total=10),
         ) as resp:
             if resp.status != 200:

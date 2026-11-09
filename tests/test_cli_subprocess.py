@@ -781,3 +781,60 @@ async def test_agy_unsigned_raises_sign_in_hint(monkeypatch):
             },
         )
     assert "not signed in" in str(exc.value)
+
+
+# -- BUG-12: a signed-out CLI says so ------------------------------------------
+
+
+def test_extract_cli_error_claude_not_signed_in_gives_the_sign_in_hint():
+    from plugboard.cli_subprocess import CLAUDE_SIGN_IN_HINT
+
+    stream = "\n".join(
+        [
+            json.dumps({"type": "system", "subtype": "init", "apiKeySource": "none"}),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {"model": "<synthetic>"},
+                    "error": "authentication_failed",
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": True,
+                    "result": "Not logged in · Please run /login",
+                }
+            ),
+        ]
+    )
+    assert _extract_cli_error(stream, "claude") == CLAUDE_SIGN_IN_HINT
+
+
+def test_extract_cli_error_claude_result_error_is_surfaced():
+    stream = "\n".join(
+        [
+            json.dumps({"type": "system", "subtype": "init"}),
+            json.dumps(
+                {"type": "result", "is_error": True, "result": "Model not found"}
+            ),
+        ]
+    )
+    assert _extract_cli_error(stream, "claude") == "Model not found"
+    ok = json.dumps({"type": "result", "is_error": False, "result": "OK"})
+    assert _extract_cli_error(ok, "claude") == ""
+
+
+def test_extract_cli_error_codex_unauthorized_gives_the_sign_in_hint():
+    from plugboard.cli_subprocess import CODEX_SIGN_IN_HINT
+
+    stream = json.dumps(
+        {
+            "type": "error",
+            "message": "Reconnecting... 2/5 (unexpected status 401 Unauthorized: "
+            "Missing bearer or basic authentication in header, "
+            "url: wss://api.openai.com/v1/responses)",
+        }
+    )
+    assert _extract_cli_error(stream, "codex") == CODEX_SIGN_IN_HINT

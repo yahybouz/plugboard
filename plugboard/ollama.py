@@ -26,6 +26,10 @@ log = logging.getLogger(__name__)
 _OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 _OLLAMA_ENABLED = os.environ.get("OLLAMA_ENABLED", "auto").strip().lower()
 _OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "30"))
+# Bearer token for an Ollama behind an authenticating proxy (e.g. a relay that
+# lets only the gateway's network in). Sent to OLLAMA_URL only, never to the
+# public ollama.com catalogue.
+_OLLAMA_TOKEN = os.environ.get("PLUGBOARD_OLLAMA_TOKEN", "").strip()
 _PROVIDER_ID = "ollama"
 _PROVIDER_NAME = "Ollama"
 
@@ -33,6 +37,19 @@ _PROVIDER_NAME = "Ollama"
 def get_ollama_url() -> str:
     """Return the configured Ollama base URL."""
     return _OLLAMA_URL
+
+
+def ollama_headers(url: str = "") -> Dict[str, str]:
+    """Authorization for the operator's Ollama (``PLUGBOARD_OLLAMA_TOKEN``).
+
+    Empty when no token is set, or when ``url`` is not the configured
+    ``OLLAMA_URL``: the token never leaves for another host.
+    """
+    if not _OLLAMA_TOKEN:
+        return {}
+    if url and url.rstrip("/") != _OLLAMA_URL:
+        return {}
+    return {"Authorization": f"Bearer {_OLLAMA_TOKEN}"}
 
 
 # ── Health ───────────────────────────────────────────────────────────────────
@@ -44,6 +61,7 @@ async def check_available() -> bool:
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 _OLLAMA_URL,
+                headers=ollama_headers(),
                 timeout=aiohttp.ClientTimeout(total=5),
             ) as resp:
                 if resp.status == 200:
@@ -61,6 +79,7 @@ async def health() -> Dict[str, Any]:
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 _OLLAMA_URL,
+                headers=ollama_headers(),
                 timeout=aiohttp.ClientTimeout(total=_OLLAMA_TIMEOUT),
             ) as resp:
                 elapsed_ms = (_time.perf_counter() - t0) * 1000
@@ -83,6 +102,7 @@ async def list_models() -> List[Dict[str, Any]]:
     async with aiohttp.ClientSession() as session:
         async with session.get(
             f"{_OLLAMA_URL}/api/tags",
+            headers=ollama_headers(),
             timeout=aiohttp.ClientTimeout(total=_OLLAMA_TIMEOUT),
         ) as resp:
             if resp.status != 200:
@@ -230,6 +250,7 @@ async def pull_model(name: str) -> AsyncIterator[Dict[str, Any]]:
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{_OLLAMA_URL}/api/pull",
+            headers=ollama_headers(),
             json={"name": name},
             timeout=aiohttp.ClientTimeout(total=3600),  # pulls can be very slow
         ) as resp:
@@ -256,6 +277,7 @@ async def delete_model(name: str) -> bool:
     async with aiohttp.ClientSession() as session:
         async with session.delete(
             f"{_OLLAMA_URL}/api/delete",
+            headers=ollama_headers(),
             json={"name": name},
             timeout=aiohttp.ClientTimeout(total=_OLLAMA_TIMEOUT),
         ) as resp:
@@ -272,6 +294,7 @@ async def show_model(name: str) -> Dict[str, Any]:
     async with aiohttp.ClientSession() as session:
         async with session.post(
             f"{_OLLAMA_URL}/api/show",
+            headers=ollama_headers(),
             json={"name": name},
             timeout=aiohttp.ClientTimeout(total=_OLLAMA_TIMEOUT),
         ) as resp:
@@ -314,6 +337,10 @@ async def bootstrap_ollama() -> Optional[Dict[str, Any]]:
     for p in load_providers():
         if p.get("id") == _PROVIDER_ID:
             log.info("Ollama provider already registered (id=%s)", _PROVIDER_ID)
+            if _OLLAMA_TOKEN and p.get("bearer_token", "") != _OLLAMA_TOKEN:
+                from plugboard.config import update_provider
+
+                p = update_provider(_PROVIDER_ID, {"bearer_token": _OLLAMA_TOKEN}) or p
             # Sync models
             await _sync_models(p)
             return p
@@ -323,7 +350,7 @@ async def bootstrap_ollama() -> Optional[Dict[str, Any]]:
     record = create_provider(
         name=_PROVIDER_NAME,
         base_url=_OLLAMA_URL,
-        bearer_token="",
+        bearer_token=_OLLAMA_TOKEN,
         default_model="",
         is_active=True,
         provider_type="sovereign",

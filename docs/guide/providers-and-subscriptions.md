@@ -170,7 +170,7 @@ The presets *GitHub Models (OAuth via dashboard)* and *GitHub Copilot (OAuth via
 ## Add providers from `.env` or scripts
 
 - **Existing OpenClaw installations:** the connector and its environment bootstrap have been removed. Its old variables are ignored and recognizable legacy requests are refused without fallback. [Migrate manually to direct providers](openclaw-removal.md); changing an old provider's name is not a migration.
-- **Ollama**: `OLLAMA_URL`, `OLLAMA_ENABLED`, `OLLAMA_TIMEOUT`.
+- **Ollama**: `OLLAMA_URL`, `OLLAMA_ENABLED`, `OLLAMA_TIMEOUT`, `PLUGBOARD_OLLAMA_TOKEN` (Ollama behind a proxy that asks for a bearer token).
 - **API key presets on a remote instance**: `scripts/setup_railway_providers.py` reads `SETUP_ANTHROPIC_API_KEY`, `SETUP_OPENAI_API_KEY`, `SETUP_GEMINI_API_KEY` and `SETUP_GITHUB_PAT` and creates the matching presets through the admin API (`PLUGBOARD_URL` and `PLUGBOARD_ADMIN_KEY` point it at the instance). Unset variables are skipped, and presets that already exist are left untouched.
 - **Admin API**: everything the dashboard does is available over HTTP with `Authorization: Bearer $ADMIN_KEY`:
 

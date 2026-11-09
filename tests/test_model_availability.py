@@ -179,7 +179,12 @@ async def test_refresh_keeps_existing_model_until_transient_threshold(
 
     assert [m["id"] for m in report["models"]] == ["gpt-5.4"]
     assert report["dropped"] == [
-        {"id": "gpt-5.5", "reason": "probe_failed", "failures": 1}
+        {
+            "id": "gpt-5.5",
+            "reason": "probe_failed",
+            "failures": 1,
+            "detail": "temporary 503",
+        }
     ]
 
 
@@ -212,6 +217,7 @@ async def test_refresh_drops_transient_failure_at_threshold(monkeypatch, tmp_pat
             "id": "new-model",
             "reason": "quarantined",
             "failures": QUARANTINE_THRESHOLD,
+            "detail": "temporary outage",
         }
     ]
 

@@ -44,7 +44,7 @@ About the image:
 - A health check calls `/health` every 30 seconds.
 - **Auto-login does not apply in Docker**: requests reach the server from the Docker network, so sign in with `ADMIN_KEY`.
 - **CLI subscriptions in a container** (`full` image only): sign in from inside the container (`docker compose exec <service> claude`, `codex login`, `gemini`) and keep `/home/app` on a volume, otherwise the login is lost when the container is recreated.
-- **Ollama on the host**: `localhost` inside the container is the container itself. Set `OLLAMA_URL` to an address the container can reach, for example `http://host.docker.internal:11434` on Docker Desktop. Local models are free for budgeted keys only on a loopback or private IP literal: with a DNS name, use the host's private IP or set a `manual` 0 in the `ollama` price space ([pricing](pricing.md#how-a-model-finds-its-price)).
+- **Ollama on the host**: `localhost` inside the container is the container itself. Set `OLLAMA_URL` to an address the container can reach, for example `http://host.docker.internal:11434` on Docker Desktop. Local models are free for budgeted keys only on a loopback or private IP literal: with a DNS name, use the host's private IP or set a `manual` 0 in the `ollama` price space ([pricing](pricing.md#how-a-model-finds-its-price)). When the host only lets the gateway in through a proxy that asks for a bearer token, set `PLUGBOARD_OLLAMA_TOKEN` too.
 
 ## Without Docker (systemd)
 
