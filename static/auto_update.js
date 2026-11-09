@@ -137,7 +137,7 @@
     const reviewLine = h("div", { className: "au-row" },
       h("strong", null, "Review"),
       pending ? badge(pending + " price change(s) waiting", "orange") : badge("nothing waiting", "green"),
-      pending ? h("span", { className: "muted" }, "Price changes that need your OK (big moves, conflicting sources, prices read by a model, estimates). Apply or reject them below.") : null);
+      pending ? h("span", { className: "muted" }, "Price changes that need your OK (big moves, conflicting sources, prices read by a model, estimates). Apply or reject them in Pricing › Review.") : null);
 
     const card = h("div", { className: "card au-card" },
       h("div", { className: "card-header" }, h("span", { className: "card-title" }, "Automatic updates"), h("div", { className: "btn-group" }, runBtn)),
@@ -163,13 +163,22 @@
           (c.removed || []).length ? "−" + c.removed.length + " " + c.removed.slice(0, 5).join(", ") : null,
           c.truncated ? c.truncated + " more changes (see journal)" : null,
         ].filter(Boolean).join(" · ");
+      } else if (c.event === "price.estimated") {
+        // A model called without a price: billed on an estimate taken from a
+        // close catalogue entry until someone confirms a price.
+        what = (c.model || "") + ": estimated " + price(c) + (c.from ? " from " + c.from : "") + " (waiting for review)";
+      } else if (c.truncated) {
+        what = c.truncated + " more price changes (see journal)";
       } else {
-        what = c.truncated ? c.truncated + " more price changes (see journal)"
-          : (c.model || "") + ": " + price(c.old) + " → " + price(c.new) + " (" + c.pct + "%, " + c.status + ")";
+        const pct = c.pct != null ? c.pct + "%" : null;
+        what = (c.model || "") + ": " + price(c.old) + " → " + price(c.new) +
+          (pct || c.status ? " (" + [pct, c.status].filter(Boolean).join(", ") + ")" : "");
       }
+      const kind = c.event === "models.changed" ? ["models", "accent"]
+        : c.event === "price.estimated" ? ["estimate", "muted"] : ["price", "orange"];
       return h("tr", null,
         h("td", null, (c.at || "").replace("T", " ").replace("Z", "")),
-        h("td", null, badge(c.event === "models.changed" ? "models" : "price", c.event === "models.changed" ? "accent" : "orange")),
+        h("td", null, badge(kind[0], kind[1])),
         h("td", null, h("code", null, c.provider || "—")),
         h("td", null, what));
     });
