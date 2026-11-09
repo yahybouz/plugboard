@@ -287,11 +287,14 @@ async def probe_ollama_model(
         "stream": False,
         "options": {"num_predict": 4},
     }
+    from plugboard.ollama import ollama_headers
+
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 f"{url}/api/generate",
                 json=payload,
+                headers=ollama_headers(url),
                 timeout=aiohttp.ClientTimeout(total=timeout_s),
             ) as resp:
                 if resp.status != 200:
