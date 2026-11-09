@@ -420,3 +420,85 @@ def test_get_stats_exposes_embed_state(sem_embed_mod):
     assert stats["embed_model"] == "stub-embed"
     assert "embed_threshold" in stats
     assert "entries_with_embedding" in stats
+
+
+# -- BUG-5: only the last question is fuzzy; its context must match exactly --
+
+_Q = "What is the capital city of France and why is it so famous ?"
+_SYS_FR = {"role": "system", "content": "Answer in French."}
+_SYS_ES = {"role": "system", "content": "Answer in Spanish."}
+
+
+def _user(text: str) -> dict:
+    return {"role": "user", "content": text}
+
+
+def test_system_prompt_is_part_of_the_match(sem_mod):
+    sem_mod.store("gpt-4o", [_SYS_FR, _user(_Q)], {"id": "fr"}, ttl=60)
+    assert sem_mod.lookup_similar("gpt-4o", [_SYS_ES, _user(_Q)]) is None
+    assert sem_mod.lookup_similar("gpt-4o", [_user(_Q)]) is None
+    assert sem_mod.lookup_similar("gpt-4o", [_SYS_FR, _user(_Q)])["id"] == "fr"
+
+
+def test_history_is_part_of_the_match(sem_mod):
+    cats = [_user("Talk about cats."), {"role": "assistant", "content": "Cats purr."}]
+    dogs = [_user("Talk about dogs."), {"role": "assistant", "content": "Dogs bark."}]
+    question = _user("Tell me more about their history and their origins please.")
+    sem_mod.store("gpt-4o", [*cats, question], {"id": "cats"}, ttl=60)
+    assert sem_mod.lookup_similar("gpt-4o", [*dogs, question]) is None
+    assert sem_mod.lookup_similar("gpt-4o", [*cats, question])["id"] == "cats"
+
+
+def test_request_params_are_part_of_the_match(sem_mod):
+    tool_a = {"tools": [{"type": "function", "function": {"name": "a"}}]}
+    tool_b = {"tools": [{"type": "function", "function": {"name": "b"}}]}
+    sem_mod.store("gpt-4o", [_user(_Q)], {"id": "a"}, ttl=60, params=tool_a)
+    assert sem_mod.lookup_similar("gpt-4o", [_user(_Q)], params=tool_b) is None
+    assert sem_mod.lookup_similar("gpt-4o", [_user(_Q)]) is None
+    assert sem_mod.lookup_similar("gpt-4o", [_user(_Q)], params=tool_a)["id"] == "a"
+
+
+def test_near_duplicate_question_still_hits_in_same_context(sem_mod):
+    sem_mod.store("gpt-4o", [_SYS_FR, _user(_Q)], {"id": "fr"}, ttl=60)
+    near = _user("What is capital city of France and why is it so famous")
+    hit = sem_mod.lookup_similar("gpt-4o", [_SYS_FR, near], threshold=0.5)
+    assert hit is not None and hit["id"] == "fr"
+
+
+def test_rows_from_before_the_fix_are_never_served(sem_mod):
+    """An entry stored without a context (old schema) cannot match any
+    request: it was keyed on the last question alone."""
+    import sqlite3
+
+    sem_mod.store("gpt-4o", [_user(_Q)], {"id": "old"}, ttl=60)
+    conn = sqlite3.connect(str(sem_mod._DB_PATH))
+    conn.execute("UPDATE semantic_cache SET context_key = ''")
+    conn.commit()
+    conn.close()
+    assert sem_mod.lookup_similar("gpt-4o", [_user(_Q)]) is None
+
+
+def test_old_database_is_migrated(tmp_path, monkeypatch):
+    import sqlite3
+
+    monkeypatch.setenv("PLUGBOARD_DATA", str(tmp_path))
+    monkeypatch.setenv("PLUGBOARD_SEMANTIC_CACHE", "1")
+    db = tmp_path / "semantic_cache.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "CREATE TABLE semantic_cache (cache_key TEXT PRIMARY KEY, model TEXT NOT NULL,"
+        " signature BLOB NOT NULL, band_keys TEXT NOT NULL, prompt_hash TEXT NOT NULL,"
+        " response TEXT NOT NULL, created_at REAL NOT NULL, ttl INTEGER NOT NULL,"
+        " hit_count INTEGER NOT NULL DEFAULT 0, cost_saved REAL NOT NULL DEFAULT 0)"
+    )
+    conn.commit()
+    conn.close()
+    import plugboard.semantic_cache as sem
+
+    sem = importlib.reload(sem)
+    sem._DATA_DIR, sem._DB_PATH = tmp_path, db
+    try:
+        sem.store("gpt-4o", [_user(_Q)], {"id": "new"}, ttl=60)
+        assert sem.lookup_similar("gpt-4o", [_user(_Q)])["id"] == "new"
+    finally:
+        sem.clear()
