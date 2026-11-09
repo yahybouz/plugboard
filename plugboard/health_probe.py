@@ -38,6 +38,11 @@ def health_url_for(provider: Dict[str, Any]) -> str:
     base = (provider.get("base_url") or "").rstrip("/")
     if base in _HEALTH_URL_OVERRIDES:
         return _HEALTH_URL_OVERRIDES[base]
+    if provider.get("provider_type") == "sovereign":
+        # Ollama and other local servers have no /health. Behind an OpenAI-
+        # compatible base (".../v1", e.g. a relay with a token) the model list
+        # answers; on a bare Ollama base, "/" answers "Ollama is running".
+        return base + ("/models" if base.endswith("/v1") else "/")
     return base + "/health"
 
 

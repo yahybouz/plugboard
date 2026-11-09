@@ -2333,37 +2333,20 @@ async def health():
 
 @app.get("/health/detailed")
 async def health_detailed(_: None = Depends(_require_admin)):
-    """Detailed health check — tests connectivity to all active providers."""
-    import aiohttp
+    """Detailed health check — probes every active provider.
 
-    providers = load_providers()
-    results = []
-    all_ok = True
-    for p in providers:
-        if not p.get("is_active", True):
-            continue
-        try:
-            require_supported_provider(p)
-            require_supported_model(p.get("default_model", ""), effective_name=True)
-        except ValueError as exc:
-            results.append({"provider": p["id"], "ok": False, "error": str(exc)})
-            all_ok = False
-            continue
-        url = p["base_url"].rstrip("/") + "/health"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    url, timeout=aiohttp.ClientTimeout(total=5)
-                ) as resp:
-                    ok = resp.status < 500
-                    results.append(
-                        {"provider": p["id"], "ok": ok, "status": resp.status}
-                    )
-                    if not ok:
-                        all_ok = False
-        except Exception as exc:
-            results.append({"provider": p["id"], "ok": False, "error": str(exc)})
-            all_ok = False
+    Uses the same probe as the dashboard Ping (health_probe.probe_provider):
+    CLI providers are checked through their binary, local servers through
+    the URL they really serve, and the provider's credentials are sent.
+    """
+    import asyncio
+
+    from plugboard.health_probe import probe_provider
+
+    active = [p for p in load_providers() if p.get("is_active", True)]
+    probes = await asyncio.gather(*(probe_provider(p) for p in active))
+    results = [{"provider": p["id"], **r} for p, r in zip(active, probes)]
+    all_ok = all(r.get("ok") for r in results)
     month = _billing.current_pricing_month()
     usage_summary = _usage.summarize_usage_month(month)
     return {
