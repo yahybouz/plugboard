@@ -154,6 +154,7 @@ def fresh_warnings(monkeypatch):
 
     monkeypatch.setattr(pricing_merge, "_warned", set())
     monkeypatch.setattr(envcompat, "_warned", set())
+    monkeypatch.setattr(envcompat, "_bad_numbers", set())
     for name in (
         "PLUGBOARD_PRICING_SOURCES",
         "PLUGBOARD_PRICING_SOURCE_URL",
@@ -201,6 +202,18 @@ def test_drift_settings(fresh_warnings, monkeypatch):
     monkeypatch.setenv("PLUGBOARD_PRICE_DRIFT_ACTION", "apply")
     assert pricing_merge.drift_threshold_pct() == 35.0
     assert pricing_merge.drift_action() == "apply"
+
+
+@pytest.mark.parametrize("raw", ["-5", "0", "nan"])
+def test_unusable_drift_threshold_is_reported(fresh_warnings, monkeypatch, caplog, raw):
+    # Read with the shared numeric reader: a threshold it cannot use gives
+    # the default and says so, instead of being replaced silently.
+    monkeypatch.setenv("PLUGBOARD_PRICE_DRIFT_PCT", raw)
+
+    with caplog.at_level("WARNING"):
+        assert pricing_merge.drift_threshold_pct() == 20.0
+
+    assert "PLUGBOARD_PRICE_DRIFT_PCT" in caplog.text
 
 
 # -- update_current_pricing -------------------------------------------------------
