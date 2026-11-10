@@ -17,6 +17,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **Streamed requests never reached the circuit breaker**: `forward_stream()` (a `stream: true` request to an HTTP provider) neither read nor recorded the route's circuit, so a provider failing only streamed requests never showed `open` in `/admin/circuits`, and the LLM pricing pass kept choosing it. A streamed request now counts like any other, by the same rule: a provider failure before the stream begins counts, a `200` closes a half-open circuit. A drop once the stream has begun is not counted.
+### Fixed
+
+- **The Caddy example of the deployment guide set `flush_interval -1`**: Plugboard does not need it, since each of its streams is `text/event-stream` or has no `Content-Length`, which Caddy sends to the client at once without it. From Caddy 2.6 to 2.8 the setting also kept Caddy from cancelling the request to Plugboard when the client hung up ([Caddy pull request 4952](https://github.com/caddyserver/caddy/pull/4952), reverted in Caddy 2.9.0): during a request that was not streamed, or during a stream before its first byte, the gateway did not see the client leave, so it could neither stop the provider call nor free the chat slot. The example no longer sets it, and the guide says why ([deployment](docs/guide/deployment.md#behind-a-reverse-proxy)).
 
 ## [4.5.1] — 2026-11-10
 
