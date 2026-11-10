@@ -42,8 +42,11 @@ What it does not open:
   model too: a request `Codex:` or `chatgpt-via-codex-cli:` then resolves to
   an empty model name, which no entry grants, whatever its spelling: not the
   alias alone, not the provider ID alone (`chatgpt-via-codex-cli:`), not an
-  empty entry (`""`). Before, those last two let the CLI run its own default
-  model.
+  empty entry (`""`). Before, those last two let the request through, and
+  Plugboard then ran the CLI with `--model` set to the default model it
+  hard-codes for that kind of CLI (`plugboard/cli_subprocess.py`), a model
+  the key never named. Chat, streamed or not, now answers `403` and
+  `/v1/preflight` `forbidden_model`, without running the CLI.
 - The legacy request prefixes `claude-cli:`, `codex-cli:` and `gemini-cli:`
   (and their `-subprocess` forms) are still resolved in a request, but an
   entry written with them grants nothing: `/v1/models` never publishes them.
