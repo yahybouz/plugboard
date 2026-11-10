@@ -65,10 +65,10 @@ The repository also ships a small Python client, [`sdk/python`](../../sdk/python
 | Route | Use |
 |---|---|
 | `POST /v1/chat/completions` | Chat completion, streamed or not |
-| `GET /v1/models` | Models the gateway serves, with `account_compatible` for your key |
+| `GET /v1/models` | Models the gateway serves, with `account_compatible` for your key; a key limited by `allowed_models` sees only the models it may call |
 | `GET /v1/decisions/models` | Permitted decision engines, availability, limits and confidence semantics |
 | `POST /v1/decisions` | Named typed questions; requires an explicitly permitted client key |
-| `GET /v1/models/benchmarks`, `GET /v1/models/{model_id}/info` | Model profiles: capabilities, benchmarks, cost tier |
+| `GET /v1/models/benchmarks`, `GET /v1/models/{model_id}/info` | Model profiles: capabilities, benchmarks, cost tier. A key limited by `allowed_models` gets only the models it may call; for any other model, `/info` answers as for an unknown model (`info_source: "derived"`) |
 | `POST /v1/preflight` | Check that provider/model pairs answer before a long run (10 pairs at most; each ping is checked, counted and billed like a chat call; `error` is a closed code) |
 | `GET /v1/me`, `GET /v1/me/keys`, `GET /usage/me` | Your key: limits, spend this month, usage entries |
 | `GET /health` | Liveness, no key needed |
