@@ -1028,11 +1028,16 @@ def _extract_gemini_error(stdout_text: str) -> str:
     """Message of the ``{"error": {"type", "message", "code"}}`` object gemini
     writes on stdout with ``--output-format json`` (JsonFormatter.formatError).
 
-    The whole stdout must be that JSON: a line the model wrote among others
-    is not the CLI's error (no lenient per-line fallback here).
+    The object must end stdout: CLI log lines may come before it ("Loaded
+    cached credentials."), but a line the model wrote among others is not
+    the CLI's error (no lenient per-line fallback here).
     """
+    lines = stdout_text.strip().splitlines()
+    start = next((i for i, ln in enumerate(lines) if ln.startswith("{")), None)
+    if start is None:
+        return ""
     try:
-        payload = json.loads(stdout_text.strip())
+        payload = json.loads("\n".join(lines[start:]))
     except ValueError:  # no strict JSON, no structured error
         return ""
     error = payload.get("error") if isinstance(payload, dict) else None
@@ -1143,17 +1148,19 @@ def _quota_fields(cli_error: str, stderr_text: str) -> Dict[str, Any]:
 
 
 def _first_jsonl_error(stdout_text: str, *, terminal_only: bool = False) -> str:
-    """First error carried by a codex/claude JSONL stream, or ``""``.
+    """Error that ended a codex/claude JSONL stream, or ``""``.
 
-    An ``error``/``turn.failed`` event wins; otherwise claude's final
-    ``result`` event with ``is_error``, then an ``assistant`` event's
-    ``error`` code (``authentication_failed`` when signed out).
+    The event that ends the run wins (codex ``turn.failed``, claude
+    ``result`` with ``is_error``); otherwise the last ``error`` event, then
+    an ``assistant`` event's ``error`` code (``authentication_failed`` when
+    signed out). An ``error`` event can be transient ("Reconnecting... 1/5")
+    and followed by the real outcome, so the first one never decides.
 
-    ``terminal_only`` keeps only the events that end a run in failure
-    (codex ``turn.failed``, claude ``result`` with ``is_error``): a codex
-    ``error`` event can be transient ("Reconnecting... 1/5") and followed by
-    a normal answer.
+    ``terminal_only`` keeps only the events that end a run in failure: after
+    a transient ``error`` the CLI may still answer normally.
     """
+    failed_error = ""
+    last_error = ""
     result_error = ""
     assistant_error = ""
     skipped = {"error", "assistant"} if terminal_only else set()
@@ -1179,10 +1186,13 @@ def _first_jsonl_error(stdout_text: str, *, terminal_only: bool = False) -> str:
                         "message"
                     )
                     if isinstance(deep, str) and deep:
-                        return deep[:400]
+                        msg = deep
                 except (json.JSONDecodeError, AttributeError, TypeError):
                     pass
-                return msg[:400]
+                if etype == "turn.failed":
+                    failed_error = msg[:400]
+                else:
+                    last_error = msg[:400]
         elif etype == "result" and evt.get("is_error") is True:
             text = evt.get("result")
             if isinstance(text, str) and text and not result_error:
@@ -1191,7 +1201,7 @@ def _first_jsonl_error(stdout_text: str, *, terminal_only: bool = False) -> str:
             code = evt.get("error")
             if isinstance(code, str) and code and not assistant_error:
                 assistant_error = code[:400]
-    return result_error or assistant_error
+    return failed_error or result_error or last_error or assistant_error
 
 
 AGY_SIGN_IN_HINT = (
@@ -1648,9 +1658,10 @@ async def complete(
         # context (exit=0 guarantees the CLI thought it succeeded).
         # agy's ERROR payload without an answer, or a quota error a CLI
         # reports while exiting 0: claude's `is_error` result would otherwise
-        # be served, and billed, as the answer. Terminal events only: a codex
-        # reconnect `error` followed by an answer and turn.completed is fine.
-        cli_error = _extract_cli_error(stdout_text, kind, terminal_only=True)
+        # be served, and billed, as the answer. Terminal events only when
+        # there is an answer: a codex reconnect `error` followed by an answer
+        # and turn.completed is fine.
+        cli_error = _extract_cli_error(stdout_text, kind, terminal_only=bool(text))
         if cli_error and (
             (text is None and kind == "agy") or is_quota_error(cli_error)
         ):

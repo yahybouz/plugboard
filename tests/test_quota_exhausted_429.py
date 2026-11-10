@@ -462,6 +462,118 @@ async def test_codex_turn_failed_on_quota_with_exit_0_gives_429(
     assert resp.status_code == 429, resp.text
 
 
+_GEMINI_QUOTA_AFTER_A_LOG = (
+    b"Loaded cached credentials.\n"
+    b'{\n  "error": {\n    "type": "ApiError",\n    "message": "Resource has'
+    b' been exhausted (e.g. check quota).",\n    "code": 429\n  }\n}\n'
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [0, 1])
+async def test_gemini_quota_object_after_a_log_line_gives_429(
+    client, client_key, cli_route, code
+):
+    """A CLI log line before the error object does not hide the quota."""
+    cli_route("gemini", _GEMINI_QUOTA_AFTER_A_LOG, stderr=b"", returncode=code)
+    resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
+
+    assert resp.status_code == 429, resp.text
+
+
+_CODEX_RECONNECT = (
+    b'{"type":"turn.started"}\n{"type":"error","message":"Reconnecting... 1/5 (%s)"}\n'
+)
+
+
+@pytest.mark.asyncio
+async def test_codex_exit_1_reconnect_then_usage_limit_gives_429(
+    client, client_key, cli_route
+):
+    """The event that ends the run decides, not the first `error`."""
+    stdout = _CODEX_RECONNECT % b"stream disconnected" + (
+        b'{"type":"error","message":"You\'ve hit your usage limit."}\n'
+        b'{"type":"turn.failed","error":{"message":"You\'ve hit your usage'
+        b' limit."}}\n'
+    )
+    cli_route("codex", stdout)
+    resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
+
+    assert resp.status_code == 429, resp.text
+
+
+@pytest.mark.asyncio
+async def test_codex_exit_1_last_error_decides_without_turn_failed(
+    client, client_key, cli_route
+):
+    stdout = _CODEX_RECONNECT % b"stream disconnected" + (
+        b'{"type":"error","message":"exceeded retry limit, last status: 429"}\n'
+    )
+    cli_route("codex", stdout)
+    resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
+
+    assert resp.status_code == 429, resp.text
+
+
+@pytest.mark.asyncio
+async def test_codex_exit_1_reconnect_on_rate_limit_then_other_failure_stays_502(
+    client, client_key, cli_route
+):
+    stdout = _CODEX_RECONNECT % b"rate limit exceeded" + (
+        b'{"type":"turn.failed","error":{"message":"stream disconnected before'
+        b' completion"}}\n'
+    )
+    cli_route("codex", stdout)
+    resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
+
+    assert resp.status_code == 502, resp.text
+
+
+@pytest.mark.asyncio
+async def test_codex_exit_0_quota_error_without_an_answer_gives_429(
+    client, client_key, cli_route
+):
+    """No answer to serve: the `error` event is the outcome."""
+    stdout = (
+        b'{"type":"turn.started"}\n'
+        b'{"type":"error","message":"You\'ve hit your usage limit."}\n'
+    )
+    cli_route("codex", stdout, returncode=0)
+    resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
+
+    assert resp.status_code == 429, resp.text
+
+
+@pytest.mark.asyncio
+async def test_claude_exit_1_retry_error_then_other_result_stays_502(
+    client, client_key, cli_route
+):
+    stdout = (
+        b'{"type":"error","message":"rate limit exceeded, retrying"}\n'
+        b'{"type":"result","is_error":true,"result":"Invalid model name"}\n'
+    )
+    cli_route("claude", stdout)
+    resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
+
+    assert resp.status_code == 502, resp.text
+
+
+@pytest.mark.asyncio
+async def test_claude_exit_0_retry_error_then_answer_is_served(
+    client, client_key, cli_route
+):
+    stdout = (
+        b'{"type":"error","message":"rate limit exceeded, retrying"}\n'
+        b'{"type":"result","subtype":"success","is_error":false,'
+        b'"result":"Paris."}\n'
+    )
+    cli_route("claude", stdout, returncode=0)
+    resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["choices"][0]["message"]["content"] == "Paris."
+
+
 @pytest.fixture
 def five_pm(monkeypatch):
     """The gateway's local clock reads 17:00 (codex prints its local time)."""
