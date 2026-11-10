@@ -36,6 +36,7 @@ import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -51,6 +52,10 @@ class CliSubprocessError(RuntimeError):
         pid: subprocess pid (None if not started).
         provider_name: CLI kind (e.g. 'gemini', 'codex', 'claude').
         model_id: model string requested.
+        quota: the CLI's own error or its stderr says its quota or rate
+            limit is exhausted (decided when raised, never from the model's
+            output).
+        retry_after: seconds until the CLI said its quota reopens, or None.
     """
 
     def __init__(
@@ -62,6 +67,8 @@ class CliSubprocessError(RuntimeError):
         pid: Optional[int] = None,
         provider_name: str = "",
         model_id: str = "",
+        quota: bool = False,
+        retry_after: Optional[int] = None,
     ):
         super().__init__(message)
         self.exit_code = exit_code
@@ -69,6 +76,8 @@ class CliSubprocessError(RuntimeError):
         self.pid = pid
         self.provider_name = provider_name
         self.model_id = model_id
+        self.quota = quota
+        self.retry_after = retry_after
 
 
 _SPAWN_CWD_CACHE: Optional[str] = None
@@ -1000,6 +1009,8 @@ def _extract_cli_error(stdout_text: str, kind: str) -> str:
     """
     if kind == "agy":
         return _extract_agy_error(stdout_text)
+    if kind == "gemini":
+        return _extract_gemini_error(stdout_text)
     if kind not in {"codex", "claude"}:
         return ""
     msg = _first_jsonl_error(stdout_text)
@@ -1007,6 +1018,19 @@ def _extract_cli_error(stdout_text: str, kind: str) -> str:
     if msg and any(marker in low for marker in _SIGNED_OUT_MARKERS):
         return CLAUDE_SIGN_IN_HINT if kind == "claude" else CODEX_SIGN_IN_HINT
     return msg
+
+
+def _extract_gemini_error(stdout_text: str) -> str:
+    """Message of the ``{"error": {"type", "message", "code"}}`` object gemini
+    writes on stdout with ``--output-format json`` (JsonFormatter.formatError).
+    """
+    try:
+        payload = _parse_gemini_json_stdout(stdout_text)
+    except Exception:  # noqa: BLE001 - no JSON, no structured error
+        return ""
+    error = payload.get("error") if isinstance(payload, dict) else None
+    msg = error.get("message") if isinstance(error, dict) else None
+    return msg[:400] if isinstance(msg, str) else ""
 
 
 CLAUDE_SIGN_IN_HINT = (
@@ -1031,33 +1055,81 @@ _SIGNED_OUT_MARKERS = (
 )
 
 # Lower-case fragments of a CLI that failed on its subscription quota or rate
-# limit. Only reported formats: claude's JSONL error event, agy's ERROR
-# payload, gemini's 429 payload/stderr, codex's "You've hit your usage limit"
-# event, the OpenAI "insufficient_quota" code and Claude Code's limit notices.
+# limit. Only sourced formats: the repository's tests; gemini/agy (Google
+# API 429: "Resource has been exhausted (e.g. check quota).",
+# RESOURCE_EXHAUSTED, reason rateLimitExceeded); codex ("You've hit your
+# usage limit", "exceeded retry limit, last status: 429"); Claude Code
+# ("You've hit your limit", "usage limit reached", "5-hour limit reached",
+# "You've reached your weekly limit"); the Anthropic rate_limit_error and
+# OpenAI insufficient_quota error types.
 _QUOTA_MARKERS = (
     "rate limit exceeded",
     "quota exceeded",
     "resource exhausted",
+    "resource has been exhausted",
+    "resource_exhausted",
+    "ratelimitexceeded",
     "hit your usage limit",
+    "exceeded retry limit, last status: 429",
     "you've hit your limit",
     "usage limit reached",
+    "5-hour limit reached",
+    "reached your weekly limit",
+    "rate_limit_error",
     "insufficient_quota",
 )
+# A full disk ("[Errno 122] Disk quota exceeded") is not a provider quota.
+_NOT_QUOTA = "disk quota exceeded"
 
-# codex: "... or try again at 6:00 PM." Only the clock time is kept.
-_RETRY_TIME = re.compile(r"\btry again at (\d{1,2}:\d{2}(?:\s?[ap]m)?)\b", re.I)
+# Longest delay a quota error may announce; HTTP Retry-After is capped too.
+MAX_RETRY_AFTER_S = 7 * 24 * 3600
+
+# codex: "... or try again at 6:00 PM." in the gateway's local time.
+_RETRY_TIME = re.compile(r"\btry again at (\d{1,2}):(\d{2})(?:\s?([ap]m))?\b", re.I)
 
 
 def is_quota_error(message: str) -> bool:
     """True when a CLI error says its quota or rate limit is exhausted."""
-    low = (message or "").lower().replace("’", "'")
+    low = (message or "").lower().replace("’", "'").replace(_NOT_QUOTA, "")
     return any(marker in low for marker in _QUOTA_MARKERS)
 
 
-def quota_retry_time(message: str) -> Optional[str]:
-    """Reopening time a quota error gives ("6:00 PM"), or None."""
+def _local_now() -> datetime:
+    """The gateway's local wall clock: the CLI runs here and prints its time."""
+    return datetime.now()
+
+
+def quota_retry_after(message: str) -> Optional[int]:
+    """Seconds until the next "try again at HH:MM [AM|PM]" of a quota error.
+
+    The time has no zone: the CLI prints it in the local time of the machine
+    that runs it, the gateway. A time already past means tomorrow.
+    """
     match = _RETRY_TIME.search(message or "")
-    return match.group(1).upper() if match else None
+    if not match:
+        return None
+    hour, minute, half = int(match[1]), int(match[2]), (match[3] or "").lower()
+    if half:
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if half == "pm" else 0)
+    if hour > 23 or minute > 59:
+        return None
+    now = _local_now()
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return min(int((target - now).total_seconds()), MAX_RETRY_AFTER_S)
+
+
+def _quota_fields(cli_error: str, stderr_text: str) -> Dict[str, Any]:
+    """quota/retry_after of a CliSubprocessError: the CLI's error and stderr
+    only, never the model's stdout."""
+    quota = is_quota_error(cli_error) or is_quota_error(stderr_text)
+    return {
+        "quota": quota,
+        "retry_after": quota_retry_after(cli_error) if quota else None,
+    }
 
 
 def _first_jsonl_error(stdout_text: str) -> str:
@@ -1532,6 +1604,7 @@ async def complete(
                     pid=proc.pid,
                     provider_name=backend.command,
                     model_id=model,
+                    **_quota_fields(cli_error, stderr_text),
                 )
         else:
             # Non-Gemini backend, or Gemini with empty stdout — raise
@@ -1546,6 +1619,7 @@ async def complete(
                 pid=proc.pid,
                 provider_name=backend.command,
                 model_id=model,
+                **_quota_fields(cli_error, stderr_text),
             )
     else:
         # Normal exit=0 path: extract assistant text via the shared helper.
@@ -1554,15 +1628,21 @@ async def complete(
             raise RuntimeError(f"Unsupported output_mode: {backend.output_mode}")
         # JSON decode errors on the happy path produce a CliSubprocessError with
         # context (exit=0 guarantees the CLI thought it succeeded).
-        agy_error = _extract_agy_error(stdout_text) if kind == "agy" else ""
-        if text is None and agy_error:
+        # agy's ERROR payload without an answer, or a quota error a CLI
+        # reports while exiting 0: claude's `is_error` result would otherwise
+        # be served, and billed, as the answer.
+        cli_error = _extract_cli_error(stdout_text, kind)
+        if cli_error and (
+            (text is None and kind == "agy") or is_quota_error(cli_error)
+        ):
             raise CliSubprocessError(
-                f"CLI {backend.command!r} failed: {agy_error}",
+                f"CLI {backend.command!r} failed: {cli_error}",
                 exit_code=proc.returncode,
                 stderr=stderr_text[:500],
                 pid=proc.pid,
                 provider_name=backend.command,
                 model_id=model,
+                **_quota_fields(cli_error, stderr_text),
             )
         if text is None and backend.output_mode == "json":
             raise CliSubprocessError(
@@ -1573,6 +1653,7 @@ async def complete(
                 pid=proc.pid,
                 provider_name=backend.command,
                 model_id=model,
+                **_quota_fields("", stderr_text),
             )
         if text is None:
             text = ""
@@ -1586,6 +1667,7 @@ async def complete(
             pid=proc.pid,
             provider_name=backend.command,
             model_id=model,
+            **_quota_fields("", stderr_text),
         )
 
     # Only agy reports token counts; the other CLIs keep usage=0 and the

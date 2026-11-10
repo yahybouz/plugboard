@@ -151,7 +151,7 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 | `403` | The key may not use this model | Pick a model where `account_compatible` is true |
 | `413` | Body over `MAX_BODY_BYTES` (10 MB) | Send less |
 | `429` | IP rate limit, key RPM limit or monthly budget | Back off; `GET /v1/me` shows the budget left |
-| `429` | The provider's quota or rate limit is exhausted and no fallback provider answered; `detail` names the provider | Retry after `Retry-After` / `retry_after` seconds when set, else later or with another model |
+| `429` | The last provider tried has exhausted its quota or rate limit (a streamed request to an HTTP provider is not offered to another one); `detail` names the provider | Retry after `Retry-After` / `retry_after` seconds when set (at most 7 days), else later or with another model |
 | `502` | The provider failed | Retry later or use another model |
 | `503` | Gateway at capacity, or provider timeout | Retry after `Retry-After` / `retry_after` seconds |
 

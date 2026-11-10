@@ -110,11 +110,7 @@ from plugboard.legacy_connectors import (
 )
 from plugboard.decisions import is_decision_model
 from plugboard.cli_auth import AuthError
-from plugboard.cli_subprocess import (
-    CliSubprocessError,
-    is_quota_error,
-    quota_retry_time,
-)
+from plugboard.cli_subprocess import CliSubprocessError
 from plugboard.router import (
     ProviderQuotaError,
     discover_models,
@@ -1463,36 +1459,43 @@ def _for_caller(completion: Dict[str, Any], client_id: Optional[str]) -> Dict[st
     }
 
 
-def _quota_detail(
-    provider: str, retry_after: Optional[int], retry_at: Optional[str] = None
-) -> str:
+def _quota_detail(provider: str, retry_after: Optional[int]) -> str:
     """Reason given to a client key: composed here, never the upstream text."""
-    if retry_after is not None:
-        when = f"retry after {retry_after} seconds"
-    elif retry_at:
-        when = f"retry after {retry_at}"
-    else:
-        when = "retry later"
+    when = (
+        f"retry after {retry_after} seconds"
+        if retry_after is not None
+        else "retry later"
+    )
     return f"The quota or rate limit of the {provider} provider is exhausted: {when}."
+
+
+def _retry_after_headers(
+    content: Dict[str, Any], retry_after: Optional[int]
+) -> Dict[str, str]:
+    """Add ``retry_after`` to an error body; return the Retry-After header."""
+    if retry_after is None:
+        return {}
+    content["retry_after"] = retry_after
+    return {"Retry-After": str(retry_after)}
 
 
 def _quota_error_response(
     exc: ProviderQuotaError, client_id: Optional[str]
 ) -> JSONResponse:
-    """429 when the last provider tried answered 429 (no fallback answered).
+    """429 when the last HTTP provider tried answered 429.
 
-    The upstream body stays with the admin; a client key gets the provider,
-    the reason and the provider's Retry-After delay when it gave one.
+    A non-streamed request has already been offered to the other candidate
+    providers (the last one tried decides); a streamed one to an HTTP
+    provider has no fallback. The upstream body stays with the admin; a
+    client key gets the provider, the reason and the provider's Retry-After
+    delay when it gave one.
     """
     if client_id == "admin":
         detail = str(exc)
     else:
         detail = _quota_detail(exc.provider_id, exc.retry_after)
     content: Dict[str, Any] = {"detail": detail}
-    headers = {}
-    if exc.retry_after is not None:
-        content["retry_after"] = exc.retry_after
-        headers["Retry-After"] = str(exc.retry_after)
+    headers = _retry_after_headers(content, exc.retry_after)
     return JSONResponse(status_code=429, content=content, headers=headers)
 
 
@@ -1501,11 +1504,13 @@ def _cli_error_response(
 ) -> JSONResponse:
     """502 for a failed CLI provider, 429 when it failed on its quota.
 
-    The CLI's message, stderr, pid and exit code can carry local paths,
-    account names or tokens: only the admin (dashboard Playground, admin
-    key) gets them. A client key gets a reference to the server log entry.
+    ``exc.quota`` was decided by the CLI wrapper from the CLI's own error and
+    stderr, never from the model's output. The CLI's message, stderr, pid and
+    exit code can carry local paths, account names or tokens: only the admin
+    (dashboard Playground, admin key) gets them. A client key gets a
+    reference to the server log entry.
     """
-    quota = is_quota_error(str(exc))
+    quota = exc.quota
     ref = secrets.token_hex(4)
     log.warning(
         "cli provider error ref=%s provider=%s model=%s exit=%s pid=%s: %s | stderr=%s",
@@ -1530,14 +1535,17 @@ def _cli_error_response(
     else:
         name = exc.provider_name or "CLI"
         content = {
-            "detail": _quota_detail(name, None, quota_retry_time(str(exc)))
+            "detail": _quota_detail(name, exc.retry_after)
             if quota
             else f"The {name} provider failed (reference {ref} in the gateway log).",
             "error_ref": ref,
             "provider_name": exc.provider_name,
             "model_id": exc.model_id,
         }
-    return JSONResponse(status_code=429 if quota else 502, content=content)
+    if not quota:
+        return JSONResponse(status_code=502, content=content)
+    headers = _retry_after_headers(content, exc.retry_after)
+    return JSONResponse(status_code=429, content=content, headers=headers)
 
 
 def _require_chat_messages(body: Dict[str, Any]) -> None:

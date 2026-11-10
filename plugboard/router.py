@@ -30,6 +30,7 @@ import aiohttp
 
 from plugboard import metrics
 from plugboard.alerts import record_provider_failure, record_provider_success
+from plugboard.cli_subprocess import MAX_RETRY_AFTER_S
 from plugboard.config import load_providers
 from plugboard.logging_config import _request_id_var
 from plugboard.endpoints import openai_url
@@ -70,17 +71,21 @@ class ProviderQuotaError(RuntimeError):
 
 
 def _retry_after_seconds(value: Optional[str]) -> Optional[int]:
-    """Seconds of a Retry-After header (delta-seconds or HTTP-date), or None."""
+    """Seconds of a Retry-After header (delta-seconds or HTTP-date), or None.
+
+    Capped at MAX_RETRY_AFTER_S (7 days).
+    """
     value = (value or "").strip()
     try:
         if value.isascii() and value.isdigit():
-            return int(value)
+            return min(int(value), MAX_RETRY_AFTER_S)
         when = parsedate_to_datetime(value)
     except (TypeError, ValueError, OverflowError):
         return None
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
-    return max(0, int((when - datetime.now(timezone.utc)).total_seconds()))
+    seconds = int((when - datetime.now(timezone.utc)).total_seconds())
+    return min(max(0, seconds), MAX_RETRY_AFTER_S)
 
 
 def _http_error(provider_id: str, status: int, text: str, headers) -> RuntimeError:

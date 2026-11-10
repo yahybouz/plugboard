@@ -1436,7 +1436,7 @@
       },
       "ErrorResponse": {
         "additionalProperties": true,
-        "description": "FastAPI's error body. Upstream timeouts (503) add `retry_after` and a\nRetry-After header; a failing CLI provider (502) adds its exit details.",
+        "description": "FastAPI's error body. Upstream timeouts (503) add `retry_after` and a\nRetry-After header, as does an exhausted provider quota (429) when the\nprovider gave a delay; a failing CLI provider (502) adds its exit details\nfor the admin only.",
         "properties": {
           "detail": {
             "anyOf": [
@@ -2604,7 +2604,7 @@
             }
           },
           "429": {
-            "description": "Rate limit or monthly spending limit exceeded, or the provider's quota is exhausted and no fallback answered (Retry-After when the provider gives it).",
+            "description": "Rate limit or monthly spending limit exceeded, or the quota of the last provider tried is exhausted (retry_after and Retry-After when it gives a delay).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3398,7 +3398,7 @@
             }
           },
           "429": {
-            "description": "Rate limit or monthly spending limit exceeded, or the provider's quota is exhausted and no fallback answered (Retry-After when the provider gives it).",
+            "description": "Rate limit or monthly spending limit exceeded, or the quota of the last provider tried is exhausted (retry_after and Retry-After when it gives a delay).",
             "content": {
               "application/json": {
                 "schema": {
