@@ -763,7 +763,7 @@ def check_cli_installed(kind: str) -> Dict[str, Any]:
     return {"ok": True, "binary": path, "kind": kind}
 
 
-# Longest a timed-out version probe waits to reap the killed CLI.
+# Longest a timed-out probe (version, sign-in status) waits to reap the killed CLI.
 _PROBE_REAP_TIMEOUT_S = 2.0
 
 
@@ -825,12 +825,18 @@ async def _run_status(argv: List[str], kind: str, timeout_s: float):
         stderr=asyncio.subprocess.PIPE,
         env=build_child_env(kind),
         cwd=_clean_spawn_cwd(),
+        # Own process group: a timeout kills the CLI's descendants too.
+        start_new_session=True,
     )
+    finished = False
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
-    except asyncio.TimeoutError:
-        proc.kill()
-        raise
+        finished = True
+    finally:
+        if not finished:
+            # Bounded, as in probe_cli_version: an escaped descendant can hold the pipes.
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(_kill_group(proc), _PROBE_REAP_TIMEOUT_S)
     return (
         proc.returncode,
         (stdout or b"").decode("utf-8", "replace"),

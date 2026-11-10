@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **A hung `<cli> --version` kept running**: the version check run at start-up (CLI warm-up), by the health watchdog and by the dashboard's CLI check gave up after its delay but left the CLI and its children running. They are now started in their own process group and killed with it when the delay runs out, as for a chat request. The check still gives up within two seconds of its delay when a child that left the group (a daemon) keeps its output open, so it can no longer stall the watchdog.
+- **A hung sign-in check left the CLI's children running**: the account check (`claude auth status`, `codex login status`) run by the health watchdog and by a failed model discovery killed only the CLI when its delay ran out, so the CLI's children kept running. The CLI is now started in its own process group and the whole group is killed. The check still gives up within two seconds of its delay when a child that left the group keeps its output open.
 
 ## [4.5.0] — 2026-11-10
 
