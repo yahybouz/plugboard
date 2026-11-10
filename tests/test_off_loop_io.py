@@ -44,6 +44,10 @@ async def test_price_update_reads_merges_and_saves_off_the_event_loop(
 
     monkeypatch.setattr(pricing_scraper, "_fetch_sources", no_sources)
     monkeypatch.setattr(pricing_scraper, "_PRICING_SOURCE_URL", "")
+    # The update keeps the sources it used for revert_model(): those stay
+    # with this test, not with the tests that run after it.
+    monkeypatch.setattr(pricing_scraper, "_last_sources", {})
+    monkeypatch.setattr(pricing_scraper, "_last_space_sources", {})
     loaded = _record_threads(monkeypatch, pricing_scraper, "load_pricing")
     saved = _record_threads(monkeypatch, pricing_scraper, "save_pricing")
     month = billing.current_pricing_month()
