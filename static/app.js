@@ -1464,16 +1464,27 @@ async function loadOllamaCloudCatalog() {
       el.appendChild(h("div", { className: "muted", style: "padding:1rem;" }, "The public cloud catalogue is empty or unreachable."));
       return;
     }
+    // Adding a cloud model goes through the local Ollama: offer nothing while
+    // it does not answer (BUG-13).
+    const online = data.local_list_available !== false;
+    if (!online) {
+      el.appendChild(h("div", { className: "alert alert-warning" },
+        "Ollama offline: cloud models can be added once Ollama answers at the URL above."));
+    }
     const table = h("table", { className: "data-table" },
       h("thead", null, h("tr", null, h("th", null, "Cloud model"), h("th", null, "Status"), h("th", null, "Actions")))
     );
     const tbody = h("tbody");
     models.forEach(function (m) {
       const id = m.id;
+      let badge;
+      if (!online) badge = h("span", { className: "badge badge-muted" }, "Ollama offline");
+      else if (m.installed) badge = h("span", { className: "badge badge-green" }, "installed");
+      else badge = h("span", { className: "badge badge-muted" }, "available");
       tbody.appendChild(h("tr", null,
         h("td", null, h("span", { style: "font-weight:600;" }, id)),
-        h("td", null, h("span", { className: "badge badge-" + (m.installed ? "green" : "muted") }, m.installed ? "installed" : "available")),
-        h("td", null, m.installed ? null : h("button", { className: "btn btn-ghost btn-sm", onClick: function () { _pullFromCatalog(id); } }, "Add"))
+        h("td", null, badge),
+        h("td", null, (!online || m.installed) ? null : h("button", { className: "btn btn-ghost btn-sm", onClick: function () { _pullFromCatalog(id); } }, "Add"))
       ));
     });
     table.appendChild(tbody);
