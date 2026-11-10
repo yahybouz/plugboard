@@ -339,6 +339,38 @@ async def test_codex_reconnect_on_a_rate_limit_then_a_failed_turn_is_not_a_quota
     assert ledger.turns == []
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [0, 1])
+async def test_a_failed_run_without_message_is_judged_on_stderr_like_exit_1(
+    client, key, providers, cli_process, monkeypatch, code
+):
+    """No message from the CLI: its stderr is the reason the router reads for
+    quarantine, at exit 0 as at exit 1. A client key still gets none of it."""
+    import plugboard.model_quarantine as quarantine
+
+    quarantined: list = []
+    monkeypatch.setattr(
+        quarantine,
+        "record_terminal_unavailable",
+        lambda model, **kw: quarantined.append(kw.get("reason", "")),
+    )
+    headers, _ = key
+    providers("codex")
+    cli_process(
+        _CODEX_ANSWER + b'{"type":"turn.failed"}\n',
+        stderr=b"error: model gpt-x does not exist (/srv/pbtest/.codex/config.toml)\n",
+        returncode=code,
+    )
+
+    resp = await client.post("/v1/chat/completions", headers=headers, json=_chat())
+
+    assert resp.status_code == 502, resp.text
+    assert len(quarantined) == 1 and "does not exist" in quarantined[0]
+    for leaked in ("PARTIAL-TEXT", "gpt-x", "does not exist", "/srv/pbtest"):
+        assert leaked not in resp.text
+    assert resp.json()["detail"].startswith("The codex provider failed (reference ")
+
+
 # ── Quota read from claude's structured events ────────────────────────────
 
 _CLAUDE_REJECTED = "API Error: Request rejected (429)"

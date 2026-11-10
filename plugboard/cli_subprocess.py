@@ -1743,9 +1743,16 @@ async def complete(
             if failed:
                 quota_error = _extract_cli_error(stdout_text, kind, terminal_only=True)
             quota_stderr = "" if cli_error else stderr_text
+            # Without a message, stderr is the reason, as on a non-zero exit
+            # (the router reads it for quarantine); never stdout, which holds
+            # the partial answer. A client key gets none of it.
+            detail = (
+                cli_error
+                or stderr_text[:400]
+                or "the run ended in error without a message"
+            )
             raise CliSubprocessError(
-                f"CLI {backend.command!r} failed: "
-                f"{cli_error or 'the run ended in error without a message'}",
+                f"CLI {backend.command!r} failed: {detail}",
                 exit_code=proc.returncode,
                 stderr=stderr_text[:500],
                 pid=proc.pid,
