@@ -298,10 +298,12 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 
 ### Remaining review follow-ups
 
-**What:** Move the locked load/merge/save of the price update and the catalog parse off the event loop (`asyncio.to_thread`); cache negative price lookups across the twelve-month walk-back; share one env-number parser; pin catalog provider traffic (not only the connection test) to the checked address.
+**What:** Keep the traffic of a provider created from a catalog preset away from non-public addresses after it is created, not only during the connection test (pinned) and the creation check. Then finish the shared number parser: about 35 settings are still read inline with `int(os.environ…)` / `float(os.environ…)` (`http_pool`, `cache`, `provider_watchdog`, `app`, `model_availability`, `session_store`…), where a bad value raises, at import for most, instead of giving the default; and `envcompat.get_float` accepts `inf`, which crashes `PLUGBOARD_LLM_PRICING_MAX_MODELS` and `PLUGBOARD_CATALOG_MAX_MB` and, in `PLUGBOARD_PRICE_DRIFT_PCT`, holds no price change for review.
 
-**Why:** Informational findings of the pre-landing review and the CSO audit of the auto-update stack.
+**Why:** Informational findings of the pre-landing review and the CSO audit of the auto-update stack. A catalog base URL comes from a third-party feed. Chat, streaming and model discovery go through the shared HTTP pool, which resolves the host again (DNS cache 300 s): a name re-pointed inside the network after the check (DNS rebinding) would receive the provider key.
+
+**Context:** Done: the price update's locked read/merge/save, the queueing of held drifts and the catalog parse run in a worker thread (`asyncio.to_thread`); misses of the twelve-month price walk-back are cached; the numeric settings of the auto-update stack go through `envcompat.get_int` / `get_float`. Waiting on a product choice: pin each catalog host to the address checked at creation (breaks when the provider moves) or check every new resolution of that host with `llm_pricing.ip_is_public` (keeps address changes working); keep or drop the stop on a bad inline value; refuse `inf` or not. `llm_pricing._resolve_public` and `_PinnedResolver` already exist. The pool trusts `HTTPS_PROXY`, which a DNS check cannot cover.
 
 **Effort:** M
 **Priority:** P3
-**Depends on:** none
+**Depends on:** the pinning and `inf` decisions
