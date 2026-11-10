@@ -52,8 +52,10 @@ _PROVIDER_FAULT_STATUSES = frozenset({401, 403, 429})
 # claude ("prompt is too long", "exceed context limit"), OpenAI
 # ("context_length_exceeded", "maximum context length", "string too long"),
 # codex ("exceeds the context window"), Bedrock ("input is too long"),
-# llama.cpp/Ollama ("exceeds the available context size"), Gemini ("exceeds
-# the maximum number of tokens").
+# llama.cpp ("exceeds the available context size"), Ollama ("prompt is too
+# long", "exceeded max context length"), Gemini ("exceeds the maximum number
+# of tokens"). The router's answer to the client follows the same rule
+# (router._names_the_request): such an error gives 400, never 502.
 _REQUEST_TOO_LONG = (
     "prompt is too long",
     "input is too long",
