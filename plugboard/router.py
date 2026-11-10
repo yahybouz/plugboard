@@ -29,7 +29,7 @@ from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
 
 import aiohttp
 
-from plugboard import metrics
+from plugboard import envcompat, metrics
 from plugboard.alerts import record_provider_failure, record_provider_success
 from plugboard.cli_subprocess import MAX_RETRY_AFTER_S
 from plugboard.config import load_providers
@@ -257,30 +257,6 @@ def _adapt_payload(model: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
-def _read_env_float(name: str, default: float, *, min_value: float = 0.0) -> float:
-    """Read float env var with validation and sane fallback."""
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        log.warning(
-            "Invalid %s=%r (float expected) — using default %.3f", name, raw, default
-        )
-        return default
-    if value < min_value:
-        log.warning(
-            "Invalid %s=%.3f (must be >= %.3f) — using default %.3f",
-            name,
-            value,
-            min_value,
-            default,
-        )
-        return default
-    return value
-
-
 def _read_retry_delays() -> List[float]:
     """Read retry backoff delays from env with robust fallback.
 
@@ -314,8 +290,12 @@ def _read_retry_delays() -> List[float]:
     return out if out else [2.0, 5.0, 15.0]
 
 
-_ERROR_RATE_WEIGHT = _read_env_float("PLUGBOARD_LB_ERROR_RATE_WEIGHT", 5.0)
-_INFLIGHT_WEIGHT = _read_env_float("PLUGBOARD_LB_INFLIGHT_WEIGHT", 0.35)
+_ERROR_RATE_WEIGHT = envcompat.get_float(
+    "PLUGBOARD_LB_ERROR_RATE_WEIGHT", default=5.0, minimum=0.0
+)
+_INFLIGHT_WEIGHT = envcompat.get_float(
+    "PLUGBOARD_LB_INFLIGHT_WEIGHT", default=0.35, minimum=0.0
+)
 _DELAYS = _read_retry_delays()
 _IN_FLIGHT_BY_PROVIDER: Dict[str, int] = {}
 _LEGACY_PROVIDER_PREFIX_TO_AUTH_SOURCE: Dict[str, str] = {

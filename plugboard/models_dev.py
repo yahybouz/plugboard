@@ -34,6 +34,7 @@ from urllib.parse import urlsplit
 import aiohttp
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from plugboard import envcompat
 from plugboard.storage import atomic_write_json, data_dir
 
 log = logging.getLogger(__name__)
@@ -73,15 +74,6 @@ def catalog_url() -> str:
     if "PLUGBOARD_CATALOG_URL" in os.environ:
         return os.environ["PLUGBOARD_CATALOG_URL"].strip()
     return DEFAULT_CATALOG_URL
-
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        value = float(os.environ.get(name, "") or default)
-    except ValueError:
-        log.error("%s is not a number; using %s", name, default)
-        return default
-    return value if value > 0 else default
 
 
 def _catalog_dir() -> Path:
@@ -262,8 +254,11 @@ class CatalogTooLarge(ValueError):
 
 
 async def _download(url: str, etag: str) -> Tuple[int, Optional[bytes], str]:
-    timeout = aiohttp.ClientTimeout(total=_env_float("PLUGBOARD_CATALOG_TIMEOUT_S", 20))
-    max_bytes = int(_env_float("PLUGBOARD_CATALOG_MAX_MB", 20) * 1024 * 1024)
+    timeout = aiohttp.ClientTimeout(
+        total=envcompat.get_float("PLUGBOARD_CATALOG_TIMEOUT_S", default=20.0, above=0)
+    )
+    max_mb = envcompat.get_float("PLUGBOARD_CATALOG_MAX_MB", default=20.0, above=0)
+    max_bytes = int(max_mb * 1024 * 1024)
     headers = {"Accept": "application/json"}
     if etag:
         headers["If-None-Match"] = etag

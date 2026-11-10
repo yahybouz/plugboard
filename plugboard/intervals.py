@@ -19,18 +19,7 @@ _warned: set = set()
 
 
 def _hours(name: str, legacy: tuple, default: int, allow_daily: bool = True) -> int:
-    raw = envcompat.get(name, *legacy)
-    if not raw:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        if name not in _warned:
-            _warned.add(name)
-            log.warning(
-                "%s=%r is not a whole number of hours; using %d", name, raw, default
-            )
-        return default
+    value = envcompat.get_int(name, *legacy, default=default)
     if value == 0 and allow_daily:
         return 0
     clamped = max(1, min(24, value))

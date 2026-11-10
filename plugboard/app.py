@@ -67,6 +67,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from plugboard import __version__
 from plugboard import admin_sessions
+from plugboard import envcompat
 from plugboard import billing as _billing
 from plugboard import usage as _usage
 from plugboard.alerts import check_and_alert as _check_and_alert
@@ -568,22 +569,12 @@ _MAX_BODY_BYTES = int(
 # to PLUGBOARD_INFLIGHT_WAIT_S for a slot and then get 503 + Retry-After.
 
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        return max(0, int(os.environ.get(name, str(default)) or str(default)))
-    except ValueError:
-        return default
-
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        return max(0.0, float(os.environ.get(name, str(default)) or str(default)))
-    except ValueError:
-        return default
-
-
-_INFLIGHT_CHAT_MAX = _env_int("PLUGBOARD_MAX_INFLIGHT_CHAT", 0)
-_INFLIGHT_WAIT_S = _env_float("PLUGBOARD_INFLIGHT_WAIT_S", 0.0)
+_INFLIGHT_CHAT_MAX = envcompat.get_int(
+    "PLUGBOARD_MAX_INFLIGHT_CHAT", default=0, minimum=0
+)
+_INFLIGHT_WAIT_S = envcompat.get_float(
+    "PLUGBOARD_INFLIGHT_WAIT_S", default=0.0, minimum=0.0
+)
 _INFLIGHT_RETRY_AFTER_S = 5
 _inflight_chat_sem: Optional["_asyncio.Semaphore"] = None
 _inflight_chat_active = 0  # observability counter; only accurate when sem is used
