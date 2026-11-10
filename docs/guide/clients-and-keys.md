@@ -57,7 +57,7 @@ Each entry is compared, as a whole string, with the provider and model that serv
 - A bare model name (`qwen3:8b`) allows that name on every provider.
 - Clients should send the model as `<provider-id>:<model>`, spelled like the entry. A name without a provider prefix can be routed to another provider and refused.
 - When a provider lists only dated snapshots of a model (`claude-haiku-4-5-20251001`), a request for the undated name can be served, and is then checked, under the newest dated ID once Plugboard has loaded its model list. List the dated ID and request it as it is.
-- The `detail` of a `403` names the ID that was checked (`Model '<provider-id>:<model>' not allowed ...`) and the key's list.
+- On `/v1/chat/completions`, the `detail` of a `403` names the ID that was checked (`Model '<provider-id>:<model>' not allowed ...`) and the key's list. `/v1/embeddings` answers `403 Embedding model not permitted for this key` without them, and `/v1/preflight` gives the closed code `forbidden_model`.
 
 An entry that is only a provider prefix (`"anthropic-direct:"`) or part of a name (`"claude"` for `claude-haiku-...`) has allowed none of the models it used to cover since 4.3.1: their requests get `403`. `GET /admin/keys` shows the list of each key. A list cannot be edited, and rotating a key copies it: create a new key with full IDs, then revoke the old one ([details](../model-access-correction.md)).
 
