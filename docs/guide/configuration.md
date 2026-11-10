@@ -13,7 +13,7 @@ Boolean flags accept `1`, `true`, `yes`, `on` unless stated otherwise. Values be
 | `ADMIN_KEY` | empty | Admin secret for the dashboard and `/admin/*`. Required: the server refuses to start without it, or with fewer than 16 characters, unless `PLUGBOARD_DEV=1`. `make init` generates one. |
 | `API_KEY` | empty | Any non-empty value turns on client authentication for `/v1/*` (clients use `pb_` keys). The value itself is not a client key. Empty: client authentication is off, a critical warning is logged every five minutes and `/health` reports `auth_disabled`. |
 | `ENCRYPTION_KEY` | empty | Key used to encrypt provider tokens, OAuth credentials and the MFA secret at rest. Empty: a key is generated once in `data/.encryption_key`. Changing it makes stored credentials unreadable. |
-| `PLUGBOARD_DEV` | empty | `1` marks a development instance: the server may start without `ADMIN_KEY`, and the empty-`API_KEY` warning is logged once instead of repeated. |
+| `PLUGBOARD_DEV` | empty | `1` marks a development instance: the server may start without `ADMIN_KEY`, and the empty-`API_KEY` warning is logged once instead of repeated. With `API_KEY` empty too, every route is open, so `run.py` then listens on a loopback `HOST` only. |
 | `PLUGBOARD_LOCAL_AUTO_LOGIN` | `auto` | Dashboard auto-login. `auto`: only when `run.py` listens on a loopback address. `1`: also when listening on another interface (personal workstation). `0`: never. Unknown values count as `0`. See [Security notes](../../README.md#security-notes). |
 | `PLUGBOARD_OPEN_BROWSER` | empty | `1` (set by `make dev`): once the server answers, `run.py` opens the dashboard with the one-time login token from `data/.login_token`. Loopback bind only. |
 | `PLUGBOARD_ADMIN_MFA_REQUIRED` | empty | `1` requires a TOTP code at admin login, and refuses the admin key alone as a bearer ([admin API with MFA](monitoring.md#admin-api-with-mfa)), once a secret is enrolled (`POST /admin/mfa/begin`, then `POST /admin/mfa/setup`, or `make admin-mfa-setup`). Without an enrolled secret it has no effect, so it cannot lock you out. |
@@ -42,7 +42,7 @@ The command reads every secret with the current key and re-encrypts it with the 
 
 | Variable | Default | Description |
 |---|---|---|
-| `HOST` | `0.0.0.0` | Interface `run.py` listens on. `.env.example` sets `127.0.0.1` (local install). |
+| `HOST` | `0.0.0.0` | Interface `run.py` listens on. `.env.example` sets `127.0.0.1` (local install). With `API_KEY` and `ADMIN_KEY` both empty, `run.py` refuses any value other than `127.0.0.1`, `localhost` or `::1` ([details](troubleshooting.md#api_key-and-admin_key-are-both-empty-refusing-to-listen-on-0000)). |
 | `PORT` | `8765` | Listening port. |
 | `RELOAD` | `false` | `true` enables hot reload (`make dev` sets it). |
 | `PLUGBOARD_DATA` | `data` | Directory for all state (JSON files, SQLite databases, pricing grids). The pricing scheduler's `cb_state.json` always lives in the `data/` directory of the installation. |

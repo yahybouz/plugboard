@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **Keyless mode no longer listens on a network**: with `API_KEY` and `ADMIN_KEY` both empty (allowed with `PLUGBOARD_DEV=1`), every route is open, the admin API and the dashboard included, and `run.py` listened on `0.0.0.0` when `HOST` was unset. `run.py`, and so `make dev`, the Docker image, Railway and the systemd unit, now refuses to start on any `HOST` other than `127.0.0.1`, `localhost` or `::1` in that mode, and says how to fix it: run `make init` (or set `ADMIN_KEY` and `API_KEY`), or set `HOST=127.0.0.1`. An instance with either key set is unchanged, and the default `HOST` stays `0.0.0.0` ([troubleshooting](docs/guide/troubleshooting.md#api_key-and-admin_key-are-both-empty-refusing-to-listen-on-0000)).
+
 ## [4.5.1] — 2026-11-10
 
 ### Security

@@ -52,18 +52,6 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 **Priority:** P2
 **Depends on:** None
 
-### Keyless dev mode on a public bind
-
-**What:** Refuse a non-loopback bind when `API_KEY` and `ADMIN_KEY` are both empty, or default `HOST` to `127.0.0.1` in `run.py`.
-
-**Why:** In keyless mode every route is open to any peer while `run.py` binds `0.0.0.0` by default.
-
-**Context:** `_require_admin` and `_check_dashboard_auth` return early when both keys are empty.
-
-**Effort:** S
-**Priority:** P2
-**Depends on:** None
-
 ### Same-site CSRF on admin POSTs
 
 **What:** Reject state-changing admin requests whose `Sec-Fetch-Site` is not `same-origin`.

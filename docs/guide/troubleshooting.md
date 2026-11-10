@@ -16,6 +16,15 @@ A real key may start with `#`; only `#` alone or `#` followed by whitespace is r
 
 If the log says the same about `ENCRYPTION_KEY`, the server starts but logs a critical message: your stored credentials are encrypted with a guessable key. Do not change the value blindly (stored tokens and the MFA secret would become unreadable): protect `data/`, then re-create the providers with a new `ENCRYPTION_KEY`.
 
+### `API_KEY and ADMIN_KEY are both empty: refusing to listen on 0.0.0.0`
+
+With both keys empty (possible only with `PLUGBOARD_DEV=1`), every route is open, the admin API and the dashboard included. `run.py` (and so `make dev`, the Docker image and the systemd unit) then listens on this machine only, and refuses `HOST=0.0.0.0` (the default when `HOST` is unset), `::`, a LAN address or an empty value. Either:
+
+- run `make init`, or set random values for `ADMIN_KEY` and `API_KEY` in `.env` (`openssl rand -hex 24`); a container needs `ADMIN_KEY`, since it listens on `0.0.0.0`;
+- or, for throwaway local work, set `HOST=127.0.0.1` (`localhost` and `::1` also work).
+
+Only `API_KEY` and `ADMIN_KEY` count: `PLUGBOARD_API_KEY` and `PLUGBOARD_ADMIN_KEY` are MCP client settings that the server does not read.
+
 ### `Invalid configuration: STRICT_TENANT explicitly enabled while API_KEY is empty`
 
 `PLUGBOARD_STRICT_TENANT=1` (or its old name) with an empty `API_KEY` is refused. Set `API_KEY`, or remove the variable.
