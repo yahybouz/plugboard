@@ -17,6 +17,8 @@ import asyncio
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import logging
 import os
 import re
@@ -28,6 +30,7 @@ import aiohttp
 
 from plugboard import metrics
 from plugboard.alerts import record_provider_failure, record_provider_success
+from plugboard.cli_subprocess import MAX_RETRY_AFTER_S
 from plugboard.config import load_providers
 from plugboard.logging_config import _request_id_var
 from plugboard.endpoints import openai_url
@@ -49,6 +52,52 @@ log = logging.getLogger(__name__)
 
 _RETRYABLE = {429, 500, 502, 503, 529}
 _TIMEOUT = float(900)  # Allow long-running direct CLI requests.
+
+
+class ProviderQuotaError(RuntimeError):
+    """An HTTP provider answered 429: its quota or rate limit is exhausted.
+
+    ``retry_after`` is the delay in seconds the provider gave in its
+    ``Retry-After`` header, or None. The message keeps the upstream body for
+    the server log and the admin; a client key never sees it.
+    """
+
+    def __init__(
+        self, message: str, *, provider_id: str, retry_after: Optional[int] = None
+    ):
+        super().__init__(message)
+        self.provider_id = provider_id
+        self.retry_after = retry_after
+
+
+def _retry_after_seconds(value: Optional[str]) -> Optional[int]:
+    """Seconds of a Retry-After header (delta-seconds or HTTP-date), or None.
+
+    Capped at MAX_RETRY_AFTER_S (7 days).
+    """
+    value = (value or "").strip()
+    try:
+        if value.isascii() and value.isdigit():
+            return min(int(value), MAX_RETRY_AFTER_S)
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    seconds = int((when - datetime.now(timezone.utc)).total_seconds())
+    return min(max(0, seconds), MAX_RETRY_AFTER_S)
+
+
+def _http_error(provider_id: str, status: int, text: str, headers) -> RuntimeError:
+    """The error of a non-200 answer; a 429 keeps its Retry-After delay."""
+    message = f"[{provider_id}] HTTP {status}: {text}"
+    if status == 429:
+        return ProviderQuotaError(
+            message,
+            provider_id=provider_id,
+            retry_after=_retry_after_seconds(headers.get("Retry-After")),
+        )
+    return RuntimeError(message)
 
 
 # BENCH-006 closed: OpenAI's o-series (o1/o3/o4-mini/...) deprecated
@@ -647,8 +696,8 @@ async def forward(
                     ) as resp:
                         if resp.status in _RETRYABLE:
                             text = await resp.text()
-                            last_err = RuntimeError(
-                                f"[{provider['id']}] HTTP {resp.status}: {text[:200]}"
+                            last_err = _http_error(
+                                provider["id"], resp.status, text[:200], resp.headers
                             )
                             continue
                         if resp.status != 200:
@@ -908,7 +957,7 @@ async def forward_stream(
     ) as resp:
         if resp.status != 200:
             text = await resp.text()
-            raise RuntimeError(f"[{provider['id']}] HTTP {resp.status}: {text[:400]}")
+            raise _http_error(provider["id"], resp.status, text[:400], resp.headers)
         async for chunk in resp.content.iter_any():
             yield chunk
 
