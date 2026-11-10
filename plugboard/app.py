@@ -830,6 +830,69 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+_KEYLESS_REFUSAL = (
+    "API_KEY and ADMIN_KEY are both empty: every route is open, so this server "
+    "only answers on a loopback interface. Run `make init` (or set random "
+    "ADMIN_KEY and API_KEY values), or listen on 127.0.0.1."
+)
+_keyless_refusal_logged = False
+
+
+def _arrived_on_loopback(scope) -> bool:
+    """True when the connection arrived on a loopback interface.
+
+    ``scope["server"]`` is the local address of the connection (uvicorn: the
+    socket's sockname); proxy headers, the Host header and the peer never
+    change it. A Unix socket or an unknown address is not loopback.
+    """
+    server = scope.get("server")
+    if not server:
+        return False
+    try:
+        address = ipaddress.ip_address(str(server[0]))
+    except ValueError:
+        return False
+    mapped = getattr(address, "ipv4_mapped", None)
+    return (mapped or address).is_loopback
+
+
+class _KeylessLoopbackOnlyMiddleware:
+    """Keyless mode (API_KEY and ADMIN_KEY empty) answers on loopback only.
+
+    Every route is open then. run.py refuses to listen elsewhere; this covers
+    a server started another way, e.g. ``uvicorn plugboard.app:app --host
+    0.0.0.0``.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if (
+            scope["type"] in ("http", "websocket")
+            and not _API_KEY
+            and not _ADMIN_KEY
+            and not _arrived_on_loopback(scope)
+        ):
+            global _keyless_refusal_logged
+            if not _keyless_refusal_logged:
+                _keyless_refusal_logged = True
+                log.critical(
+                    "%s Refused a request on %s.", _KEYLESS_REFUSAL, scope.get("server")
+                )
+            if scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 1008})
+                return
+            refusal = JSONResponse(
+                status_code=403, content={"detail": _KEYLESS_REFUSAL}
+            )
+            await refusal(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
+# Added first = innermost: the refusal still gets the security headers.
+app.add_middleware(_KeylessLoopbackOnlyMiddleware)
 app.add_middleware(_SecurityHeadersMiddleware)
 app.add_middleware(_BodySizeLimitMiddleware)
 app.add_middleware(_RequestIdMiddleware)

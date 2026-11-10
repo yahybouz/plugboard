@@ -110,3 +110,128 @@ def test_names_the_server_does_not_read_do_not_count(start, calls, monkeypatch):
     with pytest.raises(SystemExit) as exc:
         start("0.0.0.0")
     _assert_refused(exc, calls)
+
+
+# ── The app itself: `uvicorn plugboard.app:app --host 0.0.0.0` ──────────────
+#
+# run.py is not the only documented start command, so the app also answers
+# only connections that arrive on a loopback interface in keyless mode.
+# scope["server"] is that local address (uvicorn: the socket's sockname);
+# proxy headers, the Host header and the peer address never change it.
+
+_REMOTE_PEER = ("203.0.113.7", 50000)
+
+
+@pytest.fixture
+def app_module(_providers_file, monkeypatch):
+    import plugboard.app as module
+    import plugboard.ratelimit as rl
+
+    monkeypatch.setattr(rl, "_LIMIT", 0)
+    monkeypatch.setattr(module, "_API_KEY", "")
+    monkeypatch.setattr(module, "_ADMIN_KEY", "")
+    return module
+
+
+async def _get(app, path, server, client=_REMOTE_PEER, headers=None):
+    from httpx import ASGITransport, AsyncClient
+
+    # ASGITransport reports the URL host and port as scope["server"].
+    netloc = f"[{server}]" if ":" in server else server
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=client),
+        base_url=f"http://{netloc}:8765",
+    ) as c:
+        return await c.get(path, headers=headers or {})
+
+
+async def _raw_call(app, server, scope_type="http"):
+    scope = {
+        "type": scope_type,
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/providers",
+        "raw_path": b"/providers",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"host", b"localhost")],
+        "server": server,
+        "client": _REMOTE_PEER,
+    }
+    sent = []
+
+    async def receive():
+        if scope_type == "websocket":
+            return {"type": "websocket.connect"}
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    await app(scope, receive, send)
+    return sent
+
+
+def _assert_app_refused(resp):
+    assert resp.status_code == 403
+    detail = resp.json()["detail"]
+    assert "API_KEY" in detail and "ADMIN_KEY" in detail
+    assert "make init" in detail and "127.0.0.1" in detail
+
+
+@pytest.mark.parametrize("server", ["192.0.2.10", "10.0.0.5", "2001:db8::1"])
+@pytest.mark.parametrize("path", ["/providers", "/v1/models", "/", "/health"])
+async def test_keyless_app_refuses_a_connection_on_a_network_interface(
+    app_module, server, path
+):
+    _assert_app_refused(await _get(app_module.app, path, server))
+
+
+async def test_keyless_app_ignores_headers_and_peer_address(app_module):
+    resp = await _get(
+        app_module.app,
+        "/providers",
+        "192.0.2.10",
+        client=("127.0.0.1", 50000),
+        headers={
+            "Host": "localhost:8765",
+            "X-Forwarded-For": "127.0.0.1",
+            "X-Real-IP": "127.0.0.1",
+        },
+    )
+    _assert_app_refused(resp)
+
+
+@pytest.mark.parametrize(
+    "server",
+    [None, ("/run/plugboard.sock", None), ("localhost", None), ("testserver", 80)],
+)
+async def test_keyless_app_fails_closed_on_an_unknown_interface(app_module, server):
+    # A Unix socket (even one named "localhost") or a name is not loopback.
+    assert (await _raw_call(app_module.app, server))[0]["status"] == 403
+
+
+async def test_keyless_app_closes_a_websocket_on_a_network_interface(app_module):
+    sent = await _raw_call(app_module.app, ("192.0.2.10", 8765), "websocket")
+    assert sent == [{"type": "websocket.close", "code": 1008}]
+
+
+@pytest.mark.parametrize("server", ["127.0.0.1", "::1", "::ffff:127.0.0.1"])
+async def test_keyless_app_serves_loopback(app_module, server):
+    resp = await _get(app_module.app, "/providers", server, client=(server, 50000))
+    assert resp.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("api_key", "admin_key"),
+    [("synthetic-api-key", ""), ("", "synthetic-admin-key-0123456789")],
+)
+async def test_app_with_one_key_serves_a_network_interface(
+    app_module, monkeypatch, api_key, admin_key
+):
+    monkeypatch.setattr(app_module, "_API_KEY", api_key)
+    monkeypatch.setattr(app_module, "_ADMIN_KEY", admin_key)
+    resp = await _get(app_module.app, "/health", "192.0.2.10")
+    assert resp.status_code == 200
