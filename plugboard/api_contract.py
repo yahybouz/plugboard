@@ -445,7 +445,9 @@ class Health(BaseModel):
 
 class ErrorResponse(_Open):
     """FastAPI's error body. Upstream timeouts (503) add `retry_after` and a
-    Retry-After header; a failing CLI provider (502) adds its exit details."""
+    Retry-After header, as does an exhausted provider quota (429) when the
+    provider gave a delay; a failing CLI provider (502) adds its exit details
+    for the admin only."""
 
     detail: Union[str, List[Any], Dict[str, Any]]
     retry_after: Optional[int] = None
@@ -513,6 +515,8 @@ _AUTH_ERRORS = {
 }
 _CHAT_ERRORS = {
     **_AUTH_ERRORS,
+    "429": "Rate limit or monthly spending limit exceeded, or the quota of the last"
+    " provider tried is exhausted (retry_after and Retry-After when it gives a delay).",
     "402": "The key has a monthly budget and the model no known price; nothing was called.",
     "403": "The key may not use this model.",
     "413": "Request body larger than MAX_BODY_BYTES (10 MB by default).",
@@ -541,7 +545,8 @@ _ROUTES: List[_Route] = [
       "413": "Decision request exceeds the byte limit.",
       "422": "Invalid typed question or unsupported engine capability.",
       "429": "Key already has a decision in flight, queue full or wait over, "
-             "or a key limit exceeded.",
+             "a key limit exceeded, or TypeSafe's quota or rate limit exhausted "
+             "(Retry-After when TypeSafe gives it).",
       "502": "Invalid response from the decision engine.",
       "503": "Decision engine unavailable.",
       "504": "Decision engine timed out."}, True),

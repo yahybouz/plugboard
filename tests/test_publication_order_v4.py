@@ -239,9 +239,11 @@ async def test_api_and_mcp_keep_the_safe_survivor(routing, monkeypatch, warm):
     )
     expected = {"owner:qwen3", "owner:qwen3:gpt-5", "safe:gpt-4o"}
     assert {row["id"] for row in result["data"]} == expected
-    assert {
-        row["id"] for row in (await api.models_v2(client_id=None))["data"]
-    } == expected
+    v2 = await api.models_v2(
+        Request({"type": "http", "headers": [], "method": "GET", "path": "/v2/models"}),
+        client_id=None,
+    )
+    assert {row["id"] for row in v2["data"]} == expected
 
     async def api_get(path):
         assert path == "/v1/models"

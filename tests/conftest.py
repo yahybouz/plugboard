@@ -36,9 +36,13 @@ os.environ.setdefault("PLUGBOARD_OLLAMA_CLOUD_AUTOSYNC", "0")
 # throwaway directory so the suite never writes into the repository's data/
 # (or a live install's providers, keys and pricing grids).
 if not os.environ.get("PLUGBOARD_DATA"):
+    import atexit as _atexit
+    import shutil as _shutil
     import tempfile as _tempfile
 
     os.environ["PLUGBOARD_DATA"] = _tempfile.mkdtemp(prefix="plugboard-tests-")
+    # Removed when the run ends, so test runs leave nothing in /tmp.
+    _atexit.register(_shutil.rmtree, os.environ["PLUGBOARD_DATA"], True)
 
 import json  # noqa: E402
 import aiohttp  # noqa: E402

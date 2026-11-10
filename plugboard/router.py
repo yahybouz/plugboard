@@ -14,9 +14,12 @@ the default provider is used with the full model string as-is.
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 import logging
 import os
 import re
@@ -28,6 +31,7 @@ import aiohttp
 
 from plugboard import metrics
 from plugboard.alerts import record_provider_failure, record_provider_success
+from plugboard.cli_subprocess import MAX_RETRY_AFTER_S
 from plugboard.config import load_providers
 from plugboard.logging_config import _request_id_var
 from plugboard.endpoints import openai_url
@@ -49,6 +53,133 @@ log = logging.getLogger(__name__)
 
 _RETRYABLE = {429, 500, 502, 503, 529}
 _TIMEOUT = float(900)  # Allow long-running direct CLI requests.
+
+
+class ProviderQuotaError(RuntimeError):
+    """An HTTP provider answered 429: its quota or rate limit is exhausted.
+
+    ``retry_after`` is the delay in seconds the provider gave in its
+    ``Retry-After`` header, or None. The message keeps the upstream body for
+    the server log and the admin; a client key never sees it.
+    """
+
+    def __init__(
+        self, message: str, *, provider_id: str, retry_after: Optional[int] = None
+    ):
+        super().__init__(message)
+        self.provider_id = provider_id
+        self.retry_after = retry_after
+
+
+class ProviderHTTPError(RuntimeError):
+    """An HTTP provider answered an error status other than 429.
+
+    The message keeps the upstream body for the server log and the admin; a
+    client key never sees it. ``request_rejected`` is True when the provider
+    said the request itself is at fault (see ``_names_the_request``).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider_id: str,
+        status: int,
+        request_rejected: bool = False,
+    ):
+        super().__init__(message)
+        self.provider_id = provider_id
+        self.status = status
+        self.request_rejected = request_rejected
+
+
+class ProviderNetworkError(RuntimeError):
+    """An HTTP provider could not be reached, or its answer could not be read.
+
+    The message names the provider's host and port, an internal address for
+    a local endpoint: it stays with the server log and the admin.
+    """
+
+    def __init__(self, message: str, *, provider_id: str):
+        super().__init__(message)
+        self.provider_id = provider_id
+
+
+# OpenAI-style error type and code that blame the request (context too long,
+# unsupported parameter); "invalid_api_key" shares the type but blames the
+# gateway's key.
+_REQUEST_ERROR_TYPES = frozenset({"invalid_request_error"})
+_REQUEST_ERROR_CODES = frozenset({"context_length_exceeded"})
+_GATEWAY_ERROR_CODES = frozenset({"invalid_api_key"})
+
+
+def _names_the_request(status: int, text: str) -> bool:
+    """True when a 4xx answer says the request itself is at fault.
+
+    413 says so by its status. A 400 or 422 must say it in its body
+    (``error.type`` or ``error.code``): providers also answer 400 for their
+    own key or region (Gemini: INVALID_ARGUMENT, FAILED_PRECONDITION).
+    """
+    if status == 413:
+        return True
+    if status not in (400, 422):
+        return False
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return False
+    if isinstance(data, list) and data:
+        data = data[0]
+    error = data.get("error") if isinstance(data, dict) else None
+    if not isinstance(error, dict):
+        return False
+    code, kind = error.get("code"), error.get("type")
+    code = code if isinstance(code, str) else ""
+    kind = kind if isinstance(kind, str) else ""
+    if code in _GATEWAY_ERROR_CODES:
+        return False
+    return code in _REQUEST_ERROR_CODES or kind in _REQUEST_ERROR_TYPES
+
+
+def _retry_after_seconds(value: Optional[str]) -> Optional[int]:
+    """Seconds of a Retry-After header (delta-seconds or HTTP-date), or None.
+
+    Capped at MAX_RETRY_AFTER_S (7 days).
+    """
+    value = (value or "").strip()
+    try:
+        if value.isascii() and value.isdigit():
+            return min(int(value), MAX_RETRY_AFTER_S)
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    seconds = int((when - datetime.now(timezone.utc)).total_seconds())
+    return min(max(0, seconds), MAX_RETRY_AFTER_S)
+
+
+def _http_error(
+    provider_id: str, status: int, text: str, headers, *, limit: int = 400
+) -> RuntimeError:
+    """The error of a non-200 answer; a 429 keeps its Retry-After delay.
+
+    The message keeps the first ``limit`` characters of the body; the whole
+    body says whether the request was at fault.
+    """
+    message = f"[{provider_id}] HTTP {status}: {text[:limit]}"
+    if status == 429:
+        return ProviderQuotaError(
+            message,
+            provider_id=provider_id,
+            retry_after=_retry_after_seconds(headers.get("Retry-After")),
+        )
+    return ProviderHTTPError(
+        message,
+        provider_id=provider_id,
+        status=status,
+        request_rejected=_names_the_request(status, text),
+    )
 
 
 # BENCH-006 closed: OpenAI's o-series (o1/o3/o4-mini/...) deprecated
@@ -484,6 +615,15 @@ def _pop_reported_usage(result: Dict[str, Any]) -> bool:
     return result.pop(USAGE_REPORTED_KEY, None) is True
 
 
+def _circuit_key(provider: Dict[str, Any], real_model: str) -> str:
+    """Circuit-breaker key of a route: its effective ``provider-id:native`` ID.
+
+    forward() reads and records the breaker under this one key, the spelling
+    the LLM pricing pass reads too.
+    """
+    return f"{provider['id']}:{real_model}"
+
+
 async def forward(
     body: Dict[str, Any],
     timeout: float = _TIMEOUT,
@@ -495,6 +635,7 @@ async def forward(
     Retries on transient errors per provider, then falls back to next provider.
     """
     from plugboard.circuit_breaker import (
+        _extract_suffix,
         check_circuit,
         record_failure as cb_failure,
         record_success as cb_success,
@@ -505,15 +646,21 @@ async def forward(
     model_str = body.get("model", "")
     candidates = _resolve_all_providers(model_str)
 
-    # Circuit breaker check — if model is open, try fallback
-    circuit = check_circuit(model_str)
+    # Circuit breaker check — if model is open, try fallback. Each route is
+    # read under the key its outcomes are recorded under; the model counts as
+    # open only when no candidate route is allowed.
+    circuits = [check_circuit(_circuit_key(p, m)) for p, m in candidates]
+    circuit = next((c for c in circuits if c["allowed"]), circuits[0])
     if not circuit["allowed"] and circuit["fallback"]:
         # Rewrite model to fallback
         fallback_suffix = circuit["fallback"]
         log.warning("Circuit breaker: %s → fallback %s", model_str, fallback_suffix)
-        # Try to find the fallback in available models
+        # Try to find the fallback in available models. The model suffix must
+        # equal the fallback: ``gpt-5.5`` is a substring of ``gpt-5.5-pro``,
+        # and a substring match pinned the request to one route of the very
+        # model whose circuits are open, dropping the routes that answer.
         for prov, rmodel in candidates:
-            if fallback_suffix in rmodel:
+            if _extract_suffix(rmodel) == fallback_suffix:
                 model_str = f"{prov['id']}:{rmodel}"
                 body = {**body, "model": model_str}
                 candidates = _resolve_all_providers(model_str)
@@ -573,7 +720,7 @@ async def forward(
                     log.debug("subprocess usage estimation failed: %s", _exc)
                 try:
                     record_provider_success(provider["id"])
-                    cb_success(real_model)
+                    cb_success(_circuit_key(provider, real_model))
                 except Exception:
                     pass
                 _served_by.set((provider, real_model))
@@ -601,7 +748,7 @@ async def forward(
                             terminal_reason="model_unavailable",
                         )
                         invalidate_models_cache()
-                    cb_failure(real_model)
+                    cb_failure(_circuit_key(provider, real_model))
                     await record_provider_failure(provider["id"])
                 except Exception:
                     pass
@@ -647,8 +794,12 @@ async def forward(
                     ) as resp:
                         if resp.status in _RETRYABLE:
                             text = await resp.text()
-                            last_err = RuntimeError(
-                                f"[{provider['id']}] HTTP {resp.status}: {text[:200]}"
+                            last_err = _http_error(
+                                provider["id"],
+                                resp.status,
+                                text,
+                                resp.headers,
+                                limit=200,
                             )
                             continue
                         if resp.status != 200:
@@ -657,8 +808,8 @@ async def forward(
                                 metrics.record(provider["id"], 0.0, error=True)
                             except Exception:
                                 pass
-                            last_err = RuntimeError(
-                                f"[{provider['id']}] HTTP {resp.status}: {text[:400]}"
+                            last_err = _http_error(
+                                provider["id"], resp.status, text, resp.headers
                             )
                             provider_failed = True
                             break  # non-retryable error, try next provider
@@ -670,7 +821,7 @@ async def forward(
                             pass
                         try:
                             record_provider_success(provider["id"])
-                            cb_success(real_model)
+                            cb_success(_circuit_key(provider, real_model))
                         except Exception:
                             pass
                         _served_by.set((provider, real_model))
@@ -702,8 +853,9 @@ async def forward(
                     except Exception:
                         pass
                     detail = str(exc) or type(exc).__name__
-                    last_err = RuntimeError(
-                        f"[{provider['id']}] network error: {detail[:200]}"
+                    last_err = ProviderNetworkError(
+                        f"[{provider['id']}] network error: {detail[:200]}",
+                        provider_id=provider["id"],
                     )
                     log.warning(
                         "Network error on %s (%s): %s",
@@ -717,7 +869,7 @@ async def forward(
                     break
 
         # If we exhausted retries for this provider, record circuit breaker failure
-        cb_failure(real_model)
+        cb_failure(_circuit_key(provider, real_model))
 
         # Record error metrics and try next provider
         if not provider_failed:
@@ -900,17 +1052,29 @@ async def forward_stream(
     from plugboard.http_pool import get_session as _get_http_session
 
     session = await _get_http_session()
-    async with session.post(
-        url,
-        headers=headers,
-        json=payload,
-        timeout=aiohttp.ClientTimeout(total=effective_timeout),
-    ) as resp:
-        if resp.status != 200:
-            text = await resp.text()
-            raise RuntimeError(f"[{provider['id']}] HTTP {resp.status}: {text[:400]}")
-        async for chunk in resp.content.iter_any():
-            yield chunk
+    # aiohttp's text names the provider's host and port: typed like forward().
+    try:
+        async with session.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=effective_timeout),
+        ) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise _http_error(provider["id"], resp.status, text, resp.headers)
+            async for chunk in resp.content.iter_any():
+                yield chunk
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError(
+            f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}"
+        ) from exc
+    except aiohttp.ClientError as exc:
+        detail = str(exc) or type(exc).__name__
+        raise ProviderNetworkError(
+            f"[{provider['id']}] network error: {detail[:200]}",
+            provider_id=provider["id"],
+        ) from exc
 
 
 _models_cache: Optional[List[Dict[str, Any]]] = None

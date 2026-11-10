@@ -21,7 +21,10 @@ supplied by the caller.
 
 Then the gateway reads `GET /api/tags` on the engine (the model must be installed;
 its digest is returned) and calls `POST /api/embed` with `truncate: false`: an
-input longer than the model context is refused (422), never cut.
+input longer than the model context is refused (422), never cut. When the engine
+is exactly the operator's `OLLAMA_URL` and `PLUGBOARD_OLLAMA_TOKEN` is set (Ollama
+behind an authenticating proxy), both calls carry that token; no other engine
+ever gets it.
 
 ## Response
 

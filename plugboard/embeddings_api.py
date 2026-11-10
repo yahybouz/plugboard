@@ -380,6 +380,7 @@ async def create_embeddings(
 ):
     from plugboard.app import _check_spending_limit
     from plugboard.model_identity import model_access_matches
+    from plugboard.ollama import ollama_headers
 
     inputs = _inputs(body)
     provider, native = resolve_route(body.model)
@@ -394,17 +395,24 @@ async def create_embeddings(
         raise HTTPException(429, "Client rate limit exceeded")
 
     base = str(provider["base_url"]).rstrip("/")
+    # PLUGBOARD_OLLAMA_TOKEN for an Ollama behind an authenticating relay:
+    # empty unless ``base`` is exactly the operator's OLLAMA_URL.
+    headers = ollama_headers(base)
     started = time.perf_counter()
     if not _try_acquire_slot():
         raise HTTPException(429, "Embedding engine busy, retry shortly")
     try:
         timeout = aiohttp.ClientTimeout(total=_timeout())
         async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
-            digest = _digest(await _call(session, "GET", f"{base}/api/tags"), native)
+            digest = _digest(
+                await _call(session, "GET", f"{base}/api/tags", headers=headers),
+                native,
+            )
             raw = await _call(
                 session,
                 "POST",
                 f"{base}/api/embed",
+                headers=headers,
                 json={"model": native, "input": inputs, "truncate": False},
             )
         vectors = validate_vectors(raw, len(inputs))

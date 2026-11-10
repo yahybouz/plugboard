@@ -20,7 +20,7 @@ Provision a client key using the existing authenticated `POST /admin/keys` route
 
 The separate `allowed_decision_models` policy matches exact IDs. Missing/null
 means no policy granted; explicit `[]` means explicitly no decisions. Both deny
-all engines. Old chat substring policies grant no decisions. Rotation preserves
+all engines. Chat `allowed_models` entries grant no decisions. Rotation preserves
 this policy. No wildcard and no shared MCP admin credential fallback.
 
 Example request (synthetic data only):
@@ -72,7 +72,10 @@ Jev always calls the fixed official TLS endpoint
 `https://api.typesafe.ai/v1/systemone`, with redirects refused. Configure
 `PLUGBOARD_JEV_API_KEY` deliberately on the server. Missing credentials/assets
 return 503; invalid input 422; permission failure 403; per-key RPM, spending
-or capacity 429; invalid upstream output 502; timeout 504. The gateway returns
+or capacity 429; invalid upstream output 502; timeout 504. When TypeSafe
+answers HTTP 429 (quota or rate limit exhausted), the client gets 429 as on
+chat: a reason naming `typesafe`, plus `Retry-After` and `retry_after` when
+TypeSafe gives a delay; nothing is billed. The gateway returns
 static bounded errors without submitted text, upstream bodies or credentials.
 
 Every successful decision is recorded in the usage ledger against the key and
