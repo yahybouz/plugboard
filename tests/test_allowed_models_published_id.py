@@ -214,8 +214,17 @@ def _auth(key):
 
 
 @pytest.fixture
-def cli_calls(monkeypatch):
-    """Stand in for every CLI: records (kind, model), never spawns a process."""
+def cli_calls(monkeypatch, tmp_path):
+    """Stand in for every CLI: records (kind, model), never spawns a process.
+
+    The response cache gets its own database: the suite shares one, and an
+    answer cached by another test file for the same client and prompt would
+    be replayed here without any CLI call.
+    """
+    import plugboard.cache as response_cache
+
+    monkeypatch.setattr(response_cache, "_DATA_DIR", tmp_path / "cache")
+    monkeypatch.setattr(response_cache, "_DB_PATH", tmp_path / "cache" / "cache.db")
     calls = []
 
     async def _complete(kind, body, *, timeout_s=None):
