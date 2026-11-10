@@ -116,13 +116,15 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 
 ### Remaining public-surface and robustness items
 
-**What:** Translate the provider preset `setup_steps` in `plugboard/direct_providers.py` to English; a `model_not_found` 404 with a hint for an unknown provider prefix; `DOCS_BASE_URL` and a bundled guide at `/guide`; data directory created `0700` and SQLite stores `0600`; refuse a short or placeholder `ADMIN_KEY` outside dev mode; log an unreadable `providers.json` once instead of on every call; warm the tiktoken encoding at startup; skip local Ollama models in the boot internet probe; cutover runbook for an existing install; SDK status line and an OpenAI JS snippet in the docs.
+**What:** A `model_not_found` 404 with a hint for an unknown provider prefix; `DOCS_BASE_URL` and a bundled guide at `/guide`; a cutover runbook for an existing install.
+
+**Done:** provider preset `setup_steps` in English; data directory created `0700` and SQLite stores `0600`; a short or placeholder `ADMIN_KEY` refused outside dev mode; an unreadable `providers.json` logged once instead of on every call; the tiktoken encoding warmed at startup; local Ollama models skipped by the boot internet probe; an SDK status line and an OpenAI JS snippet in `docs/api/README.md`.
 
 **Why:** Review findings and plan items that do not block the private merge request.
 
-**Context:** Deferred from plan: design-brief.md (Stage 2) and the stage 2 ship review.
+**Context:** Deferred from plan: design-brief.md (Stage 2) and the stage 2 ship review. Each item left needs an owner decision first: the 404 changes what clients get for a model ID whose prefix names no provider (a bare Ollama tag such as `gpt-oss:20b-cloud` is routed today, and the chat contract documents no 404); `/guide` is a new public route; the runbook needs its source and target install named (the LLM Enabler 3.x upgrade steps are in the 4.0.0 CHANGELOG entry). The Docker image still creates `/app/data` with mode `0755` at build time, so a new volume starts `0755`.
 
-**Effort:** L
+**Effort:** M
 **Priority:** P1
 **Depends on:** None
 
