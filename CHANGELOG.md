@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.6.0] — 2026-11-11
+
 ### Changed
 
 - **Circuit breaker counts only the provider's failures**: a route's circuit opened after any 3 failed calls in a row, including the ones the request caused, so one client key sending over-long prompts showed the route `open` in `/admin/circuits` and made the LLM pricing pass skip it for 60 s. It now counts HTTP `429` and `5xx`, timeouts, network errors, `401` and `403`, and for a CLI provider a quota, an unavailable model or a failed run. The other HTTP statuses (`400`, `413`, `422`, `404`...) and every HTTP or CLI error saying the context or the message is too long no longer count ([runbook](docs/runbooks/provider-down.md#quick-diagnosis)).
