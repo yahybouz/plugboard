@@ -26,13 +26,18 @@ def model_access_matches(
 
     Given every registered provider ID (inactive ones included), the ID that
     /v1/models publishes for this identity is accepted too, in strict equality.
-    A route without a model name has no published ID: the alias alone
-    ('Codex:') is a prefix, not a model.
+    A route without a model name is granted by no spelling: the alias alone
+    ('Codex:'), the owner ID alone ('chatgpt-via-codex-cli:') and the empty
+    entry are prefixes, not models. An empty policy still restricts nothing.
     """
     allowed = tuple(allowed)
-    if not allowed or native in allowed or f"{owner}:{native}" in allowed:
+    if not allowed:
         return True
-    if provider_ids is None or not native:
+    if not native:
+        return False
+    if native in allowed or f"{owner}:{native}" in allowed:
+        return True
+    if provider_ids is None:
         return False
     published = published_model_id(owner, native, provider_ids)
     return published is not None and published in allowed

@@ -23,6 +23,7 @@ _CLAUDE = "claude-via-claude-cli"
 _CODEX = "chatgpt-via-codex-cli"
 _GEMINI = "google-gemini-via-gemini-cli"
 _CLI_IDS = (_CLAUDE, _CODEX, _GEMINI)
+_DISPLAY = {_CLAUDE: "claude-code", _CODEX: "Codex", _GEMINI: "Gemini"}
 
 
 def _cli(provider_id, kind, *models, **extra):
@@ -125,6 +126,24 @@ def test_bare_alias_is_not_the_published_id_of_an_empty_model(entry, owner):
     'Codex:' resolves to (owner, ''), and the alias alone would equal it.
     """
     assert model_access_matches([entry], owner, "", _CLI_IDS) is False
+
+
+@pytest.mark.parametrize("provider_ids", [None, _CLI_IDS])
+@pytest.mark.parametrize("owner", _CLI_IDS)
+def test_empty_model_name_is_never_granted(owner, provider_ids):
+    """No spelling grants a route without a model name.
+
+    The owner ID with an empty name ('chatgpt-via-codex-cli:') would equal the
+    owner-qualified spelling, and the empty entry ('') the native one.
+    """
+    for entry in (f"{owner}:", "", _DISPLAY[owner] + ":"):
+        assert model_access_matches([entry], owner, "", provider_ids) is False, entry
+
+
+def test_empty_model_name_stays_open_to_an_unrestricted_key():
+    """An empty allowed_models still means no restriction at all."""
+    assert model_access_matches([], _CODEX, "", _CLI_IDS) is True
+    assert model_access_matches([], _CODEX, "") is True
 
 
 def test_published_id_needs_the_registry():
@@ -372,6 +391,43 @@ async def test_bare_alias_opens_nothing_when_the_cli_has_no_default_model(
     resp = await _chat(client, rec["key"], entry)
     assert resp.status_code == 403, resp.text
     assert cli_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("form", ["owner-id", "empty"])
+@pytest.mark.parametrize(
+    "cli", [CODEX_CLI, CLAUDE_CLI, GEMINI_CLI], ids=lambda c: c["id"]
+)
+async def test_empty_model_entry_opens_nothing_when_the_cli_has_no_default_model(
+    client, registry, keys, cli_calls, cli, form
+):
+    """'chatgpt-via-codex-cli:' or '' must not hand the CLI its own default.
+
+    Both requests resolve to the CLI with an empty model name, which the CLI
+    would run without --model, on a model the key never named.
+    """
+    owner = cli["id"]
+    registry([PROVIDER_A, dict(cli, default_model="", models=[])])
+    rec = _key(keys, [f"{owner}:" if form == "owner-id" else ""])
+    for path in _MODEL_LISTS:
+        assert await _ids(client, rec["key"], path) == [], path
+    for request in (_DISPLAY[owner] + ":", f"{owner}:"):
+        resp = await _chat(client, rec["key"], request)
+        assert resp.status_code == 403, f"{request}: {resp.status_code} {resp.text}"
+    assert cli_calls == []
+
+
+@pytest.mark.asyncio
+async def test_unrestricted_key_keeps_the_cli_default_model(
+    client, registry, keys, cli_calls
+):
+    """A key without allowed_models is not limited: the empty name still routes."""
+    registry([PROVIDER_A, dict(CODEX_CLI, default_model="", models=[])])
+    rec = _key(keys, [])
+    for request in ("Codex:", f"{_CODEX}:"):
+        resp = await _chat(client, rec["key"], request)
+        assert resp.status_code == 200, f"{request}: {resp.status_code} {resp.text}"
+    assert cli_calls == [("codex", "")] * 2
 
 
 # ── security, through the real registry ──────────────────────────────────────
