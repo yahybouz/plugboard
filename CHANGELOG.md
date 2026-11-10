@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **The first request after a start paid for loading the token counter**: the tiktoken encoding used to estimate tokens was loaded, and downloaded when tiktoken's cache was empty, by the first request that counted tokens, on the event loop, holding up every other request meanwhile. It is now loaded at startup in a background thread; startup does not wait for it, and a request that comes first still loads it as before.
 - **The boot internet check ran every local Ollama model**: at startup the gateway sent its web-access question to each model, local Ollama models included, so the host loaded and ran every installed model in turn, for models that have no web access. The boot check now leaves them out (Ollama Cloud models are still checked). `POST /admin/models/check-internet/all` is unchanged and accepts `"skip_local": true` to do the same.
 - **An unreadable `providers.json` flooded the log**: every request reads the provider store, and each read of a broken file logged the same error. It is now logged once per version of the file (again after the file changes, or after it was readable in between); the gateway still serves no provider until the file is fixed, and still refuses to overwrite it.
 

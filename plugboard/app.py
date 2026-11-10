@@ -374,6 +374,12 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
 
     _spawn_boot_task(_warm(), "subprocess-warm-up")
 
+    # Load the tiktoken encoding (read from its cache, or downloaded) now,
+    # off the event loop: the first token count of a request would block it.
+    from plugboard.tokenizer import warm_up_in_background
+
+    warm_up_in_background()
+
     # Repeat the auth-disabled warning every 5 minutes in non-dev contexts so
     # long-running deployments can't forget they are wide open (TM-007).
     async def _auth_nag():
