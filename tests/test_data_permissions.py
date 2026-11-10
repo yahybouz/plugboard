@@ -107,6 +107,13 @@ STORES = [
     ("plugboard.mcp_server", "_TRACKING_DB", "_tracking_conn"),
 ]
 
+# Module-level record of "schema already created", with its fresh value.
+_SCHEMA_FLAGS = {
+    "plugboard.session_store": ("_INITIALISED", lambda: False),
+    "plugboard.mcp_server": ("_TRACKING_SCHEMA_READY", lambda: False),
+    "plugboard.usage": ("_schema_ready", dict),
+}
+
 
 @pytest.mark.parametrize(
     "module_name, path_attr, func", STORES, ids=[s[0] for s in STORES]
@@ -121,8 +128,11 @@ def test_sqlite_store_and_its_directory_are_owner_only(
     db = data / Path(getattr(module, path_attr)).name
     monkeypatch.setattr(module, "_DATA_DIR", data, raising=False)
     monkeypatch.setattr(module, path_attr, db)
-    if module_name == "plugboard.session_store":
-        monkeypatch.setattr(module, "_INITIALISED", False, raising=False)
+    # "Schema created" flags are set for the temporary store: monkeypatch
+    # restores them, so a later test still creates the schema of the real one.
+    if module_name in _SCHEMA_FLAGS:
+        attr, fresh = _SCHEMA_FLAGS[module_name]
+        monkeypatch.setattr(module, attr, fresh())
 
     _open(module, func)
 
