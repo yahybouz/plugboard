@@ -1145,7 +1145,7 @@ def _quota_fields(
 
     The CLI's own error decides; stderr is read only when the CLI gave none
     (a retry log there must not override "model not found"). ``rate_limited``
-    is the CLI's structured sign of an API 429 (``_claude_rate_limited``).
+    is claude's structured rate-limit sign (``_claude_rate_limited``).
     """
     quota = rate_limited or is_quota_error(cli_error if cli_error else stderr_text)
     return {
@@ -1253,9 +1253,21 @@ def _ended_in_error(stdout_text: str, kind: str) -> bool:
 
 
 def _claude_rate_limited(stdout_text: str) -> bool:
-    """claude's structured sign of an API 429, whatever the error text says:
+    """claude's structured rate-limit sign, whatever the error text says:
     an ``assistant`` event with ``error: "rate_limit"`` or a ``result`` with
-    ``api_error_status: 429``."""
+    ``api_error_status: 429``.
+
+    Read in the claude 2.1.321 binary, not seen in a captured run: the CLI
+    sets ``error: "rate_limit"`` on an API 429 (usage or spend limit, usage
+    credits required, "Request rejected (429)", "Server is temporarily
+    limiting requests (not your usage limit)"), and also on errors tested by
+    their text or by a server-side model block, not by a 429 status: "Opus
+    (or Fable) is experiencing high load", and a per-model block
+    (``model_blocked``). Every one of them is a quota 429 here, with a
+    Retry-After only when the error text gives a "try again at" time. A
+    ``system`` ``api_retry`` event carries ``error: "rate_limit"`` too; it
+    announces a retry, not the outcome, and is not read.
+    """
     for evt in _jsonl_events(stdout_text):
         etype = evt.get("type")
         if etype == "assistant" and evt.get("error") == "rate_limit":
