@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **Changes sent with the dashboard session from another page are refused**: the session cookie is `SameSite=Strict`, which only keeps it off cross-site requests. A page served on another port of the same host (another local tool, a development server) is the same site, so the browser attached the cookie to the forms and fetches that page sent, and a `POST`, `PUT`, `PATCH` or `DELETE` to an admin route (`/admin/*`, `/providers*`, `/admin/suivi/*`, `/admin/mfa*`) or to the Playground's chat routes (`/v1/chat/completions`, `/v2/chat/completions`, `/v1/preflight`) ran with admin rights. Such a request authenticated by the session cookie now gets `403 Cross-site request refused` when its `Sec-Fetch-Site` header is anything but `same-origin`, or, from a browser that sends no `Sec-Fetch-Site` (plain HTTP to a non-local address), when its `Origin` names another host or port than `Host`. Not affected: reads, the admin key in `Authorization`, client keys, requests without browser headers (`curl -b`), and `POST /auth/admin/login`. The dashboard and `/suivi` call the API from their own origin and keep working ([monitoring](docs/guide/monitoring.md#changes-made-with-a-dashboard-session)).
+
 ## [4.5.1] — 2026-11-10
 
 ### Security
