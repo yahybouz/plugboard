@@ -1029,6 +1029,21 @@ _SIGNED_OUT_MARKERS = (
     "missing bearer",
 )
 
+# Lower-case fragments of a CLI that failed on its subscription quota or rate
+# limit. Only formats observed so far: claude's JSONL error event, agy's
+# ERROR payload and gemini's 429 payload/stderr.
+_QUOTA_MARKERS = (
+    "rate limit exceeded",
+    "quota exceeded",
+    "resource exhausted",
+)
+
+
+def is_quota_error(message: str) -> bool:
+    """True when a CLI error says its quota or rate limit is exhausted."""
+    low = (message or "").lower()
+    return any(marker in low for marker in _QUOTA_MARKERS)
+
 
 def _first_jsonl_error(stdout_text: str) -> str:
     """First error carried by a codex/claude JSONL stream, or ``""``.

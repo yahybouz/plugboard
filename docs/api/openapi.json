@@ -2604,7 +2604,7 @@
             }
           },
           "429": {
-            "description": "Rate limit or monthly spending limit exceeded.",
+            "description": "Rate limit or monthly spending limit exceeded, or the provider's quota is exhausted and no fallback answered (Retry-After when the provider gives it).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3398,7 +3398,7 @@
             }
           },
           "429": {
-            "description": "Rate limit or monthly spending limit exceeded.",
+            "description": "Rate limit or monthly spending limit exceeded, or the provider's quota is exhausted and no fallback answered (Retry-After when the provider gives it).",
             "content": {
               "application/json": {
                 "schema": {

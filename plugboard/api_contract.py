@@ -513,6 +513,8 @@ _AUTH_ERRORS = {
 }
 _CHAT_ERRORS = {
     **_AUTH_ERRORS,
+    "429": "Rate limit or monthly spending limit exceeded, or the provider's quota"
+    " is exhausted and no fallback answered (Retry-After when the provider gives it).",
     "402": "The key has a monthly budget and the model no known price; nothing was called.",
     "403": "The key may not use this model.",
     "413": "Request body larger than MAX_BODY_BYTES (10 MB by default).",

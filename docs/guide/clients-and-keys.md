@@ -134,7 +134,7 @@ Cache hits are not billed again. Streaming responses (`"stream": true`) are serv
 | `402` | The key has a monthly budget and the model has no known price |
 | `403` | Model not in the key's `allowed_models` |
 | `413` | Request body larger than `MAX_BODY_BYTES` (10 MB) |
-| `429` | IP rate limit, key RPM limit or monthly budget reached |
+| `429` | IP rate limit, key RPM limit or monthly budget reached, or the provider's quota exhausted with no fallback answering (`Retry-After` when the provider gives it) |
 | `502` | The provider returned an error, or every candidate provider failed |
 | `503` | Server at its concurrency cap, or a CLI provider timed out (`Retry-After` is set) |
 

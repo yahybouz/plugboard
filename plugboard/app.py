@@ -110,8 +110,9 @@ from plugboard.legacy_connectors import (
 )
 from plugboard.decisions import is_decision_model
 from plugboard.cli_auth import AuthError
-from plugboard.cli_subprocess import CliSubprocessError
+from plugboard.cli_subprocess import CliSubprocessError, is_quota_error
 from plugboard.router import (
+    ProviderQuotaError,
     discover_models,
     forward,
     forward_stream,
@@ -1458,15 +1459,46 @@ def _for_caller(completion: Dict[str, Any], client_id: Optional[str]) -> Dict[st
     }
 
 
+def _quota_detail(provider: str, retry_after: Optional[int]) -> str:
+    """Reason given to a client key: composed here, never the upstream text."""
+    when = (
+        f"retry after {retry_after} seconds"
+        if retry_after is not None
+        else "retry later"
+    )
+    return f"The quota or rate limit of the {provider} provider is exhausted: {when}."
+
+
+def _quota_error_response(
+    exc: ProviderQuotaError, client_id: Optional[str]
+) -> JSONResponse:
+    """429 when the last provider tried answered 429 (no fallback answered).
+
+    The upstream body stays with the admin; a client key gets the provider,
+    the reason and the provider's Retry-After delay when it gave one.
+    """
+    if client_id == "admin":
+        detail = str(exc)
+    else:
+        detail = _quota_detail(exc.provider_id, exc.retry_after)
+    content: Dict[str, Any] = {"detail": detail}
+    headers = {}
+    if exc.retry_after is not None:
+        content["retry_after"] = exc.retry_after
+        headers["Retry-After"] = str(exc.retry_after)
+    return JSONResponse(status_code=429, content=content, headers=headers)
+
+
 def _cli_error_response(
     exc: CliSubprocessError, client_id: Optional[str]
 ) -> JSONResponse:
-    """502 for a failed CLI provider.
+    """502 for a failed CLI provider, 429 when it failed on its quota.
 
     The CLI's message, stderr, pid and exit code can carry local paths,
     account names or tokens: only the admin (dashboard Playground, admin
     key) gets them. A client key gets a reference to the server log entry.
     """
+    quota = is_quota_error(str(exc))
     ref = secrets.token_hex(4)
     log.warning(
         "cli provider error ref=%s provider=%s model=%s exit=%s pid=%s: %s | stderr=%s",
@@ -1489,14 +1521,16 @@ def _cli_error_response(
             "error_ref": ref,
         }
     else:
+        name = exc.provider_name or "CLI"
         content = {
-            "detail": f"The {exc.provider_name or 'CLI'} provider failed"
-            f" (reference {ref} in the gateway log).",
+            "detail": _quota_detail(name, None)
+            if quota
+            else f"The {name} provider failed (reference {ref} in the gateway log).",
             "error_ref": ref,
             "provider_name": exc.provider_name,
             "model_id": exc.model_id,
         }
-    return JSONResponse(status_code=502, content=content)
+    return JSONResponse(status_code=429 if quota else 502, content=content)
 
 
 def _require_chat_messages(body: Dict[str, Any]) -> None:
@@ -1769,6 +1803,8 @@ async def chat_completions(
                 # Before the timeout test: a CLI message quotes its stderr.
                 if isinstance(exc, CliSubprocessError):
                     return _cli_error_response(exc, client_id)
+                if isinstance(exc, ProviderQuotaError):
+                    return _quota_error_response(exc, client_id)
                 if "timeout" in err_str.lower():
                     return JSONResponse(
                         status_code=503,
@@ -1941,6 +1977,8 @@ async def chat_completions(
         except Exception as exc:
             log.error("stream error: %s", exc)
             err_str = str(exc)
+            if isinstance(exc, ProviderQuotaError):
+                return _quota_error_response(exc, client_id)
             if "timeout" in err_str.lower():
                 return JSONResponse(
                     status_code=503,
@@ -2074,6 +2112,8 @@ async def chat_completions(
         # Before the timeout test: a CLI message quotes its stderr.
         if isinstance(exc, CliSubprocessError):
             return _cli_error_response(exc, client_id)
+        if isinstance(exc, ProviderQuotaError):
+            return _quota_error_response(exc, client_id)
         # 503 + Retry-After for timeouts (client can retry), 502 for other errors
         if "timeout" in err_str.lower():
             return JSONResponse(
