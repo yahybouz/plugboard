@@ -119,3 +119,13 @@ def test_dangling_env_symlink_is_never_written_through(workdir):
 
     assert (workdir / ".env").is_symlink()
     assert not target.exists()
+
+
+def test_dangling_env_symlink_is_refused_with_a_clear_message(workdir):
+    (workdir / ".env").symlink_to(workdir / "missing.env")
+
+    result = _make_init(workdir)
+
+    assert result.returncode != 0
+    assert "Traceback" not in result.stderr
+    assert ".env is a symbolic link to a missing file" in result.stderr

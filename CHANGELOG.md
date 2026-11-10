@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **Bytecode and key material could reach the Docker image**: `.dockerignore` patterns are anchored at the context root, so `__pycache__/`, `*.py[cod]`, `.env*`, `*.pem` and `*.key` only matched at the top level. Since the `Dockerfile` copies `plugboard/`, `scripts/`, `static/` and `manifests/` whole, bytecode left by a local run, or a key or `.env` file put in one of those directories, went into the image. These patterns now apply in every directory (`**/`). `*secret*` stays root-only, so `plugboard/secrets_rekey.py` still ships.
+- **`make init` with a `.env` symlink to a missing file** stopped with a Python traceback (`FileExistsError`). It now says that `.env` is a symbolic link to a missing file and leaves it untouched; it still exits with an error and never writes through the link.
 
 ## [4.5.1] — 2026-11-10
 
