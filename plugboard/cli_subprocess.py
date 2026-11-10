@@ -1734,6 +1734,15 @@ async def complete(
             cli_error
             and ((text is None and kind == "agy") or is_quota_error(cli_error))
         ):
+            # Once the run ended in error, the quota is read from the event
+            # that ended it, not from a reconnect `error` the CLI answered
+            # after ("Reconnecting... 1/5 (rate limit exceeded)", the answer,
+            # a bare turn.failed). stderr, as before, only when the CLI gave
+            # no message at all.
+            quota_error = cli_error
+            if failed:
+                quota_error = _extract_cli_error(stdout_text, kind, terminal_only=True)
+            quota_stderr = "" if cli_error else stderr_text
             raise CliSubprocessError(
                 f"CLI {backend.command!r} failed: "
                 f"{cli_error or 'the run ended in error without a message'}",
@@ -1742,7 +1751,7 @@ async def complete(
                 pid=proc.pid,
                 provider_name=backend.command,
                 model_id=model,
-                **_quota_fields(cli_error, stderr_text, rate_limited=rate_limited),
+                **_quota_fields(quota_error, quota_stderr, rate_limited=rate_limited),
             )
         if text is None and backend.output_mode == "json":
             raise CliSubprocessError(

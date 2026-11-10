@@ -312,6 +312,32 @@ async def test_terminal_error_at_exit_0_is_not_streamed_either(
     assert ledger.cached == []
 
 
+@pytest.mark.asyncio
+async def test_codex_reconnect_on_a_rate_limit_then_a_failed_turn_is_not_a_quota(
+    client, key, providers, cli_process, ledger
+):
+    """The rate limit codex reconnected from is not why the run failed: it
+    answered after it. A bare turn.failed gives no reason, so 502, not 429."""
+    headers, key_id = key
+    providers("codex")
+    cli_process(
+        b'{"type":"thread.started","thread_id":"0199-test"}\n'
+        b'{"type":"turn.started"}\n'
+        b'{"type":"error","message":"Reconnecting... 1/5 (rate limit exceeded)"}\n'
+        b'{"type":"item.completed","item":{"id":"item_0","type":"agent_message",'
+        b'"text":"PARTIAL-TEXT Paris."}}\n'
+        b'{"type":"turn.failed"}\n'
+    )
+
+    resp = await client.post("/v1/chat/completions", headers=headers, json=_chat())
+
+    assert resp.status_code == 502, resp.text
+    assert "PARTIAL-TEXT" not in resp.text
+    assert ledger.usage(key_id) == []
+    assert ledger.cached == []
+    assert ledger.turns == []
+
+
 # ── Quota read from claude's structured events ────────────────────────────
 
 _CLAUDE_REJECTED = "API Error: Request rejected (429)"
