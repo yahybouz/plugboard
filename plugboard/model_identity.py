@@ -16,10 +16,24 @@ _DISPLAY_OWNERS = {
 }
 
 
-def model_access_matches(allowed: Iterable[str], owner: str, native: str) -> bool:
-    """Match an effective identity exactly; native names remain opaque."""
+def model_access_matches(
+    allowed: Iterable[str],
+    owner: str,
+    native: str,
+    provider_ids: Iterable[str] | None = None,
+) -> bool:
+    """Match an effective identity exactly; native names remain opaque.
+
+    Given every registered provider ID (inactive ones included), the ID that
+    /v1/models publishes for this identity is accepted too, in strict equality.
+    """
     allowed = tuple(allowed)
-    return not allowed or native in allowed or f"{owner}:{native}" in allowed
+    if not allowed or native in allowed or f"{owner}:{native}" in allowed:
+        return True
+    if provider_ids is None:
+        return False
+    published = published_model_id(owner, native, provider_ids)
+    return published is not None and published in allowed
 
 
 def registered_model_owner(model: str, provider_ids: Iterable[str]) -> str | None:
