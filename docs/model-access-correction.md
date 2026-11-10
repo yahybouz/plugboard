@@ -38,7 +38,9 @@ What it does not open:
 
 - A bare alias (`Codex:`, `claude-code:`), a prefix or suffix of a model name,
   a wildcard (`Codex:*`), another case (`codex:`) or added whitespace grant
-  nothing, as before.
+  nothing, as before. This holds for a CLI registered without a default
+  model too: a request `Codex:` then resolves to an empty model name, which
+  has no published ID.
 - The legacy request prefixes `claude-cli:`, `codex-cli:` and `gemini-cli:`
   (and their `-subprocess` forms) are still resolved in a request, but an
   entry written with them grants nothing: `/v1/models` never publishes them.

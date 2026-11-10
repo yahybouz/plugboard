@@ -113,6 +113,19 @@ def test_bare_alias_prefix_grants_nothing_for_claude_code():
         )
 
 
+@pytest.mark.parametrize(
+    "entry, owner",
+    [("Codex:", _CODEX), ("claude-code:", _CLAUDE), ("Gemini:", _GEMINI)],
+)
+def test_bare_alias_is_not_the_published_id_of_an_empty_model(entry, owner):
+    """A route with no model name has no published ID to be listed under.
+
+    Reached when a CLI provider has an empty default_model: the request
+    'Codex:' resolves to (owner, ''), and the alias alone would equal it.
+    """
+    assert model_access_matches([entry], owner, "", _CLI_IDS) is False
+
+
 def test_published_id_needs_the_registry():
     """Callers that pass no registry (embeddings) keep the two former spellings."""
     assert model_access_matches(["Codex:gpt-6.1-sol"], _CODEX, "gpt-6.1-sol") is False
@@ -340,6 +353,23 @@ async def test_partial_entries_still_open_nothing(
     assert await _ids(client, rec["key"]) == []
     resp = await _chat(client, rec["key"], "Codex:gpt-6.1-sol")
     assert resp.status_code == 403
+    assert cli_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entry, cli",
+    [("Codex:", CODEX_CLI), ("claude-code:", CLAUDE_CLI), ("Gemini:", GEMINI_CLI)],
+)
+async def test_bare_alias_opens_nothing_when_the_cli_has_no_default_model(
+    client, registry, keys, cli_calls, entry, cli
+):
+    """Without a default model, 'Codex:' must not hand the CLI its own default."""
+    registry([PROVIDER_A, dict(cli, default_model="", models=[])])
+    rec = _key(keys, [entry])
+    assert await _ids(client, rec["key"]) == []
+    resp = await _chat(client, rec["key"], entry)
+    assert resp.status_code == 403, resp.text
     assert cli_calls == []
 
 
