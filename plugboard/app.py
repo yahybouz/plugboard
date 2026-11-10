@@ -2197,6 +2197,8 @@ async def models(request: Request, client_id: Optional[str] = Depends(_resolve_c
         item["account_compatible"] = _model_is_compatible(
             item.get("id", ""), client_id or "", key_record=key_record
         )
+    # Same rule as chat: a key limited by allowed_models only sees what it may call.
+    items = [item for item in items if item["account_compatible"]]
     return {"object": "list", "data": items}
 
 

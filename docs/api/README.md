@@ -65,7 +65,7 @@ The repository also ships a small Python client, [`sdk/python`](../../sdk/python
 | Route | Use |
 |---|---|
 | `POST /v1/chat/completions` | Chat completion, streamed or not |
-| `GET /v1/models` | Models the gateway serves, with `account_compatible` for your key |
+| `GET /v1/models` | Models the gateway serves, with `account_compatible` for your key; a key limited by `allowed_models` sees only the models it may call |
 | `GET /v1/decisions/models` | Permitted decision engines, availability, limits and confidence semantics |
 | `POST /v1/decisions` | Named typed questions; requires an explicitly permitted client key |
 | `GET /v1/models/benchmarks`, `GET /v1/models/{model_id}/info` | Model profiles: capabilities, benchmarks, cost tier |

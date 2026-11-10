@@ -230,6 +230,61 @@ async def test_models_account_compatible_restricted(client, tmp_path, monkeypatc
         assert ok is (mid == "test-provider:fake:model-v1"), mid
 
 
+def _restricted_key(tmp_path, monkeypatch, allowed_models):
+    import plugboard.apikeys as ak
+
+    monkeypatch.setattr(ak, "_DATA_DIR", tmp_path)
+    monkeypatch.setattr(ak, "KEYS_FILE", tmp_path / "api_keys.json")
+    monkeypatch.setattr(ak, "KEYS_LOCK", tmp_path / "api_keys.json.lock")
+    return ak.create_key("test-client", "test", allowed_models=allowed_models)
+
+
+async def _model_ids(client, key):
+    resp = await client.get("/v1/models", headers={"Authorization": f"Bearer {key}"})
+    assert resp.status_code == 200
+    return [item["id"] for item in resp.json()["data"]]
+
+
+@pytest.mark.asyncio
+async def test_models_restricted_key_lists_only_chat_allowed_models(
+    client, tmp_path, monkeypatch
+):
+    """BUG-24: a key limited by allowed_models only sees what chat accepts."""
+    from fastapi import HTTPException
+
+    from plugboard.app import _check_model_access
+
+    # One qualified grant and one native-only grant, as chat accepts both.
+    rec = _restricted_key(
+        tmp_path, monkeypatch, ["other-provider:other:model-v2", "fake:model-v1"]
+    )
+    full = await _model_ids(client, "testkey")  # admin: whole catalogue
+
+    def chat_accepts(model_id):
+        try:
+            _check_model_access("test-client", model_id, key_record=rec)
+        except (HTTPException, ValueError):
+            return False
+        return True
+
+    listed = await _model_ids(client, rec["key"])
+    assert sorted(listed) == [
+        "other-provider:other:model-v2",
+        "test-provider:fake:model-v1",
+    ]
+    assert listed == [mid for mid in full if chat_accepts(mid)]
+    assert len(full) > len(listed)
+
+
+@pytest.mark.asyncio
+async def test_models_unrestricted_key_lists_whole_catalogue(
+    client, tmp_path, monkeypatch
+):
+    """Without allowed_models, the key sees the same list as the admin."""
+    rec = _restricted_key(tmp_path, monkeypatch, [])
+    assert await _model_ids(client, rec["key"]) == await _model_ids(client, "testkey")
+
+
 # ── BENCH-009 ───────────────────────────────────────────────────────────────
 
 
