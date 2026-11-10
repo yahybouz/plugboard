@@ -824,10 +824,22 @@ async def forward_stream(
     Forward a streaming /v1/chat/completions request, yielding raw SSE chunks.
     No retry — cannot retry after streaming has begun.
     """
+    from plugboard.circuit_breaker import (
+        check_circuit,
+        is_provider_fault,
+        record_failure as cb_failure,
+        record_success as cb_success,
+    )
+
     model_str = body.get("model", "")
     provider, real_model = resolve_provider_and_model(model_str)
     if route_guard is not None:
         route_guard(provider, real_model)
+    # The route's circuit is read and recorded as in forward(): the read
+    # moves an open circuit past its cooldown to half-open, so a success
+    # closes it. An open circuit never refuses the request.
+    circuit_key = _circuit_key(provider, real_model)
+    check_circuit(circuit_key)
     effective_timeout = timeout
     _served_by.set((provider, real_model))
     _usage_reported.set(False)
@@ -852,6 +864,8 @@ async def forward_stream(
             metrics.record(provider["id"], _time.perf_counter() - _t_cli)
         except Exception as exc:
             metrics.record(provider["id"], _time.perf_counter() - _t_cli, error=True)
+            if is_provider_fault(str(exc)):
+                cb_failure(circuit_key)
             try:
                 from plugboard.model_quarantine import (
                     is_account_unsupported_error,
@@ -888,6 +902,7 @@ async def forward_stream(
             yield f"data: {err_evt}\n\n".encode("utf-8")
             yield b"data: [DONE]\n\n"
             return
+        cb_success(circuit_key)
         reported = _pop_reported_usage(result)
         reported_usage = result.get("usage") or {}
         content = result["choices"][0]["message"]["content"]
@@ -978,17 +993,29 @@ async def forward_stream(
     from plugboard.http_pool import get_session as _get_http_session
 
     session = await _get_http_session()
-    async with session.post(
-        url,
-        headers=headers,
-        json=payload,
-        timeout=aiohttp.ClientTimeout(total=effective_timeout),
-    ) as resp:
-        if resp.status != 200:
-            text = await resp.text()
-            raise _http_error(provider["id"], resp.status, text[:400], resp.headers)
-        async for chunk in resp.content.iter_any():
-            yield chunk
+    streaming = False
+    try:
+        async with session.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=effective_timeout),
+        ) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                if is_provider_fault(text, resp.status):
+                    cb_failure(circuit_key)
+                raise _http_error(provider["id"], resp.status, text[:400], resp.headers)
+            cb_success(circuit_key)
+            streaming = True
+            async for chunk in resp.content.iter_any():
+                yield chunk
+    except (asyncio.TimeoutError, aiohttp.ClientError):
+        # No answer: a timeout or a network error counts, as in forward().
+        # Once the stream has begun, its success is already recorded.
+        if not streaming:
+            cb_failure(circuit_key)
+        raise
 
 
 _models_cache: Optional[List[Dict[str, Any]]] = None

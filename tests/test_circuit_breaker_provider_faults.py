@@ -276,3 +276,88 @@ async def test_streamed_cli_request_is_judged_the_same(
 
     assert resp.status_code in (429, 502), resp.text
     assert _failures(_CLI_KEY) == counted
+
+
+# ── HTTP provider, stream (forward_stream) ──────────────────────────────────
+
+
+async def _stream(client):
+    return await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer testkey"},
+        json={"model": _HTTP_MODEL, "messages": _MESSAGES, "stream": True},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", _HTTP_FAULTS)
+async def test_streamed_http_provider_fault_counts(client, breaker, answer):
+    with aioresponses() as mock:
+        mock.post(_A, **answer)
+        resp = await _stream(client)
+
+    assert resp.status_code != 200
+    assert _failures(_HTTP_KEY) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "payload"), _HTTP_REQUEST_ERRORS)
+async def test_streamed_http_request_error_does_not_count(
+    client, breaker, status, payload
+):
+    with aioresponses() as mock:
+        mock.post(_A, status=status, payload=payload)
+        resp = await _stream(client)
+
+    assert resp.status_code != 200
+    assert _failures(_HTTP_KEY) == 0
+
+
+@pytest.mark.asyncio
+async def test_streamed_success_closes_the_circuit_after_cooldown(
+    client, breaker, monkeypatch
+):
+    """Read, then recorded: a stream-only route does not stay open for good."""
+    from tests.factories import FAKE_STREAM_BODY
+
+    monkeypatch.setattr(breaker, "_COOLDOWN_SECONDS", -1.0)
+    with aioresponses() as mock:
+        for _ in range(3):
+            mock.post(_A, status=503, payload={"error": "unavailable"})
+        mock.post(
+            _A, status=200, body=FAKE_STREAM_BODY, content_type="text/event-stream"
+        )
+        for _ in range(3):
+            assert (await _stream(client)).status_code != 200
+        assert breaker._circuits[_HTTP_KEY].state == breaker.OPEN
+        resp = await _stream(client)
+
+    assert resp.status_code == 200
+    assert breaker._circuits[_HTTP_KEY].state == breaker.CLOSED
+
+
+# ── CLI provider, forward_stream (not reached from the API) ─────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("process", "counted"),
+    [
+        pytest.param({"stderr": b"Error: quota exceeded"}, 1, id="quota-counts"),
+        pytest.param({"stderr": b"Segmentation fault", "code": 139}, 1, id="crash"),
+        pytest.param(
+            {"stdout": _claude_error("Prompt is too long")}, 0, id="too-long-does-not"
+        ),
+    ],
+)
+async def test_forward_stream_cli_failure_is_judged_the_same(
+    cli, breaker, process, counted
+):
+    from plugboard.router import forward_stream
+
+    cli("claude", **process)
+    body = {"model": _CLI_MODEL, "messages": _MESSAGES, "stream": True}
+    chunks = [chunk async for chunk in forward_stream(body)]
+
+    assert b"subprocess_error" in chunks[0]
+    assert _failures(_CLI_KEY) == counted
