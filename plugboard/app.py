@@ -1448,11 +1448,18 @@ def _model_route_guard(client_id, key_record=None):
     allowed = tuple((record or {}).get("allowed_models", []))
     if not allowed:
         return None
+    registry_ids: Optional[tuple] = None
 
     def guard(provider, native):
+        from plugboard import router as _router
         from plugboard.model_identity import model_access_matches
 
-        if not model_access_matches(allowed, provider["id"], native):
+        nonlocal registry_ids
+        if registry_ids is None:
+            # Every registered ID, inactive included: the namespace /v1/models
+            # publishes in. Read once per guard, through the router's registry.
+            registry_ids = tuple(p["id"] for p in _router.load_providers())
+        if not model_access_matches(allowed, provider["id"], native, registry_ids):
             raise HTTPException(
                 status_code=403,
                 detail=(
@@ -1470,7 +1477,11 @@ def _model_is_compatible(
     key_record: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Use chat's effective-route policy for catalogue compatibility."""
-    guard = _model_route_guard(client_id, key_record)
+    return _guard_accepts(_model_route_guard(client_id, key_record), model_str)
+
+
+def _guard_accepts(guard, model_str: str) -> bool:
+    """Whether a key's guard (None: unrestricted) lets this model through."""
     if guard is None:
         return True
     try:
@@ -2380,12 +2391,12 @@ async def _models_for_key(
     so the shared models cache never carries one caller's flag.
     """
     key_record = _get_request_key_record(request, client_id=client_id)
+    # One guard for the whole list: its registry snapshot is read once.
+    guard = _model_route_guard(client_id or "", key_record)
     return [
         dict(item, account_compatible=True)
         for item in await list_models()
-        if _model_is_compatible(
-            item.get("id", ""), client_id or "", key_record=key_record
-        )
+        if _guard_accepts(guard, item.get("id", ""))
     ]
 
 
