@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Tests for the update registry path**: `PLUGBOARD_REGISTRY_PATH` (with `~` expanded, empty meaning unset), the default `<data>/registry.json`, the pre-rename `LLM_ENABLER_REGISTRY_PATH` (the new name wins) and the read-time fallback to the old `docs/registry.json` are now checked by `tests/test_registry_path.py`.
+- **Tests for `make init`**: it creates `.env` with mode `0600` and fresh keys, and never overwrites an existing one: a file (even empty) keeps its bytes and mode, a second run keeps the first secrets, and a `.env` symlink, dangling or not, is never written through (`tests/test_make_init.py`).
+
 ## [4.5.1] — 2026-11-10
 
 ### Security
