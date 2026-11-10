@@ -11,6 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Tests for the update registry path**: `PLUGBOARD_REGISTRY_PATH` (with `~` expanded, empty meaning unset), the default `<data>/registry.json`, the pre-rename `LLM_ENABLER_REGISTRY_PATH` (the new name wins) and the read-time fallback to the old `docs/registry.json` are now checked by `tests/test_registry_path.py`.
 - **Tests for `make init`**: it creates `.env` with mode `0600` and fresh keys, and never overwrites an existing one: a file (even empty) keeps its bytes and mode, a second run keeps the first secrets, and a `.env` symlink, dangling or not, is never written through (`tests/test_make_init.py`).
 - **The configuration guide lists every variable the code reads**: `tests/test_config_docs_coverage.py` scans `plugboard/`, `scripts/` and `run.py` and fails when [configuration.md](docs/guide/configuration.md) misses one. It found seven, now documented: `PLUGBOARD_JEV_API_KEY`, `PLUGBOARD_DECISION_PYTHON`, `PLUGBOARD_DECISION_ASSETS` and the obsolete `PLUGBOARD_JEV_PRICE_PER_CALL_USD` (new **Decision engines** section), `PLUGBOARD_OLLAMA_REGISTRY_URL`, and the CLIs' own `GEMINI_CLI_HOME` and `CODEX_HOME`, which Plugboard reads too.
+- **Docker image content check without Docker**: `tests/test_docker_image_content.py` reads the `Dockerfile` and `.dockerignore` with Docker's documented matching rules. It checks that every file the server opens at run time (`run.py`, `VERSION`, the package, `manifests/decisions.json`, `static/`, `scripts/decision_worker.py`) is copied and not ignored, that no source file of a copied directory is ignored, that `.env`, `data/`, `logs/`, `private/`, tests and docs stay out, and that tests, docs and data are never copied.
+
+### Fixed
+
+- **Bytecode and key material could reach the Docker image**: `.dockerignore` patterns are anchored at the context root, so `__pycache__/`, `*.py[cod]`, `.env*`, `*.pem` and `*.key` only matched at the top level. Since the `Dockerfile` copies `plugboard/`, `scripts/`, `static/` and `manifests/` whole, bytecode left by a local run, or a key or `.env` file put in one of those directories, went into the image. These patterns now apply in every directory (`**/`). `*secret*` stays root-only, so `plugboard/secrets_rekey.py` still ships.
 
 ## [4.5.1] — 2026-11-10
 
