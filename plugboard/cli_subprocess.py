@@ -853,12 +853,16 @@ async def _run_status(argv: List[str], kind: str, timeout_s: float):
         stderr=asyncio.subprocess.PIPE,
         env=build_child_env(kind),
         cwd=_clean_spawn_cwd(),
+        # Own process group: a timeout kills the CLI's descendants too.
+        start_new_session=True,
     )
+    finished = False
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
-    except asyncio.TimeoutError:
-        proc.kill()
-        raise
+        finished = True
+    finally:
+        if not finished:
+            await _kill_group(proc)
     return (
         proc.returncode,
         (stdout or b"").decode("utf-8", "replace"),

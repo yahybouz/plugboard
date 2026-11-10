@@ -599,12 +599,111 @@ async def test_probe_cli_version_timeout_bounded_when_escaped_child_holds_pipes(
             await asyncio.wait_for(proc.wait(), 5.0)
 
 
+async def test_probe_cli_signed_in_timeout_kills_cli_and_children(
+    tmp_path, monkeypatch
+):
+    """A `<cli> login status` that hangs past its deadline is killed with its children.
+
+    The fake codex starts a child, records both pids, then waits forever.
+    """
+    pid_file = tmp_path / "pids"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_cli = bin_dir / "codex"
+    fake_cli.write_text(f"#!/bin/sh\nsleep 60 &\necho \"$$ $!\" > '{pid_file}'\nwait\n")
+    fake_cli.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    try:
+        started = time.monotonic()
+        try:
+            result = await asyncio.wait_for(
+                cli_subprocess.probe_cli_signed_in("codex", timeout_s=3.0), 12.0
+            )
+        except asyncio.TimeoutError:
+            pytest.fail("probe still waiting 12 s after its 3 s delay")
+        elapsed = time.monotonic() - started
+        assert result == {"signed_in": None, "error": "TimeoutError: "}
+        assert elapsed < 8.0, f"probe took {elapsed:.1f}s for a 3 s delay"
+        pids = [int(pid) for pid in pid_file.read_text().split()]
+        assert len(pids) == 2, pids
+        survivors = await _survivors(pids)
+        assert not survivors, f"still running after the timeout: {survivors}"
+    finally:
+        if pid_file.exists():
+            for pid in pid_file.read_text().split():
+                try:
+                    os.kill(int(pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+
+async def test_probe_cli_signed_in_timeout_bounded_when_escaped_child_holds_pipes(
+    tmp_path, monkeypatch
+):
+    """A descendant that left the group still holds stdout and stderr open.
+
+    killpg cannot reach it and Process.wait() only returns once every pipe is
+    closed: the sign-in probe must still give up shortly after its delay.
+    """
+    pid_file = tmp_path / "pids"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_cli = bin_dir / "codex"
+    fake_cli.write_text(
+        "#!/bin/sh\n"
+        "setsid sleep 60 &\n"
+        "escaped=$!\n"
+        "sleep 60 &\n"
+        f"echo \"$$ $! $escaped\" > '{pid_file}'\n"
+        "wait\n"
+    )
+    fake_cli.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    spawned = []
+    real_exec = asyncio.create_subprocess_exec
+
+    async def recording_exec(*args, **kwargs):
+        proc = await real_exec(*args, **kwargs)
+        spawned.append(proc)
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", recording_exec)
+    try:
+        started = time.monotonic()
+        try:
+            result = await asyncio.wait_for(
+                cli_subprocess.probe_cli_signed_in("codex", timeout_s=2.0), 12.0
+            )
+        except asyncio.TimeoutError:
+            pytest.fail("probe still waiting 12 s after its 2 s delay")
+        elapsed = time.monotonic() - started
+        assert result == {"signed_in": None, "error": "TimeoutError: "}
+        assert elapsed < 8.0, f"probe took {elapsed:.1f}s for a 2 s delay"
+        shell, child, escaped = (int(pid) for pid in pid_file.read_text().split())
+        # The premise: the escaped child leads its own session, out of reach of killpg.
+        assert os.getsid(escaped) == escaped
+        survivors = await _survivors([shell, child])
+        assert not survivors, f"still running after the timeout: {survivors}"
+    finally:
+        if pid_file.exists():
+            for pid in pid_file.read_text().split():
+                try:
+                    os.kill(int(pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        # With the escaped child gone the pipes close: let the probe's transport
+        # finish on this loop rather than be collected after it closes.
+        for proc in spawned:
+            await asyncio.wait_for(proc.wait(), 5.0)
+
+
 # ── Stopping a CLI: SIGTERM, then SIGKILL, each wait bounded ─────────────────
 
 
 @pytest.fixture
 async def fake_cli(tmp_path, monkeypatch):
-    """A fake CLI shell script that every kind resolves to.
+    """A fake CLI shell script that every kind resolves to, and that `codex`
+    on PATH runs (the probes spawn the bare command).
 
     Yields (write, pid_file): `write(body)` installs the script, whose body
     writes its pids to `PIDS`. Teardown kills them and lets each spawned
@@ -612,6 +711,10 @@ async def fake_cli(tmp_path, monkeypatch):
     """
     pid_file = tmp_path / "pids"
     script = tmp_path / "fake-cli"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "codex").symlink_to(script)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     spawned = []
     real_exec = asyncio.create_subprocess_exec
 
@@ -662,11 +765,24 @@ async def _stop_by_timeout(caller: str) -> None:
         }
         with pytest.raises(cli_subprocess.CliSubprocessError, match="timed out"):
             await cli_subprocess.complete("codex", body, timeout_s=2.0)
-    else:
+    elif caller == "list_agy_models":
         assert await cli_subprocess.list_agy_models(timeout_s=2.0) == []
+    elif caller == "probe_cli_version":
+        assert await cli_subprocess.probe_cli_version("codex", timeout_s=2.0) == {
+            "ok": False,
+            "error": "codex --version timed out",
+        }
+    else:
+        assert await cli_subprocess.probe_cli_signed_in("codex", timeout_s=2.0) == {
+            "signed_in": None,
+            "error": "TimeoutError: ",
+        }
 
 
-@pytest.mark.parametrize("caller", ["complete", "list_agy_models"])
+@pytest.mark.parametrize(
+    "caller",
+    ["complete", "list_agy_models", "probe_cli_version", "probe_cli_signed_in"],
+)
 async def test_cli_that_cannot_be_reaped_does_not_hold_the_caller(
     fake_cli, kill_log, caller
 ):
