@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Circuit breaker counts only the provider's failures**: a route's circuit opened after any 3 failed calls in a row, including the ones the request caused, so one client key sending over-long prompts showed the route `open` in `/admin/circuits` and made the LLM pricing pass skip it for 60 s. It now counts HTTP `429` and `5xx`, timeouts, network errors, `401` and `403`, and for a CLI provider a quota, an unavailable model or a failed run. The other HTTP statuses (`400`, `413`, `422`, `404`...) and every HTTP or CLI error saying the context or the message is too long no longer count ([runbook](docs/runbooks/provider-down.md#quick-diagnosis)).
+
 ### Fixed
 
 - **Circuit breaker blind to provider-qualified models**: `forward()` recorded failures and successes under the native model name but read the breaker under the model string the client sent, so a model asked as `provider-id:model` never saw its own failures. The native circuit it opened never closed again (`/admin/circuits` showed it open for good), and the LLM pricing pass, which reads `provider-id:model`, kept choosing a provider whose calls were failing. The breaker is now read and recorded under one key per route, `provider-id:model`; an unqualified model counts as open only when every provider it is tried on is. A request to an open circuit is still sent, as before.

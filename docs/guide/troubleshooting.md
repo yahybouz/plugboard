@@ -113,7 +113,7 @@ curl -s http://localhost:8765/providers/<provider-id>/health -H "Authorization: 
 curl -s http://localhost:8765/admin/circuits -H "Authorization: Bearer $ADMIN_KEY"
 ```
 
-A model whose circuit is open (3 consecutive failures) is retried after 60 seconds; `POST /admin/circuits/{model}/reset` closes it immediately. Full procedure: [provider-down runbook](../runbooks/provider-down.md).
+A model whose circuit is open (3 consecutive provider failures: `429`, `5xx`, timeouts, network errors, `401`/`403`, CLI quota or failed run; never a `400`, `413`, `422` or a prompt too long) is retried after 60 seconds; `POST /admin/circuits/{model}/reset` closes it immediately. Full procedure: [provider-down runbook](../runbooks/provider-down.md).
 
 ## Ollama is not detected
 

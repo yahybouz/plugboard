@@ -70,7 +70,12 @@ export ADMIN_KEY=$(grep '^ADMIN_KEY=' .env | cut -d= -f2-)
      http://localhost:8765/admin/circuits | python3 -m json.tool
    ```
 
-   A model in state `open` has failed 3 times in a row. Requests for it are
+   A model in state `open` has failed 3 times in a row on the provider's
+   side: HTTP `429` or `5xx`, a timeout, a network error, a `401` or a `403`,
+   and for a CLI provider a quota, an unavailable model or a failed run. An
+   error the request caused does not count: HTTP `400`, `413` or `422`, or
+   any error saying the context or the message is too long, so one client
+   sending over-long prompts cannot open it. Requests for it are
    rejected for 60 seconds and rerouted to the model listed in `fallback`
    when one is available. After the cooldown the circuit goes `half_open`
    and lets one request through.

@@ -88,6 +88,53 @@ FALLBACK_MAP: Dict[str, str] = {
 }
 
 
+# What counts as a failure (PLU-3): only the provider's own. HTTP statuses
+# that say the provider is failing besides its 5xx: credentials it refuses and
+# its rate limit or quota. Any other status (400, 404, 413, 422...) is the
+# answer to the request itself and does not count.
+_PROVIDER_FAULT_STATUSES = frozenset({401, 403, 429})
+
+# Lower-case fragments of an error that says the context or the message is too
+# long, whatever its status or CLI: the request caused it. Anthropic and
+# claude ("prompt is too long", "exceed context limit"), OpenAI
+# ("context_length_exceeded", "maximum context length", "string too long"),
+# codex ("exceeds the context window"), Bedrock ("input is too long"),
+# llama.cpp/Ollama ("exceeds the available context size"), Gemini ("exceeds
+# the maximum number of tokens").
+_REQUEST_TOO_LONG = (
+    "prompt is too long",
+    "input is too long",
+    "message is too long",
+    "string too long",
+    "context_length_exceeded",
+    "context length",
+    "context limit",
+    "context window",
+    "context size",
+    "exceeds the maximum number of tokens",
+)
+
+
+def is_request_too_long(message: str) -> bool:
+    """True when an error says the context or the message is too long."""
+    text = (message or "").lower()
+    return any(fragment in text for fragment in _REQUEST_TOO_LONG)
+
+
+def is_provider_fault(message: str, status: Optional[int] = None) -> bool:
+    """Whether a failed call counts against its route's circuit.
+
+    ``status`` is the HTTP status of the provider's answer, or None when there
+    was none: a timeout, a network error or a failed CLI run, which count
+    unless the error says the request is too long.
+    """
+    if is_request_too_long(message):
+        return False
+    if status is None:
+        return True
+    return status in _PROVIDER_FAULT_STATUSES or 500 <= status <= 599
+
+
 class _CircuitState:
     """State for a single model circuit."""
 

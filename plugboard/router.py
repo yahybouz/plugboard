@@ -555,6 +555,7 @@ async def forward(
     from plugboard.circuit_breaker import (
         _extract_suffix,
         check_circuit,
+        is_provider_fault,
         record_failure as cb_failure,
         record_success as cb_success,
     )
@@ -666,7 +667,10 @@ async def forward(
                             terminal_reason="model_unavailable",
                         )
                         invalidate_models_cache()
-                    cb_failure(_circuit_key(provider, real_model))
+                    # A quota, an unavailable model or a failed run counts;
+                    # a prompt the CLI found too long is the request's fault.
+                    if is_provider_fault(reason):
+                        cb_failure(_circuit_key(provider, real_model))
                     await record_provider_failure(provider["id"])
                 except Exception:
                     pass
@@ -690,6 +694,9 @@ async def forward(
         log.info("→ %s | model=%s | provider=%s", url, real_model, provider["id"])
 
         provider_failed = False
+        # Whether the last failure counts against the route's circuit: a
+        # timeout or a network error does, an HTTP answer per its status.
+        provider_fault = True
         with _track_in_flight(provider["id"]):
             for attempt, delay in enumerate([0] + _DELAYS):
                 if delay:
@@ -715,6 +722,7 @@ async def forward(
                             last_err = _http_error(
                                 provider["id"], resp.status, text[:200], resp.headers
                             )
+                            provider_fault = is_provider_fault(text, resp.status)
                             continue
                         if resp.status != 200:
                             text = await resp.text()
@@ -725,6 +733,7 @@ async def forward(
                             last_err = RuntimeError(
                                 f"[{provider['id']}] HTTP {resp.status}: {text[:400]}"
                             )
+                            provider_fault = is_provider_fault(text, resp.status)
                             provider_failed = True
                             break  # non-retryable error, try next provider
                         result = await resp.json()
@@ -748,6 +757,7 @@ async def forward(
                     last_err = RuntimeError(
                         f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}"
                     )
+                    provider_fault = True
                     log.warning(
                         "Timeout on %s (attempt %d/%d)",
                         provider["id"],
@@ -776,13 +786,16 @@ async def forward(
                         type(exc).__name__,
                         detail[:200],
                     )
+                    provider_fault = True
                     provider_failed = True
 
                 if provider_failed:
                     break
 
-        # If we exhausted retries for this provider, record circuit breaker failure
-        cb_failure(_circuit_key(provider, real_model))
+        # The provider failed: count it against the route's circuit, unless
+        # the request caused the error (400, 413, 422, a prompt too long...).
+        if provider_fault:
+            cb_failure(_circuit_key(provider, real_model))
 
         # Record error metrics and try next provider
         if not provider_failed:
