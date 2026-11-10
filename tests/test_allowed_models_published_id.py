@@ -479,18 +479,37 @@ async def test_cli_registered_under_another_id_is_not_the_alias(
 async def test_fallback_candidate_outside_the_policy_is_refused(
     client, registry, keys, cli_calls, monkeypatch
 ):
-    """A candidate the published ID does not designate is refused before any call."""
+    """The guard runs on the fallback too, not only on the first candidate.
+
+    The first candidate is the granted model and fails; the second one is
+    outside the policy and must be refused before it is called.
+    """
     registry(_THREE_CLIS)
     rec = _key(keys, ["claude-code:claude-sonnet-4-6"])
+
+    async def _claude_is_down(kind, body, *, timeout_s=None):
+        cli_calls.append((kind, body.get("model")))
+        if kind == "claude":
+            raise RuntimeError("synthetic CLI failure")
+        return copy.deepcopy(FAKE_COMPLETION)
+
+    monkeypatch.setattr("plugboard.cli_subprocess.complete", _claude_is_down)
     monkeypatch.setattr(
         router,
         "_resolve_all_providers",
-        lambda _m: [(PROVIDER_B, "claude-sonnet-4-6"), (CODEX_CLI, "gpt-6.1-sol")],
+        lambda _m: [(CLAUDE_CLI, "claude-sonnet-4-6"), (CODEX_CLI, "gpt-6.1-sol")],
     )
     monkeypatch.setattr(
         "plugboard.circuit_breaker.check_circuit",
         lambda _m: {"allowed": True, "fallback": None},
     )
+    # The synthetic failure must not stay in the process-wide failure counters.
+    monkeypatch.setattr("plugboard.circuit_breaker.record_failure", lambda _m: None)
+
+    async def _no_alert(_provider_id):
+        return None
+
+    monkeypatch.setattr(router, "record_provider_failure", _no_alert)
     guard = _model_route_guard("limited-client", rec)
     with pytest.raises(HTTPException) as exc:
         await router.forward(
@@ -499,7 +518,7 @@ async def test_fallback_candidate_outside_the_policy_is_refused(
         )
     assert exc.value.status_code == 403
     assert router.served_by() is None
-    assert cli_calls == []
+    assert cli_calls == [("claude", "claude-sonnet-4-6")]
 
 
 # ── cost: one registry read per guard, one guard per list ────────────────────
