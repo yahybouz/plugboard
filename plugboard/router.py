@@ -578,7 +578,7 @@ def _resolve_all_providers(model_str: str) -> List[tuple[Dict[str, Any], str]]:
 
 
 # (provider, real_model) that actually answered the current request, after
-# fallback and circuit-breaker rewrites. Billing reads it so the price is the
+# any fallback to the next provider. Billing reads it so the price is the
 # one of the provider that served the call. Each request runs in its own
 # task, so the value never leaks between requests.
 _served_by: ContextVar[Optional[tuple]] = ContextVar(
@@ -635,8 +635,8 @@ async def forward(
     Retries on transient errors per provider, then falls back to next provider.
     """
     from plugboard.circuit_breaker import (
-        _extract_suffix,
         check_circuit,
+        is_provider_fault,
         record_failure as cb_failure,
         record_success as cb_success,
     )
@@ -646,25 +646,11 @@ async def forward(
     model_str = body.get("model", "")
     candidates = _resolve_all_providers(model_str)
 
-    # Circuit breaker check — if model is open, try fallback. Each route is
-    # read under the key its outcomes are recorded under; the model counts as
-    # open only when no candidate route is allowed.
-    circuits = [check_circuit(_circuit_key(p, m)) for p, m in candidates]
-    circuit = next((c for c in circuits if c["allowed"]), circuits[0])
-    if not circuit["allowed"] and circuit["fallback"]:
-        # Rewrite model to fallback
-        fallback_suffix = circuit["fallback"]
-        log.warning("Circuit breaker: %s → fallback %s", model_str, fallback_suffix)
-        # Try to find the fallback in available models. The model suffix must
-        # equal the fallback: ``gpt-5.5`` is a substring of ``gpt-5.5-pro``,
-        # and a substring match pinned the request to one route of the very
-        # model whose circuits are open, dropping the routes that answer.
-        for prov, rmodel in candidates:
-            if _extract_suffix(rmodel) == fallback_suffix:
-                model_str = f"{prov['id']}:{rmodel}"
-                body = {**body, "model": model_str}
-                candidates = _resolve_all_providers(model_str)
-                break
+    # Read each route's circuit under the key its outcomes are recorded under:
+    # an open circuit past its cooldown goes half-open, so a success closes
+    # it. An open circuit never refuses the request nor changes its model.
+    for route_provider, route_model in candidates:
+        check_circuit(_circuit_key(route_provider, route_model))
 
     last_err: Optional[Exception] = None
     # PERF-2: reuse the app-wide pooled session (keepalive + DNS cache)
@@ -748,7 +734,10 @@ async def forward(
                             terminal_reason="model_unavailable",
                         )
                         invalidate_models_cache()
-                    cb_failure(_circuit_key(provider, real_model))
+                    # A quota, an unavailable model or a failed run counts;
+                    # a prompt the CLI found too long is the request's fault.
+                    if is_provider_fault(reason):
+                        cb_failure(_circuit_key(provider, real_model))
                     await record_provider_failure(provider["id"])
                 except Exception:
                     pass
@@ -772,6 +761,9 @@ async def forward(
         log.info("→ %s | model=%s | provider=%s", url, real_model, provider["id"])
 
         provider_failed = False
+        # Whether the last failure counts against the route's circuit: a
+        # timeout or a network error does, an HTTP answer per its status.
+        provider_fault = True
         with _track_in_flight(provider["id"]):
             for attempt, delay in enumerate([0] + _DELAYS):
                 if delay:
@@ -801,6 +793,7 @@ async def forward(
                                 resp.headers,
                                 limit=200,
                             )
+                            provider_fault = is_provider_fault(text, resp.status)
                             continue
                         if resp.status != 200:
                             text = await resp.text()
@@ -811,6 +804,7 @@ async def forward(
                             last_err = _http_error(
                                 provider["id"], resp.status, text, resp.headers
                             )
+                            provider_fault = is_provider_fault(text, resp.status)
                             provider_failed = True
                             break  # non-retryable error, try next provider
                         result = await resp.json()
@@ -834,6 +828,7 @@ async def forward(
                     last_err = RuntimeError(
                         f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}"
                     )
+                    provider_fault = True
                     log.warning(
                         "Timeout on %s (attempt %d/%d)",
                         provider["id"],
@@ -863,13 +858,16 @@ async def forward(
                         type(exc).__name__,
                         detail[:200],
                     )
+                    provider_fault = True
                     provider_failed = True
 
                 if provider_failed:
                     break
 
-        # If we exhausted retries for this provider, record circuit breaker failure
-        cb_failure(_circuit_key(provider, real_model))
+        # The provider failed: count it against the route's circuit, unless
+        # the request caused the error (400, 413, 422, a prompt too long...).
+        if provider_fault:
+            cb_failure(_circuit_key(provider, real_model))
 
         # Record error metrics and try next provider
         if not provider_failed:
@@ -898,10 +896,22 @@ async def forward_stream(
     Forward a streaming /v1/chat/completions request, yielding raw SSE chunks.
     No retry — cannot retry after streaming has begun.
     """
+    from plugboard.circuit_breaker import (
+        check_circuit,
+        is_provider_fault,
+        record_failure as cb_failure,
+        record_success as cb_success,
+    )
+
     model_str = body.get("model", "")
     provider, real_model = resolve_provider_and_model(model_str)
     if route_guard is not None:
         route_guard(provider, real_model)
+    # The route's circuit is read and recorded as in forward(): the read
+    # moves an open circuit past its cooldown to half-open, so a success
+    # closes it. An open circuit never refuses the request.
+    circuit_key = _circuit_key(provider, real_model)
+    check_circuit(circuit_key)
     effective_timeout = timeout
     _served_by.set((provider, real_model))
     _usage_reported.set(False)
@@ -926,6 +936,8 @@ async def forward_stream(
             metrics.record(provider["id"], _time.perf_counter() - _t_cli)
         except Exception as exc:
             metrics.record(provider["id"], _time.perf_counter() - _t_cli, error=True)
+            if is_provider_fault(str(exc)):
+                cb_failure(circuit_key)
             try:
                 from plugboard.model_quarantine import (
                     is_account_unsupported_error,
@@ -962,6 +974,7 @@ async def forward_stream(
             yield f"data: {err_evt}\n\n".encode("utf-8")
             yield b"data: [DONE]\n\n"
             return
+        cb_success(circuit_key)
         reported = _pop_reported_usage(result)
         reported_usage = result.get("usage") or {}
         content = result["choices"][0]["message"]["content"]
@@ -1052,6 +1065,7 @@ async def forward_stream(
     from plugboard.http_pool import get_session as _get_http_session
 
     session = await _get_http_session()
+    streaming = False
     # aiohttp's text names the provider's host and port: typed like forward().
     try:
         async with session.post(
@@ -1062,14 +1076,24 @@ async def forward_stream(
         ) as resp:
             if resp.status != 200:
                 text = await resp.text()
+                if is_provider_fault(text, resp.status):
+                    cb_failure(circuit_key)
                 raise _http_error(provider["id"], resp.status, text, resp.headers)
+            cb_success(circuit_key)
+            streaming = True
             async for chunk in resp.content.iter_any():
                 yield chunk
     except asyncio.TimeoutError as exc:
+        # No answer: a timeout or a network error counts, as in forward().
+        # Once the stream has begun, its success is already recorded.
+        if not streaming:
+            cb_failure(circuit_key)
         raise RuntimeError(
             f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}"
         ) from exc
     except aiohttp.ClientError as exc:
+        if not streaming:
+            cb_failure(circuit_key)
         detail = str(exc) or type(exc).__name__
         raise ProviderNetworkError(
             f"[{provider['id']}] network error: {detail[:200]}",

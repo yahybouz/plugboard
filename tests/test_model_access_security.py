@@ -77,7 +77,7 @@ async def test_forward_guards_fallback_before_any_call(monkeypatch):
     )
     monkeypatch.setattr(
         "plugboard.circuit_breaker.check_circuit",
-        lambda _m: {"allowed": True, "fallback": None},
+        lambda _m: {"allowed": True, "state": "closed"},
     )
     guard = _model_route_guard(
         "c", {"client_id": "c", "allowed_models": ["test-provider:fake:model-v1"]}

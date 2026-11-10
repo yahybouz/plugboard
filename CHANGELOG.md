@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Circuit breaker counts only the provider's failures**: a route's circuit opened after any 3 failed calls in a row, including the ones the request caused, so one client key sending over-long prompts showed the route `open` in `/admin/circuits` and made the LLM pricing pass skip it for 60 s. It now counts HTTP `429` and `5xx`, timeouts, network errors, `401` and `403`, and for a CLI provider a quota, an unavailable model or a failed run. The other HTTP statuses (`400`, `413`, `422`, `404`...) and every HTTP or CLI error saying the context or the message is too long no longer count ([runbook](docs/runbooks/provider-down.md#quick-diagnosis)).
+
+### Removed
+
+- **Circuit breaker fallback table (`FALLBACK_MAP`)**: when every route of a model was open, `forward()` looked for the table's fallback model among the routes of the model asked for, so it never switched to another model (at best it narrowed the request to one provider, fixed in 4.5.1). The table, the rewrite and the `Circuit breaker: <model> → fallback <model>` log line are gone; `GET /admin/circuits` no longer returns `fallback_map` nor a `fallback` per circuit. An open circuit still never refuses a request.
+
+### Fixed
+
+- **Streamed requests never reached the circuit breaker**: `forward_stream()` (a `stream: true` request to an HTTP provider) neither read nor recorded the route's circuit, so a provider failing only streamed requests never showed `open` in `/admin/circuits`, and the LLM pricing pass kept choosing it. A streamed request now counts like any other, by the same rule: a provider failure before the stream begins counts, a `200` closes a half-open circuit. A drop once the stream has begun is not counted.
+
 ## [4.5.1] — 2026-11-10
 
 ### Security

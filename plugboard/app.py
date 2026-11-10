@@ -1415,8 +1415,8 @@ def _bill_completion(
 def _billing_target(body: Dict[str, Any]) -> tuple:
     """(provider, real_model) to bill: the one that served the call.
 
-    forward() may fall back to another provider or rewrite the model through
-    the circuit breaker; router.served_by() records what actually answered.
+    forward() may fall back to another provider; router.served_by() records
+    what actually answered.
     """
     served = _served_by()
     if served is not None:
@@ -2732,13 +2732,11 @@ async def get_circuits(_: None = Depends(_require_admin)):
     from plugboard.circuit_breaker import (
         get_all_circuits,
         TIER_TIMEOUTS,
-        FALLBACK_MAP,
     )
 
     return {
         "circuits": get_all_circuits(),
         "tier_timeouts": TIER_TIMEOUTS,
-        "fallback_map": FALLBACK_MAP,
     }
 
 
