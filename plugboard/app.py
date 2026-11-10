@@ -5644,6 +5644,24 @@ async def admin_logout(request: Request):
     return resp
 
 
+@app.post("/auth/admin/logout-all", include_in_schema=False, status_code=204)
+async def admin_logout_all(request: Request, _: None = Depends(_require_admin)):
+    """Revoke every admin session (this one included), then clear its cookie."""
+    try:
+        admin_sessions.revoke_all()
+    except OSError as exc:
+        log.error("Admin sessions not revoked: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Sessions could not be revoked: the session store is not writable.",
+        ) from exc
+    _audit("auth.logout_all", details="every admin session revoked")
+    resp = Response(status_code=204)
+    resp.delete_cookie(_ADMIN_COOKIE_NAME, path="/")
+    resp.delete_cookie("llm_admin_key", path="/")
+    return resp
+
+
 # ── Admin MFA (TM-001) ──────────────────────────────────────────────────────
 
 
