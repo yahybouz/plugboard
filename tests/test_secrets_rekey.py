@@ -241,3 +241,97 @@ def test_cli_refuses_a_weak_key_and_reports_unreadable_secrets(tmp_path):
     assert run.returncode == 1
     assert "providers.json: provider alpha" in run.stderr
     assert "Nothing was written" in run.stderr
+
+
+# A completed rotation signs out every dashboard session (PB-SEC-04).
+_SESSION = {"issued_at": 1800000000, "mfa": False, "mfa_generation": None}
+
+
+def _seed_session(data: Path) -> None:
+    data.mkdir(parents=True, exist_ok=True)
+    (data / "admin_sessions.json").write_text(
+        json.dumps({"sessions": {"0" * 64: dict(_SESSION)}})
+    )
+
+
+def _sessions(data: Path) -> dict:
+    return json.loads((data / "admin_sessions.json").read_text())["sessions"]
+
+
+def test_cli_rotation_signs_out_every_session(tmp_path):
+    data = tmp_path / "data"
+    _seed(data)
+    _seed_session(data)
+    (data / ".encryption_key").write_text(OLD)
+
+    run = _run_cli(tmp_path, "--new-key-file", str(tmp_path / "new.key"), "--generate")
+
+    assert run.returncode == 0, run.stderr
+    assert _sessions(data) == {}
+    assert "Every dashboard session was signed out" in run.stdout
+
+
+def test_cli_dry_run_keeps_sessions(tmp_path):
+    data = tmp_path / "data"
+    _seed(data)
+    _seed_session(data)
+    (data / ".encryption_key").write_text(OLD)
+    new_file = tmp_path / "new.key"
+
+    run = _run_cli(tmp_path, "--new-key-file", str(new_file), "--generate", "--dry-run")
+
+    assert run.returncode == 0, run.stderr
+    assert _sessions(data) == {"0" * 64: _SESSION}
+    assert "signed out" not in run.stdout
+
+
+def test_cli_refused_rotation_keeps_sessions(tmp_path):
+    data = tmp_path / "data"
+    _seed(data, key=Fernet.generate_key().decode())  # not the server key
+    _seed_session(data)
+    good = tmp_path / "good.key"
+    good.write_text(NEW)
+
+    run = _run_cli(tmp_path, "--new-key-file", str(good), env_key=OLD)
+
+    assert run.returncode == 1
+    assert _sessions(data) == {"0" * 64: _SESSION}
+    assert "signed out" not in run.stdout
+
+
+def test_rotation_warns_when_sessions_cannot_be_revoked(tmp_path, monkeypatch, capsys):
+    import importlib.util
+
+    from plugboard import admin_sessions, config
+
+    data = tmp_path / "data"
+    _seed(data)
+    _seed_session(data)
+    monkeypatch.setenv("PLUGBOARD_DATA", str(data))
+    monkeypatch.setenv("PLUGBOARD_SKIP_DOTENV", "1")
+    monkeypatch.delenv("ENCRYPTION_KEY", raising=False)
+    monkeypatch.setattr(config, "_ENCRYPTION_KEY", OLD)
+    monkeypatch.setattr(sys, "path", list(sys.path))  # the script prepends ROOT
+
+    def refuse() -> None:
+        raise PermissionError("read-only store")
+
+    monkeypatch.setattr(admin_sessions, "revoke_all", refuse)
+    spec = importlib.util.spec_from_file_location(
+        "rotate_encryption_key_under_test",
+        ROOT / "scripts" / "rotate_encryption_key.py",
+    )
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+
+    code = script.main(["--new-key-file", str(tmp_path / "new.key"), "--generate"])
+
+    assert code == 0
+    out = capsys.readouterr()
+    assert "Log out everywhere" in out.err
+    assert "read-only store" in out.err
+    assert "Every dashboard session was signed out" not in out.out
+    # The rotation itself went through: secrets and key file are on the new key.
+    new_key = (tmp_path / "new.key").read_text().strip()
+    assert (data / ".encryption_key").read_text().strip() == new_key
+    assert _dec(new_key, _stored(data)["alpha"]) == "tok-alpha"

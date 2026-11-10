@@ -40,18 +40,6 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 **Priority:** P2
 **Depends on:** None
 
-### Session revocation
-
-**What:** Add a session epoch bumped on logout and on key rotation.
-
-**Why:** Admin sessions are stateless HMAC tokens valid 8 h; logout only clears the cookie.
-
-**Context:** `_create_admin_session_token` / `_is_admin_session` in `plugboard/app.py`.
-
-**Effort:** S
-**Priority:** P2
-**Depends on:** None
-
 ### Keyless dev mode on a public bind
 
 **What:** Refuse a non-loopback bind when `API_KEY` and `ADMIN_KEY` are both empty, or default `HOST` to `127.0.0.1` in `run.py`.
@@ -138,7 +126,7 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 
 **Effort:** L
 **Priority:** P1
-**Depends on:** Session revocation
+**Depends on:** None
 
 ## MCP
 

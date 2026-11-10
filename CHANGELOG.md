@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **Log out everywhere**: the admin can now sign out every dashboard session at once (stolen cookie, lost phone, shared computer) without changing MFA or `ADMIN_KEY`. `POST /auth/admin/logout-all` (admin only, MFA rules included) revokes every session, the caller's included, records `auth.logout_all` in the audit log and clears the session cookie; when the session store cannot be rewritten it answers `503` and records nothing. The dashboard sidebar gets a **Log out everywhere** button that asks for confirmation first. A completed `ENCRYPTION_KEY` rotation (`make rotate-encryption-key`) also signs out every session; a dry run or a refused rotation signs out nobody, and if the session store cannot be rewritten the rotation still succeeds and tells the operator to use the button once the server runs again ([guide](docs/guide/monitoring.md#admin-api-with-mfa)).
+
 ## [4.5.1] — 2026-11-10
 
 ### Security
