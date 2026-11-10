@@ -1621,7 +1621,11 @@ def get_model_info(model_id: str) -> Optional[Dict[str, Any]]:
         info["matched_from"] = model_id
         info["info_source"] = "benchmark_db"
         return info
+    return derived_model_info(model_id)
 
+
+def derived_model_info(model_id: str) -> Dict[str, Any]:
+    """The answer for a model _MODELS_DB does not know, from its ID alone."""
     # Derived fallback: use model_catalog.classify to extract family/variant,
     # then infer provider from the routed owner prefix.
     from plugboard.model_catalog import classify

@@ -2177,12 +2177,31 @@ async def chat_completions(
 # -- /v1/models --------------------------------------------------------------
 
 
+async def _models_for_key(
+    request: Request, client_id: Optional[str]
+) -> List[Dict[str, Any]]:
+    """The catalogue as the calling key sees it, for every model list route.
+
+    Chat's allowed_models rule decides: a limited key only gets the models it
+    may call; the admin and unlimited keys get every model. Entries are copies,
+    so the shared models cache never carries one caller's flag.
+    """
+    key_record = _get_request_key_record(request, client_id=client_id)
+    return [
+        dict(item, account_compatible=True)
+        for item in await list_models()
+        if _model_is_compatible(
+            item.get("id", ""), client_id or "", key_record=key_record
+        )
+    ]
+
+
 @app.get("/v1/models")
 async def models(request: Request, client_id: Optional[str] = Depends(_resolve_client)):
     from plugboard.legacy_connectors import is_removed_catalogue_model
     from plugboard.model_identity import catalogue_native_model
 
-    items = await list_models()
+    items = await _models_for_key(request, client_id)
     provider_ids = tuple(p["id"] for p in load_providers())
     items = [
         item
@@ -2192,13 +2211,6 @@ async def models(request: Request, client_id: Optional[str] = Depends(_resolve_c
         )
         and not is_removed_catalogue_model(item)
     ]
-    key_record = _get_request_key_record(request, client_id=client_id)
-    for item in items:
-        item["account_compatible"] = _model_is_compatible(
-            item.get("id", ""), client_id or "", key_record=key_record
-        )
-    # Same rule as chat: a key limited by allowed_models only sees what it may call.
-    items = [item for item in items if item["account_compatible"]]
     return {"object": "list", "data": items}
 
 
@@ -2300,21 +2312,29 @@ async def preflight(
 
 
 @app.get("/v1/models/benchmarks")
-async def models_with_benchmarks(client_id: Optional[str] = Depends(_resolve_client)):
+async def models_with_benchmarks(
+    request: Request, client_id: Optional[str] = Depends(_resolve_client)
+):
     """List all models enriched with benchmarks, capabilities, and metadata."""
     from plugboard.benchmarks import enrich_models_list
 
-    items = await list_models()
+    items = await _models_for_key(request, client_id)
     return {"object": "list", "data": enrich_models_list(items)}
 
 
 @app.get("/v1/models/{model_id:path}/info")
 async def model_info(
-    model_id: str, client_id: Optional[str] = Depends(_resolve_client)
+    model_id: str,
+    request: Request,
+    client_id: Optional[str] = Depends(_resolve_client),
 ):
     """Get detailed info for a specific model: benchmarks, capabilities, best_for."""
-    from plugboard.benchmarks import get_model_info
+    from plugboard.benchmarks import derived_model_info, get_model_info
 
+    key_record = _get_request_key_record(request, client_id=client_id)
+    if not _model_is_compatible(model_id, client_id or "", key_record=key_record):
+        # A model the key may not call gets the unknown-model answer.
+        return derived_model_info(model_id)
     info = get_model_info(model_id)
     if not info:
         raise HTTPException(404, f"No benchmark data for model '{model_id}'")
@@ -2336,16 +2356,20 @@ async def chat_completions_v2(
 
 
 @app.get("/v2/models")
-async def models_v2(client_id: Optional[str] = Depends(_resolve_client)):
-    items = await list_models()
+async def models_v2(
+    request: Request, client_id: Optional[str] = Depends(_resolve_client)
+):
+    items = await _models_for_key(request, client_id)
     return {"object": "list", "data": items, "api_version": "2"}
 
 
 @app.get("/v2/models/benchmarks")
-async def models_benchmarks_v2(client_id: Optional[str] = Depends(_resolve_client)):
+async def models_benchmarks_v2(
+    request: Request, client_id: Optional[str] = Depends(_resolve_client)
+):
     from plugboard.benchmarks import enrich_models_list
 
-    items = await list_models()
+    items = await _models_for_key(request, client_id)
     return {"object": "list", "data": enrich_models_list(items), "api_version": "2"}
 
 

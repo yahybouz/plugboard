@@ -239,15 +239,24 @@ def _restricted_key(tmp_path, monkeypatch, allowed_models):
     return ak.create_key("test-client", "test", allowed_models=allowed_models)
 
 
-async def _model_ids(client, key):
-    resp = await client.get("/v1/models", headers={"Authorization": f"Bearer {key}"})
+_MODEL_LISTS = [
+    "/v1/models",
+    "/v1/models/benchmarks",
+    "/v2/models",
+    "/v2/models/benchmarks",
+]
+
+
+async def _model_ids(client, key, path="/v1/models"):
+    resp = await client.get(path, headers={"Authorization": f"Bearer {key}"})
     assert resp.status_code == 200
     return [item["id"] for item in resp.json()["data"]]
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", _MODEL_LISTS)
 async def test_models_restricted_key_lists_only_chat_allowed_models(
-    client, tmp_path, monkeypatch
+    client, tmp_path, monkeypatch, path
 ):
     """BUG-24: a key limited by allowed_models only sees what chat accepts."""
     from fastapi import HTTPException
@@ -258,7 +267,7 @@ async def test_models_restricted_key_lists_only_chat_allowed_models(
     rec = _restricted_key(
         tmp_path, monkeypatch, ["other-provider:other:model-v2", "fake:model-v1"]
     )
-    full = await _model_ids(client, "testkey")  # admin: whole catalogue
+    full = await _model_ids(client, "testkey", path)  # admin: whole catalogue
 
     def chat_accepts(model_id):
         try:
@@ -267,7 +276,7 @@ async def test_models_restricted_key_lists_only_chat_allowed_models(
             return False
         return True
 
-    listed = await _model_ids(client, rec["key"])
+    listed = await _model_ids(client, rec["key"], path)
     assert sorted(listed) == [
         "other-provider:other:model-v2",
         "test-provider:fake:model-v1",
@@ -277,12 +286,47 @@ async def test_models_restricted_key_lists_only_chat_allowed_models(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", _MODEL_LISTS)
 async def test_models_unrestricted_key_lists_whole_catalogue(
-    client, tmp_path, monkeypatch
+    client, tmp_path, monkeypatch, path
 ):
     """Without allowed_models, the key sees the same list as the admin."""
     rec = _restricted_key(tmp_path, monkeypatch, [])
-    assert await _model_ids(client, rec["key"]) == await _model_ids(client, "testkey")
+    listed = await _model_ids(client, rec["key"], path)
+    assert listed == await _model_ids(client, "testkey", path)
+
+
+async def _model_info(client, key, model_id):
+    resp = await client.get(
+        f"/v1/models/{model_id}/info", headers={"Authorization": f"Bearer {key}"}
+    )
+    return resp.status_code, resp.json()
+
+
+@pytest.mark.asyncio
+async def test_model_info_refused_model_answers_as_unknown(
+    client, tmp_path, monkeypatch
+):
+    """BUG-24: a limited key gets the unknown-model answer for a refused model."""
+    import plugboard.benchmarks as bench
+
+    rec = _restricted_key(tmp_path, monkeypatch, ["fake:model-v1"])
+    refused = "other-provider:claude-sonnet-4-6"  # has a curated profile
+    admin_view = await _model_info(client, "testkey", refused)
+    assert admin_view[1]["info_source"] == "benchmark_db"
+
+    # Allowed model: the limited key sees what the admin sees.
+    allowed = "test-provider:fake:model-v1"
+    assert await _model_info(client, rec["key"], allowed) == await _model_info(
+        client, "testkey", allowed
+    )
+
+    limited_view = await _model_info(client, rec["key"], refused)
+    # What the route answers when the profile database does not know the model.
+    monkeypatch.setattr(bench, "_MODELS_DB", {})
+    unknown_view = await _model_info(client, "testkey", refused)
+    assert limited_view == unknown_view
+    assert limited_view[0] == 200 and limited_view[1]["info_source"] == "derived"
 
 
 # ── BENCH-009 ───────────────────────────────────────────────────────────────
