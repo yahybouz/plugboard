@@ -33,7 +33,7 @@ curl -s -X POST http://localhost:8765/admin/keys \
         "label": "production",
         "monthly_limit_usd": 25,
         "rpm_limit": 120,
-        "allowed_models": ["anthropic-direct:", "ollama:"],
+        "allowed_models": ["anthropic-direct:claude-haiku-4-5-20251001", "ollama:qwen3:8b"],
         "org_id": "acme"
       }'
 ```
@@ -46,15 +46,27 @@ The response contains the record and, once, the plaintext key in `"key"`.
 |---|---|---|
 | `monthly_limit_usd` | `PLUGBOARD_DEFAULT_MONTHLY_LIMIT_USD` (10) | Monthly budget in USD for this key. `0` means unlimited. |
 | `rpm_limit` | `PLUGBOARD_DEFAULT_RPM_LIMIT` (60) | Requests per minute for this key. `0` means unlimited. |
-| `allowed_models` | empty (all models) | List of substrings; a request is allowed when the model string contains one of them. |
+| `allowed_models` | empty (all models) | List of exact model IDs. A request is allowed when the model that serves it equals one entry, as `<provider-id>:<model>` or as the bare model name. No substring, prefix, wildcard or change of case. Set through the admin API only: the dashboard form has no field for it. See [allowed models](#allowed-models). |
 | `org_id` | empty | Organisation used for grouped reporting. |
+
+### Allowed models
+
+Each entry is compared, as a whole string, with the provider and model that serve the request:
+
+- Write an entry as `<provider-id>:<model>`, with the provider ID shown on the Providers page. The display prefixes `/v1/models` uses for the CLI providers (`claude-code:`, `Codex:`, `Gemini:`) are not provider IDs: an entry written with one does not allow that model.
+- A bare model name (`qwen3:8b`) allows that name on every provider.
+- Clients should send the model as `<provider-id>:<model>`, spelled like the entry. A name without a provider prefix can be routed to another provider and refused.
+- When a provider lists only dated snapshots of a model (`claude-haiku-4-5-20251001`), a request for the undated name can be served, and is then checked, under the newest dated ID once Plugboard has loaded its model list. List the dated ID and request it as it is.
+- On `/v1/chat/completions`, the `detail` of a `403` names the ID that was checked (`Model '<provider-id>:<model>' not allowed ...`) and the key's list. `/v1/embeddings` answers `403 Embedding model not permitted for this key` without them, and `/v1/preflight` gives the closed code `forbidden_model`.
+
+An entry that is only a provider prefix (`"anthropic-direct:"`) or part of a name (`"claude"` for `claude-haiku-...`) has allowed none of the models it used to cover since 4.3.1: their requests get `403`. `GET /admin/keys` shows the list of each key. A list cannot be edited, and rotating a key copies it: create a new key with full IDs, then revoke the old one ([details](../model-access-correction.md)).
 
 ## How limits are enforced
 
 Checks run in this order on each chat request:
 
 1. **Global rate limit per IP address**: `RATE_LIMIT` requests per minute (default 60, `0` disables it), for every route. Exceeding it returns `429 Rate limit exceeded`. Behind a reverse proxy every request comes from the proxy's address; see [Deployment](deployment.md#behind-a-reverse-proxy).
-2. **Global concurrency cap** (optional): with `PLUGBOARD_MAX_INFLIGHT_CHAT` above 0, extra concurrent chat requests wait up to `PLUGBOARD_INFLIGHT_WAIT_S` seconds, then get `503` with `Retry-After: 5`.
+2. **Global concurrency cap** (optional): with `PLUGBOARD_MAX_INFLIGHT_CHAT` above 0, extra concurrent chat requests wait up to `PLUGBOARD_INFLIGHT_WAIT_S` seconds, then get `503` with `Retry-After: 5`. A request holds its slot until its answer is sent, or until its client hangs up: the gateway then stops the provider call (the CLI and its children are killed, an HTTP request is cancelled), bills and caches nothing, and frees the slot at once.
 3. **Monthly budget**: the key's spend for the current month is summed from the usage records. When it is greater than or equal to the limit the request is refused with `429 Monthly spending limit exceeded`. The check happens before the call, so the last request of a month can take the spend slightly over the limit.
 4. **Allowed models**: a model outside the list returns `403`.
 5. **Known price** (keys with a monthly budget only): a model without a known price returns `402 Model price unavailable for this key`, before any provider call, streamed or not. Such a call would be recorded at 0 and the budget could never stop it. Every provider the request may fall back to is checked. The refusal is logged (key, provider, model; never the prompt). Keys with `monthly_limit_usd` 0 are not affected.

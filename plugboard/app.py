@@ -50,7 +50,7 @@ import re
 import secrets
 import time
 import uuid
-from typing import Annotated, Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Awaitable, Dict, List, Literal, Optional, TypeVar
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -582,6 +582,7 @@ def _env_float(name: str, default: float) -> float:
 
 _INFLIGHT_CHAT_MAX = _env_int("PLUGBOARD_MAX_INFLIGHT_CHAT", 0)
 _INFLIGHT_WAIT_S = _env_float("PLUGBOARD_INFLIGHT_WAIT_S", 0.0)
+_INFLIGHT_RETRY_AFTER_S = 5
 _inflight_chat_sem: Optional["_asyncio.Semaphore"] = None
 _inflight_chat_active = 0  # observability counter; only accurate when sem is used
 
@@ -619,8 +620,11 @@ async def _inflight_chat_dep():
     except _asyncio.TimeoutError:
         raise HTTPException(
             status_code=503,
-            detail="Server overloaded: too many concurrent chat requests",
-            headers={"Retry-After": "5"},
+            detail=(
+                "Server overloaded: the limit of concurrent chat requests is "
+                f"reached, retry in {_INFLIGHT_RETRY_AFTER_S} s"
+            ),
+            headers={"Retry-After": str(_INFLIGHT_RETRY_AFTER_S)},
         )
     global _inflight_chat_active
     _inflight_chat_active += 1
@@ -629,6 +633,80 @@ async def _inflight_chat_dep():
     finally:
         _inflight_chat_active -= 1
         sem.release()
+
+
+# ── Client hang-up while the upstream works (BUG-30) ────────────────────────
+#
+# The inflight slot is given back only once the response is sent, and nothing
+# else listens to the client before the response starts: an abandoned call
+# kept its slot, its CLI and its HTTP request until the upstream answered (up
+# to 900 s for a CLI), then was billed and cached for nobody.
+
+_CLIENT_CLOSED_REQUEST = 499  # nginx's code for "client closed request"
+_T = TypeVar("_T")
+
+
+class _ClientGone(Exception):
+    """The caller hung up before the upstream answered."""
+
+
+async def _unless_client_gone(request: Request, awaitable: Awaitable[_T]) -> _T:
+    """Await upstream work, and cancel it as soon as the caller hangs up.
+
+    The work runs in the calling task on purpose: ``forward()`` sets the
+    router's context variables that billing reads afterwards. A watcher task
+    cancels this task on ``http.disconnect``; the cancellation kills a CLI's
+    process group (cli_subprocess) and closes an HTTP request, then becomes
+    ``_ClientGone``. Only valid once the request body has been read.
+    """
+    task = _asyncio.current_task()
+    if task is None:  # pragma: no cover - always called from a request task
+        return await awaitable
+    hung_up = False
+    finished = False
+
+    async def _watch() -> None:
+        nonlocal hung_up
+        try:
+            message = await request.receive()
+        except Exception as exc:  # the server cannot tell: keep the old way
+            log.debug("Client watch stopped: %s", exc)
+            return
+        # After the body, an ASGI server only ever sends http.disconnect.
+        # Once the work is over, a hang-up changes nothing: BaseHTTPMiddleware's
+        # receive (an anyio task group) can swallow watcher.cancel() and still
+        # return the disconnect, which must not cancel the finished request.
+        if message.get("type") == "http.disconnect" and not finished:
+            hung_up = True
+            task.cancel()
+
+    watcher = _asyncio.ensure_future(_watch())
+    try:
+        result = await awaitable
+    except (_asyncio.CancelledError, Exception):
+        # Withdraw our own cancellation request (the work may also have turned
+        # it into an error); any other cancellation keeps propagating.
+        if hung_up and task.uncancel() == 0:
+            raise _ClientGone() from None
+        raise
+    finally:
+        finished = True  # before the first await: see _watch
+        watcher.cancel()
+        await _asyncio.wait([watcher])
+    if hung_up:
+        # The work swallowed the cancellation: the caller is gone all the same.
+        task.uncancel()
+        raise _ClientGone()
+    return result
+
+
+def _client_gone_response(model: str) -> Response:
+    """Answer nobody reads: it only lets the inflight slot go at once."""
+    log.info(
+        "Client hung up before the answer: upstream stopped, nothing billed | model=%s",
+        model,
+    )
+    return Response(status_code=_CLIENT_CLOSED_REQUEST)
 
 
 def _csp_for(nonce: str) -> str:
@@ -1820,7 +1898,11 @@ async def chat_completions(
 
         if _stream_bypass:
             try:
-                result = await forward({**body, "stream": False}, **route_options)
+                result = await _unless_client_gone(
+                    request, forward({**body, "stream": False}, **route_options)
+                )
+            except _ClientGone:
+                return _client_gone_response(body.get("model", "?"))
             except HTTPException:
                 raise
             except Exception as exc:
@@ -1991,7 +2073,10 @@ async def chat_completions(
 
         try:
             gen = forward_stream(body, **route_options)
-            first = await gen.__anext__()
+            first = await _unless_client_gone(request, gen.__anext__())
+        except _ClientGone:
+            await _aclose_quietly(gen)
+            return _client_gone_response(body.get("model", "?"))
         except StopAsyncIteration:
             return StreamingResponse(
                 iter([]),
@@ -2129,7 +2214,9 @@ async def chat_completions(
 
     t0 = time.perf_counter()
     try:
-        result = await forward(body, **route_options)
+        result = await _unless_client_gone(request, forward(body, **route_options))
+    except _ClientGone:
+        return _client_gone_response(body.get("model", "?"))
     except HTTPException:
         raise
     except Exception as exc:
@@ -2353,7 +2440,12 @@ async def preflight(
                 "max_tokens": 1,
             }
             try:
-                result = await forward(ping_body, timeout=10.0, **route_options)
+                result = await _unless_client_gone(
+                    request, forward(ping_body, timeout=10.0, **route_options)
+                )
+            except _ClientGone:
+                # Nobody waits for the rest of the batch: stop here.
+                return _client_gone_response(model_str)
             except HTTPException:
                 error = "forbidden_model"
             except Exception as exc:
