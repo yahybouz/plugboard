@@ -100,7 +100,7 @@ llm.example.com {
 }
 ```
 
-Do not add `flush_interval -1`: with it, Caddy does not cancel the request to Plugboard when the client hangs up, so for a request that is not streamed Plugboard can neither stop the provider call nor free the chat slot until the provider answers. Streams do not need it: Caddy flushes `text/event-stream` responses to the client at once.
+Do not add `flush_interval -1`. Plugboard does not need it: each of its streams is `text/event-stream` or has no `Content-Length`, and Caddy sends such a response to the client at once without it. From Caddy 2.6 to 2.8 it also did harm: with it, Caddy did not cancel the request to Plugboard when the client hung up ([Caddy pull request 4952](https://github.com/caddyserver/caddy/pull/4952), reverted in Caddy 2.9.0). Plugboard then did not see the client leave during a request that is not streamed, or during a stream before its first byte, so it could neither stop the provider call nor free the chat slot.
 
 nginx:
 
