@@ -12,8 +12,8 @@ provider, or an OAuth-connected source) stops answering or returns errors.
   `"type": "provider_down"` after `ALERT_FAILURE_THRESHOLD` (default 3)
   consecutive failures. Alerts for the same provider are sent at most once
   every 5 minutes.
-- Logs contain lines such as `Watchdog: provider '<id>' unhealthy`,
-  `Circuit OPENED for <model>` or `Circuit breaker: <model> → fallback <model>`.
+- Logs contain lines such as `Watchdog: provider '<id>' unhealthy` or
+  `Circuit OPENED for <model>`.
 
 ## Priority
 
@@ -75,10 +75,10 @@ export ADMIN_KEY=$(grep '^ADMIN_KEY=' .env | cut -d= -f2-)
    and for a CLI provider a quota, an unavailable model or a failed run. An
    error the request caused does not count: HTTP `400`, `413` or `422`, or
    any error saying the context or the message is too long, so one client
-   sending over-long prompts cannot open it. Requests for it are
-   rejected for 60 seconds and rerouted to the model listed in `fallback`
-   when one is available. After the cooldown the circuit goes `half_open`
-   and lets one request through.
+   sending over-long prompts cannot open it. Requests for it are still sent
+   to the model asked for (there is no fallback model), but the LLM pricing
+   pass skips that route. After 60 seconds the circuit goes `half_open` and
+   the next success closes it.
 
 5. Get the full picture (all providers, health, uptime over 24 h and 7 days):
 

@@ -128,12 +128,8 @@ async def test_unqualified_model_still_reads_its_open_circuit(_providers_file, b
 async def test_one_open_route_does_not_pin_an_unqualified_model(
     _providers_file, breaker
 ):
-    """While another route answers, the model's fallback does not kick in.
-
-    ``gpt-5.5-pro`` has a FALLBACK_MAP entry (``gpt-5.5``) that the rewrite
-    finds inside the same native name: an open preferred route must not pin
-    the request to that route and drop the one that answers.
-    """
+    """While another route answers, an open preferred route does not pin
+    the request to itself and drop the one that answers."""
     from plugboard.router import forward, served_by
 
     model = "openai/gpt-5.5-pro"
@@ -171,28 +167,20 @@ async def test_a_client_error_does_not_stop_other_callers(_providers_file, break
 
 
 @pytest.mark.asyncio
-async def test_client_errors_do_not_pin_other_callers_to_one_route(
+async def test_open_circuits_do_not_pin_other_callers_to_one_route(
     _providers_file, breaker
 ):
-    """One caller's refused requests never narrow the next caller's routes.
+    """Open circuits on every route never narrow the next caller's routes.
 
-    Three requests refused for their own content (HTTP 400) on both routes
-    open both circuits. ``gpt-5.5-pro``'s FALLBACK_MAP entry, ``gpt-5.5``, is
-    a substring of its native name: the rewrite took that for the fallback
-    model and pinned the next caller to the first route, dropping the one
-    that answers.
+    ``gpt-5.5-pro`` used to have a fallback, ``gpt-5.5``, that the rewrite
+    (removed with FALLBACK_MAP) found inside its own native name: it pinned
+    the next caller to the first route and dropped the one that answers.
     """
     from plugboard.router import forward, served_by
 
     model = "openai/gpt-5.5-pro"
-    refused = {"error": {"message": "prompt is too long"}}
     with aioresponses() as mock:
-        for _ in range(3):
-            mock.post(_A, status=400, payload=refused)
-            mock.post(_B, status=400, payload=refused)
-        for _ in range(3):
-            with pytest.raises(RuntimeError, match="HTTP 400"):
-                await forward({"model": model, "messages": []})
+        await _fail_three_times(model, mock)
         mock.post(_A, exception=aiohttp.ClientConnectionError("refused"))
         mock.post(_B, payload=FAKE_COMPLETION)
         result = await forward({"model": model, "messages": []})

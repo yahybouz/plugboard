@@ -2670,13 +2670,11 @@ async def get_circuits(_: None = Depends(_require_admin)):
     from plugboard.circuit_breaker import (
         get_all_circuits,
         TIER_TIMEOUTS,
-        FALLBACK_MAP,
     )
 
     return {
         "circuits": get_all_circuits(),
         "tier_timeouts": TIER_TIMEOUTS,
-        "fallback_map": FALLBACK_MAP,
     }
 
 

@@ -147,7 +147,6 @@ async def test_benchmarks_coverage_endpoint_returns_totals(admin_client):
 def test_new_models_pricing_and_benchmarks():
     from plugboard.billing import resolve_model_price
     from plugboard.benchmarks import get_model_info
-    from plugboard.circuit_breaker import FALLBACK_MAP
 
     empty_grid = {"models": {}}
 
@@ -191,9 +190,3 @@ def test_new_models_pricing_and_benchmarks():
     assert c37_info is not None
     assert c37_info["provider"] == "Anthropic"
     assert c37_info["benchmarks"]["Arena_ELO"] == 1368
-
-    # Test Circuit Breaker Mappings
-    assert FALLBACK_MAP["claude-opus-4-7"] == "claude-opus-4-6"
-    assert FALLBACK_MAP["kimi-k2.6-thinking"] == "kimi-k2.6"
-    assert FALLBACK_MAP["deepseek-r1"] == "deepseek-v3"
-    assert FALLBACK_MAP["qwen3.5"] == "qwen3"

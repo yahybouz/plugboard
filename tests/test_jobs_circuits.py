@@ -37,7 +37,6 @@ class TestCircuitStartsClosed:
         result = cb.check_circuit("test-model")
         assert result["state"] == cb.CLOSED
         assert result["allowed"] is True
-        assert result["fallback"] is None
 
 
 class TestRecordSuccessResetsFailures:
@@ -89,19 +88,19 @@ class TestOpenCircuitRejects:
         assert result["state"] == cb.OPEN
 
 
-class TestOpenCircuitSuggestsFallback:
-    """6 — fallback from FALLBACK_MAP."""
+class TestOpenCircuitNamesNoFallback:
+    """6 — no fallback model (PLU-4): FALLBACK_MAP never changed the model."""
 
-    def test_open_circuit_suggests_fallback(
+    def test_open_circuit_names_no_fallback(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _fresh_circuits(monkeypatch)
         model = "claude-sonnet-4-5"
         for _ in range(3):
             cb.record_failure(model)
-        result = cb.check_circuit(model)
-        assert result["allowed"] is False
-        assert result["fallback"] == "claude-haiku-4-5"
+        assert cb.check_circuit(model) == {"allowed": False, "state": cb.OPEN}
+        assert "fallback" not in cb.get_all_circuits()[model]
+        assert not hasattr(cb, "FALLBACK_MAP")
 
 
 class TestCircuitHalfOpenAfterCooldown:

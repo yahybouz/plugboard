@@ -553,7 +553,6 @@ async def forward(
     Retries on transient errors per provider, then falls back to next provider.
     """
     from plugboard.circuit_breaker import (
-        _extract_suffix,
         check_circuit,
         is_provider_fault,
         record_failure as cb_failure,
@@ -565,25 +564,11 @@ async def forward(
     model_str = body.get("model", "")
     candidates = _resolve_all_providers(model_str)
 
-    # Circuit breaker check — if model is open, try fallback. Each route is
-    # read under the key its outcomes are recorded under; the model counts as
-    # open only when no candidate route is allowed.
-    circuits = [check_circuit(_circuit_key(p, m)) for p, m in candidates]
-    circuit = next((c for c in circuits if c["allowed"]), circuits[0])
-    if not circuit["allowed"] and circuit["fallback"]:
-        # Rewrite model to fallback
-        fallback_suffix = circuit["fallback"]
-        log.warning("Circuit breaker: %s → fallback %s", model_str, fallback_suffix)
-        # Try to find the fallback in available models. The model suffix must
-        # equal the fallback: ``gpt-5.5`` is a substring of ``gpt-5.5-pro``,
-        # and a substring match pinned the request to one route of the very
-        # model whose circuits are open, dropping the routes that answer.
-        for prov, rmodel in candidates:
-            if _extract_suffix(rmodel) == fallback_suffix:
-                model_str = f"{prov['id']}:{rmodel}"
-                body = {**body, "model": model_str}
-                candidates = _resolve_all_providers(model_str)
-                break
+    # Read each route's circuit under the key its outcomes are recorded under:
+    # an open circuit past its cooldown goes half-open, so a success closes
+    # it. An open circuit never refuses the request nor changes its model.
+    for route_provider, route_model in candidates:
+        check_circuit(_circuit_key(route_provider, route_model))
 
     last_err: Optional[Exception] = None
     # PERF-2: reuse the app-wide pooled session (keepalive + DNS cache)

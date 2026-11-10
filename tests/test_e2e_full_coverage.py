@@ -144,7 +144,7 @@ class TestCircuits:
         body = resp.json()
         assert "circuits" in body
         assert "tier_timeouts" in body
-        assert "fallback_map" in body
+        assert "fallback_map" not in body  # PLU-4: no fallback model
         # All tier timeouts should be 600s
         for tier, val in body["tier_timeouts"].items():
             assert val == 900.0, f"tier {tier} should be 900s"
