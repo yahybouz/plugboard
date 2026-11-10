@@ -545,7 +545,8 @@ _ROUTES: List[_Route] = [
       "413": "Decision request exceeds the byte limit.",
       "422": "Invalid typed question or unsupported engine capability.",
       "429": "Key already has a decision in flight, queue full or wait over, "
-             "or a key limit exceeded.",
+             "a key limit exceeded, or TypeSafe's quota or rate limit exhausted "
+             "(Retry-After when TypeSafe gives it).",
       "502": "Invalid response from the decision engine.",
       "503": "Decision engine unavailable.",
       "504": "Decision engine timed out."}, True),
