@@ -18,6 +18,7 @@ from plugboard.storage import (
     atomic_write_json,
     atomic_write_text,
     data_dir,
+    ensure_private_dir,
 )
 
 # Load `.env` as early as possible so the encryption-key resolver (and any
@@ -90,6 +91,13 @@ def dotenv_permission_warning(path: Optional[str] = None) -> Optional[str]:
 # server has booted once, without requiring operator action.
 
 _DATA_DIR = data_dir()
+# Owner-only (0700) when this process creates it: every module that writes
+# data imports this one first, and a store creating it later would leave it
+# with the default mode. An existing directory keeps its mode.
+try:
+    ensure_private_dir(_DATA_DIR)
+except OSError as _exc:  # pragma: no cover - read-only or missing mount
+    log.warning("Cannot create the data directory %s: %s", _DATA_DIR, _exc)
 PROVIDERS_FILE = _DATA_DIR / "providers.json"
 PROVIDERS_LOCK = _DATA_DIR / "providers.json.lock"
 _KEY_FILE = _DATA_DIR / ".encryption_key"
@@ -174,7 +182,7 @@ try:
     from filelock import FileLock as _FileLock
 
     def _lock():
-        _DATA_DIR.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(_DATA_DIR)
         return _FileLock(str(PROVIDERS_LOCK))
 except ImportError:
     from contextlib import contextmanager

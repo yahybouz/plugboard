@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from plugboard import billing as _billing
-from plugboard.storage import data_dir
+from plugboard.storage import data_dir, private_sqlite_file
 
 _DATA_DIR = data_dir()
 _DB_PATH = _DATA_DIR / "usage.db"
@@ -60,9 +60,9 @@ _CREATE_INDEXES = [
 
 def _get_conn() -> sqlite3.Connection:
     """Get a thread-local SQLite connection with WAL mode."""
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
     if not _DB_PATH.exists():
         _schema_ready.clear()  # deleted or not created yet: set the schema up again
+    private_sqlite_file(_DB_PATH)
     conn = sqlite3.connect(str(_DB_PATH), timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")

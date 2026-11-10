@@ -30,7 +30,7 @@ from plugboard.legacy_connectors import (
     require_supported_model,
     require_supported_provider,
 )
-from plugboard.storage import data_dir
+from plugboard.storage import data_dir, private_sqlite_file
 from plugboard.endpoints import openai_url
 
 log = logging.getLogger(__name__)
@@ -71,7 +71,7 @@ _CREATE_INDEX2 = (
 
 
 def _get_conn() -> sqlite3.Connection:
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    private_sqlite_file(_DB_PATH)
     conn = sqlite3.connect(str(_DB_PATH), timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")

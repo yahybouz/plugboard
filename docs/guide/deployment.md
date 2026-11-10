@@ -21,6 +21,7 @@ Then:
 
 - [ ] TLS in front of Plugboard (reverse proxy, below); port 8765 not reachable from the internet.
 - [ ] `data/` on persistent storage and backed up (it holds encrypted credentials, key hashes, usage and pricing history).
+- [ ] `data/` readable by the server's account only: Plugboard creates it with mode `0700` and its SQLite stores `0600`, but a `data/` that already exists keeps its mode (`chmod 700 data`).
 - [ ] Optional: `PLUGBOARD_ADMIN_MFA_REQUIRED=1` after enrolling a TOTP secret.
 - [ ] Optional: `PLUGBOARD_PROVIDER_DOMAINS_ALLOWED` to restrict where provider requests may go.
 - [ ] Optional: `ALERT_WEBHOOK_URL` for provider and budget alerts.

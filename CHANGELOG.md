@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Security
 
 - **A placeholder `ADMIN_KEY` is refused**: the deployment guide shows `ADMIN_KEY=<openssl rand -hex 24>`; copied as is, that public text is long enough to pass the 16-character check, so anyone who read the guide could sign in to the dashboard. Outside `PLUGBOARD_DEV=1` the server now refuses to start when `ADMIN_KEY` is written `<...>`. A key that only contains angle brackets is accepted.
+- **The data directory and the SQLite stores are owner-only**: SQLite created most of its databases (response cache, usage, audit, chat sessions, monitoring, provider watchdog, tickets, MCP tracking) with mode `0644`, readable by every local account, and a missing `data/` (or a missing parent of `PLUGBOARD_DATA`) was created `0755`. The server now creates `data/` and its missing parents `0700`, creates each SQLite store `0600`, and tightens an existing store and its `-wal` / `-shm` files to `0600` when it opens them. A `data/` that already exists keeps its mode: `chmod 700 data` to tighten it.
 
 ### Fixed
 

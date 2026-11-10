@@ -23,7 +23,7 @@ import time
 
 
 from typing import Any, Dict, Optional
-from plugboard.storage import data_dir
+from plugboard.storage import data_dir, private_sqlite_file
 
 log = logging.getLogger(__name__)
 
@@ -94,7 +94,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
 
 
 def _get_conn() -> sqlite3.Connection:
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    private_sqlite_file(_DB_PATH)
     conn = sqlite3.connect(str(_DB_PATH), timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")

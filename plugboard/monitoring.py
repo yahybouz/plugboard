@@ -25,7 +25,7 @@ from plugboard.legacy_connectors import (
     require_supported_provider,
 )
 from plugboard.metrics import get_stats
-from plugboard.storage import data_dir
+from plugboard.storage import data_dir, private_sqlite_file
 from plugboard.endpoints import openai_url
 
 log = logging.getLogger(__name__)
@@ -51,7 +51,7 @@ _CREATE_INDEX2 = "CREATE INDEX IF NOT EXISTS idx_mon_provider ON monitoring_snap
 
 
 def _get_conn() -> sqlite3.Connection:
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    private_sqlite_file(_DB_PATH)
     conn = sqlite3.connect(str(_DB_PATH), timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")

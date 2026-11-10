@@ -15,7 +15,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from plugboard.storage import data_dir
+from plugboard.storage import data_dir, private_sqlite_file
 
 STATUTS = ("a_trier", "pret", "en_cours", "en_revue", "termine", "bloque", "abandonne")
 PRIORITES = ("P0", "P1", "P2", "P3")
@@ -79,9 +79,8 @@ def _now() -> str:
 
 
 def _connect() -> sqlite3.Connection:
-    directory = data_dir()
-    directory.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(directory / "suivi.db"), timeout=10)
+    db = private_sqlite_file(data_dir() / "suivi.db")
+    conn = sqlite3.connect(str(db), timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")

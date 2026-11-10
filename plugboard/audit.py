@@ -12,7 +12,7 @@ import secrets
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from plugboard.storage import data_dir
+from plugboard.storage import data_dir, private_sqlite_file
 
 _DATA_DIR = data_dir()
 _DB_PATH = _DATA_DIR / "audit.db"
@@ -39,7 +39,7 @@ _CREATE_INDEXES = [
 
 
 def _get_conn() -> sqlite3.Connection:
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    private_sqlite_file(_DB_PATH)
     conn = sqlite3.connect(str(_DB_PATH), timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
