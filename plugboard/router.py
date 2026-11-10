@@ -496,7 +496,7 @@ def _resolve_all_providers(model_str: str) -> List[tuple[Dict[str, Any], str]]:
 
 
 # (provider, real_model) that actually answered the current request, after
-# fallback and circuit-breaker rewrites. Billing reads it so the price is the
+# any fallback to the next provider. Billing reads it so the price is the
 # one of the provider that served the call. Each request runs in its own
 # task, so the value never leaks between requests.
 _served_by: ContextVar[Optional[tuple]] = ContextVar(
