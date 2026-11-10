@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Exhausted TypeSafe quota answered 502 on `/v1/decisions`**: when TypeSafe answered HTTP 429 to a Jev decision, the client got the generic `502 Invalid decision engine response`. It now gets `429` as on `POST /v1/chat/completions` since 4.5.0: a reason written by the gateway naming `typesafe`, and TypeSafe's delay in `Retry-After` and `retry_after` when it gave one (at most 7 days). TypeSafe's body is never read nor returned, and nothing is billed. Other TypeSafe error statuses still answer `502` ([decisions](docs/guide/decisions.md)).
+
 ## [4.5.0] — 2026-11-10
 
 ### Security

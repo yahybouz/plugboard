@@ -2707,7 +2707,7 @@
             }
           },
           "429": {
-            "description": "Key already has a decision in flight, queue full or wait over, or a key limit exceeded.",
+            "description": "Key already has a decision in flight, queue full or wait over, a key limit exceeded, or TypeSafe's quota or rate limit exhausted (Retry-After when TypeSafe gives it).",
             "content": {
               "application/json": {
                 "schema": {

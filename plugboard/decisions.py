@@ -287,6 +287,12 @@ async def infer_jev(request_dict: dict) -> dict:
                 headers={"Authorization": f"Bearer {key}"},
                 allow_redirects=False,
             ) as response:
+                if response.status == 429:
+                    # Quota or rate limit exhausted: the chat's error (BUG-26),
+                    # with TypeSafe's Retry-After; its body is never read.
+                    from plugboard.router import _http_error
+
+                    raise _http_error("typesafe", 429, "", response.headers)
                 if response.status != 200:
                     raise DecisionUpstreamError()
                 return await _answered(request, response)

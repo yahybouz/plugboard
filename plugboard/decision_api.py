@@ -374,7 +374,8 @@ async def decide(body: DecisionRequest, record: dict = Depends(require_decision_
         q.type == "score" and len(q.criteria) > 10 for q in body.questions.values()
     ):
         raise HTTPException(422, "Jev supports at most ten score levels")
-    from plugboard.app import _check_spending_limit
+    from plugboard.app import _check_spending_limit, _quota_error_response
+    from plugboard.router import ProviderQuotaError
 
     _warn_obsolete_price()
     if _usage_breaker_refuses(record):
@@ -396,6 +397,7 @@ async def decide(body: DecisionRequest, record: dict = Depends(require_decision_
         # taken it. None: not sent, or cut by the API deadline (at most 15 s
         # queued out of 45 s, so Jev's own 30 s timeout normally fires first).
         charge: dict | None = None
+        quota: ProviderQuotaError | None = None
         try:
             # Time spent queued counts: queue plus engine stay within TIMEOUT.
             remaining = deadline - loop.time()
@@ -410,6 +412,8 @@ async def decide(body: DecisionRequest, record: dict = Depends(require_decision_
         except (TimeoutError, DecisionTimeout) as exc:
             error = HTTPException(504, "Decision engine timed out")
             charge = getattr(exc, "charge", None)
+        except ProviderQuotaError as exc:
+            quota = exc  # TypeSafe answered 429: nothing processed, nothing billed
         except HTTPException:
             raise
         except Exception as exc:
@@ -418,6 +422,9 @@ async def decide(body: DecisionRequest, record: dict = Depends(require_decision_
             charge = getattr(exc, "charge", None)
         finally:
             _SLOT.release()
+        if quota is not None:
+            # The chat's answer (BUG-26): 429, reason, Retry-After when given.
+            return _quota_error_response(quota, record["client_id"])
         if error is not None:
             if charge is not None and body.model == "jev":
                 _record_decision(record, body.model, charge)
