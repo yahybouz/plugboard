@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import logging
 import os
 import signal
 import time
@@ -595,6 +597,156 @@ async def test_probe_cli_version_timeout_bounded_when_escaped_child_holds_pipes(
         # finish on this loop rather than be collected after it closes.
         for proc in spawned:
             await asyncio.wait_for(proc.wait(), 5.0)
+
+
+# ── Stopping a CLI: SIGTERM, then SIGKILL, each wait bounded ─────────────────
+
+
+@pytest.fixture
+async def fake_cli(tmp_path, monkeypatch):
+    """A fake CLI shell script that every kind resolves to.
+
+    Yields (write, pid_file): `write(body)` installs the script, whose body
+    writes its pids to `PIDS`. Teardown kills them and lets each spawned
+    process finish on this loop.
+    """
+    pid_file = tmp_path / "pids"
+    script = tmp_path / "fake-cli"
+    spawned = []
+    real_exec = asyncio.create_subprocess_exec
+
+    async def recording_exec(*args, **kwargs):
+        proc = await real_exec(*args, **kwargs)
+        spawned.append(proc)
+        return proc
+
+    def write(body: str) -> None:
+        script.write_text("#!/bin/sh\n" + body.replace("PIDS", f"'{pid_file}'"))
+        script.chmod(0o755)
+
+    monkeypatch.setattr(cli_subprocess.shutil, "which", lambda cmd: str(script))
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", recording_exec)
+    yield write, pid_file
+    if pid_file.exists():
+        for pid in pid_file.read_text().split():
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(int(pid), signal.SIGKILL)
+    # Read both pipes to their end: the transport then closes on this loop
+    # instead of being collected once the loop is gone.
+    for proc in spawned:
+        await asyncio.wait_for(proc.stdout.read(), 5.0)
+        await asyncio.wait_for(proc.stderr.read(), 5.0)
+        await asyncio.wait_for(proc.wait(), 5.0)
+
+
+@pytest.fixture
+def kill_log(caplog):
+    module_logger = logging.getLogger(cli_subprocess.__name__)
+    module_logger.addHandler(caplog.handler)
+    caplog.set_level(logging.WARNING, logger=cli_subprocess.__name__)
+    yield caplog
+    module_logger.removeHandler(caplog.handler)
+
+
+def _gave_up(caplog) -> set:
+    # The handler sits on the module logger and on root: one call, two records.
+    return {r.getMessage() for r in caplog.records if "not reaped" in r.getMessage()}
+
+
+async def _stop_by_timeout(caller: str) -> None:
+    """Call `caller` on a CLI that hangs past a 2 s delay."""
+    if caller == "complete":
+        body = {
+            "model": "codex-cli:x-model",
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+        with pytest.raises(cli_subprocess.CliSubprocessError, match="timed out"):
+            await cli_subprocess.complete("codex", body, timeout_s=2.0)
+    else:
+        assert await cli_subprocess.list_agy_models(timeout_s=2.0) == []
+
+
+@pytest.mark.parametrize("caller", ["complete", "list_agy_models"])
+async def test_cli_that_cannot_be_reaped_does_not_hold_the_caller(
+    fake_cli, kill_log, caller
+):
+    """A CLI that ignores SIGTERM and is never reaped, like a process stuck
+    in state D: an escaped child keeps stdout and stderr open, so
+    Process.wait() never returns. The caller still gets its answer soon after
+    the delay, the CLI dies by SIGKILL, and the gateway logs that it gave up.
+    """
+    write, pid_file = fake_cli
+    write(
+        "trap '' TERM\n"
+        "setsid sleep 60 &\n"
+        "escaped=$!\n"
+        "sleep 60 &\n"
+        'echo "$$ $! $escaped" > PIDS\n'
+        "wait\n"
+    )
+    started = time.monotonic()
+    try:
+        await asyncio.wait_for(_stop_by_timeout(caller), 12.0)
+    except asyncio.TimeoutError:
+        pytest.fail(f"{caller} still waiting 12 s after its 2 s delay")
+    elapsed = time.monotonic() - started
+    assert elapsed < 8.0, f"{caller} took {elapsed:.1f}s for a 2 s delay"
+    shell, child, escaped = (int(pid) for pid in pid_file.read_text().split())
+    # The premise: the escaped child leads its own session, out of reach of killpg.
+    assert os.getsid(escaped) == escaped
+    survivors = await _survivors([shell, child])
+    assert not survivors, f"ignored SIGTERM and survived: {survivors}"
+    assert len(_gave_up(kill_log)) == 1, kill_log.records
+
+
+async def test_cli_that_dies_on_sigterm_is_stopped_at_once(
+    fake_cli, kill_log, monkeypatch
+):
+    """A CLI that exits on SIGTERM is not kept for the grace period, and a
+    child of its group that ignores SIGTERM is killed all the same."""
+    monkeypatch.setattr(cli_subprocess, "_KILL_GRACE_S", 30.0)
+    write, pid_file = fake_cli
+    write(
+        "sleep 60 &\n"
+        "child=$!\n"
+        "(trap '' TERM; exec sleep 60) >/dev/null 2>&1 &\n"
+        'echo "$$ $child $!" > PIDS\n'
+        "wait\n"
+    )
+    started = time.monotonic()
+    await asyncio.wait_for(_stop_by_timeout("complete"), 20.0)
+    elapsed = time.monotonic() - started
+    assert elapsed < 12.0, f"waited for the SIGTERM grace: {elapsed:.1f}s"
+    pids = [int(pid) for pid in pid_file.read_text().split()]
+    survivors = await _survivors(pids)
+    assert not survivors, f"still running after the stop: {survivors}"
+    assert not _gave_up(kill_log)
+
+
+async def test_kill_group_cancelled_during_grace_still_sends_sigkill(monkeypatch):
+    monkeypatch.setattr(cli_subprocess, "_KILL_GRACE_S", 30.0)
+    proc = await asyncio.create_subprocess_exec(
+        "sh",
+        "-c",
+        "trap '' TERM; echo ready; exec sleep 60",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        assert await asyncio.wait_for(proc.stdout.readline(), 10.0) == b"ready\n"
+        stopping = asyncio.ensure_future(cli_subprocess._kill_group(proc))
+        await asyncio.sleep(0.5)
+        stopping.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await stopping
+        await asyncio.wait_for(proc.stdout.read(), 5.0)
+        assert await asyncio.wait_for(proc.wait(), 5.0) == -signal.SIGKILL
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.stdout.read()
+            await proc.wait()
 
 
 async def test_complete_raises_on_invalid_json(monkeypatch):

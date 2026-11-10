@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **A hung `<cli> --version` kept running**: the version check run at start-up (CLI warm-up), by the health watchdog and by the dashboard's CLI check gave up after its delay but left the CLI and its children running. They are now started in their own process group and killed with it when the delay runs out, as for a chat request. The check still gives up within two seconds of its delay when a child that left the group (a daemon) keeps its output open, so it can no longer stall the watchdog.
+- **A CLI that would not die held its chat request**: when a CLI provider (claude, codex, gemini, agy) or `agy models` ran out of time, failed or lost its client, the gateway killed it and then waited without limit for it to be reaped. A CLI stuck in the kernel, or a child that left its process group and kept the output open, held the request, its concurrency slot and its private Gemini home for good. The CLI's group now gets SIGTERM, then SIGKILL one second later for whatever is left; one second after that, the gateway logs a warning with the pid, stops waiting and answers as usual. A CLI that exits on SIGTERM is stopped at once, and the version check uses the same bounded stop.
 
 ## [4.5.0] — 2026-11-10
 
