@@ -763,6 +763,10 @@ def check_cli_installed(kind: str) -> Dict[str, Any]:
     return {"ok": True, "binary": path, "kind": kind}
 
 
+# Longest a timed-out version probe waits to reap the killed CLI.
+_PROBE_REAP_TIMEOUT_S = 2.0
+
+
 async def probe_cli_version(kind: str, timeout_s: float = 5.0) -> Dict[str, Any]:
     """Spawn `<cli> --version` to confirm the CLI runs. Non-blocking for Connect."""
     backend = CLI_BACKENDS.get(kind)
@@ -778,8 +782,19 @@ async def probe_cli_version(kind: str, timeout_s: float = 5.0) -> Dict[str, Any]
             stderr=asyncio.subprocess.PIPE,
             env=build_child_env(kind),
             cwd=_clean_spawn_cwd(),
+            # Own process group: a timeout kills the CLI's descendants too.
+            start_new_session=True,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
+        finished = False
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
+            finished = True
+        finally:
+            if not finished:
+                # Bounded: Process.wait() also waits for the pipes to close, and
+                # a descendant that left the group (setsid, daemon) can hold them.
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(_kill_group(proc), _PROBE_REAP_TIMEOUT_S)
         version = (stdout or b"").decode("utf-8", "replace").strip().splitlines()
         stderr_text = (stderr or b"").decode("utf-8", "replace").strip()
         error = stderr_text or None
