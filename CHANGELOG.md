@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **A placeholder `ADMIN_KEY` is refused**: the deployment guide shows `ADMIN_KEY=<openssl rand -hex 24>`; copied as is, that public text is long enough to pass the 16-character check, so anyone who read the guide could sign in to the dashboard. Outside `PLUGBOARD_DEV=1` the server now refuses to start when `ADMIN_KEY` is written `<...>`. A key that only contains angle brackets is accepted.
+
 ### Fixed
 
 - **An unreadable `providers.json` flooded the log**: every request reads the provider store, and each read of a broken file logged the same error. It is now logged once per version of the file (again after the file changes, or after it was readable in between); the gateway still serves no provider until the file is fixed, and still refuses to overwrite it.

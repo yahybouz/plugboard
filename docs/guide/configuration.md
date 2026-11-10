@@ -10,7 +10,7 @@ Boolean flags accept `1`, `true`, `yes`, `on` unless stated otherwise. Values be
 
 | Variable | Default | Description |
 |---|---|---|
-| `ADMIN_KEY` | empty | Admin secret for the dashboard and `/admin/*`. Required: the server refuses to start without it, or with fewer than 16 characters, unless `PLUGBOARD_DEV=1`. `make init` generates one. |
+| `ADMIN_KEY` | empty | Admin secret for the dashboard and `/admin/*`. Required: the server refuses to start without it, with fewer than 16 characters, or with a placeholder written `<...>` as in these guides, unless `PLUGBOARD_DEV=1`. `make init` generates one. |
 | `API_KEY` | empty | Any non-empty value turns on client authentication for `/v1/*` (clients use `pb_` keys). The value itself is not a client key. Empty: client authentication is off, a critical warning is logged every five minutes and `/health` reports `auth_disabled`. |
 | `ENCRYPTION_KEY` | empty | Key used to encrypt provider tokens, OAuth credentials and the MFA secret at rest. Empty: a key is generated once in `data/.encryption_key`. Changing it makes stored credentials unreadable. |
 | `PLUGBOARD_DEV` | empty | `1` marks a development instance: the server may start without `ADMIN_KEY`, and the empty-`API_KEY` warning is logged once instead of repeated. |

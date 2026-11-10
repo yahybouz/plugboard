@@ -140,6 +140,20 @@ def test_server_refuses_to_start_without_admin_key_outside_dev_mode():
     _require_admin_key_outside_dev("admin", dev_mode=True)
 
 
+def test_server_refuses_a_placeholder_admin_key_outside_dev_mode():
+    # docs/guide/deployment.md shows `ADMIN_KEY=<openssl rand -hex 24>`: copied
+    # as is, that public text is long enough to pass the length check.
+    from plugboard.app import _require_admin_key_outside_dev
+
+    for placeholder in ("<openssl rand -hex 24>", " <your admin key here> "):
+        with pytest.raises(RuntimeError, match="placeholder"):
+            _require_admin_key_outside_dev(placeholder, dev_mode=False)
+        _require_admin_key_outside_dev(placeholder, dev_mode=True)
+    # A random key that merely contains angle brackets is accepted.
+    _require_admin_key_outside_dev("<4f9c2e7a1b8d3f60a5c4", dev_mode=False)
+    _require_admin_key_outside_dev("4f9c2e7a1b8d3f60a5c4>", dev_mode=False)
+
+
 def test_removed_env_over_corrupt_store_keeps_it_and_returns_no_provider(
     tmp_path, monkeypatch
 ):

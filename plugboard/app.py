@@ -229,6 +229,15 @@ def _require_admin_key_outside_dev(admin_key: str, dev_mode: bool) -> None:
             f"ADMIN_KEY is shorter than {_ADMIN_KEY_MIN_LENGTH} characters: use a "
             "random value (`make init` generates 48 hex characters)."
         )
+    # The documentation writes values to fill in as `<...>`
+    # (`ADMIN_KEY=<openssl rand -hex 24>`): copied as is, that public text
+    # passes the length check.
+    stripped = (admin_key or "").strip()
+    if not dev_mode and stripped.startswith("<") and stripped.endswith(">"):
+        raise RuntimeError(
+            "ADMIN_KEY is a placeholder written as <...> in the documentation: "
+            "set a random value (openssl rand -hex 24) and restart."
+        )
 
 
 _require_admin_key_outside_dev(_ADMIN_KEY, _DEV_MODE)
