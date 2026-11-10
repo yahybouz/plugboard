@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Price update and catalog refresh stalled every request**: the pricing update read, merged and wrote the month's grid under its lock, and queued the price changes held for review, on the event loop; the models.dev refresh parsed and validated the downloaded catalog (up to 20 MB) there too, and so did the price update's first reading of the stored catalog. No request was answered for as long as that took. This work now runs in a worker thread (`asyncio.to_thread`); the lock, the shrink guards and the last good copy are unchanged, and the catalog parsed by a refresh is kept so the next reading does not parse it again.
+
 ## [4.5.1] — 2026-11-10
 
 ### Security
