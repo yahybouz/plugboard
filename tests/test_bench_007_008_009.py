@@ -210,7 +210,7 @@ async def test_models_account_compatible_default(client, tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_models_account_compatible_restricted(client, tmp_path, monkeypatch):
-    """When allowed_models is set, only matching models are compatible."""
+    """A limited key lists exactly its allowed models, each account_compatible."""
     import plugboard.apikeys as ak
 
     monkeypatch.setattr(ak, "_DATA_DIR", tmp_path)
@@ -224,10 +224,8 @@ async def test_models_account_compatible_restricted(client, tmp_path, monkeypatc
     assert resp.status_code == 200
     body = resp.json()
     compat = {item["id"]: item["account_compatible"] for item in body["data"]}
-    assert compat, "catalogue must not be empty"
-    for mid, ok in compat.items():
-        # Exact effective identity only; no substring matching.
-        assert ok is (mid == "test-provider:fake:model-v1"), mid
+    # Exact effective identity only; no substring matching.
+    assert compat == {"test-provider:fake:model-v1": True}
 
 
 def _restricted_key(tmp_path, monkeypatch, allowed_models):
@@ -327,6 +325,25 @@ async def test_model_info_refused_model_answers_as_unknown(
     unknown_view = await _model_info(client, "testkey", refused)
     assert limited_view == unknown_view
     assert limited_view[0] == 200 and limited_view[1]["info_source"] == "derived"
+
+
+@pytest.mark.asyncio
+async def test_model_routes_leave_the_shared_models_cache_untouched(
+    client, tmp_path, monkeypatch
+):
+    """One key's view must never be written into the cache every caller shares."""
+    import plugboard.router as router
+
+    rec = _restricted_key(tmp_path, monkeypatch, ["fake:model-v1"])
+    for path in _MODEL_LISTS:
+        await _model_ids(client, rec["key"], path)
+    for model_id in ("test-provider:fake:model-v1", "other-provider:other:model-v2"):
+        await _model_info(client, rec["key"], model_id)
+
+    assert router._models_cache, "the lists must have filled the cache"
+    for entry in router._models_cache:
+        assert "account_compatible" not in entry, entry["id"]
+        assert "info" not in entry, entry["id"]
 
 
 # ── BENCH-009 ───────────────────────────────────────────────────────────────
