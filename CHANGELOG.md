@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.5.0] — 2026-11-10
+
 ### Security
 
 - **CLI provider errors no longer reach client keys**: a failed CLI provider (claude, codex, gemini, agy) answered every caller with its stderr, process id, exit code and its own message, which can quote local paths, account names or tokens. A client key now gets `502` with a generic `detail` and an `error_ref` to find the full error in the gateway log; the admin (dashboard Playground, admin key) still gets the details.
