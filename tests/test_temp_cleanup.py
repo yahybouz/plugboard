@@ -35,6 +35,14 @@ def test_spawn_dir_is_removed_when_the_process_exits(tmp_path):
     assert not Path(path).exists()
 
 
+def test_spec_oracle_dir_is_removed_when_the_run_ends(tmp_path):
+    path = _run(
+        "import tests.test_spec_v7_residuals_parent as m; print(m.TMP)", tmp_path
+    )
+    assert Path(path).name.startswith("spec-v7b-")
+    assert not Path(path).exists()
+
+
 def test_suite_data_dir_is_removed_when_the_run_ends(tmp_path):
     path = _run(
         "import tests.conftest, os; print(os.environ['PLUGBOARD_DATA'])", tmp_path
