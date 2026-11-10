@@ -533,6 +533,15 @@ def _pop_reported_usage(result: Dict[str, Any]) -> bool:
     return result.pop(USAGE_REPORTED_KEY, None) is True
 
 
+def _circuit_key(provider: Dict[str, Any], real_model: str) -> str:
+    """Circuit-breaker key of a route: its effective ``provider-id:native`` ID.
+
+    forward() reads and records the breaker under this one key, the spelling
+    the LLM pricing pass reads too.
+    """
+    return f"{provider['id']}:{real_model}"
+
+
 async def forward(
     body: Dict[str, Any],
     timeout: float = _TIMEOUT,
@@ -544,6 +553,7 @@ async def forward(
     Retries on transient errors per provider, then falls back to next provider.
     """
     from plugboard.circuit_breaker import (
+        _extract_suffix,
         check_circuit,
         record_failure as cb_failure,
         record_success as cb_success,
@@ -554,15 +564,21 @@ async def forward(
     model_str = body.get("model", "")
     candidates = _resolve_all_providers(model_str)
 
-    # Circuit breaker check — if model is open, try fallback
-    circuit = check_circuit(model_str)
+    # Circuit breaker check — if model is open, try fallback. Each route is
+    # read under the key its outcomes are recorded under; the model counts as
+    # open only when no candidate route is allowed.
+    circuits = [check_circuit(_circuit_key(p, m)) for p, m in candidates]
+    circuit = next((c for c in circuits if c["allowed"]), circuits[0])
     if not circuit["allowed"] and circuit["fallback"]:
         # Rewrite model to fallback
         fallback_suffix = circuit["fallback"]
         log.warning("Circuit breaker: %s → fallback %s", model_str, fallback_suffix)
-        # Try to find the fallback in available models
+        # Try to find the fallback in available models. The model suffix must
+        # equal the fallback: ``gpt-5.5`` is a substring of ``gpt-5.5-pro``,
+        # and a substring match pinned the request to one route of the very
+        # model whose circuits are open, dropping the routes that answer.
         for prov, rmodel in candidates:
-            if fallback_suffix in rmodel:
+            if _extract_suffix(rmodel) == fallback_suffix:
                 model_str = f"{prov['id']}:{rmodel}"
                 body = {**body, "model": model_str}
                 candidates = _resolve_all_providers(model_str)
@@ -622,7 +638,7 @@ async def forward(
                     log.debug("subprocess usage estimation failed: %s", _exc)
                 try:
                     record_provider_success(provider["id"])
-                    cb_success(real_model)
+                    cb_success(_circuit_key(provider, real_model))
                 except Exception:
                     pass
                 _served_by.set((provider, real_model))
@@ -650,7 +666,7 @@ async def forward(
                             terminal_reason="model_unavailable",
                         )
                         invalidate_models_cache()
-                    cb_failure(real_model)
+                    cb_failure(_circuit_key(provider, real_model))
                     await record_provider_failure(provider["id"])
                 except Exception:
                     pass
@@ -719,7 +735,7 @@ async def forward(
                             pass
                         try:
                             record_provider_success(provider["id"])
-                            cb_success(real_model)
+                            cb_success(_circuit_key(provider, real_model))
                         except Exception:
                             pass
                         _served_by.set((provider, real_model))
@@ -766,7 +782,7 @@ async def forward(
                     break
 
         # If we exhausted retries for this provider, record circuit breaker failure
-        cb_failure(real_model)
+        cb_failure(_circuit_key(provider, real_model))
 
         # Record error metrics and try next provider
         if not provider_failed:
