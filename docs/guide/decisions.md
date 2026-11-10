@@ -20,7 +20,7 @@ Provision a client key using the existing authenticated `POST /admin/keys` route
 
 The separate `allowed_decision_models` policy matches exact IDs. Missing/null
 means no policy granted; explicit `[]` means explicitly no decisions. Both deny
-all engines. Old chat substring policies grant no decisions. Rotation preserves
+all engines. Chat `allowed_models` entries grant no decisions. Rotation preserves
 this policy. No wildcard and no shared MCP admin credential fallback.
 
 Example request (synthetic data only):
