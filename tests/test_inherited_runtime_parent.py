@@ -369,11 +369,15 @@ def _attach_wait_probe(state, proc):
     proc.on_wait = probe
 
 
+# Stopping a CLI: SIGTERM to its group, then SIGKILL to what is left.
+_STOP_SIGNALS = [(_PID, signal.SIGTERM), (_PID, signal.SIGKILL)]
+
+
 def _assert_killed_and_reaped(state, kind):
     events = state["events"]
     kills = [e for e in events if isinstance(e, tuple) and e[0] == "killpg"]
-    assert kills and kills[0][1:] == (_PID, signal.SIGKILL), (
-        f"os.killpg(pid, SIGKILL) not called; events={events}"
+    assert [k[1:] for k in kills] == _STOP_SIGNALS, (
+        f"group not sent SIGTERM then SIGKILL; events={events}"
     )
     assert "wait" in events, f"proc.wait() never awaited after kill; events={events}"
     w = events.index("wait")
@@ -381,6 +385,7 @@ def _assert_killed_and_reaped(state, kind):
     assert "sem_release" in events and w < events.index("sem_release"), (
         f"semaphore released before the child was reaped; events={events}"
     )
+    assert events.index(kills[-1]) < events.index("sem_release"), events
     if kind == "gemini":
         assert state.get("home_alive_at_wait") is True, (
             "private gemini home removed before proc.wait()"
@@ -453,8 +458,8 @@ async def test_list_agy_models_timeout_kills_group_and_reaps(cli_env):
     assert await cli_subprocess.list_agy_models(timeout_s=0.05) == []
     events = cli_env["events"]
     kills = [e for e in events if isinstance(e, tuple) and e[0] == "killpg"]
-    assert kills and kills[0][1:] == (_PID, signal.SIGKILL), (
-        f"list_agy_models timeout: os.killpg(pid, SIGKILL) not called; events={events}"
+    assert [k[1:] for k in kills] == _STOP_SIGNALS, (
+        f"list_agy_models timeout: group not sent SIGTERM then SIGKILL; events={events}"
     )
     assert "wait" in events and events.index(kills[0]) < events.index("wait"), (
         f"list_agy_models timeout: proc.wait() not awaited after kill; events={events}"

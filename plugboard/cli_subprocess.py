@@ -650,16 +650,51 @@ def parse_agy_models(stdout_text: str) -> List[str]:
     return ids
 
 
-async def _kill_group(proc: asyncio.subprocess.Process) -> None:
-    """Kill the CLI and its descendants (node, sandbox helpers), then reap it.
+# Stopping a CLI: how long SIGTERM gets before SIGKILL, then how long SIGKILL
+# gets before the caller gives up on the process.
+_KILL_GRACE_S = 1.0
+_KILL_REAP_S = 1.0
 
-    Every CLI is started in its own session, so its pid is the group id.
-    """
+
+def _signal_group(pgid: int, sig: int) -> None:
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
+        os.killpg(pgid, sig)
     except ProcessLookupError:
         pass
-    await proc.wait()
+
+
+async def _reaped_within(proc: asyncio.subprocess.Process, timeout_s: float) -> bool:
+    try:
+        await asyncio.wait_for(proc.wait(), timeout_s)
+    except asyncio.TimeoutError:
+        return False
+    return True
+
+
+async def _kill_group(proc: asyncio.subprocess.Process) -> None:
+    """Stop the CLI and its descendants (node, sandbox helpers), then reap it.
+
+    Every CLI is started in its own session, so its pid is the group id.
+    SIGTERM first, then SIGKILL for whatever is left of the group, even when
+    this wait is cancelled. Process.wait() also waits for the CLI's pipes to
+    close, so each wait is bounded: a CLI stuck in the kernel (state D), or a
+    descendant that left the group and holds the pipes, is logged and left
+    behind instead of holding the caller forever.
+    """
+    _signal_group(proc.pid, signal.SIGTERM)
+    try:
+        reaped = await _reaped_within(proc, _KILL_GRACE_S)
+    finally:
+        # Also after a clean exit: it ends descendants that ignored SIGTERM.
+        _signal_group(proc.pid, signal.SIGKILL)
+    if reaped or await _reaped_within(proc, _KILL_REAP_S):
+        return
+    log.warning(
+        "CLI pid %d not reaped %.0fs after SIGKILL (stuck, or a process outside "
+        "its group holds its output); giving up on it",
+        proc.pid,
+        _KILL_REAP_S,
+    )
 
 
 async def list_agy_models(timeout_s: float = 30.0) -> List[str]:
@@ -763,10 +798,6 @@ def check_cli_installed(kind: str) -> Dict[str, Any]:
     return {"ok": True, "binary": path, "kind": kind}
 
 
-# Longest a timed-out version probe waits to reap the killed CLI.
-_PROBE_REAP_TIMEOUT_S = 2.0
-
-
 async def probe_cli_version(kind: str, timeout_s: float = 5.0) -> Dict[str, Any]:
     """Spawn `<cli> --version` to confirm the CLI runs. Non-blocking for Connect."""
     backend = CLI_BACKENDS.get(kind)
@@ -791,10 +822,7 @@ async def probe_cli_version(kind: str, timeout_s: float = 5.0) -> Dict[str, Any]
             finished = True
         finally:
             if not finished:
-                # Bounded: Process.wait() also waits for the pipes to close, and
-                # a descendant that left the group (setsid, daemon) can hold them.
-                with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(_kill_group(proc), _PROBE_REAP_TIMEOUT_S)
+                await _kill_group(proc)
         version = (stdout or b"").decode("utf-8", "replace").strip().splitlines()
         stderr_text = (stderr or b"").decode("utf-8", "replace").strip()
         error = stderr_text or None
@@ -825,12 +853,16 @@ async def _run_status(argv: List[str], kind: str, timeout_s: float):
         stderr=asyncio.subprocess.PIPE,
         env=build_child_env(kind),
         cwd=_clean_spawn_cwd(),
+        # Own process group: a timeout kills the CLI's descendants too.
+        start_new_session=True,
     )
+    finished = False
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
-    except asyncio.TimeoutError:
-        proc.kill()
-        raise
+        finished = True
+    finally:
+        if not finished:
+            await _kill_group(proc)
     return (
         proc.returncode,
         (stdout or b"").decode("utf-8", "replace"),
@@ -1716,7 +1748,7 @@ async def complete(
             finally:
                 # Timeout, cancellation or any error: the semaphore slot and
                 # the private gemini home are released only once the child
-                # is dead and reaped.
+                # is dead and reaped, or given up on (see _kill_group).
                 if not finished:
                     await _kill_group(proc)
 

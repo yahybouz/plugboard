@@ -11,7 +11,6 @@ import asyncio
 import json
 import logging
 import os
-import signal
 
 import pytest
 
@@ -23,7 +22,7 @@ from tests.test_inherited_runtime_parent import (
     _KNOWN_PRICE,
     _MONTH,
     _OK_STDOUT,
-    _PID,
+    _STOP_SIGNALS,
     _FakeProc,
     _auth,
     _body,
@@ -373,7 +372,7 @@ def _kill_wait_release(events):
     kills = [
         i for i, e in enumerate(events) if isinstance(e, tuple) and e[0] == "killpg"
     ]
-    assert kills and events[kills[0]][1:] == (_PID, signal.SIGKILL), events
+    assert [events[i][1:] for i in kills] == _STOP_SIGNALS, events
     assert "wait" in events and kills[0] < events.index("wait"), events
     assert events.index("wait") < events.index("sem_release"), events
 
