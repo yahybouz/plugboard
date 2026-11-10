@@ -12,6 +12,7 @@ no external network, synthetic keys. Mutants are monkeypatch-only.
 from __future__ import annotations
 
 import asyncio
+import atexit
 import importlib
 import importlib.util
 import json
@@ -29,6 +30,9 @@ from httpx import ASGITransport, AsyncClient
 
 W = Path(__file__).resolve().parents[1]
 TMP = Path(os.environ.get("SPEC_TMP") or tempfile.mkdtemp(prefix="spec-v7b-"))
+if not os.environ.get("SPEC_TMP"):
+    # A directory of our own: removed when the run ends (SPEC_TMP is kept).
+    atexit.register(shutil.rmtree, TMP, True)
 ADMIN = "spec-admin-key-synthetic-0123456789abcdef"
 API = "spec-api-key-synthetic-0123456789abcdef"
 TOKEN = "T" * 16 + "spec-mcp-token-synthetic-xyz"  # 44 chars
