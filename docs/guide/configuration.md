@@ -90,6 +90,8 @@ The command reads every secret with the current key and re-encrypts it with the 
 | `PLUGBOARD_SUBPROCESS_ENV_PASSTHROUGH` | empty | Extra environment variable names passed to CLI processes, comma-separated. CLI processes otherwise get an allowlist; server secrets and `PLUGBOARD_*` names are always refused. |
 | `PLUGBOARD_CODEX_SANDBOX` | `read-only` | codex access to its spawn directory: `read-only` or `workspace-write`; the rest of the disk is denied. `danger-full-access` disables the sandbox. |
 | `PLUGBOARD_OAUTH_CALLBACK_BASE` | `http://localhost:8765` | Public base URL used to build OAuth callback URLs (`/oauth/callback/<source>`). |
+| `GEMINI_CLI_HOME` | the server account's home | The Gemini CLI's own variable, read from the server's environment: the operator's `.gemini` directory under it holds the sign-in that each Gemini call links to and the auth method it keeps. Each call still runs with a private `GEMINI_CLI_HOME` of its own. |
+| `CODEX_HOME` | `~/.codex` | The codex CLI's own variable: Plugboard reads the model list the signed-in account caches there (`models_cache.json`). |
 
 ## Providers bootstrapped from the environment
 
@@ -108,6 +110,7 @@ The removed connector's `OPENCLAW_URL`, `OPENCLAW_KEY`, `OPENCLAW_MODEL` and
 | `PLUGBOARD_LOCAL_MODEL_DOWNLOADS` | `1` | `0` refuses Ollama pulls of local (non-cloud) models; only `:cloud` / `-cloud` ids of the official library (no `user/` namespace, no other registry) can be added, and such a pull is stopped if its layers exceed 64 MB. An admin can flip it on the **Ollama** page; that choice is saved in `<data>/ollama_settings.json` and wins over this variable. |
 | `PLUGBOARD_OLLAMA_MIN_FREE_GB` | `5` | Free disk space, in GB, that a local pull must leave. A pull whose registry size does not fit is refused with 507; a pull of unknown size is stopped as soon as it would cross this margin. |
 | `PLUGBOARD_OLLAMA_DISK_PATH` | data dir | Path whose filesystem is checked for free space (must be on the same disk as the Ollama models). |
+| `PLUGBOARD_OLLAMA_REGISTRY_URL` | `https://registry.ollama.ai` | Registry asked for a model's manifest to learn its download size before a pull (redirects are not followed). A model named `host/user/model` comes from another registry: its size is unknown. |
 | `PLUGBOARD_OLLAMA_CLOUD_FAMILIES` | deepseek, kimi, qwen, glm, gemma, nemotron, minimax, gpt-oss, gemini, beam | Ollama cloud model families added automatically (comma-separated, `all` for the whole catalogue). |
 
 ## Caching
@@ -220,6 +223,17 @@ The catalog is downloaded with each price update. A download that fails, is inva
 | `WEBHOOK_EVENTS` | empty (all) | Comma-separated list of events to send. |
 | `WEBHOOK_SECRET` | empty | Secret used to sign event payloads with HMAC-SHA256. |
 | `PLUGBOARD_WEBHOOK_MAX_PER_RUN` | `50` | Maximum `models.changed` / `pricing.changed` events sent by one automatic update; the rest is summarised as `{"truncated": N}`. |
+
+## Decision engines
+
+See [typed decisions](decisions.md) and the [local decision runtime](decisions-runtime.md).
+
+| Variable | Default | Description |
+|---|---|---|
+| `PLUGBOARD_JEV_API_KEY` | empty | TypeSafe credential for the hosted `jev` engine on `POST /v1/decisions`. Without it, `jev` answers 503. The network MCP server drops it from its environment. |
+| `PLUGBOARD_DECISION_PYTHON` | empty | Absolute path to the Python of the isolated environment that runs the local `laya` and `laya-multilingual` engines. Never the gateway's own environment. |
+| `PLUGBOARD_DECISION_ASSETS` | empty | Directory of the pinned assets downloaded with `scripts/decision_download.py`. Without it or `PLUGBOARD_DECISION_PYTHON`, the local engines are unavailable. |
+| `PLUGBOARD_JEV_PRICE_PER_CALL_USD` | unset | Obsolete and ignored: Jev is billed at its official per-token price. If it is set, the server logs one warning per process (never its value). |
 
 ## Data and integrations
 
