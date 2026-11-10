@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A hung `<cli> --version` kept running**: the version check run at start-up (CLI warm-up), by the health watchdog and by the dashboard's CLI check gave up after its delay but left the CLI and its children running. They are now started in their own process group and killed with it when the delay runs out, as for a chat request.
+
 ## [4.5.0] — 2026-11-10
 
 ### Security

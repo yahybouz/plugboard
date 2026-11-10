@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
+import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -483,6 +485,56 @@ async def test_probe_cli_version_includes_dyld_hint(monkeypatch):
     assert result["ok"] is False
     assert "dyld library error" in result["error"]
     assert "brew reinstall gemini" in result["error"]
+
+
+def _pid_alive(pid: int) -> bool:
+    """True while `pid` runs; a killed but not yet reaped zombie counts as dead."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    try:
+        with open(f"/proc/{pid}/stat", encoding="ascii") as fh:
+            return fh.read().rsplit(")", 1)[1].split()[0] != "Z"
+    except OSError:
+        return True
+
+
+async def _survivors(pids, within_s: float = 5.0):
+    deadline = time.monotonic() + within_s
+    while time.monotonic() < deadline:
+        if not any(_pid_alive(pid) for pid in pids):
+            return []
+        await asyncio.sleep(0.05)
+    return [pid for pid in pids if _pid_alive(pid)]
+
+
+async def test_probe_cli_version_timeout_kills_cli_and_children(tmp_path, monkeypatch):
+    """A `--version` that hangs past its deadline is killed with its children.
+
+    The fake codex starts a child, records both pids, then waits forever.
+    """
+    pid_file = tmp_path / "pids"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_cli = bin_dir / "codex"
+    fake_cli.write_text(f"#!/bin/sh\nsleep 60 &\necho \"$$ $!\" > '{pid_file}'\nwait\n")
+    fake_cli.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    try:
+        result = await cli_subprocess.probe_cli_version("codex", timeout_s=3.0)
+        assert result == {"ok": False, "error": "codex --version timed out"}
+        pids = [int(pid) for pid in pid_file.read_text().split()]
+        assert len(pids) == 2, pids
+        survivors = await _survivors(pids)
+        assert not survivors, f"still running after the timeout: {survivors}"
+    finally:
+        if pid_file.exists():
+            for pid in pid_file.read_text().split():
+                try:
+                    os.kill(int(pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
 
 async def test_complete_raises_on_invalid_json(monkeypatch):

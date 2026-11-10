@@ -778,8 +778,16 @@ async def probe_cli_version(kind: str, timeout_s: float = 5.0) -> Dict[str, Any]
             stderr=asyncio.subprocess.PIPE,
             env=build_child_env(kind),
             cwd=_clean_spawn_cwd(),
+            # Own process group: a timeout kills the CLI's descendants too.
+            start_new_session=True,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
+        finished = False
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
+            finished = True
+        finally:
+            if not finished:
+                await _kill_group(proc)
         version = (stdout or b"").decode("utf-8", "replace").strip().splitlines()
         stderr_text = (stderr or b"").decode("utf-8", "replace").strip()
         error = stderr_text or None
