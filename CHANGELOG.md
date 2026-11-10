@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Claude high load, model block and server throttling answered `429` quota**: claude sets `error: "rate_limit"` on more than the account's usage limit: on its Opus/Fable high-load switch ("is experiencing high load") and a per-model block, which it raises itself without an HTTP status, and on an API 429 it reports as "Server is temporarily limiting requests (not your usage limit)". The gateway read all of them as an exhausted quota and answered `429` "quota or rate limit exhausted" when no other provider could serve. They are now a provider failure: the other candidate providers are tried, then `502`. A usage or spend limit (`api_error_status: 429` and an `API Error` text or a usage-limit message) still gives `429`.
+
 ## [4.5.0] — 2026-11-10
 
 ### Security
