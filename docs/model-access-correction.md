@@ -48,7 +48,13 @@ What it does not open:
   whose ID is `Codex`, active or not, `Codex:<model>` designates that provider
   and never the Codex CLI, which `/v1/models` then publishes as
   `chatgpt-via-codex-cli:<model>`. The same holds for a nested owner such as
-  `claude-code:team`.
+  `claude-code:team`. The comparison is on the exact provider ID, case
+  included. A provider created through the API gets a lower-case ID made from
+  its name (`Codex` gives `codex`, `Gemini` gives `gemini`), which is not the
+  alias: `Codex:<model>` then still designates the CLI. IDs such as `Codex`,
+  `Gemini` or `claude-code:team` only come from editing the registry by hand;
+  through the API only `claude-code` can be taken (a provider named
+  `Claude Code`, for instance).
 - A CLI registered under another ID (for instance `my-codex`) is published as
   `my-codex:<model>`; `Codex:<model>` does not cover it.
 
@@ -61,7 +67,8 @@ Two consequences to know:
   therefore also covers a provider whose native model is literally named
   `Codex:gpt-6.1-sol` (an upstream gateway registered as a provider). And if a
   provider is later registered under an alias, entries written with that alias
-  move from the CLI to that provider.
+  move from the CLI to that provider; through the API, this can only happen to
+  `claude-code` (see above).
 
 Chat admission checks the effective route before any response-cache lookup.
 Trusted handler callbacks check each actual dispatch candidate, including
