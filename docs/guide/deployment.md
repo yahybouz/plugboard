@@ -93,13 +93,14 @@ Caddy (automatic HTTPS):
 ```
 llm.example.com {
     reverse_proxy 127.0.0.1:8765 {
-        flush_interval -1
         transport http {
             read_timeout 900s
         }
     }
 }
 ```
+
+Do not add `flush_interval -1`: with it, Caddy does not cancel the request to Plugboard when the client hangs up, so for a request that is not streamed Plugboard can neither stop the provider call nor free the chat slot until the provider answers. Streams do not need it: Caddy flushes `text/event-stream` responses to the client at once.
 
 nginx:
 

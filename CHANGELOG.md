@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Caddy example of the deployment guide hid client hang-ups from Plugboard**: it set `flush_interval -1`, with which Caddy does not cancel the request to Plugboard when the client hangs up, so for a request that was not streamed the gateway never saw the hang-up and kept the provider call running and its chat slot taken until the provider answered. The example no longer sets it, and the guide says why; streams are still flushed at once, since Caddy never buffers `text/event-stream` ([deployment](docs/guide/deployment.md#behind-a-reverse-proxy)).
+
 ## [4.5.1] — 2026-11-10
 
 ### Security
