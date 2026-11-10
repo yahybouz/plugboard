@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import fcntl
 import json
+import logging
 import os
 from pathlib import Path
 import signal
@@ -12,9 +13,13 @@ import tempfile
 
 from plugboard import decision_assets
 
+log = logging.getLogger(__name__)
+
 TIMEOUT_SECONDS = 30.0
 MAX_OUTPUT_BYTES = 128 * 1024
 MAX_INPUT_BYTES = 64 * 1024
+# How long a killed worker gets to be reaped before infer() gives up on it.
+_KILL_REAP_S = 1.0
 _active = False
 
 
@@ -79,7 +84,17 @@ async def _kill(process: asyncio.subprocess.Process) -> None:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    await process.wait()
+    # Bounded: Process.wait() also waits for the pipes to close. A worker stuck
+    # in the kernel (state D), or a descendant that left the group and holds
+    # stdout, would otherwise hold infer(), the lock and the worker slot.
+    try:
+        await asyncio.wait_for(process.wait(), _KILL_REAP_S)
+    except TimeoutError:
+        log.warning(
+            "Decision worker pid %d not reaped %.0fs after SIGKILL; giving up on it",
+            process.pid,
+            _KILL_REAP_S,
+        )
 
 
 async def infer(model_id: str, request: dict) -> dict:
