@@ -1,8 +1,9 @@
 """BUG-27: a key may list the exact ID /v1/models publishes, and nothing wider.
 
 The published ID is a third accepted spelling next to the native ID and the
-owner-qualified ID. Every check goes through the real registry file: an alias
-never opens the namespace of a provider registered under it.
+owner-qualified ID. The end-to-end checks go through the real registry file. A
+provider whose ID is the alias itself owns that spelling: the entry then
+designates that provider, never the CLI.
 """
 
 from __future__ import annotations
@@ -142,7 +143,7 @@ def test_published_id_does_not_cover_another_owner():
     assert model_access_matches(entry, "my-codex", "gpt-6.1-sol", ids) is False
 
 
-def test_alias_never_opens_a_provider_registered_under_it():
+def test_provider_registered_under_the_alias_owns_the_spelling():
     """A provider whose ID is the alias owns that spelling, active or not."""
     ids = (*_CLI_IDS, "Codex")
     entry = ["Codex:gpt-6.1-sol"]
