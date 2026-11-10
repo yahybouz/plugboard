@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **An unreadable `providers.json` flooded the log**: every request reads the provider store, and each read of a broken file logged the same error. It is now logged once per version of the file (again after the file changes, or after it was readable in between); the gateway still serves no provider until the file is fixed, and still refuses to overwrite it.
+
 ## [4.5.1] — 2026-11-10
 
 ### Security

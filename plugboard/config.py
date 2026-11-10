@@ -246,14 +246,38 @@ def check_provider_domain_allowed(base_url: str) -> None:
     )
 
 
+# State (path, mtime, size) of the unreadable providers.json last reported.
+# Every request reads the file: the error is logged once per broken version
+# of it, not on every call, and again once it was readable in between.
+_unreadable_reported: Optional[tuple] = None
+
+
+def _file_state(path) -> tuple:
+    try:
+        st = path.stat()
+    except OSError:
+        return (str(path), None, None)
+    return (str(path), st.st_mtime_ns, st.st_size)
+
+
 def _read() -> Dict[str, Any]:
+    global _unreadable_reported
     if not PROVIDERS_FILE.exists():
         return {"providers": []}
     try:
-        return json.loads(PROVIDERS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(PROVIDERS_FILE.read_text(encoding="utf-8"))
     except Exception as exc:
-        log.error("Failed to read providers.json: %s", exc)
+        state = _file_state(PROVIDERS_FILE)
+        if state != _unreadable_reported:
+            _unreadable_reported = state
+            log.error(
+                "Failed to read providers.json: %s (no provider is loaded until "
+                "it is fixed; logged once per version of the file)",
+                exc,
+            )
         return {"providers": []}
+    _unreadable_reported = None
+    return data
 
 
 def _write(data: Dict[str, Any]) -> None:

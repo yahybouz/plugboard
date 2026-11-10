@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import stat
 from pathlib import Path
@@ -73,6 +74,51 @@ def test_provider_write_over_corrupt_file_fails_closed(tmp_path, monkeypatch):
     with pytest.raises(storage.StoreUnreadableError):
         cfg._write(cfg._read())
     assert pfile.read_text() == "{{NOT VALID JSON"
+
+
+def _config_errors(caplog) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "plugboard.config" and r.levelno >= logging.ERROR
+    ]
+
+
+def test_unreadable_providers_file_is_logged_once(tmp_path, monkeypatch, caplog):
+    # Every request reads providers.json: a broken file must not flood the log.
+    import plugboard.config as cfg
+
+    pfile = tmp_path / "providers.json"
+    pfile.write_text("{{NOT VALID JSON")
+    monkeypatch.setattr(cfg, "PROVIDERS_FILE", pfile)
+    monkeypatch.setattr(cfg, "_unreadable_reported", None, raising=False)
+
+    with caplog.at_level(logging.ERROR, logger="plugboard.config"):
+        for _ in range(3):
+            assert cfg._read() == {"providers": []}
+
+    errors = _config_errors(caplog)
+    assert len(errors) == 1
+    assert "providers.json" in errors[0]
+
+
+def test_providers_file_broken_again_is_logged_again(tmp_path, monkeypatch, caplog):
+    import plugboard.config as cfg
+
+    pfile = tmp_path / "providers.json"
+    pfile.write_text("{{NOT VALID JSON")
+    monkeypatch.setattr(cfg, "PROVIDERS_FILE", pfile)
+    monkeypatch.setattr(cfg, "_unreadable_reported", None, raising=False)
+
+    with caplog.at_level(logging.ERROR, logger="plugboard.config"):
+        cfg._read()
+        pfile.write_text('{"providers": []}')
+        assert cfg._read() == {"providers": []}
+        pfile.write_text("{{BROKEN AGAIN, LONGER")
+        cfg._read()
+        cfg._read()
+
+    assert len(_config_errors(caplog)) == 2
 
 
 def test_suite_does_not_use_the_repository_data_dir():
