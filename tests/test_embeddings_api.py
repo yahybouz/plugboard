@@ -11,7 +11,8 @@ import struct
 
 import aiohttp
 import pytest
-from aioresponses import aioresponses
+from aioresponses import CallbackResult, aioresponses
+from yarl import URL
 
 from tests.conftest import _setup_providers
 
@@ -560,6 +561,101 @@ def test_operator_public_ollama_url_is_not_trusted(monkeypatch):
     assert not ea._is_loopback_base("http://ollama.example:11434")
     monkeypatch.delenv("OLLAMA_URL")
     assert not ea._is_loopback_base("http://172.30.114.1:11434")
+
+
+# -- Operator OLLAMA_URL behind a token-protected relay (BUG-25) --------------
+
+RELAY = "http://172.17.0.1:11435"
+RELAY_TOKEN = "relay-test-token"
+RELAY_BEARER = f"Bearer {RELAY_TOKEN}"
+
+
+def _relay_reply(payload):
+    """A relay that answers like Ollama only when it gets the operator's token."""
+
+    def reply(_url, **kwargs):
+        if (kwargs.get("headers") or {}).get("Authorization") != RELAY_BEARER:
+            return CallbackResult(status=401, body="unauthorized")
+        return CallbackResult(status=200, payload=payload)
+
+    return reply
+
+
+def _sent_headers(mock) -> list[dict]:
+    return [
+        c.kwargs.get("headers") or {} for calls in mock.requests.values() for c in calls
+    ]
+
+
+@pytest.fixture
+async def relayed(emb, monkeypatch, tmp_path):
+    import plugboard.apikeys as keys
+    from plugboard import ollama
+
+    monkeypatch.setenv("OLLAMA_URL", RELAY)
+    monkeypatch.setattr(ollama, "_OLLAMA_URL", RELAY)
+    monkeypatch.setattr(ollama, "_OLLAMA_TOKEN", RELAY_TOKEN)
+    (tmp_path / "r").mkdir()
+    _setup_providers(
+        tmp_path / "r",
+        monkeypatch,
+        [
+            # As bootstrap_ollama registers it from OLLAMA_URL + the token.
+            {**OLLAMA, "base_url": RELAY, "bearer_token": RELAY_TOKEN},
+            {**OLLAMA, "id": "ollama-local"},  # loopback engine, not OLLAMA_URL
+            {**OLLAMA, "id": "ollama-other", "base_url": "http://172.17.0.2:11435"},
+        ],
+    )
+    monkeypatch.setenv(
+        "PLUGBOARD_EMBEDDING_MODELS",
+        ",".join([MODEL, "ollama-local:" + NATIVE, "ollama-other:" + NATIVE]),
+    )
+    client, _ = emb
+    rec = keys.create_key("argos-synthetic")  # routing alone decides
+    client.headers["Authorization"] = f"Bearer {rec['key']}"
+    return client
+
+
+async def test_relay_embeddings_carry_the_operator_token(relayed):
+    with aioresponses() as mock:
+        mock.get(f"{RELAY}/api/tags", callback=_relay_reply(_tags()))
+        mock.post(
+            f"{RELAY}/api/embed",
+            callback=_relay_reply(
+                {"model": NATIVE, "embeddings": [_vec(1)], "prompt_eval_count": 3}
+            ),
+        )
+        r = await relayed.post("/v1/embeddings", json={"model": MODEL, "input": "x"})
+    assert r.status_code == 200, r.text
+    assert r.json()["plugboard"]["digest"] == DIGEST
+    for method, path in (("GET", "/api/tags"), ("POST", "/api/embed")):
+        calls = mock.requests[(method, URL(RELAY + path))]
+        assert calls
+        assert all(
+            (c.kwargs.get("headers") or {}).get("Authorization") == RELAY_BEARER
+            for c in calls
+        )
+
+
+async def test_relay_token_never_leaves_for_another_engine(relayed):
+    with aioresponses() as mock:
+        _ok(mock, [_vec(1)])
+        r = await relayed.post(
+            "/v1/embeddings", json={"model": "ollama-local:" + NATIVE, "input": "x"}
+        )
+    assert r.status_code == 200, r.text
+    assert all("Authorization" not in h for h in _sent_headers(mock))
+
+
+async def test_relay_trust_is_the_exact_operator_url_only(relayed):
+    # Another private address registered as sovereign is still not a local
+    # engine, token or not: nothing leaves the gateway.
+    with aioresponses() as mock:
+        r = await relayed.post(
+            "/v1/embeddings", json={"model": "ollama-other:" + NATIVE, "input": "x"}
+        )
+        assert not mock.requests
+    assert r.status_code == 503
 
 
 # -- Global concurrency cap ----------------------------------------------------
