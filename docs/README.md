@@ -20,5 +20,6 @@
 - [Architecture](ARCHITECTURE.md): components, request flow, state and security boundaries.
 - [Architecture Decision Records](adr/README.md): why the design is what it is.
 - [Runbooks](runbooks/README.md): step-by-step procedures for operators.
+- [Model access rule](model-access-correction.md): how `allowed_models` matches since 4.3.1.
 - [Client API contract](api/openapi.json) (OpenAPI 3.1) and [MCP contract](api/mcp.json): what integrators may rely on, checked in CI. A running instance serves the first at `/v1/openapi.json`, without a key.
 - The full OpenAPI schema, admin routes included, is served by the running instance at `/openapi.json` and `/docs` (admin access required).

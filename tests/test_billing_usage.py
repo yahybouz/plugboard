@@ -441,7 +441,7 @@ async def test_streaming_bills_tokens(client, tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_model_access_allowed(client, tmp_path, monkeypatch):
-    """Client with allowed_models=['fake'] can access fake:model-v1."""
+    """Client with allowed_models=['fake:model-v1'] can access test-provider:fake:model-v1."""
     import plugboard.apikeys as ak
 
     monkeypatch.setattr(ak, "_DATA_DIR", tmp_path)

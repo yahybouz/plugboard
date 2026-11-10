@@ -67,7 +67,7 @@ With `PLUGBOARD_ADMIN_MFA_REQUIRED=1`, an `admin_mfa.json` that exists but canno
 |---|---|
 | `401 Invalid API key` | Unknown, revoked or mistyped key. Check it under **API Keys**; create a new one if it was lost (keys cannot be recovered). |
 | `401 Authentication required: missing client_id` | A chat request without a key. Send `Authorization: Bearer pb_...`. |
-| `403 Model '...' not allowed` | The model is outside the key's `allowed_models`. |
+| `403 Model '...' not allowed` | The model is outside the key's `allowed_models`. Entries are exact IDs: since 4.3.1 a provider prefix or part of a name no longer allows the models it used to cover. The message names the ID that was checked; create a new key that lists it ([allowed models](clients-and-keys.md#allowed-models)). |
 | `429 Rate limit exceeded` | The per-IP limit (`RATE_LIMIT`, 60 per minute). Behind a reverse proxy all clients share the proxy's address: raise `RATE_LIMIT` or set it to `0` and limit traffic at the proxy. |
 | `429 Client rate limit exceeded` | The key's RPM limit. |
 | `429 Monthly spending limit exceeded` | The key's monthly budget. Raise it or wait for the next month (UTC). |
