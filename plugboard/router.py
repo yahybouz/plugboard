@@ -14,6 +14,7 @@ the default provider is used with the full model string as-is.
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -70,6 +71,76 @@ class ProviderQuotaError(RuntimeError):
         self.retry_after = retry_after
 
 
+class ProviderHTTPError(RuntimeError):
+    """An HTTP provider answered an error status other than 429.
+
+    The message keeps the upstream body for the server log and the admin; a
+    client key never sees it. ``request_rejected`` is True when the provider
+    said the request itself is at fault (see ``_names_the_request``).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider_id: str,
+        status: int,
+        request_rejected: bool = False,
+    ):
+        super().__init__(message)
+        self.provider_id = provider_id
+        self.status = status
+        self.request_rejected = request_rejected
+
+
+class ProviderNetworkError(RuntimeError):
+    """An HTTP provider could not be reached, or its answer could not be read.
+
+    The message names the provider's host and port, an internal address for
+    a local endpoint: it stays with the server log and the admin.
+    """
+
+    def __init__(self, message: str, *, provider_id: str):
+        super().__init__(message)
+        self.provider_id = provider_id
+
+
+# OpenAI-style error type and code that blame the request (context too long,
+# unsupported parameter); "invalid_api_key" shares the type but blames the
+# gateway's key.
+_REQUEST_ERROR_TYPES = frozenset({"invalid_request_error"})
+_REQUEST_ERROR_CODES = frozenset({"context_length_exceeded"})
+_GATEWAY_ERROR_CODES = frozenset({"invalid_api_key"})
+
+
+def _names_the_request(status: int, text: str) -> bool:
+    """True when a 4xx answer says the request itself is at fault.
+
+    413 says so by its status. A 400 or 422 must say it in its body
+    (``error.type`` or ``error.code``): providers also answer 400 for their
+    own key or region (Gemini: INVALID_ARGUMENT, FAILED_PRECONDITION).
+    """
+    if status == 413:
+        return True
+    if status not in (400, 422):
+        return False
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return False
+    if isinstance(data, list) and data:
+        data = data[0]
+    error = data.get("error") if isinstance(data, dict) else None
+    if not isinstance(error, dict):
+        return False
+    code, kind = error.get("code"), error.get("type")
+    code = code if isinstance(code, str) else ""
+    kind = kind if isinstance(kind, str) else ""
+    if code in _GATEWAY_ERROR_CODES:
+        return False
+    return code in _REQUEST_ERROR_CODES or kind in _REQUEST_ERROR_TYPES
+
+
 def _retry_after_seconds(value: Optional[str]) -> Optional[int]:
     """Seconds of a Retry-After header (delta-seconds or HTTP-date), or None.
 
@@ -88,16 +159,27 @@ def _retry_after_seconds(value: Optional[str]) -> Optional[int]:
     return min(max(0, seconds), MAX_RETRY_AFTER_S)
 
 
-def _http_error(provider_id: str, status: int, text: str, headers) -> RuntimeError:
-    """The error of a non-200 answer; a 429 keeps its Retry-After delay."""
-    message = f"[{provider_id}] HTTP {status}: {text}"
+def _http_error(
+    provider_id: str, status: int, text: str, headers, *, limit: int = 400
+) -> RuntimeError:
+    """The error of a non-200 answer; a 429 keeps its Retry-After delay.
+
+    The message keeps the first ``limit`` characters of the body; the whole
+    body says whether the request was at fault.
+    """
+    message = f"[{provider_id}] HTTP {status}: {text[:limit]}"
     if status == 429:
         return ProviderQuotaError(
             message,
             provider_id=provider_id,
             retry_after=_retry_after_seconds(headers.get("Retry-After")),
         )
-    return RuntimeError(message)
+    return ProviderHTTPError(
+        message,
+        provider_id=provider_id,
+        status=status,
+        request_rejected=_names_the_request(status, text),
+    )
 
 
 # BENCH-006 closed: OpenAI's o-series (o1/o3/o4-mini/...) deprecated
@@ -705,7 +787,11 @@ async def forward(
                         if resp.status in _RETRYABLE:
                             text = await resp.text()
                             last_err = _http_error(
-                                provider["id"], resp.status, text[:200], resp.headers
+                                provider["id"],
+                                resp.status,
+                                text,
+                                resp.headers,
+                                limit=200,
                             )
                             provider_fault = is_provider_fault(text, resp.status)
                             continue
@@ -715,8 +801,8 @@ async def forward(
                                 metrics.record(provider["id"], 0.0, error=True)
                             except Exception:
                                 pass
-                            last_err = RuntimeError(
-                                f"[{provider['id']}] HTTP {resp.status}: {text[:400]}"
+                            last_err = _http_error(
+                                provider["id"], resp.status, text, resp.headers
                             )
                             provider_fault = is_provider_fault(text, resp.status)
                             provider_failed = True
@@ -762,8 +848,9 @@ async def forward(
                     except Exception:
                         pass
                     detail = str(exc) or type(exc).__name__
-                    last_err = RuntimeError(
-                        f"[{provider['id']}] network error: {detail[:200]}"
+                    last_err = ProviderNetworkError(
+                        f"[{provider['id']}] network error: {detail[:200]}",
+                        provider_id=provider["id"],
                     )
                     log.warning(
                         "Network error on %s (%s): %s",
@@ -979,6 +1066,7 @@ async def forward_stream(
 
     session = await _get_http_session()
     streaming = False
+    # aiohttp's text names the provider's host and port: typed like forward().
     try:
         async with session.post(
             url,
@@ -990,17 +1078,27 @@ async def forward_stream(
                 text = await resp.text()
                 if is_provider_fault(text, resp.status):
                     cb_failure(circuit_key)
-                raise _http_error(provider["id"], resp.status, text[:400], resp.headers)
+                raise _http_error(provider["id"], resp.status, text, resp.headers)
             cb_success(circuit_key)
             streaming = True
             async for chunk in resp.content.iter_any():
                 yield chunk
-    except (asyncio.TimeoutError, aiohttp.ClientError):
+    except asyncio.TimeoutError as exc:
         # No answer: a timeout or a network error counts, as in forward().
         # Once the stream has begun, its success is already recorded.
         if not streaming:
             cb_failure(circuit_key)
-        raise
+        raise RuntimeError(
+            f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}"
+        ) from exc
+    except aiohttp.ClientError as exc:
+        if not streaming:
+            cb_failure(circuit_key)
+        detail = str(exc) or type(exc).__name__
+        raise ProviderNetworkError(
+            f"[{provider['id']}] network error: {detail[:200]}",
+            provider_id=provider["id"],
+        ) from exc
 
 
 _models_cache: Optional[List[Dict[str, Any]]] = None

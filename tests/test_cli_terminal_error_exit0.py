@@ -459,6 +459,105 @@ async def test_claude_other_structured_error_stays_502(
     assert resp.status_code == 502, resp.text
 
 
+# claude also sets error "rate_limit" when no usage limit of the account is
+# behind it (BUG-31, read in the claude 2.1.321 binary): it raises one
+# itself, without an HTTP status, on a model's high load and on a per-model
+# block (free text set by the server), and reports an API 429 of the
+# server's own throttling as "not your usage limit".
+def _claude_failure(text: str, **fields) -> bytes:
+    return _claude(
+        _assistant(text, error="rate_limit", **fields),
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": True,
+            "result": text,
+            **fields,
+        },
+    )
+
+
+_CLAUDE_NOT_A_USAGE_LIMIT = [
+    pytest.param(
+        _claude_failure(
+            "Opus is experiencing high load, please use /model to switch to Sonnet"
+        ),
+        id="high-load",
+    ),
+    pytest.param(
+        _claude_failure("pbtest-model is paused by its provider for now."),
+        id="model-blocked",
+    ),
+    pytest.param(
+        _claude_failure(
+            "API Error: Server is temporarily limiting requests (not your usage"
+            " limit) · Rate limited",
+            api_error_status=429,
+        ),
+        id="server-throttling",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [0, 1])
+@pytest.mark.parametrize("stdout", _CLAUDE_NOT_A_USAGE_LIMIT)
+async def test_claude_rate_limit_without_a_usage_limit_gives_502(
+    client, key, providers, cli_process, ledger, stdout, code
+):
+    headers, key_id = key
+    providers("claude")
+    cli_process(stdout, returncode=code)
+
+    resp = await client.post("/v1/chat/completions", headers=headers, json=_chat())
+
+    assert resp.status_code == 502, resp.text
+    assert "quota" not in resp.json()["detail"].lower()
+    assert "retry-after" not in resp.headers
+    assert ledger.usage(key_id) == []
+    assert ledger.cached == []
+    assert ledger.turns == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stdout", _CLAUDE_NOT_A_USAGE_LIMIT)
+async def test_claude_rate_limit_without_a_usage_limit_falls_back(
+    client, key, providers, cli_process, ledger, stdout
+):
+    headers, _ = key
+    providers("claude", fallback=True)
+    cli_process(stdout)
+
+    with aioresponses() as mock:
+        mock.post(_A, payload=FAKE_COMPLETION, status=200)
+        resp = await client.post("/v1/chat/completions", headers=headers, json=_chat())
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["choices"][0]["message"]["content"] == "Hello!"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [0, 1])
+async def test_claude_usage_limit_with_its_429_stays_a_quota(
+    client, key, providers, cli_process, code
+):
+    headers, _ = key
+    providers("claude")
+    cli_process(
+        _claude_failure(
+            "API Error: Request rejected (429) · spend limit reached",
+            api_error_status=429,
+            api_error="usage_limit_reached",
+        ),
+        returncode=code,
+    )
+
+    resp = await client.post("/v1/chat/completions", headers=headers, json=_chat())
+
+    assert resp.status_code == 429, resp.text
+    assert "quota" in resp.json()["detail"].lower()
+
+
 # ── What must keep working ────────────────────────────────────────────────
 
 _CLAUDE_SAYS_RATE_LIMIT = _claude(

@@ -112,6 +112,8 @@ from plugboard.decisions import is_decision_model
 from plugboard.cli_auth import AuthError
 from plugboard.cli_subprocess import CliSubprocessError
 from plugboard.router import (
+    ProviderHTTPError,
+    ProviderNetworkError,
     ProviderQuotaError,
     discover_models,
     forward,
@@ -1446,11 +1448,18 @@ def _model_route_guard(client_id, key_record=None):
     allowed = tuple((record or {}).get("allowed_models", []))
     if not allowed:
         return None
+    registry_ids: Optional[tuple] = None
 
     def guard(provider, native):
+        from plugboard import router as _router
         from plugboard.model_identity import model_access_matches
 
-        if not model_access_matches(allowed, provider["id"], native):
+        nonlocal registry_ids
+        if registry_ids is None:
+            # Every registered ID, inactive included: the namespace /v1/models
+            # publishes in. Read once per guard, through the router's registry.
+            registry_ids = tuple(p["id"] for p in _router.load_providers())
+        if not model_access_matches(allowed, provider["id"], native, registry_ids):
             raise HTTPException(
                 status_code=403,
                 detail=(
@@ -1468,7 +1477,11 @@ def _model_is_compatible(
     key_record: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Use chat's effective-route policy for catalogue compatibility."""
-    guard = _model_route_guard(client_id, key_record)
+    return _guard_accepts(_model_route_guard(client_id, key_record), model_str)
+
+
+def _guard_accepts(guard, model_str: str) -> bool:
+    """Whether a key's guard (None: unrestricted) lets this model through."""
     if guard is None:
         return True
     try:
@@ -1575,6 +1588,47 @@ def _quota_error_response(
     content: Dict[str, Any] = {"detail": detail}
     headers = _retry_after_headers(content, exc.retry_after)
     return JSONResponse(status_code=429, content=content, headers=headers)
+
+
+def _provider_http_error_response(
+    exc: ProviderHTTPError | ProviderNetworkError, client_id: Optional[str]
+) -> JSONResponse:
+    """400 when an HTTP provider rejected the request, 502 for its other errors.
+
+    The provider rejected the request when its answer says so (413, or an
+    error type or code naming the request: ``exc.request_rejected``); the
+    status alone does not, a provider also answers 400 for its own key. A
+    provider that could not be reached gives a 502. The provider's body can
+    name its account or organisation, and a network error its host and port:
+    only the admin gets them. A client key gets a reason written here and a
+    reference to the server log entry, never the upstream text.
+    """
+    ref = secrets.token_hex(4)
+    log.warning(
+        "http provider error ref=%s provider=%s status=%s: %s",
+        ref,
+        exc.provider_id,
+        getattr(exc, "status", "network"),
+        exc,
+    )
+    rejected = getattr(exc, "request_rejected", False)
+    if client_id == "admin":
+        detail = str(exc)
+    elif rejected:
+        detail = (
+            f"The {exc.provider_id} provider rejected the request: check the "
+            "length of the messages against the model's context and the "
+            f"parameters (reference {ref} in the gateway log)."
+        )
+    else:
+        detail = (
+            f"The {exc.provider_id} provider failed "
+            f"(reference {ref} in the gateway log)."
+        )
+    return JSONResponse(
+        status_code=400 if rejected else 502,
+        content={"detail": detail, "error_ref": ref},
+    )
 
 
 def _cli_error_response(
@@ -1902,6 +1956,8 @@ async def chat_completions(
                     return _cli_error_response(exc, client_id)
                 if isinstance(exc, ProviderQuotaError):
                     return _quota_error_response(exc, client_id)
+                if isinstance(exc, (ProviderHTTPError, ProviderNetworkError)):
+                    return _provider_http_error_response(exc, client_id)
                 if "timeout" in err_str.lower():
                     return JSONResponse(
                         status_code=503,
@@ -2079,6 +2135,9 @@ async def chat_completions(
             err_str = str(exc)
             if isinstance(exc, ProviderQuotaError):
                 return _quota_error_response(exc, client_id)
+            # Before the timeout test: the provider's body can say "timeout".
+            if isinstance(exc, (ProviderHTTPError, ProviderNetworkError)):
+                return _provider_http_error_response(exc, client_id)
             if "timeout" in err_str.lower():
                 return JSONResponse(
                     status_code=503,
@@ -2216,6 +2275,9 @@ async def chat_completions(
             return _cli_error_response(exc, client_id)
         if isinstance(exc, ProviderQuotaError):
             return _quota_error_response(exc, client_id)
+        # Before the timeout test: the provider's body can say "timeout".
+        if isinstance(exc, (ProviderHTTPError, ProviderNetworkError)):
+            return _provider_http_error_response(exc, client_id)
         # 503 + Retry-After for timeouts (client can retry), 502 for other errors
         if "timeout" in err_str.lower():
             return JSONResponse(
@@ -2329,12 +2391,12 @@ async def _models_for_key(
     so the shared models cache never carries one caller's flag.
     """
     key_record = _get_request_key_record(request, client_id=client_id)
+    # One guard for the whole list: its registry snapshot is read once.
+    guard = _model_route_guard(client_id or "", key_record)
     return [
         dict(item, account_compatible=True)
         for item in await list_models()
-        if _model_is_compatible(
-            item.get("id", ""), client_id or "", key_record=key_record
-        )
+        if _guard_accepts(guard, item.get("id", ""))
     ]
 
 

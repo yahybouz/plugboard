@@ -763,6 +763,10 @@ def check_cli_installed(kind: str) -> Dict[str, Any]:
     return {"ok": True, "binary": path, "kind": kind}
 
 
+# Longest a timed-out version probe waits to reap the killed CLI.
+_PROBE_REAP_TIMEOUT_S = 2.0
+
+
 async def probe_cli_version(kind: str, timeout_s: float = 5.0) -> Dict[str, Any]:
     """Spawn `<cli> --version` to confirm the CLI runs. Non-blocking for Connect."""
     backend = CLI_BACKENDS.get(kind)
@@ -778,8 +782,19 @@ async def probe_cli_version(kind: str, timeout_s: float = 5.0) -> Dict[str, Any]
             stderr=asyncio.subprocess.PIPE,
             env=build_child_env(kind),
             cwd=_clean_spawn_cwd(),
+            # Own process group: a timeout kills the CLI's descendants too.
+            start_new_session=True,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
+        finished = False
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
+            finished = True
+        finally:
+            if not finished:
+                # Bounded: Process.wait() also waits for the pipes to close, and
+                # a descendant that left the group (setsid, daemon) can hold them.
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(_kill_group(proc), _PROBE_REAP_TIMEOUT_S)
         version = (stdout or b"").decode("utf-8", "replace").strip().splitlines()
         stderr_text = (stderr or b"").decode("utf-8", "replace").strip()
         error = stderr_text or None
@@ -1252,28 +1267,67 @@ def _ended_in_error(stdout_text: str, kind: str) -> bool:
     return False
 
 
+# claude's rate_limit errors that say no usage limit is behind them (claude
+# 2.1.321 binary): "Opus (or Fable) is experiencing high load...", also
+# matched when an API error carries it, and the server's own throttling.
+_CLAUDE_NOT_USAGE_LIMIT = ("experiencing high load", "not your usage limit")
+# Prefix of every API error claude reports ("API Error: ...").
+_CLAUDE_API_ERROR = "API Error"
+
+
+def _claude_event_text(evt: Dict[str, Any]) -> str:
+    """Text of a claude ``assistant`` event's blocks or of its ``result``."""
+    if evt.get("type") == "result":
+        text = evt.get("result")
+        return text if isinstance(text, str) else ""
+    content = (evt.get("message") or {}).get("content")
+    if not isinstance(content, list):
+        return ""
+    return "".join(
+        str(block.get("text") or "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+def _claude_usage_limit(evt: Dict[str, Any]) -> bool:
+    """True when a claude rate-limit event is the account's usage limit."""
+    text = _claude_event_text(evt)
+    if any(marker in text.lower() for marker in _CLAUDE_NOT_USAGE_LIMIT):
+        return False
+    status = evt.get("api_error_status")
+    if status is not None:
+        return status == 429
+    return not text or text.startswith(_CLAUDE_API_ERROR)
+
+
 def _claude_rate_limited(stdout_text: str) -> bool:
-    """claude's structured rate-limit sign, whatever the error text says:
-    an ``assistant`` event with ``error: "rate_limit"`` or a ``result`` with
-    ``api_error_status: 429``.
+    """claude's structured sign of a usage limit: an ``assistant`` event with
+    ``error: "rate_limit"`` or a ``result`` with ``api_error_status: 429``,
+    unless the CLI says no usage limit is behind it.
 
     Read in the claude 2.1.321 binary, not seen in a captured run: the CLI
     sets ``error: "rate_limit"`` on an API 429 (usage or spend limit, usage
-    credits required, "Request rejected (429)", "Server is temporarily
-    limiting requests (not your usage limit)"), and also on errors tested by
-    their text or by a server-side model block, not by a 429 status: "Opus
-    (or Fable) is experiencing high load", and a per-model block
-    (``model_blocked``). Every one of them is a quota 429 here, with a
-    Retry-After only when the error text gives a "try again at" time. A
-    ``system`` ``api_retry`` event carries ``error: "rate_limit"`` too; it
-    announces a retry, not the outcome, and is not read.
+    credits required, "Request rejected (429)") and gives it
+    ``api_error_status: 429`` and an "API Error" text, or a usage-limit
+    message. It also sets it on failures that are not the account's usage
+    limit: an API 429 it reports as "Server is temporarily limiting requests
+    (not your usage limit)", and errors it raises itself, without an HTTP
+    status nor the "API Error" prefix: "Opus (or Fable) is experiencing high
+    load" and a per-model block (``model_blocked``, free text set by the
+    server). Those are a provider failure here (502, next provider), not a
+    quota 429. A ``system`` ``api_retry`` event carries ``error:
+    "rate_limit"`` too; it announces a retry, not the outcome, and is not
+    read.
     """
     for evt in _jsonl_events(stdout_text):
         etype = evt.get("type")
         if etype == "assistant" and evt.get("error") == "rate_limit":
-            return True
-        if etype == "result" and evt.get("api_error_status") == 429:
-            return True
+            if _claude_usage_limit(evt):
+                return True
+        elif etype == "result" and evt.get("api_error_status") == 429:
+            if _claude_usage_limit(evt):
+                return True
     return False
 
 

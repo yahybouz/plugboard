@@ -327,6 +327,7 @@ class _Body:
 class _Resp:
     def __init__(self, status, data=b"", fail=None):
         self.status, self.content = status, _Body(data, fail)
+        self.headers = {}  # aiohttp's response always has headers
 
     async def __aenter__(self):
         return self
@@ -431,7 +432,7 @@ def _raise(exc):
         (_raise(aiohttp.ClientConnectionError("refused")), 502),
         (_raise(aiohttp.ConnectionTimeoutError("connect timeout")), 504),
         (lambda: _Resp(401, b'{"error": "bad key"}'), 502),
-        (lambda: _Resp(429, b'{"error": "slow down"}'), 502),
+        (lambda: _Resp(429, b'{"error": "slow down"}'), 429),  # BUG-36
     ],
 )
 async def test_connection_failure_or_error_status_is_not_billed(
