@@ -27,8 +27,20 @@ _SECRET = "upstream-secret org-42 acct_7731"
 ADMIN = {"Authorization": "Bearer testkey"}  # the admin key in the fixture
 
 
-def _upstream_body(message: str = _SECRET) -> str:
-    return json.dumps({"error": {"message": message, "type": "invalid_request"}})
+def _upstream_body(
+    message: str = _SECRET,
+    type_: str = "invalid_request_error",
+    code: str | None = None,
+) -> str:
+    """An OpenAI-style error body (``error.type``, ``error.code``)."""
+    return json.dumps({"error": {"message": message, "type": type_, "code": code}})
+
+
+def _gemini_body(message: str, status: str) -> str:
+    """The error body of Gemini's OpenAI-compatible endpoint: a list, no type."""
+    return json.dumps(
+        [{"error": {"code": 400, "message": f"{message} {_SECRET}", "status": status}}]
+    )
 
 
 @pytest.fixture
@@ -140,16 +152,32 @@ async def test_upstream_timeout_text_is_not_sent_to_a_client_key(
     assert resp.json()["error_ref"]
 
 
+_CONTEXT_TOO_LONG = _upstream_body(
+    f"This model's maximum context length is 8192 tokens. {_SECRET}",
+    code="context_length_exceeded",
+)
+
+
 @pytest.mark.asyncio
 @_STREAM
-@pytest.mark.parametrize("status", [400, 413, 422])
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (400, _CONTEXT_TOO_LONG),
+        # Only the code names the request (no OpenAI type).
+        (400, _upstream_body(_SECRET, type_="", code="context_length_exceeded")),
+        (400, _upstream_body(_SECRET, code="unsupported_parameter")),
+        (422, _CONTEXT_TOO_LONG),
+        # 413 names the request by its status, whatever the body.
+        (413, f"<html>413 Request Entity Too Large {_SECRET}</html>"),
+    ],
+    ids=["400-context", "400-code-only", "400-param", "422", "413-html"],
+)
 async def test_request_rejected_by_the_provider_gives_400_to_a_client_key(
-    client, client_key, provider, status, stream
+    client, client_key, provider, status, body, stream
 ):
     provider["status"] = status
-    provider["body"] = _upstream_body(
-        f"This model's maximum context length is 8192 tokens. {_SECRET}"
-    )
+    provider["body"] = body
     resp = await client.post(
         "/v1/chat/completions", headers=client_key, json=_chat(stream)
     )
@@ -163,6 +191,41 @@ async def test_request_rejected_by_the_provider_gives_400_to_a_client_key(
     detail = body["detail"]
     assert "test-provider" in detail and "rejected" in detail
     assert "context" in detail  # tells the client what to look at
+
+
+@pytest.mark.asyncio
+@_STREAM
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        # Gemini answers 400 for its own key and for a refused region.
+        (400, _gemini_body("API key not valid.", "INVALID_ARGUMENT")),
+        (400, _gemini_body("User location is not supported.", "FAILED_PRECONDITION")),
+        (400, f"Bad Request {_SECRET}"),
+        (400, _upstream_body(_SECRET, code="invalid_api_key")),
+        (422, json.dumps({"detail": [{"msg": _SECRET}]})),
+    ],
+    ids=["gemini-key", "gemini-region", "text", "openai-key", "422-untyped"],
+)
+async def test_a_4xx_that_does_not_name_the_request_is_a_provider_failure(
+    client, client_key, provider, status, body, stream
+):
+    # The status alone does not say whose fault it is: without an error type
+    # or code naming the request, the client is not told to fix its request
+    # (a 400 is not retried by the OpenAI SDKs).
+    provider["status"] = status
+    provider["body"] = body
+    resp = await client.post(
+        "/v1/chat/completions", headers=client_key, json=_chat(stream)
+    )
+
+    assert provider["calls"] == 1
+    assert resp.status_code == 502, resp.text
+    _assert_no_upstream_text(resp)
+    assert "API key" not in resp.text and "location" not in resp.text
+    detail = resp.json()["detail"]
+    assert "rejected" not in detail and "context" not in detail
+    assert resp.json()["error_ref"] in detail
 
 
 @pytest.mark.asyncio

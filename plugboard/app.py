@@ -1578,16 +1578,15 @@ def _quota_error_response(
     return JSONResponse(status_code=429, content=content, headers=headers)
 
 
-# Upstream statuses that mean the provider refused the request itself.
-_REQUEST_REJECTED_STATUSES = frozenset({400, 413, 422})
-
-
 def _provider_http_error_response(
     exc: ProviderHTTPError, client_id: Optional[str]
 ) -> JSONResponse:
     """400 when an HTTP provider rejected the request, 502 for its other errors.
 
-    The provider's body can name its account or organisation: only the admin
+    The provider rejected the request when its answer says so (413, or an
+    error type or code naming the request: ``exc.request_rejected``); the
+    status alone does not, a provider also answers 400 for its own key. The
+    provider's body can name its account or organisation: only the admin
     gets it. A client key gets a reason written here and a reference to the
     server log entry, never the upstream text.
     """
@@ -1599,7 +1598,7 @@ def _provider_http_error_response(
         exc.status,
         exc,
     )
-    rejected = exc.status in _REQUEST_REJECTED_STATUSES
+    rejected = exc.request_rejected
     if client_id == "admin":
         detail = str(exc)
     elif rejected:
