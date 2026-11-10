@@ -533,6 +533,15 @@ def _pop_reported_usage(result: Dict[str, Any]) -> bool:
     return result.pop(USAGE_REPORTED_KEY, None) is True
 
 
+def _circuit_key(provider: Dict[str, Any], real_model: str) -> str:
+    """Circuit-breaker key of a route: its effective ``provider-id:native`` ID.
+
+    forward() reads and records the breaker under this one key, the spelling
+    the LLM pricing pass reads too.
+    """
+    return f"{provider['id']}:{real_model}"
+
+
 async def forward(
     body: Dict[str, Any],
     timeout: float = _TIMEOUT,
@@ -554,8 +563,11 @@ async def forward(
     model_str = body.get("model", "")
     candidates = _resolve_all_providers(model_str)
 
-    # Circuit breaker check — if model is open, try fallback
-    circuit = check_circuit(model_str)
+    # Circuit breaker check — if model is open, try fallback. Each route is
+    # read under the key its outcomes are recorded under; the model counts as
+    # open only when no candidate route is allowed.
+    circuits = [check_circuit(_circuit_key(p, m)) for p, m in candidates]
+    circuit = next((c for c in circuits if c["allowed"]), circuits[0])
     if not circuit["allowed"] and circuit["fallback"]:
         # Rewrite model to fallback
         fallback_suffix = circuit["fallback"]
@@ -622,7 +634,7 @@ async def forward(
                     log.debug("subprocess usage estimation failed: %s", _exc)
                 try:
                     record_provider_success(provider["id"])
-                    cb_success(real_model)
+                    cb_success(_circuit_key(provider, real_model))
                 except Exception:
                     pass
                 _served_by.set((provider, real_model))
@@ -650,7 +662,7 @@ async def forward(
                             terminal_reason="model_unavailable",
                         )
                         invalidate_models_cache()
-                    cb_failure(real_model)
+                    cb_failure(_circuit_key(provider, real_model))
                     await record_provider_failure(provider["id"])
                 except Exception:
                     pass
@@ -719,7 +731,7 @@ async def forward(
                             pass
                         try:
                             record_provider_success(provider["id"])
-                            cb_success(real_model)
+                            cb_success(_circuit_key(provider, real_model))
                         except Exception:
                             pass
                         _served_by.set((provider, real_model))
@@ -766,7 +778,7 @@ async def forward(
                     break
 
         # If we exhausted retries for this provider, record circuit breaker failure
-        cb_failure(real_model)
+        cb_failure(_circuit_key(provider, real_model))
 
         # Record error metrics and try next provider
         if not provider_failed:

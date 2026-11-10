@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Circuit breaker blind to provider-qualified models**: `forward()` recorded failures and successes under the native model name but read the breaker under the model string the client sent, so a model asked as `provider-id:model` never saw its own failures. The native circuit it opened never closed again (`/admin/circuits` showed it open for good), and the LLM pricing pass, which reads `provider-id:model`, kept choosing a provider whose calls were failing. The breaker is now read and recorded under one key per route, `provider-id:model`; an unqualified model counts as open only when every provider it is tried on is. A request to an open circuit is still sent, as before.
+
 ## [4.5.0] — 2026-11-10
 
 ### Security
