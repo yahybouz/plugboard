@@ -3215,13 +3215,28 @@ async def provider_health(provider_id: str, _: None = Depends(_require_admin)):
     return {"provider": provider_id, **result}
 
 
-def _no_models_detail(provider_id: str, report: Optional[Dict[str, Any]]) -> str:
+def _no_models_detail(
+    provider_id: str,
+    report: Optional[Dict[str, Any]],
+    *,
+    signed_out: str = "",
+    probes_off_kind: str = "",
+) -> str:
     """502 detail when a discovery kept no model: say why (admin endpoint)."""
     base = f"Could not discover models from '{provider_id}'"
+    if signed_out:
+        # The root cause: nothing can be listed or tested without an account.
+        return f"{base}: {signed_out}"
     if report is None:
         return base
     candidates = int(report.get("candidate_count") or 0)
     if not candidates:
+        if probes_off_kind:
+            return (
+                f"{base}: the {probes_off_kind} CLI cannot list its models and model "
+                f"probes are off for it (add {probes_off_kind} to "
+                "PLUGBOARD_MODEL_REFRESH_PROBE_KINDS)."
+            )
         return f"{base}: no candidate model to test."
     tested = int(report.get("verified_count") or 0)
     reasons: List[str] = []
@@ -3273,7 +3288,26 @@ async def discover_provider_models(
         models = await discover_models(provider)
         trusted = last_discovery_trusted()
     if not models:
-        raise HTTPException(502, _no_models_detail(provider_id, report))
+        signed_out = probes_off_kind = ""
+        if report is not None:
+            from plugboard.cli_subprocess import probe_cli_signed_in
+            from plugboard.model_availability import _probe_kinds_from_env
+
+            kind = provider["auth_source"].split(":", 1)[1]
+            account = await probe_cli_signed_in(kind)
+            if account.get("signed_in") is False:
+                signed_out = account.get("error") or f"{kind} is not signed in."
+            elif kind not in _probe_kinds_from_env():
+                probes_off_kind = kind
+        raise HTTPException(
+            502,
+            _no_models_detail(
+                provider_id,
+                report,
+                signed_out=signed_out,
+                probes_off_kind=probes_off_kind,
+            ),
+        )
     diff = model_diff.apply(
         provider_id,
         models,

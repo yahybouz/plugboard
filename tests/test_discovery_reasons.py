@@ -93,6 +93,11 @@ async def test_discover_says_when_there_was_nothing_to_test(
         return {"models": [], "candidate_count": 0, "verified_count": 0, "dropped": []}
 
     monkeypatch.setattr(ma, "refresh_subprocess_provider_models", report)
+
+    async def unknown_account(kind, timeout_s=10.0):
+        return {"signed_in": None, "error": ""}
+
+    monkeypatch.setattr("plugboard.cli_subprocess.probe_cli_signed_in", unknown_account)
     resp = await client.post("/providers/claude-cli/discover", headers=AUTH)
     assert resp.status_code == 502
     assert "no candidate model" in resp.json()["detail"]
