@@ -72,7 +72,7 @@ With `PLUGBOARD_ADMIN_MFA_REQUIRED=1`, an `admin_mfa.json` that exists but canno
 | `429 Client rate limit exceeded` | The key's RPM limit. |
 | `429 Monthly spending limit exceeded` | The key's monthly budget. Raise it or wait for the next month (UTC). |
 | `429 The quota or rate limit of the ... provider is exhausted` | The last provider tried answered HTTP 429, or its CLI reported an exhausted quota. A non-streamed request is offered to the other candidate providers first; a streamed request to an HTTP provider is not. `Retry-After` carries the provider's delay, or the time until the reopening hour the CLI printed (gateway local time), capped at 7 days. The admin key and the Playground see the provider's own message. |
-| `502` with `HTTP 404` from the provider | The model name does not exist on that provider, or the base URL of a custom provider contains `/v1` (Plugboard appends `/v1/chat/completions` itself). |
+| `502` with `HTTP 404` from the provider | The model name does not exist on that provider, or the base URL of a custom provider contains `/v1` (Plugboard appends `/v1/chat/completions` itself). Only the admin key and the Playground see the provider's message; a client key gets an `error_ref`: search the gateway log for `ref=<error_ref>`. |
 | `502` from a CLI provider | The CLI failed. The response includes its exit code and error output; run the CLI by hand as the same user to see the prompt it is waiting for (login expired, terms to accept). |
 | `503` with `Retry-After` | The concurrency cap (`PLUGBOARD_MAX_INFLIGHT_CHAT`) is reached, or a CLI provider timed out. |
 | Empty `content` with status 200 | The model returned no text. Check the provider directly; Plugboard passes the answer through unchanged. |

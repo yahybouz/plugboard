@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **HTTP provider errors no longer reach client keys**: when an HTTP provider answered an error other than 429 (400, 401, 403, 404, 500, 503...), `POST /v1/chat/completions` (and `/v2`), streamed or not, gave every caller `[provider] HTTP <status>: <body>`, the provider's own text, which can name its account or organisation; a body that contained the word "timeout" even came back as `503`. A client key now gets a message written by the gateway with an `error_ref` to find the full error in the gateway log: `400` when the provider rejected the request itself (`400`, `413`, `422`: context too long, unsupported parameter), `502` otherwise. The admin (dashboard Playground, admin key) still gets the provider's message, with the same status and the `error_ref`. Fallback to the other candidate providers is unchanged.
+
 ## [4.5.0] — 2026-11-10
 
 ### Security

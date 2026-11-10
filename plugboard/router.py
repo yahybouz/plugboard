@@ -70,6 +70,19 @@ class ProviderQuotaError(RuntimeError):
         self.retry_after = retry_after
 
 
+class ProviderHTTPError(RuntimeError):
+    """An HTTP provider answered an error status other than 429.
+
+    The message keeps the upstream body for the server log and the admin; a
+    client key never sees it.
+    """
+
+    def __init__(self, message: str, *, provider_id: str, status: int):
+        super().__init__(message)
+        self.provider_id = provider_id
+        self.status = status
+
+
 def _retry_after_seconds(value: Optional[str]) -> Optional[int]:
     """Seconds of a Retry-After header (delta-seconds or HTTP-date), or None.
 
@@ -97,7 +110,7 @@ def _http_error(provider_id: str, status: int, text: str, headers) -> RuntimeErr
             provider_id=provider_id,
             retry_after=_retry_after_seconds(headers.get("Retry-After")),
         )
-    return RuntimeError(message)
+    return ProviderHTTPError(message, provider_id=provider_id, status=status)
 
 
 # BENCH-006 closed: OpenAI's o-series (o1/o3/o4-mini/...) deprecated
@@ -706,8 +719,8 @@ async def forward(
                                 metrics.record(provider["id"], 0.0, error=True)
                             except Exception:
                                 pass
-                            last_err = RuntimeError(
-                                f"[{provider['id']}] HTTP {resp.status}: {text[:400]}"
+                            last_err = _http_error(
+                                provider["id"], resp.status, text[:400], resp.headers
                             )
                             provider_failed = True
                             break  # non-retryable error, try next provider
