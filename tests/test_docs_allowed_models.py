@@ -1,4 +1,4 @@
-"""The documentation must not show `allowed_models` examples that grant nothing.
+"""The documentation must not show `allowed_models` examples that match no model.
 
 Entries are compared as whole strings (`plugboard.model_identity`): a provider
 prefix (`"ollama:"`) or a wildcard (`"ollama:*"`) matches no model.
@@ -55,7 +55,7 @@ def test_documented_allowed_models_examples_are_full_ids():
         for entry in entries
         if entry.endswith(":") or "*" in entry
     ]
-    assert not partial, "prefix or wildcard entries grant nothing: " + "; ".join(
+    assert not partial, "prefix or wildcard entries match no model: " + "; ".join(
         partial
     )
 
