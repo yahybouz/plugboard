@@ -148,7 +148,7 @@ Cache hits are not billed again. Streaming responses (`"stream": true`) are serv
 | `403` | Model not in the key's `allowed_models` |
 | `413` | Request body larger than `MAX_BODY_BYTES` (10 MB) |
 | `429` | IP rate limit, key RPM limit or monthly budget reached, or the quota of the last provider tried exhausted (`Retry-After` when it gives a delay) |
-| `502` | The provider returned an error, or every candidate provider failed. A client key never gets the provider's own message: the `error_ref` finds it in the gateway log |
+| `502` | The provider returned an error or could not be reached, or every candidate provider failed. A client key never gets the provider's own message or address: the `error_ref` finds it in the gateway log |
 | `503` | Server at its concurrency cap, or a CLI provider timed out (`Retry-After` is set) |
 
 ## Self-service for clients

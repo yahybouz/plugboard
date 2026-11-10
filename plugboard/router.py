@@ -93,6 +93,18 @@ class ProviderHTTPError(RuntimeError):
         self.request_rejected = request_rejected
 
 
+class ProviderNetworkError(RuntimeError):
+    """An HTTP provider could not be reached, or its answer could not be read.
+
+    The message names the provider's host and port, an internal address for
+    a local endpoint: it stays with the server log and the admin.
+    """
+
+    def __init__(self, message: str, *, provider_id: str):
+        super().__init__(message)
+        self.provider_id = provider_id
+
+
 # OpenAI-style error type and code that blame the request (context too long,
 # unsupported parameter); "invalid_api_key" shares the type but blames the
 # gateway's key.
@@ -825,8 +837,9 @@ async def forward(
                     except Exception:
                         pass
                     detail = str(exc) or type(exc).__name__
-                    last_err = RuntimeError(
-                        f"[{provider['id']}] network error: {detail[:200]}"
+                    last_err = ProviderNetworkError(
+                        f"[{provider['id']}] network error: {detail[:200]}",
+                        provider_id=provider["id"],
                     )
                     log.warning(
                         "Network error on %s (%s): %s",
@@ -1023,17 +1036,29 @@ async def forward_stream(
     from plugboard.http_pool import get_session as _get_http_session
 
     session = await _get_http_session()
-    async with session.post(
-        url,
-        headers=headers,
-        json=payload,
-        timeout=aiohttp.ClientTimeout(total=effective_timeout),
-    ) as resp:
-        if resp.status != 200:
-            text = await resp.text()
-            raise _http_error(provider["id"], resp.status, text, resp.headers)
-        async for chunk in resp.content.iter_any():
-            yield chunk
+    # aiohttp's text names the provider's host and port: typed like forward().
+    try:
+        async with session.post(
+            url,
+            headers=headers,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=effective_timeout),
+        ) as resp:
+            if resp.status != 200:
+                text = await resp.text()
+                raise _http_error(provider["id"], resp.status, text, resp.headers)
+            async for chunk in resp.content.iter_any():
+                yield chunk
+    except asyncio.TimeoutError as exc:
+        raise RuntimeError(
+            f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}"
+        ) from exc
+    except aiohttp.ClientError as exc:
+        detail = str(exc) or type(exc).__name__
+        raise ProviderNetworkError(
+            f"[{provider['id']}] network error: {detail[:200]}",
+            provider_id=provider["id"],
+        ) from exc
 
 
 _models_cache: Optional[List[Dict[str, Any]]] = None

@@ -113,6 +113,7 @@ from plugboard.cli_auth import AuthError
 from plugboard.cli_subprocess import CliSubprocessError
 from plugboard.router import (
     ProviderHTTPError,
+    ProviderNetworkError,
     ProviderQuotaError,
     discover_models,
     forward,
@@ -1579,26 +1580,27 @@ def _quota_error_response(
 
 
 def _provider_http_error_response(
-    exc: ProviderHTTPError, client_id: Optional[str]
+    exc: ProviderHTTPError | ProviderNetworkError, client_id: Optional[str]
 ) -> JSONResponse:
     """400 when an HTTP provider rejected the request, 502 for its other errors.
 
     The provider rejected the request when its answer says so (413, or an
     error type or code naming the request: ``exc.request_rejected``); the
-    status alone does not, a provider also answers 400 for its own key. The
-    provider's body can name its account or organisation: only the admin
-    gets it. A client key gets a reason written here and a reference to the
-    server log entry, never the upstream text.
+    status alone does not, a provider also answers 400 for its own key. A
+    provider that could not be reached gives a 502. The provider's body can
+    name its account or organisation, and a network error its host and port:
+    only the admin gets them. A client key gets a reason written here and a
+    reference to the server log entry, never the upstream text.
     """
     ref = secrets.token_hex(4)
     log.warning(
         "http provider error ref=%s provider=%s status=%s: %s",
         ref,
         exc.provider_id,
-        exc.status,
+        getattr(exc, "status", "network"),
         exc,
     )
-    rejected = exc.request_rejected
+    rejected = getattr(exc, "request_rejected", False)
     if client_id == "admin":
         detail = str(exc)
     elif rejected:
@@ -1943,7 +1945,7 @@ async def chat_completions(
                     return _cli_error_response(exc, client_id)
                 if isinstance(exc, ProviderQuotaError):
                     return _quota_error_response(exc, client_id)
-                if isinstance(exc, ProviderHTTPError):
+                if isinstance(exc, (ProviderHTTPError, ProviderNetworkError)):
                     return _provider_http_error_response(exc, client_id)
                 if "timeout" in err_str.lower():
                     return JSONResponse(
@@ -2123,7 +2125,7 @@ async def chat_completions(
             if isinstance(exc, ProviderQuotaError):
                 return _quota_error_response(exc, client_id)
             # Before the timeout test: the provider's body can say "timeout".
-            if isinstance(exc, ProviderHTTPError):
+            if isinstance(exc, (ProviderHTTPError, ProviderNetworkError)):
                 return _provider_http_error_response(exc, client_id)
             if "timeout" in err_str.lower():
                 return JSONResponse(
@@ -2263,7 +2265,7 @@ async def chat_completions(
         if isinstance(exc, ProviderQuotaError):
             return _quota_error_response(exc, client_id)
         # Before the timeout test: the provider's body can say "timeout".
-        if isinstance(exc, ProviderHTTPError):
+        if isinstance(exc, (ProviderHTTPError, ProviderNetworkError)):
             return _provider_http_error_response(exc, client_id)
         # 503 + Retry-After for timeouts (client can retry), 502 for other errors
         if "timeout" in err_str.lower():
