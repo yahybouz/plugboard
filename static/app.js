@@ -32,6 +32,28 @@ async function logout(explicit) {
   location.href = explicit ? "/login?logged_out=1" : "/login";
 }
 
+// Revoke every dashboard session, this one included (stolen cookie, lost
+// device). A refusal leaves every session open, so the page stays and says so.
+async function logoutEverywhere() {
+  if (!await confirmAction(
+    "Log out every browser and device signed in to this dashboard, this one included?",
+    "Log out everywhere")) return;
+  let res;
+  try {
+    res = await fetch("/auth/admin/logout-all", { method: "POST" });
+  } catch (e) {
+    console.debug("logout-all request failed:", e);
+    toast("Could not log out everywhere (network error). Try again.", "error");
+    return;
+  }
+  // 401: this session was already revoked, which is the goal anyway.
+  if (res.status === 204 || res.status === 401) {
+    location.href = "/login?logged_out=1";
+    return;
+  }
+  toast("Could not log out everywhere (HTTP " + res.status + "). Sessions are unchanged.", "error");
+}
+
 function currentMonth() {
   const d = new Date();
   return d.getFullYear() + "_" + String(d.getMonth() + 1).padStart(2, "0");
@@ -107,6 +129,7 @@ async function refreshVersionBadge() {
 })();
 
 document.getElementById("logout-btn").addEventListener("click", function () { logout(true); });
+document.getElementById("logout-all-btn").addEventListener("click", logoutEverywhere);
 
 // Mobile menu
 const mobileBtn = document.getElementById("mobile-menu-btn");
