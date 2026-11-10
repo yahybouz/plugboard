@@ -13,7 +13,7 @@ colons, tags and Hugging Face namespaces remain opaque to the CLI layer.
 
 ## Published model ID as a third spelling
 
-Status: unreleased, after 4.4.1.
+Status: unreleased, after 4.5.0.
 
 `/v1/models` shows the three CLI providers under a display alias:
 `claude-code:<model>`, `Codex:<model>`, `Gemini:<model>`. An `allowed_models`

@@ -46,20 +46,26 @@ The response contains the record and, once, the plaintext key in `"key"`.
 |---|---|---|
 | `monthly_limit_usd` | `PLUGBOARD_DEFAULT_MONTHLY_LIMIT_USD` (10) | Monthly budget in USD for this key. `0` means unlimited. |
 | `rpm_limit` | `PLUGBOARD_DEFAULT_RPM_LIMIT` (60) | Requests per minute for this key. `0` means unlimited. |
-| `allowed_models` | empty (all models) | List of exact model IDs. A request is allowed when the model that serves it equals one entry, as `<provider-id>:<model>` or as the bare model name. No substring, prefix, wildcard or change of case. Set through the admin API only: the dashboard form has no field for it. See [allowed models](#allowed-models). |
+| `allowed_models` | empty (all models) | List of exact model IDs. A request is allowed when the model that serves it equals one entry, written as the bare model name, as `<provider-id>:<model>` or as the full ID `/v1/models` lists for it. No substring, prefix, wildcard or change of case. Set through the admin API only: the dashboard form has no field for it. See [allowed models](#allowed-models). |
 | `org_id` | empty | Organisation used for grouped reporting. |
 
 ### Allowed models
 
-Each entry is compared, as a whole string, with the provider and model that serve the request:
+Each entry is compared, as a whole string, with the provider and model that serve the request. One model can be listed under three spellings, here the Codex CLI model `gpt-6.1-sol`:
 
-- Write an entry as `<provider-id>:<model>`, with the provider ID shown on the Providers page. The display prefixes `/v1/models` uses for the CLI providers (`claude-code:`, `Codex:`, `Gemini:`) are not provider IDs: an entry written with one does not allow that model.
+| Spelling | Example |
+|---|---|
+| bare model name | `gpt-6.1-sol` |
+| `<provider-id>:<model>` | `chatgpt-via-codex-cli:gpt-6.1-sol` |
+| full ID listed by `/v1/models` | `Codex:gpt-6.1-sol` |
+
+- The provider ID is the one shown on the Providers page. `/v1/models` lists the CLI providers under a display prefix instead (`claude-code:`, `Codex:`, `Gemini:`). An entry equal to the full ID it lists for a model allows that model; the prefix alone (`Codex:`) allows nothing. A provider whose ID is the prefix itself owns that spelling, and `/v1/models` then lists the CLI under its provider ID ([details](../model-access-correction.md#published-model-id-as-a-third-spelling)).
 - A bare model name (`qwen3:8b`) allows that name on every provider.
-- Clients should send the model as `<provider-id>:<model>`, spelled like the entry. A name without a provider prefix can be routed to another provider and refused.
+- Clients should send the model with its provider, as `<provider-id>:<model>` or as the ID `/v1/models` lists. A name without a provider prefix can be routed to another provider and refused.
 - When a provider lists only dated snapshots of a model (`claude-haiku-4-5-20251001`), a request for the undated name can be served, and is then checked, under the newest dated ID once Plugboard has loaded its model list. List the dated ID and request it as it is.
 - On `/v1/chat/completions`, the `detail` of a `403` names the ID that was checked (`Model '<provider-id>:<model>' not allowed ...`) and the key's list. `/v1/embeddings` answers `403 Embedding model not permitted for this key` without them, and `/v1/preflight` gives the closed code `forbidden_model`.
 
-An entry that is only a provider prefix (`"anthropic-direct:"`) or part of a name (`"claude"` for `claude-haiku-...`) has allowed none of the models it used to cover since 4.3.1: their requests get `403`. `GET /admin/keys` shows the list of each key. A list cannot be edited, and rotating a key copies it: create a new key with full IDs, then revoke the old one ([details](../model-access-correction.md)).
+An entry that is only a provider prefix (`"anthropic-direct:"`, `"Codex:"`) or part of a name (`"claude"` for `claude-haiku-...`) has allowed none of the models it used to cover since 4.3.1: their requests get `403`. `GET /admin/keys` shows the list of each key. A list cannot be edited, and rotating a key copies it: create a new key with full IDs, then revoke the old one ([details](../model-access-correction.md)).
 
 ## How limits are enforced
 
