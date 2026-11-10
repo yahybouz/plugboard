@@ -161,10 +161,14 @@ async def infer(model_id: str, request: dict) -> dict:
     except (OSError, BrokenPipeError, ConnectionError):
         raise RuntimeFailure("worker_failed") from None
     finally:
-        if process is not None:
-            await _kill(process)
-        if workdir is not None:
-            workdir.cleanup()
-        if lock_fd is not None:
-            os.close(lock_fd)
-        _active = False
+        try:
+            if process is not None:
+                await _kill(process)
+        finally:
+            # Even when the caller's deadline cancels the reap wait: otherwise
+            # the lock and the slot stay taken and every later call is busy.
+            if workdir is not None:
+                workdir.cleanup()
+            if lock_fd is not None:
+                os.close(lock_fd)
+            _active = False

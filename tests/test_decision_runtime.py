@@ -152,6 +152,86 @@ async def test_worker_that_cannot_be_reaped_does_not_hold_the_runtime(
 
 
 @pytest.mark.asyncio
+async def test_cancellation_during_the_reap_still_frees_the_runtime(
+    runtime, monkeypatch, tmp_path
+):
+    """The caller's deadline falls while infer() waits for a killed worker
+    that cannot be reaped. The cancellation reaches the caller, and the work
+    directory, the inference lock and the worker slot are released all the
+    same: the next request is admitted instead of answering worker_busy until
+    the gateway restarts."""
+    pidfile = tmp_path / "pids"
+    spawned = []
+    real_exec = asyncio.create_subprocess_exec
+
+    async def recording_exec(*args, **kwargs):
+        proc = await real_exec(*args, **kwargs)
+        spawned.append(proc)
+        return proc
+
+    reaping = asyncio.Event()
+    real_kill = runtime._kill
+
+    async def signalling_kill(process):
+        reaping.set()
+        await real_kill(process)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", recording_exec)
+    monkeypatch.setattr(runtime, "_kill", signalling_kill)
+    # Put back by monkeypatch if the slot leaks, so later tests run.
+    monkeypatch.setattr(runtime, "_active", False)
+    monkeypatch.setattr(runtime, "TIMEOUT_SECONDS", 3.0)
+    # Long enough for the cancellation to land inside the reap wait.
+    monkeypatch.setattr(runtime, "_KILL_REAP_S", 30.0)
+    command(
+        monkeypatch,
+        runtime,
+        (
+            "import os, pathlib, subprocess, time\n"
+            "escaped = subprocess.Popen(['sleep', '60'], start_new_session=True)\n"
+            "pathlib.Path(PIDS).write_text(f'{os.getpid()} {escaped.pid}')\n"
+            "time.sleep(60)\n"
+        ).replace("PIDS", repr(str(pidfile))),
+    )
+    task = asyncio.create_task(runtime.infer("laya", {"state": "synthetic"}))
+    try:
+        await asyncio.wait_for(reaping.wait(), 15.0)
+        await asyncio.sleep(0.1)
+        # The premise: the killed worker cannot be reaped, infer() is waiting.
+        assert pidfile.exists()
+        assert not task.done()
+        task.cancel()
+        done, _ = await asyncio.wait({task}, timeout=5.0)
+        assert task in done, "infer still waiting after its cancellation"
+        assert task.cancelled()
+        for _ in range(100):
+            if spawned[0].returncode is not None:
+                break
+            await asyncio.sleep(0.05)
+        assert spawned[0].returncode == -signal.SIGKILL
+        command(monkeypatch, runtime, "print('{\"answers\":{}}')")
+        monkeypatch.setattr(runtime, "_kill", real_kill)
+        try:
+            result = await runtime.infer("laya", {"state": "synthetic"})
+        except runtime.RuntimeFailure as exc:
+            pytest.fail(f"next request refused after a cancelled reap: {exc}")
+        assert result == {"answers": {}}
+        assert not [p for p in tmp_path.iterdir() if p.name.startswith(".worker-")]
+    finally:
+        if pidfile.exists():
+            for pid in pidfile.read_text().split():
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(int(pid), signal.SIGKILL)
+        if not task.done():
+            task.cancel()
+        await asyncio.wait({task}, timeout=5.0)
+        # Let each transport close on this loop, not once the loop is gone.
+        for proc in spawned:
+            await asyncio.wait_for(proc.stdout.read(), 5.0)
+            await asyncio.wait_for(proc.wait(), 5.0)
+
+
+@pytest.mark.asyncio
 async def test_busy_worker_rejects_second_model(runtime, monkeypatch):
     command(
         monkeypatch, runtime, "import time; time.sleep(.15); print('{\"answers\":{}}')"
