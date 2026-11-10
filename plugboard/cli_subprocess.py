@@ -1138,13 +1138,16 @@ def quota_retry_after(message: str) -> Optional[int]:
     return min(int((target - now).total_seconds()), MAX_RETRY_AFTER_S)
 
 
-def _quota_fields(cli_error: str, stderr_text: str) -> Dict[str, Any]:
+def _quota_fields(
+    cli_error: str, stderr_text: str, *, rate_limited: bool = False
+) -> Dict[str, Any]:
     """quota/retry_after of a CliSubprocessError, never from the model's stdout.
 
     The CLI's own error decides; stderr is read only when the CLI gave none
-    (a retry log there must not override "model not found").
+    (a retry log there must not override "model not found"). ``rate_limited``
+    is the CLI's structured sign of an API 429 (``_claude_rate_limited``).
     """
-    quota = is_quota_error(cli_error if cli_error else stderr_text)
+    quota = rate_limited or is_quota_error(cli_error if cli_error else stderr_text)
     return {
         "quota": quota,
         "retry_after": quota_retry_after(cli_error) if quota else None,
@@ -1206,6 +1209,60 @@ def _first_jsonl_error(stdout_text: str, *, terminal_only: bool = False) -> str:
             if isinstance(code, str) and code and not assistant_error:
                 assistant_error = code[:400]
     return failed_error or result_error or last_error or assistant_error
+
+
+def _jsonl_events(stdout_text: str) -> List[Dict[str, Any]]:
+    """The JSON objects of a codex/claude JSONL stream; other lines dropped."""
+    events: List[Dict[str, Any]] = []
+    for line in stdout_text.splitlines():
+        try:
+            evt = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(evt, dict):
+            events.append(evt)
+    return events
+
+
+def _ended_in_error(stdout_text: str, kind: str) -> bool:
+    """True when the CLI's own output says the run failed, message or not.
+
+    codex ``turn.failed``; claude ``result`` with ``is_error`` or an error
+    ``subtype`` (``error_during_execution``..., which has no ``result``
+    text); an ``error`` object in gemini's payload. A codex ``error`` event
+    alone is not one: a reconnect can be followed by the answer.
+    """
+    if kind == "gemini":
+        try:
+            payload = _parse_gemini_json_stdout(stdout_text)
+        except ValueError:
+            return False
+        return isinstance(payload, dict) and bool(payload.get("error"))
+    if kind not in {"codex", "claude"}:
+        return False
+    for evt in _jsonl_events(stdout_text):
+        etype = evt.get("type")
+        if etype == "turn.failed":
+            return True
+        if etype == "result" and (
+            evt.get("is_error") is True
+            or str(evt.get("subtype") or "").startswith("error")
+        ):
+            return True
+    return False
+
+
+def _claude_rate_limited(stdout_text: str) -> bool:
+    """claude's structured sign of an API 429, whatever the error text says:
+    an ``assistant`` event with ``error: "rate_limit"`` or a ``result`` with
+    ``api_error_status: 429``."""
+    for evt in _jsonl_events(stdout_text):
+        etype = evt.get("type")
+        if etype == "assistant" and evt.get("error") == "rate_limit":
+            return True
+        if etype == "result" and evt.get("api_error_status") == 429:
+            return True
+    return False
 
 
 AGY_SIGN_IN_HINT = (
@@ -1600,6 +1657,7 @@ async def complete(
     elapsed = time.perf_counter() - t0
     stdout_text = (stdout or b"").decode("utf-8", "replace")
     stderr_text = (stderr or b"").decode("utf-8", "replace")
+    rate_limited = kind == "claude" and _claude_rate_limited(stdout_text)
 
     if proc.returncode != 0:
         # W004 (2026-05-13): Gemini CLI v0.41+ may exit != 0 due to
@@ -1651,7 +1709,7 @@ async def complete(
                 pid=proc.pid,
                 provider_name=backend.command,
                 model_id=model,
-                **_quota_fields(cli_error, stderr_text),
+                **_quota_fields(cli_error, stderr_text, rate_limited=rate_limited),
             )
     else:
         # Normal exit=0 path: extract assistant text via the shared helper.
@@ -1660,23 +1718,31 @@ async def complete(
             raise RuntimeError(f"Unsupported output_mode: {backend.output_mode}")
         # JSON decode errors on the happy path produce a CliSubprocessError with
         # context (exit=0 guarantees the CLI thought it succeeded).
-        # agy's ERROR payload without an answer, or a quota error a CLI
-        # reports while exiting 0: claude's `is_error` result would otherwise
-        # be served, and billed, as the answer. Terminal events only when
-        # there is an answer: a codex reconnect `error` followed by an answer
-        # and turn.completed is fine.
-        cli_error = _extract_cli_error(stdout_text, kind, terminal_only=bool(text))
-        if cli_error and (
-            (text is None and kind == "agy") or is_quota_error(cli_error)
+        # A run its CLI ended in error while exiting 0 is not an answer:
+        # the text that came with it (claude's `is_error` result, a partial
+        # message before codex's turn.failed, gemini's response next to an
+        # error object) would otherwise be served, billed and cached. Same
+        # for agy's ERROR payload and for a quota error. Without such an
+        # ending, only terminal events count when there is an answer: a
+        # codex reconnect `error` followed by an answer and turn.completed
+        # is fine.
+        failed = bool(text) and _ended_in_error(stdout_text, kind)
+        cli_error = _extract_cli_error(
+            stdout_text, kind, terminal_only=bool(text) and not failed
+        )
+        if failed or (
+            cli_error
+            and ((text is None and kind == "agy") or is_quota_error(cli_error))
         ):
             raise CliSubprocessError(
-                f"CLI {backend.command!r} failed: {cli_error}",
+                f"CLI {backend.command!r} failed: "
+                f"{cli_error or 'the run ended in error without a message'}",
                 exit_code=proc.returncode,
                 stderr=stderr_text[:500],
                 pid=proc.pid,
                 provider_name=backend.command,
                 model_id=model,
-                **_quota_fields(cli_error, stderr_text),
+                **_quota_fields(cli_error, stderr_text, rate_limited=rate_limited),
             )
         if text is None and backend.output_mode == "json":
             raise CliSubprocessError(
@@ -1701,7 +1767,7 @@ async def complete(
             pid=proc.pid,
             provider_name=backend.command,
             model_id=model,
-            **_quota_fields("", stderr_text),
+            **_quota_fields("", stderr_text, rate_limited=rate_limited),
         )
 
     # Only agy reports token counts; the other CLIs keep usage=0 and the
