@@ -245,12 +245,27 @@ async def _ids(client, key, path="/v1/models"):
     return [item["id"] for item in resp.json()["data"]]
 
 
-async def _chat(client, key, model):
-    return await client.post(
-        "/v1/chat/completions",
+async def _chat(client, key, model, *, stream=False):
+    body = {"model": model, "messages": [{"role": "user", "content": "Hi"}]}
+    if stream:
+        body["stream"] = True
+    return await client.post("/v1/chat/completions", headers=_auth(key), json=body)
+
+
+async def _preflight_empty_model(client, key, owner):
+    """Preflight the CLI under its alias and under its ID, without a model name."""
+    resp = await client.post(
+        "/v1/preflight",
         headers=_auth(key),
-        json={"model": model, "messages": [{"role": "user", "content": "Hi"}]},
+        json={
+            "items": [
+                {"provider": _DISPLAY[owner], "model": ""},
+                {"provider": owner, "model": ""},
+            ]
+        },
     )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["results"]
 
 
 _MODEL_LISTS = [
@@ -384,7 +399,7 @@ async def test_partial_entries_still_open_nothing(
 async def test_bare_alias_opens_nothing_when_the_cli_has_no_default_model(
     client, registry, keys, cli_calls, entry, cli
 ):
-    """Without a default model, 'Codex:' must not hand the CLI its own default."""
+    """Without a default model, 'Codex:' must not open the CLI's fallback model."""
     registry([PROVIDER_A, dict(cli, default_model="", models=[])])
     rec = _key(keys, [entry])
     assert await _ids(client, rec["key"]) == []
@@ -401,18 +416,57 @@ async def test_bare_alias_opens_nothing_when_the_cli_has_no_default_model(
 async def test_empty_model_entry_opens_nothing_when_the_cli_has_no_default_model(
     client, registry, keys, cli_calls, cli, form
 ):
-    """'chatgpt-via-codex-cli:' or '' must not hand the CLI its own default.
+    """'chatgpt-via-codex-cli:' or '' must not open a model the key never named.
 
-    Both requests resolve to the CLI with an empty model name, which the CLI
-    would run without --model, on a model the key never named.
+    Both requests resolve to the CLI with an empty model name. Past the guard,
+    cli_subprocess.complete replaces it with the default model Plugboard
+    hard-codes for that kind of CLI and passes that one with --model.
     """
     owner = cli["id"]
     registry([PROVIDER_A, dict(cli, default_model="", models=[])])
     rec = _key(keys, [f"{owner}:" if form == "owner-id" else ""])
+    # Already empty before the fix: no catalogue entry has an empty name.
     for path in _MODEL_LISTS:
         assert await _ids(client, rec["key"], path) == [], path
     for request in (_DISPLAY[owner] + ":", f"{owner}:"):
         resp = await _chat(client, rec["key"], request)
+        assert resp.status_code == 403, f"{request}: {resp.status_code} {resp.text}"
+    assert cli_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("form", ["owner-id", "empty"])
+@pytest.mark.parametrize(
+    "cli", [CODEX_CLI, CLAUDE_CLI, GEMINI_CLI], ids=lambda c: c["id"]
+)
+async def test_empty_model_entry_is_refused_on_preflight(
+    client, registry, keys, cli_calls, cli, form
+):
+    """Before the fix, the preflight pinged the CLI with the empty name."""
+    owner = cli["id"]
+    registry([PROVIDER_A, dict(cli, default_model="", models=[])])
+    rec = _key(keys, [f"{owner}:" if form == "owner-id" else ""])
+    results = await _preflight_empty_model(client, rec["key"], owner)
+    assert [(r["ok"], r.get("error")) for r in results] == [
+        (False, "forbidden_model")
+    ] * 2, results
+    assert cli_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("form", ["owner-id", "empty"])
+@pytest.mark.parametrize(
+    "cli", [CODEX_CLI, CLAUDE_CLI, GEMINI_CLI], ids=lambda c: c["id"]
+)
+async def test_empty_model_entry_is_refused_on_a_streamed_chat(
+    client, registry, keys, cli_calls, cli, form
+):
+    """Before the fix, the streamed chat answered 200 from the CLI."""
+    owner = cli["id"]
+    registry([PROVIDER_A, dict(cli, default_model="", models=[])])
+    rec = _key(keys, [f"{owner}:" if form == "owner-id" else ""])
+    for request in (_DISPLAY[owner] + ":", f"{owner}:"):
+        resp = await _chat(client, rec["key"], request, stream=True)
         assert resp.status_code == 403, f"{request}: {resp.status_code} {resp.text}"
     assert cli_calls == []
 
@@ -428,6 +482,21 @@ async def test_unrestricted_key_keeps_the_cli_default_model(
         resp = await _chat(client, rec["key"], request)
         assert resp.status_code == 200, f"{request}: {resp.status_code} {resp.text}"
     assert cli_calls == [("codex", "")] * 2
+
+
+@pytest.mark.asyncio
+async def test_unrestricted_key_keeps_preflight_and_stream_on_the_empty_name(
+    client, registry, keys, cli_calls
+):
+    """Preflight and streamed chat stay open to a key without allowed_models."""
+    registry([PROVIDER_A, dict(CODEX_CLI, default_model="", models=[])])
+    rec = _key(keys, [])
+    results = await _preflight_empty_model(client, rec["key"], _CODEX)
+    assert [(r["ok"], r.get("error")) for r in results] == [(True, None)] * 2, results
+    for request in ("Codex:", f"{_CODEX}:"):
+        resp = await _chat(client, rec["key"], request, stream=True)
+        assert resp.status_code == 200, f"{request}: {resp.status_code} {resp.text}"
+    assert cli_calls == [("codex", "")] * 4
 
 
 # ── security, through the real registry ──────────────────────────────────────
