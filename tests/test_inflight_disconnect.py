@@ -15,16 +15,22 @@ real; HTTP providers are faked with aioresponses, no network, no inference.
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import os
 import signal
 from pathlib import Path
 
 import pytest
-from aioresponses import aioresponses
+from aioresponses import CallbackResult, aioresponses
 
 from plugboard import cli_subprocess
-from tests.factories import FAKE_COMPLETION, PROVIDER_A, PROVIDER_B
+from tests.factories import (
+    FAKE_COMPLETION,
+    FAKE_STREAM_BODY,
+    PROVIDER_A,
+    PROVIDER_B,
+)
 
 AUTH = {"Authorization": "Bearer testkey"}
 
@@ -264,9 +270,13 @@ class _Abandoned:
         }
         self.task = asyncio.ensure_future(app(scope, receive, send))
 
+    def disconnect(self) -> None:
+        """Disconnect, without waiting for the gateway."""
+        self._hang_up.set()
+
     async def hang_up(self) -> None:
         """Disconnect, then give the gateway time to notice."""
-        self._hang_up.set()
+        self.disconnect()
         await asyncio.wait({self.task}, timeout=SETTLE_S)
 
     def status(self):
@@ -396,6 +406,48 @@ async def test_hang_up_during_preflight_frees_slot_and_kills_cli(
     assert inflight_cap._inflight_chat_active == 0
 
 
+@pytest.mark.parametrize("stream", [False, True], ids=["non-stream", "stream"])
+async def test_hang_up_as_the_answer_arrives_gives_200_or_499_never_500(
+    stream, client, abandon, inflight_cap
+):
+    """The answer and the hang-up race: the request ends 200 or 499, never 500.
+
+    The client hangs up as the upstream answers, the answer then comes `lag`
+    loop steps later: the disconnect reaches the gateway at every point around
+    the end of the upstream call, before and after it.
+    """
+    current: list = []
+
+    async def answer(url, **kwargs):
+        req, lag = current[-1]
+        req.disconnect()
+        for _ in range(lag):
+            await asyncio.sleep(0)
+        if stream:
+            return CallbackResult(
+                body=FAKE_STREAM_BODY, content_type="text/event-stream"
+            )
+        return CallbackResult(payload=FAKE_COMPLETION)
+
+    outcomes: dict[int, object] = {}
+    with aioresponses() as mock:
+        mock.post(OTHER_URL, callback=answer, repeat=True)
+        for lag in range(40):
+            body = {**_chat(OTHER, stream=stream), "cache": False}
+            req = abandon("/v1/chat/completions", body)
+            current.append((req, lag))
+            await asyncio.wait({req.task}, timeout=SETTLE_S)
+            assert req.task.done(), f"lag {lag}: the request never ended"
+            error = None if req.task.cancelled() else req.task.exception()
+            outcomes[lag] = repr(error) if error else req.status()
+
+    seen = collections.Counter(outcomes.values())
+    assert set(seen) <= {200, 499}, outcomes
+    assert seen[200] and seen[499], "the sweep missed the race window"
+    assert inflight_cap._get_inflight_sem()._value == inflight_cap._INFLIGHT_CHAT_MAX
+    assert inflight_cap._inflight_chat_active == 0
+
+
 # ── Non-regressions ─────────────────────────────────────────────────────────
 
 
@@ -499,3 +551,31 @@ async def test_unexpected_message_stops_the_watch_not_the_work(inflight_cap):
         SETTLE_S,
     )
     assert result == "ok"
+
+
+class _LateDisconnect:
+    """receive() as the middleware stack may give it to the watcher.
+
+    BaseHTTPMiddleware reads the client through an anyio task group: when the
+    disconnect is already there, the watcher's own cancellation is swallowed
+    and receive() still returns http.disconnect.
+    """
+
+    async def receive(self) -> dict:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            pass
+        return {"type": "http.disconnect"}
+
+
+async def test_disconnect_seen_after_the_answer_keeps_the_answer(inflight_cap):
+    work = inflight_cap._unless_client_gone(
+        _LateDisconnect(), asyncio.sleep(0.01, result="ok")
+    )
+    task = asyncio.ensure_future(work)
+    await asyncio.wait({task}, timeout=SETTLE_S)
+
+    assert task.done()
+    assert not task.cancelled(), "a disconnect after the answer cancelled it"
+    assert task.result() == "ok"

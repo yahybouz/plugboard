@@ -663,6 +663,7 @@ async def _unless_client_gone(request: Request, awaitable: Awaitable[_T]) -> _T:
     if task is None:  # pragma: no cover - always called from a request task
         return await awaitable
     hung_up = False
+    finished = False
 
     async def _watch() -> None:
         nonlocal hung_up
@@ -672,7 +673,10 @@ async def _unless_client_gone(request: Request, awaitable: Awaitable[_T]) -> _T:
             log.debug("Client watch stopped: %s", exc)
             return
         # After the body, an ASGI server only ever sends http.disconnect.
-        if message.get("type") == "http.disconnect":
+        # Once the work is over, a hang-up changes nothing: BaseHTTPMiddleware's
+        # receive (an anyio task group) can swallow watcher.cancel() and still
+        # return the disconnect, which must not cancel the finished request.
+        if message.get("type") == "http.disconnect" and not finished:
             hung_up = True
             task.cancel()
 
@@ -686,6 +690,7 @@ async def _unless_client_gone(request: Request, awaitable: Awaitable[_T]) -> _T:
             raise _ClientGone() from None
         raise
     finally:
+        finished = True  # before the first await: see _watch
         watcher.cancel()
         await _asyncio.wait([watcher])
     if hung_up:
