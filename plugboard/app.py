@@ -930,6 +930,74 @@ def _is_admin_session(token: str) -> bool:
     return bool(record.get("mfa")) or not _mfa.is_required()
 
 
+# PB-SEC-06: SameSite=Strict keeps the session cookie off cross-site requests
+# only. A page served on another port of the same host is same-site, so the
+# browser still attaches the cookie to the forms and fetches that page sends.
+_STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_CROSS_SITE_REFUSED = "Cross-site request refused"
+
+
+def _origin_is_this_host(origin: str, request: Request) -> bool:
+    """``Origin`` names the host and port the request was sent to.
+
+    The scheme is not compared: behind a TLS proxy the app sees plain HTTP.
+    """
+    from urllib.parse import urlsplit
+
+    try:
+        sent_from = urlsplit(origin)
+        sent_to = urlsplit("//" + request.headers.get("host", ""))
+        default_port = {"http": 80, "https": 443}.get(sent_from.scheme)
+        return bool(sent_from.hostname) and (
+            sent_from.hostname == sent_to.hostname
+            and (sent_from.port or default_port) == (sent_to.port or default_port)
+        )
+    except ValueError:
+        return False
+
+
+def _is_cross_origin_browser_request(request: Request) -> bool:
+    """The browser says another origin sent this request.
+
+    ``Sec-Fetch-Site`` decides when present (anything but ``same-origin``);
+    otherwise ``Origin`` when present. A page cannot set either header; a
+    request without both does not come from a browser page.
+    """
+    site = request.headers.get("sec-fetch-site")
+    if site is not None:
+        return site.strip().lower() != "same-origin"
+    origin = request.headers.get("origin")
+    if origin is not None:
+        return not _origin_is_this_host(origin, request)
+    return False
+
+
+def _refuse_cross_site_session(request: Request) -> None:
+    """403 for a state-changing request that the dashboard session cookie
+    authenticates but another origin sent (CSRF).
+
+    The admin key in ``Authorization`` carries its own authority: such a
+    request is not refused, nor any request the cookie does not authenticate.
+    """
+    if request.method not in _STATE_CHANGING_METHODS:
+        return
+    if not _is_cross_origin_browser_request(request):
+        return
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if _is_admin_key(token):
+        return
+    if not _is_admin_session(request.cookies.get(_ADMIN_COOKIE_NAME, "")):
+        return
+    log.warning(
+        "auth rejected reason=cross_site_session method=%s path=%s",
+        request.method,
+        request.url.path,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN, detail=_CROSS_SITE_REFUSED
+    )
+
+
 def _should_use_secure_cookie(request: Request) -> bool:
     """Resolve cookie secure policy from env; default 'auto' secures non-local hosts."""
     if _COOKIE_SECURE_MODE in {"true", "1", "yes", "on"}:
@@ -1013,6 +1081,7 @@ def _resolve_client(request: Request) -> Optional[str]:
     if not bearer_is_lle:
         session_token = request.cookies.get(_ADMIN_COOKIE_NAME, "")
         if _is_admin_session(session_token):
+            _refuse_cross_site_session(request)
             request.state.key_id = "admin"
             log.debug(
                 "auth resolved client_id=admin via=admin_cookie dev_mode=%s",
@@ -1161,6 +1230,7 @@ def _require_admin(request: Request) -> None:
 
     outcome = _admin_request_auth(request)
     if outcome == "ok":
+        _refuse_cross_site_session(request)
         return
     if outcome == "locked":
         raise HTTPException(
