@@ -246,11 +246,11 @@ def cli_fails(monkeypatch):
 
     state: dict = {}
 
-    def _setup(kind: str, stdout: bytes) -> None:
+    def _setup(kind: str, stdout: bytes, stderr: bytes = _STDERR) -> None:
         proc = MagicMock()
         proc.returncode = 1
         proc.pid = 4242
-        proc.communicate = AsyncMock(return_value=(stdout, _STDERR))
+        proc.communicate = AsyncMock(return_value=(stdout, stderr))
         monkeypatch.setattr(cs, "_resolve_binary", lambda cmd: f"/fake/bin/{cmd}")
         monkeypatch.setattr(
             cs.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc)
@@ -292,8 +292,74 @@ async def test_cli_quota_error_keeps_details_for_the_admin(client, cli_fails):
 
 
 @pytest.mark.asyncio
-async def test_cli_error_other_than_quota_stays_502(client, client_key, cli_fails):
-    cli_fails("claude", b'{"type":"error","message":"model overloaded"}\n')
+@pytest.mark.parametrize(
+    "message",
+    ["model overloaded", "Input exceeds the context length limit"],
+)
+async def test_cli_error_other_than_quota_stays_502(
+    client, client_key, cli_fails, message
+):
+    event = '{"type":"error","message":"%s"}\n' % message
+    cli_fails("claude", event.encode())
     resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
 
     assert resp.status_code == 502, resp.text
+
+
+# codex `exec --json` out of ChatGPT quota: the reason is in stdout's events
+# (codex exits 1 on such an error); stderr may only hold an unrelated line.
+_CODEX_USAGE_LIMIT = (
+    b'{"type":"thread.started","thread_id":"0199-test"}\n'
+    b'{"type":"turn.started"}\n'
+    b'{"type":"error","message":"You\'ve hit your usage limit. Upgrade to Pro'
+    b' or try again at 6:00 PM."}\n'
+    b'{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit.'
+    b' Upgrade to Pro or try again at 6:00 PM."}}\n'
+)
+_CODEX_STDERR = (
+    b"ERROR codex_core::codex: failed to record rollout items:"
+    b" thread 0199-test not found /home/op/.codex\n"
+)
+
+
+@pytest.mark.asyncio
+async def test_codex_usage_limit_gives_429_with_the_reopening_time(
+    client, client_key, cli_fails
+):
+    cli_fails("codex", _CODEX_USAGE_LIMIT, _CODEX_STDERR)
+    resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
+
+    assert resp.status_code == 429, resp.text
+    assert "Retry-After" not in resp.headers  # a time without a time zone
+    detail = resp.json()["detail"]
+    assert "codex" in detail and "retry after 6:00 PM" in detail
+    # Composed by the gateway: none of the CLI's text, stderr or pid.
+    for leak in ("hit your", "Upgrade", "rollout", "/home/op", "4242"):
+        assert leak not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_claude_hit_your_limit_gives_429(client, client_key, cli_fails):
+    cli_fails(
+        "claude",
+        b'{"type":"result","is_error":true,"result":"You\'ve hit your limit"}\n',
+    )
+    resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
+
+    assert resp.status_code == 429, resp.text
+    assert "claude" in resp.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "You've hit your usage limit. Upgrade to Pro or try again later.",
+        "You’ve hit your limit",
+        "Claude AI usage limit reached",
+        '{"error": {"code": "insufficient_quota"}}',
+    ],
+)
+def test_reported_quota_formats_are_recognised(message):
+    from plugboard.cli_subprocess import is_quota_error
+
+    assert is_quota_error(f"CLI 'x' exited 1: {message}")

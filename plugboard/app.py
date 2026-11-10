@@ -110,7 +110,11 @@ from plugboard.legacy_connectors import (
 )
 from plugboard.decisions import is_decision_model
 from plugboard.cli_auth import AuthError
-from plugboard.cli_subprocess import CliSubprocessError, is_quota_error
+from plugboard.cli_subprocess import (
+    CliSubprocessError,
+    is_quota_error,
+    quota_retry_time,
+)
 from plugboard.router import (
     ProviderQuotaError,
     discover_models,
@@ -1459,13 +1463,16 @@ def _for_caller(completion: Dict[str, Any], client_id: Optional[str]) -> Dict[st
     }
 
 
-def _quota_detail(provider: str, retry_after: Optional[int]) -> str:
+def _quota_detail(
+    provider: str, retry_after: Optional[int], retry_at: Optional[str] = None
+) -> str:
     """Reason given to a client key: composed here, never the upstream text."""
-    when = (
-        f"retry after {retry_after} seconds"
-        if retry_after is not None
-        else "retry later"
-    )
+    if retry_after is not None:
+        when = f"retry after {retry_after} seconds"
+    elif retry_at:
+        when = f"retry after {retry_at}"
+    else:
+        when = "retry later"
     return f"The quota or rate limit of the {provider} provider is exhausted: {when}."
 
 
@@ -1523,7 +1530,7 @@ def _cli_error_response(
     else:
         name = exc.provider_name or "CLI"
         content = {
-            "detail": _quota_detail(name, None)
+            "detail": _quota_detail(name, None, quota_retry_time(str(exc)))
             if quota
             else f"The {name} provider failed (reference {ref} in the gateway log).",
             "error_ref": ref,

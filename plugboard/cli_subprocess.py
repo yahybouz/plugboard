@@ -28,6 +28,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import sys
@@ -1030,19 +1031,33 @@ _SIGNED_OUT_MARKERS = (
 )
 
 # Lower-case fragments of a CLI that failed on its subscription quota or rate
-# limit. Only formats observed so far: claude's JSONL error event, agy's
-# ERROR payload and gemini's 429 payload/stderr.
+# limit. Only reported formats: claude's JSONL error event, agy's ERROR
+# payload, gemini's 429 payload/stderr, codex's "You've hit your usage limit"
+# event, the OpenAI "insufficient_quota" code and Claude Code's limit notices.
 _QUOTA_MARKERS = (
     "rate limit exceeded",
     "quota exceeded",
     "resource exhausted",
+    "hit your usage limit",
+    "you've hit your limit",
+    "usage limit reached",
+    "insufficient_quota",
 )
+
+# codex: "... or try again at 6:00 PM." Only the clock time is kept.
+_RETRY_TIME = re.compile(r"\btry again at (\d{1,2}:\d{2}(?:\s?[ap]m)?)\b", re.I)
 
 
 def is_quota_error(message: str) -> bool:
     """True when a CLI error says its quota or rate limit is exhausted."""
-    low = (message or "").lower()
+    low = (message or "").lower().replace("’", "'")
     return any(marker in low for marker in _QUOTA_MARKERS)
+
+
+def quota_retry_time(message: str) -> Optional[str]:
+    """Reopening time a quota error gives ("6:00 PM"), or None."""
+    match = _RETRY_TIME.search(message or "")
+    return match.group(1).upper() if match else None
 
 
 def _first_jsonl_error(stdout_text: str) -> str:
