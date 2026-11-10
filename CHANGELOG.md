@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **The boot internet check ran every local Ollama model**: at startup the gateway sent its web-access question to each model, local Ollama models included, so the host loaded and ran every installed model in turn, for models that have no web access. The boot check now leaves them out (Ollama Cloud models are still checked). `POST /admin/models/check-internet/all` is unchanged and accepts `"skip_local": true` to do the same.
 - **An unreadable `providers.json` flooded the log**: every request reads the provider store, and each read of a broken file logged the same error. It is now logged once per version of the file (again after the file changes, or after it was readable in between); the gateway still serves no provider until the file is fixed, and still refuses to overwrite it.
 
 ## [4.5.1] — 2026-11-10

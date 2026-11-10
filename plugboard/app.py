@@ -435,7 +435,11 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
         await _asyncio.sleep(5.0)
         try:
             log.info("internet_check_on_boot: starting bulk probe (persist=True)")
-            summary = await check_all_models_internet_access({"persist": True})
+            # Local Ollama models have no web access, and probing them makes
+            # the host load and run each installed model in turn.
+            summary = await check_all_models_internet_access(
+                {"persist": True, "skip_local": True}
+            )
             log.info(
                 "internet_check_on_boot: completed total=%s online=%s offline=%s failed=%s elapsed=%.1fs",
                 summary.get("total"),
@@ -2919,6 +2923,25 @@ _BULK_INTERNET_PER_MODEL_TIMEOUT_S = max(
 _BULK_INTERNET_LOCK = _asyncio.Lock()
 
 
+def _without_local_ollama_models(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """``items`` minus the models a local Ollama runs on this host.
+
+    Ollama Cloud models (``<name>:cloud``, a tag ending in ``-cloud``) are
+    served remotely and kept.
+    """
+    from plugboard.model_identity import catalogue_native_model
+    from plugboard.ollama_admin import is_cloud_id
+    from plugboard.router import _is_ollama_provider
+
+    ollama_ids = {p["id"] for p in load_providers() if _is_ollama_provider(p)}
+
+    def _local(m: Dict[str, Any]) -> bool:
+        owner = m.get("provider") or m.get("owned_by")
+        return owner in ollama_ids and not is_cloud_id(catalogue_native_model(m))
+
+    return [m for m in items if not _local(m)]
+
+
 @app.post("/admin/models/check-internet/all")
 async def check_all_models_internet_access(
     body: Optional[Dict[str, Any]] = None,
@@ -2934,13 +2957,17 @@ async def check_all_models_internet_access(
 
     Pass ``"persist": true`` (default ``false``) to write ``internet_access``
     back into ``providers.json`` for each tested model. Pass ``"provider":
-    "<provider_id>"`` to restrict the scan to one provider.
+    "<provider_id>"`` to restrict the scan to one provider. Pass
+    ``"skip_local": true`` to leave local Ollama models out (the boot probe
+    does): they have no web access, and probing one makes the host load and
+    run it. Ollama Cloud models are still probed.
     """
     import time as _time
 
     body = body or {}
     persist: bool = bool(body.get("persist", False))
     provider_filter: Optional[str] = body.get("provider")
+    skip_local: bool = body.get("skip_local") is True
 
     if _BULK_INTERNET_LOCK.locked():
         raise HTTPException(
@@ -2960,6 +2987,14 @@ async def check_all_models_internet_access(
                     or m.get("provider") == provider_filter
                 )
             ]
+        if skip_local:
+            before = len(items)
+            items = _without_local_ollama_models(items)
+            if before != len(items):
+                log.info(
+                    "bulk_internet_check: %d local Ollama model(s) skipped",
+                    before - len(items),
+                )
 
         semaphore = _asyncio.Semaphore(_BULK_INTERNET_CONCURRENCY)
         results: List[Dict[str, Any]] = []
