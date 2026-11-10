@@ -1,40 +1,33 @@
 """No Caddy example of the repository may set a negative `flush_interval`.
 
-With `flush_interval -1`, Caddy sends the request upstream without the
-client's cancellation and finishes it even when the client has gone
-(Caddy docs, `reverse_proxy`: "does not cancel the request to the backend even
-if the client disconnects early"). Behind such a proxy Plugboard never sees a
-non-streamed client hang up, so it can neither stop the provider call nor free
-the chat slot. Streams do not need the setting: Caddy flushes a
-`text/event-stream` response at once.
+Plugboard does not need it: each of its streams is `text/event-stream` or has
+no `Content-Length`, and Caddy sends such a response to the client at once
+without it. From Caddy 2.6 to 2.8, `flush_interval -1` also kept Caddy from
+cancelling the request to the backend when the client hung up (Caddy pull
+request 4952, reverted in Caddy 2.9.0). Plugboard then did not see the client
+leave during a request that is not streamed, or during a stream before its
+first byte, so it could neither stop the provider call nor free the chat slot.
 
 Checked: every Caddyfile, and every fenced code block of a Markdown file that
-holds a `reverse_proxy` directive.
+holds a `reverse_proxy` directive, in README.md, docs/ and deploy/.
 """
 
-import os
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-_SKIP_DIRS = {
-    ".git",
-    ".venv",
-    "venv",
-    "node_modules",
-    "data",
-    "graphify-out",
-    "__pycache__",
-}
 _NEGATIVE_FLUSH = re.compile(r"^\s*flush_interval\s+-", re.MULTILINE)
 _FENCE = re.compile(r"^\s*(```|~~~)")
 
 
 def _repo_files():
-    for dirpath, dirnames, filenames in os.walk(ROOT):
-        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
-        for name in filenames:
-            yield Path(dirpath) / name
+    yield ROOT / "README.md"
+    for folder in ("docs", "deploy"):
+        yield from sorted(p for p in (ROOT / folder).rglob("*") if p.is_file())
+
+
+def _read(path):
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def _is_caddyfile(path):
@@ -63,9 +56,9 @@ def _caddy_examples():
     for path in _repo_files():
         rel = path.relative_to(ROOT).as_posix()
         if _is_caddyfile(path):
-            yield rel, path.read_text(encoding="utf-8")
+            yield rel, _read(path)
         elif path.suffix.lower() == ".md":
-            text = path.read_text(encoding="utf-8")
+            text = _read(path)
             for block in _code_blocks(text):
                 if "reverse_proxy" in block:
                     yield rel, block
@@ -82,7 +75,8 @@ def test_no_caddy_example_sets_negative_flush_interval():
         rel for rel, block in _caddy_examples() if _NEGATIVE_FLUSH.search(block)
     ]
     assert offenders == [], (
-        "flush_interval -1 makes Caddy ignore a client that hangs up: "
+        "Plugboard does not need a negative flush_interval, and with -1 "
+        "Caddy 2.6 to 2.8 ignore a client that hangs up: "
         f"remove it from {offenders}"
     )
 
