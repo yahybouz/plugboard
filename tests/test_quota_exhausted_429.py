@@ -380,6 +380,23 @@ _NOT_QUOTA = [
         1,
         id="disk-quota",
     ),
+    # The CLI's error says something else: a retry log in stderr is ignored.
+    pytest.param(
+        "gemini",
+        b'{"error":{"type":"ApiError","message":"models/x is not found","code":1}}',
+        b"Retrying after error: Resource has been exhausted (e.g. check quota).\n",
+        1,
+        id="gemini-not-found-with-a-quota-retry-log",
+    ),
+    # gemini's error object must be the whole stdout, not a line the model
+    # wrote among others.
+    pytest.param(
+        "gemini",
+        b'The API may answer:\n{"error":{"message":"quota exceeded"}}\nThen retry.',
+        b"",
+        1,
+        id="gemini-model-text-holds-an-error-line",
+    ),
 ]
 
 
@@ -408,6 +425,41 @@ _CODEX_STDERR = (
     b"ERROR codex_core::codex: failed to record rollout items:"
     b" thread 0199-test not found /home/op/.codex\n"
 )
+
+
+@pytest.mark.asyncio
+async def test_codex_reconnect_error_then_answer_is_served(
+    client, client_key, cli_route
+):
+    """A transient `error` event (openai/codex#32984) is not the outcome."""
+    stdout = (
+        b'{"type":"thread.started","thread_id":"0199-test"}\n'
+        b'{"type":"turn.started"}\n'
+        b'{"type":"error","message":"Reconnecting... 1/5 (rate limit exceeded)"}\n'
+        b'{"type":"item.completed","item":{"id":"item_0","type":"agent_message",'
+        b'"text":"Paris."}}\n'
+        b'{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":2}}\n'
+    )
+    cli_route("codex", stdout, returncode=0)
+    resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["choices"][0]["message"]["content"] == "Paris."
+
+
+@pytest.mark.asyncio
+async def test_codex_turn_failed_on_quota_with_exit_0_gives_429(
+    client, client_key, cli_route
+):
+    stdout = (
+        b'{"type":"turn.started"}\n'
+        b'{"type":"turn.failed","error":{"message":"You\'ve hit your usage'
+        b' limit."}}\n'
+    )
+    cli_route("codex", stdout, returncode=0)
+    resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
+
+    assert resp.status_code == 429, resp.text
 
 
 @pytest.fixture

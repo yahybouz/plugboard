@@ -998,14 +998,18 @@ def _parse_gemini_json_stdout(stdout_text: str) -> Any:
     raise json.JSONDecodeError("Unable to parse Gemini JSON payload", stdout_text, 0)
 
 
-def _extract_cli_error(stdout_text: str, kind: str) -> str:
+def _extract_cli_error(
+    stdout_text: str, kind: str, *, terminal_only: bool = False
+) -> str:
     """Pull the first actionable error message from a CLI's stdout stream.
 
     Codex and Claude CLIs emit JSONL events; a non-zero exit is usually
     preceded by `{"type":"error",...}` or `{"type":"turn.failed",...}`
     with a nested JSON payload describing WHY. Surfacing that text gives
     the user something actionable instead of "Reading additional input
-    from stdin..." (a harmless stderr warning).
+    from stdin..." (a harmless stderr warning). ``terminal_only`` (exit 0)
+    ignores codex/claude events that do not end the run; agy and gemini
+    write one final payload.
     """
     if kind == "agy":
         return _extract_agy_error(stdout_text)
@@ -1013,7 +1017,7 @@ def _extract_cli_error(stdout_text: str, kind: str) -> str:
         return _extract_gemini_error(stdout_text)
     if kind not in {"codex", "claude"}:
         return ""
-    msg = _first_jsonl_error(stdout_text)
+    msg = _first_jsonl_error(stdout_text, terminal_only=terminal_only)
     low = msg.lower()
     if msg and any(marker in low for marker in _SIGNED_OUT_MARKERS):
         return CLAUDE_SIGN_IN_HINT if kind == "claude" else CODEX_SIGN_IN_HINT
@@ -1023,10 +1027,13 @@ def _extract_cli_error(stdout_text: str, kind: str) -> str:
 def _extract_gemini_error(stdout_text: str) -> str:
     """Message of the ``{"error": {"type", "message", "code"}}`` object gemini
     writes on stdout with ``--output-format json`` (JsonFormatter.formatError).
+
+    The whole stdout must be that JSON: a line the model wrote among others
+    is not the CLI's error (no lenient per-line fallback here).
     """
     try:
-        payload = _parse_gemini_json_stdout(stdout_text)
-    except Exception:  # noqa: BLE001 - no JSON, no structured error
+        payload = json.loads(stdout_text.strip())
+    except ValueError:  # no strict JSON, no structured error
         return ""
     error = payload.get("error") if isinstance(payload, dict) else None
     msg = error.get("message") if isinstance(error, dict) else None
@@ -1123,24 +1130,33 @@ def quota_retry_after(message: str) -> Optional[int]:
 
 
 def _quota_fields(cli_error: str, stderr_text: str) -> Dict[str, Any]:
-    """quota/retry_after of a CliSubprocessError: the CLI's error and stderr
-    only, never the model's stdout."""
-    quota = is_quota_error(cli_error) or is_quota_error(stderr_text)
+    """quota/retry_after of a CliSubprocessError, never from the model's stdout.
+
+    The CLI's own error decides; stderr is read only when the CLI gave none
+    (a retry log there must not override "model not found").
+    """
+    quota = is_quota_error(cli_error if cli_error else stderr_text)
     return {
         "quota": quota,
         "retry_after": quota_retry_after(cli_error) if quota else None,
     }
 
 
-def _first_jsonl_error(stdout_text: str) -> str:
+def _first_jsonl_error(stdout_text: str, *, terminal_only: bool = False) -> str:
     """First error carried by a codex/claude JSONL stream, or ``""``.
 
     An ``error``/``turn.failed`` event wins; otherwise claude's final
     ``result`` event with ``is_error``, then an ``assistant`` event's
     ``error`` code (``authentication_failed`` when signed out).
+
+    ``terminal_only`` keeps only the events that end a run in failure
+    (codex ``turn.failed``, claude ``result`` with ``is_error``): a codex
+    ``error`` event can be transient ("Reconnecting... 1/5") and followed by
+    a normal answer.
     """
     result_error = ""
     assistant_error = ""
+    skipped = {"error", "assistant"} if terminal_only else set()
     for line in stdout_text.splitlines():
         line = line.strip()
         if not line:
@@ -1150,6 +1166,8 @@ def _first_jsonl_error(stdout_text: str) -> str:
         except json.JSONDecodeError:
             continue
         etype = str(evt.get("type") or "")
+        if etype in skipped:
+            continue
         if etype in {"error", "turn.failed"}:
             # Payload shape: `{"error": {"message": "..."}}` or `{"message": "..."}`
             msg = evt.get("message") or (evt.get("error") or {}).get("message") or ""
@@ -1630,8 +1648,9 @@ async def complete(
         # context (exit=0 guarantees the CLI thought it succeeded).
         # agy's ERROR payload without an answer, or a quota error a CLI
         # reports while exiting 0: claude's `is_error` result would otherwise
-        # be served, and billed, as the answer.
-        cli_error = _extract_cli_error(stdout_text, kind)
+        # be served, and billed, as the answer. Terminal events only: a codex
+        # reconnect `error` followed by an answer and turn.completed is fine.
+        cli_error = _extract_cli_error(stdout_text, kind, terminal_only=True)
         if cli_error and (
             (text is None and kind == "agy") or is_quota_error(cli_error)
         ):
