@@ -77,11 +77,13 @@ async def test_completions_no_auth_header(client):
 
 @pytest.mark.asyncio
 async def test_completions_backend_error_returns_502(client):
+    # A provider failure; a request the provider rejects (400) stays a 400
+    # (test_http_provider_error_body).
     with aioresponses() as mock:
         mock.post(
             "http://fake-llm.test/v1/chat/completions",
-            status=400,
-            body="bad request",
+            status=403,
+            body="forbidden",
         )
         resp = await client.post(
             "/v1/chat/completions",
