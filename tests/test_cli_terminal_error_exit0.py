@@ -310,6 +310,7 @@ async def test_terminal_error_at_exit_0_is_not_streamed_either(
     assert "PARTIAL-TEXT" not in resp.text
     assert ledger.usage(key_id) == []
     assert ledger.cached == []
+    assert ledger.turns == []
 
 
 @pytest.mark.asyncio
