@@ -553,6 +553,7 @@ async def forward(
     Retries on transient errors per provider, then falls back to next provider.
     """
     from plugboard.circuit_breaker import (
+        _extract_suffix,
         check_circuit,
         record_failure as cb_failure,
         record_success as cb_success,
@@ -572,9 +573,12 @@ async def forward(
         # Rewrite model to fallback
         fallback_suffix = circuit["fallback"]
         log.warning("Circuit breaker: %s → fallback %s", model_str, fallback_suffix)
-        # Try to find the fallback in available models
+        # Try to find the fallback in available models. The model suffix must
+        # equal the fallback: ``gpt-5.5`` is a substring of ``gpt-5.5-pro``,
+        # and a substring match pinned the request to one route of the very
+        # model whose circuits are open, dropping the routes that answer.
         for prov, rmodel in candidates:
-            if fallback_suffix in rmodel:
+            if _extract_suffix(rmodel) == fallback_suffix:
                 model_str = f"{prov['id']}:{rmodel}"
                 body = {**body, "model": model_str}
                 candidates = _resolve_all_providers(model_str)

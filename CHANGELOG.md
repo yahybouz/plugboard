@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **Circuit breaker blind to provider-qualified models**: `forward()` recorded failures and successes under the native model name but read the breaker under the model string the client sent, so a model asked as `provider-id:model` never saw its own failures. The native circuit it opened never closed again (`/admin/circuits` showed it open for good), and the LLM pricing pass, which reads `provider-id:model`, kept choosing a provider whose calls were failing. The breaker is now read and recorded under one key per route, `provider-id:model`; an unqualified model counts as open only when every provider it is tried on is. A request to an open circuit is still sent, as before.
+- **Open circuit pinned other callers to one provider**: when every route of a model was open, the fallback rewrite looked for the `FALLBACK_MAP` entry as a substring of the native name. For a model whose fallback is a prefix of its own name (`gpt-5.5-pro` → `gpt-5.5`, `o3-pro` → `o3`, `qwen3.5` → `qwen3`…) it found the same model and narrowed the request to its first provider, so for 60 s no other provider was tried, even one that answered. Three requests refused for their own content (HTTP 400 "prompt is too long") were enough to trigger it for every caller. The rewrite now needs the model suffix to equal the fallback and no longer narrows a request to the model whose circuits are open.
 
 ## [4.5.0] — 2026-11-10
 

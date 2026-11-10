@@ -168,3 +168,34 @@ async def test_a_client_error_does_not_stop_other_callers(_providers_file, break
 
     assert result["choices"][0]["message"]["content"] == "Hello!"
     assert calls == 4
+
+
+@pytest.mark.asyncio
+async def test_client_errors_do_not_pin_other_callers_to_one_route(
+    _providers_file, breaker
+):
+    """One caller's refused requests never narrow the next caller's routes.
+
+    Three requests refused for their own content (HTTP 400) on both routes
+    open both circuits. ``gpt-5.5-pro``'s FALLBACK_MAP entry, ``gpt-5.5``, is
+    a substring of its native name: the rewrite took that for the fallback
+    model and pinned the next caller to the first route, dropping the one
+    that answers.
+    """
+    from plugboard.router import forward, served_by
+
+    model = "openai/gpt-5.5-pro"
+    refused = {"error": {"message": "prompt is too long"}}
+    with aioresponses() as mock:
+        for _ in range(3):
+            mock.post(_A, status=400, payload=refused)
+            mock.post(_B, status=400, payload=refused)
+        for _ in range(3):
+            with pytest.raises(RuntimeError, match="HTTP 400"):
+                await forward({"model": model, "messages": []})
+        mock.post(_A, exception=aiohttp.ClientConnectionError("refused"))
+        mock.post(_B, payload=FAKE_COMPLETION)
+        result = await forward({"model": model, "messages": []})
+
+    assert result["choices"][0]["message"]["content"] == "Hello!"
+    assert served_by()[0]["id"] == "other-provider"
