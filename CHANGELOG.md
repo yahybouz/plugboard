@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A context too long answered `502` outside OpenAI's format**: since 4.5.1 a client key got `400` for a context too long only when the provider said so in OpenAI's shape (a `400` or `422` with `invalid_request_error` or `context_length_exceeded`). llama.cpp (`400` `exceed_context_size_error`, or `500` on older servers), Ollama (`{"error": "prompt is too long"}`), Gemini ("exceeds the maximum number of tokens") and any `5xx` naming `context_length_exceeded` gave `502` "The provider failed", although the circuit breaker already judged them caused by the request. Both now follow one rule, the breaker's list of "too long" messages: such an error gives `400` with the gateway's own message and an `error_ref`, streamed or not, whatever the provider's status and format. A `400` that does not say so (Gemini "API key not valid", a refused region) still gives `502` and still does not count against the route's circuit.
+
 ## [4.6.0] — 2026-11-11
 
 ### Changed

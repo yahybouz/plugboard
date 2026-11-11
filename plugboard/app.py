@@ -1595,9 +1595,10 @@ def _provider_http_error_response(
 ) -> JSONResponse:
     """400 when an HTTP provider rejected the request, 502 for its other errors.
 
-    The provider rejected the request when its answer says so (413, or an
-    error type or code naming the request: ``exc.request_rejected``); the
-    status alone does not, a provider also answers 400 for its own key. A
+    The provider rejected the request when its answer says so (413, an error
+    saying the context is too long in any format, or an error type naming the
+    request: ``exc.request_rejected``); the status alone does not, a provider
+    also answers 400 for its own key. A
     provider that could not be reached gives a 502. The provider's body can
     name its account or organisation, and a network error its host and port:
     only the admin gets them. A client key gets a reason written here and a

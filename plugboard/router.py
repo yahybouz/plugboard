@@ -31,6 +31,7 @@ import aiohttp
 
 from plugboard import metrics
 from plugboard.alerts import record_provider_failure, record_provider_success
+from plugboard.circuit_breaker import is_request_too_long
 from plugboard.cli_subprocess import MAX_RETRY_AFTER_S
 from plugboard.config import load_providers
 from plugboard.logging_config import _request_id_var
@@ -105,22 +106,24 @@ class ProviderNetworkError(RuntimeError):
         self.provider_id = provider_id
 
 
-# OpenAI-style error type and code that blame the request (context too long,
-# unsupported parameter); "invalid_api_key" shares the type but blames the
-# gateway's key.
+# OpenAI-style error type that blames the request (unsupported parameter...);
+# "invalid_api_key" shares the type but blames the gateway's key.
 _REQUEST_ERROR_TYPES = frozenset({"invalid_request_error"})
-_REQUEST_ERROR_CODES = frozenset({"context_length_exceeded"})
 _GATEWAY_ERROR_CODES = frozenset({"invalid_api_key"})
 
 
 def _names_the_request(status: int, text: str) -> bool:
-    """True when a 4xx answer says the request itself is at fault.
+    """True when an error answer says the request itself is at fault.
 
-    413 says so by its status. A 400 or 422 must say it in its body
-    (``error.type`` or ``error.code``): providers also answer 400 for their
-    own key or region (Gemini: INVALID_ARGUMENT, FAILED_PRECONDITION).
+    An answer saying the context or the message is too long does, whatever
+    its status and format (llama.cpp, Ollama, Gemini, a 5xx...), by the
+    circuit breaker's own rule (``is_request_too_long``): an error the breaker
+    leaves to the request for its length gives the client 400. 413 says so by
+    its status. Otherwise a 400 or 422 must say it by its OpenAI
+    ``error.type``: providers also answer 400 for their own key or region
+    (Gemini: INVALID_ARGUMENT, FAILED_PRECONDITION).
     """
-    if status == 413:
+    if status == 413 or is_request_too_long(text):
         return True
     if status not in (400, 422):
         return False
@@ -138,7 +141,7 @@ def _names_the_request(status: int, text: str) -> bool:
     kind = kind if isinstance(kind, str) else ""
     if code in _GATEWAY_ERROR_CODES:
         return False
-    return code in _REQUEST_ERROR_CODES or kind in _REQUEST_ERROR_TYPES
+    return kind in _REQUEST_ERROR_TYPES
 
 
 def _retry_after_seconds(value: Optional[str]) -> Optional[int]:
