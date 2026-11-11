@@ -50,7 +50,7 @@ The full list is in the [configuration reference](configuration.md).
 - `ADMIN_KEY` is not empty;
 - the browser runs on the same machine and opens the URL directly (address bar or bookmark), through `localhost`, `127.0.0.1` or `::1`;
 - no proxy sits in front of the server;
-- the browser holds the operator's secret: the login token, or the cookie of a browser remembered after using it (delete `data/local_devices.json` to forget every browser);
+- the browser holds the operator's secret: the login token, or the cookie of a browser remembered after using it (**Log out everywhere** in the dashboard, or deleting `data/local_devices.json`, forgets every browser);
 - admin MFA is not enforced.
 
 Otherwise the login page asks for `ADMIN_KEY`. If you expected auto-login, the server log says why it was refused: see [Troubleshooting](troubleshooting.md#dashboard-auto-login-does-not-happen).

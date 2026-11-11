@@ -38,6 +38,8 @@ make rotate-encryption-key ARGS="--new-key-file ~/plugboard-new.key --generate"
 
 The command reads every secret with the current key and re-encrypts it with the new one, after copying the files to `data/backups/rekey-<time>/`. If one secret cannot be read, nothing is written and the command lists where it is. The new key is written to the file you name (mode 0600), never printed. When `ENCRYPTION_KEY` is set, put the content of that file in `ENCRYPTION_KEY` before starting the server; when it is empty, the command replaces `data/.encryption_key` itself. Use it to replace a key that held comment text from an older `.env.example`.
 
+A completed rotation also signs out every dashboard session and forgets the browsers remembered for local auto-login (a dry run or a refused rotation signs out nobody). If the session store cannot be rewritten, the rotation still completes and says so: use **Log out everywhere** in the dashboard once the server runs again.
+
 ## Server
 
 | Variable | Default | Description |
