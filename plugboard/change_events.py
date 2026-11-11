@@ -160,5 +160,11 @@ _pending: set = set()
 
 async def drain() -> None:
     """Wait for background webhook deliveries (tests, shutdown)."""
-    while _pending:
-        await asyncio.gather(*list(_pending), return_exceptions=True)
+    # Only the unfinished ones: a delivery that ended stays listed until its
+    # done callback runs, and gather() of finished tasks returns without
+    # giving the loop that turn, so waiting on it again would spin for ever.
+    while True:
+        running = [task for task in _pending if not task.done()]
+        if not running:
+            return
+        await asyncio.gather(*running, return_exceptions=True)
