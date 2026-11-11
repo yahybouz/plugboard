@@ -73,6 +73,8 @@ def quiet_lifespan(monkeypatch):
     )
     monkeypatch.setattr("plugboard.app.check_all_models_internet_access", _never_probe)
     monkeypatch.setattr("plugboard.change_events.drain", _noop)
+    # Loading the tiktoken encoding may download it: never from the suite.
+    monkeypatch.setattr("plugboard.tokenizer._get_encoding", lambda: None)
     monkeypatch.setattr("plugboard.http_pool.close_session", _noop)
     monkeypatch.setenv("PLUGBOARD_INTERNET_CHECK_ON_BOOT", "1")
 
@@ -102,3 +104,46 @@ async def test_internet_boot_probe_can_be_disabled(quiet_lifespan, monkeypatch):
     async with app_module._lifespan(app_module.app):
         await asyncio.sleep(0)
         assert set(_boot_tasks()) == {"subprocess-warm-up"}
+
+
+@pytest.mark.asyncio
+async def test_internet_boot_probe_skips_local_models(quiet_lifespan, monkeypatch):
+    # Probing a local Ollama model loads and runs it on the gateway host, for
+    # a model that has no web access anyway: the boot probe leaves them out.
+    seen: list[dict] = []
+    probed = asyncio.Event()
+
+    async def _record(options):
+        seen.append(options)
+        probed.set()
+        return {}
+
+    real_sleep = asyncio.sleep
+
+    async def _no_delay(_delay, *args, **kwargs):
+        await real_sleep(0)
+
+    monkeypatch.setattr("plugboard.app.check_all_models_internet_access", _record)
+    # The probe waits 5 s after boot; the test does not.
+    monkeypatch.setattr(asyncio, "sleep", _no_delay)
+    async with app_module._lifespan(app_module.app):
+        await asyncio.wait_for(probed.wait(), timeout=5)
+
+    assert seen == [{"persist": True, "skip_local": True}]
+
+
+@pytest.mark.asyncio
+async def test_boot_warms_the_tiktoken_encoding(quiet_lifespan, monkeypatch):
+    # The first token count loads (and may download) the encoding: done at
+    # boot, off the event loop, so the first request does not pay for it.
+    import threading
+
+    loaded = threading.Event()
+
+    def _load():
+        loaded.set()
+        return None
+
+    monkeypatch.setattr("plugboard.tokenizer._get_encoding", _load)
+    async with app_module._lifespan(app_module.app):
+        assert await asyncio.to_thread(loaded.wait, 5)

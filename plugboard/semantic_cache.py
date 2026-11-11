@@ -52,7 +52,7 @@ import sqlite3
 import struct
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
-from plugboard.storage import data_dir
+from plugboard.storage import data_dir, private_sqlite_file
 
 log = logging.getLogger(__name__)
 
@@ -228,8 +228,8 @@ _IDX_CREATED = (
 
 
 def _get_conn() -> sqlite3.Connection:
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    new_db = not _DB_PATH.exists()
+    # SEC-005: owner-only, the cache may hold sensitive cached responses.
+    private_sqlite_file(_DB_PATH)
     conn = sqlite3.connect(str(_DB_PATH), timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
@@ -241,12 +241,6 @@ def _get_conn() -> sqlite3.Connection:
     conn.execute(_IDX_CREATED)
     _migrate_schema(conn)
     conn.commit()
-    if new_db:
-        # SEC-005: protect cache file (may contain sensitive cached responses).
-        try:
-            os.chmod(str(_DB_PATH), 0o600)
-        except OSError as exc:
-            log.warning("chmod 0600 on %s failed: %s", _DB_PATH, exc)
     return conn
 
 

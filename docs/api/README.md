@@ -58,7 +58,11 @@ curl http://localhost:8765/v1/chat/completions \
   -d '{"model": "anthropic-direct:claude-sonnet-5-5", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-The repository also ships a small Python client, [`sdk/python`](../../sdk/python/README.md). To generate a typed client in another language, feed `openapi.json` to a generator such as [OpenAPI Generator](https://openapi-generator.tech).
+The repository also ships a small Python client, [`sdk/python`](../../sdk/python/README.md).
+
+**SDK status:** version `0.1.0`, beta, shipped in this repository only and not published on PyPI: install it from a checkout with `pip install ./sdk/python`.
+
+To generate a typed client in another language, feed `openapi.json` to a generator such as [OpenAPI Generator](https://openapi-generator.tech).
 
 ## Routes
 

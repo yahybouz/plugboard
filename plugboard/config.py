@@ -18,6 +18,7 @@ from plugboard.storage import (
     atomic_write_json,
     atomic_write_text,
     data_dir,
+    ensure_private_dir,
 )
 
 # Load `.env` as early as possible so the encryption-key resolver (and any
@@ -90,6 +91,13 @@ def dotenv_permission_warning(path: Optional[str] = None) -> Optional[str]:
 # server has booted once, without requiring operator action.
 
 _DATA_DIR = data_dir()
+# Owner-only (0700) when this process creates it: every module that writes
+# data imports this one first, and a store creating it later would leave it
+# with the default mode. An existing directory keeps its mode.
+try:
+    ensure_private_dir(_DATA_DIR)
+except OSError as _exc:  # pragma: no cover - read-only or missing mount
+    log.warning("Cannot create the data directory %s: %s", _DATA_DIR, _exc)
 PROVIDERS_FILE = _DATA_DIR / "providers.json"
 PROVIDERS_LOCK = _DATA_DIR / "providers.json.lock"
 _KEY_FILE = _DATA_DIR / ".encryption_key"
@@ -174,7 +182,7 @@ try:
     from filelock import FileLock as _FileLock
 
     def _lock():
-        _DATA_DIR.mkdir(parents=True, exist_ok=True)
+        ensure_private_dir(_DATA_DIR)
         return _FileLock(str(PROVIDERS_LOCK))
 except ImportError:
     from contextlib import contextmanager
@@ -246,14 +254,38 @@ def check_provider_domain_allowed(base_url: str) -> None:
     )
 
 
+# State (path, mtime, size) of the unreadable providers.json last reported.
+# Every request reads the file: the error is logged once per broken version
+# of it, not on every call, and again once it was readable in between.
+_unreadable_reported: Optional[tuple] = None
+
+
+def _file_state(path) -> tuple:
+    try:
+        st = path.stat()
+    except OSError:
+        return (str(path), None, None)
+    return (str(path), st.st_mtime_ns, st.st_size)
+
+
 def _read() -> Dict[str, Any]:
+    global _unreadable_reported
     if not PROVIDERS_FILE.exists():
         return {"providers": []}
     try:
-        return json.loads(PROVIDERS_FILE.read_text(encoding="utf-8"))
+        data = json.loads(PROVIDERS_FILE.read_text(encoding="utf-8"))
     except Exception as exc:
-        log.error("Failed to read providers.json: %s", exc)
+        state = _file_state(PROVIDERS_FILE)
+        if state != _unreadable_reported:
+            _unreadable_reported = state
+            log.error(
+                "Failed to read providers.json: %s (no provider is loaded until "
+                "it is fixed; logged once per version of the file)",
+                exc,
+            )
         return {"providers": []}
+    _unreadable_reported = None
+    return data
 
 
 def _write(data: Dict[str, Any]) -> None:

@@ -9,6 +9,7 @@ Falls back to character-based estimation if tiktoken unavailable.
 from __future__ import annotations
 
 import logging
+import threading
 from functools import lru_cache
 from typing import Any, Dict, List
 
@@ -40,6 +41,20 @@ def _get_encoding() -> Any | None:
             type(exc).__name__,
         )
         return None
+
+
+def warm_up_in_background() -> threading.Thread:
+    """Load the encoding now, in a daemon thread, so no request pays for it.
+
+    The first load reads tiktoken's cache or downloads the encoding (with no
+    timeout); done inside a request it would block the event loop. A daemon
+    thread never holds up shutdown, even when the download hangs.
+    """
+    thread = threading.Thread(
+        target=_get_encoding, name="tiktoken-warm-up", daemon=True
+    )
+    thread.start()
+    return thread
 
 
 def count_tokens(text: str) -> int:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import stat
 from pathlib import Path
@@ -75,6 +76,51 @@ def test_provider_write_over_corrupt_file_fails_closed(tmp_path, monkeypatch):
     assert pfile.read_text() == "{{NOT VALID JSON"
 
 
+def _config_errors(caplog) -> list[str]:
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "plugboard.config" and r.levelno >= logging.ERROR
+    ]
+
+
+def test_unreadable_providers_file_is_logged_once(tmp_path, monkeypatch, caplog):
+    # Every request reads providers.json: a broken file must not flood the log.
+    import plugboard.config as cfg
+
+    pfile = tmp_path / "providers.json"
+    pfile.write_text("{{NOT VALID JSON")
+    monkeypatch.setattr(cfg, "PROVIDERS_FILE", pfile)
+    monkeypatch.setattr(cfg, "_unreadable_reported", None, raising=False)
+
+    with caplog.at_level(logging.ERROR, logger="plugboard.config"):
+        for _ in range(3):
+            assert cfg._read() == {"providers": []}
+
+    errors = _config_errors(caplog)
+    assert len(errors) == 1
+    assert "providers.json" in errors[0]
+
+
+def test_providers_file_broken_again_is_logged_again(tmp_path, monkeypatch, caplog):
+    import plugboard.config as cfg
+
+    pfile = tmp_path / "providers.json"
+    pfile.write_text("{{NOT VALID JSON")
+    monkeypatch.setattr(cfg, "PROVIDERS_FILE", pfile)
+    monkeypatch.setattr(cfg, "_unreadable_reported", None, raising=False)
+
+    with caplog.at_level(logging.ERROR, logger="plugboard.config"):
+        cfg._read()
+        pfile.write_text('{"providers": []}')
+        assert cfg._read() == {"providers": []}
+        pfile.write_text("{{BROKEN AGAIN, LONGER")
+        cfg._read()
+        cfg._read()
+
+    assert len(_config_errors(caplog)) == 2
+
+
 def test_suite_does_not_use_the_repository_data_dir():
     repo_data = Path(storage.__file__).resolve().parent.parent / "data"
 
@@ -92,6 +138,20 @@ def test_server_refuses_to_start_without_admin_key_outside_dev_mode():
     with pytest.raises(RuntimeError, match="shorter than 16"):
         _require_admin_key_outside_dev("admin", dev_mode=False)
     _require_admin_key_outside_dev("admin", dev_mode=True)
+
+
+def test_server_refuses_a_placeholder_admin_key_outside_dev_mode():
+    # docs/guide/deployment.md shows `ADMIN_KEY=<openssl rand -hex 24>`: copied
+    # as is, that public text is long enough to pass the length check.
+    from plugboard.app import _require_admin_key_outside_dev
+
+    for placeholder in ("<openssl rand -hex 24>", " <your admin key here> "):
+        with pytest.raises(RuntimeError, match="placeholder"):
+            _require_admin_key_outside_dev(placeholder, dev_mode=False)
+        _require_admin_key_outside_dev(placeholder, dev_mode=True)
+    # A random key that merely contains angle brackets is accepted.
+    _require_admin_key_outside_dev("<4f9c2e7a1b8d3f60a5c4", dev_mode=False)
+    _require_admin_key_outside_dev("4f9c2e7a1b8d3f60a5c4>", dev_mode=False)
 
 
 def test_removed_env_over_corrupt_store_keeps_it_and_returns_no_provider(

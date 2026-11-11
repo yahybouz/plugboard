@@ -5,10 +5,13 @@ wrapper over the gateway's standard `/v1/chat/completions` endpoint.
 
 ## Install
 
+**SDK status:** version `0.1.0`, beta, shipped in this repository only and not published on PyPI: install it from a checkout with `pip install ./sdk/python`.
+
 ```bash
-pip install plugboard-sdk
+# from the root of a Plugboard checkout
+pip install ./sdk/python
 # optional async support
-pip install plugboard-sdk[async]
+pip install './sdk/python[async]'
 ```
 
 ## Quick start
