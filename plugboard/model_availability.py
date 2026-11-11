@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
-from plugboard import envcompat
+from plugboard import envcompat, netguard
 from plugboard.config import is_cli_provider as _is_cli_provider
 from plugboard.storage import atomic_write_text, data_dir
 from plugboard.model_identity import observation_owner
@@ -250,10 +250,13 @@ async def probe_ollama_model(
     *,
     base_url: str = "",
     timeout_s: float = _OLLAMA_PROBE_TIMEOUT_S,
+    public_only: bool = False,
 ) -> Dict[str, Any]:
     """Probe a single Ollama model via POST /api/generate with a minimal prompt.
 
-    Returns a dict with ``ok`` bool and ``reason`` string.
+    Returns a dict with ``ok`` bool and ``reason`` string. With
+    ``public_only`` (a protected provider, PLU-7) the probe connects to public
+    addresses only; a refusal gives reason ``egress_refused`` and the ``host``.
     """
     try:
         require_supported_model(model_id, effective_name=True)
@@ -277,7 +280,7 @@ async def probe_ollama_model(
     from plugboard.ollama import ollama_headers
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with netguard.client_session(public_only) as session:
             async with session.post(
                 f"{url}/api/generate",
                 json=payload,
@@ -299,6 +302,9 @@ async def probe_ollama_model(
     except asyncio.TimeoutError:
         return {"ok": False, "reason": f"timeout_{int(timeout_s)}s"}
     except Exception as exc:  # noqa: BLE001
+        if netguard.is_egress_refusal(exc):
+            # The guard refused a non-public address: no socket was opened.
+            return {"ok": False, "reason": netguard.EGRESS_REFUSED, "host": exc.host}
         return {"ok": False, "reason": str(exc)[:200]}
 
 
@@ -306,11 +312,14 @@ async def probe_ollama_provider(
     *,
     base_url: str = "",
     timeout_s: float = _OLLAMA_PROBE_TIMEOUT_S,
+    public_only: bool = False,
+    provider_id: str = "",
 ) -> Dict[str, Dict[str, Any]]:
     """Probe all installed Ollama models.
 
     If the Ollama daemon is unreachable, every model is marked offline.
-    Returns a dict keyed by model_id.
+    Returns a dict keyed by model_id. With ``public_only`` the probes go
+    through the egress guard, and a refusal is reported for ``provider_id``.
     """
     from plugboard import ollama as ollama_mod
 
@@ -330,8 +339,10 @@ async def probe_ollama_provider(
         if not mid:
             continue
         probe = await probe_ollama_model(
-            mid, base_url=effective_url, timeout_s=timeout_s
+            mid, base_url=effective_url, timeout_s=timeout_s, public_only=public_only
         )
+        if probe.get("reason") == netguard.EGRESS_REFUSED:
+            netguard.report_refusal(provider_id, probe["host"], "probe")
         results[mid] = {
             "connected": probe["ok"],
             "last_probed_at": now_str,
@@ -405,8 +416,13 @@ async def _probe_ollama_provider(
     provider_id: str = provider.get("id", "")
     base_url = (provider.get("base_url") or "").rstrip("/")
     try:
+        # PLU-7: a protected provider (box ticked) is probed through the
+        # public-only session, like its requests.
         ollama_results = await probe_ollama_provider(
-            base_url=base_url, timeout_s=timeout_s
+            base_url=base_url,
+            timeout_s=timeout_s,
+            public_only=netguard.is_protected(provider),
+            provider_id=provider_id,
         )
         if ollama_results:
             for mid, entry in ollama_results.items():

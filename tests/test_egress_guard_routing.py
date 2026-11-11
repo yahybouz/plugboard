@@ -11,6 +11,7 @@ refused host; a client key gets a reference to the gateway log only.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import socket
 from types import SimpleNamespace
@@ -27,6 +28,7 @@ from plugboard import (
     metrics,
     model_availability,
     netguard,
+    ollama,
     provider_watchdog,
     router,
     semantic_cache,
@@ -298,3 +300,72 @@ async def test_embed_refusal_is_reported(monkeypatch, closed_port, recorders):
     monkeypatch.setattr(config, "get_provider", {"acme": acme}.get)
     assert await semantic_cache._embed("hello") is None
     assert recorders.reports == [("acme", "127.0.0.1", "embed")]
+
+
+@pytest.fixture
+async def ollama_upstream(monkeypatch):
+    """A local Ollama counting ``POST /api/generate``, named ``ollama.test``.
+
+    Simulated DNS: ``ollama.test`` answers the loopback address (a public name
+    later pointed inside, DNS rebinding); any other name fails, so the test
+    never reaches a real resolver.
+    """
+    state = SimpleNamespace(calls=0, port=0)
+
+    async def generate(request: web.Request) -> web.Response:
+        state.calls += 1
+        return web.json_response({"response": "OK"})
+
+    async def getaddrinfo(host, port, **kw):
+        if host != "ollama.test":
+            raise OSError(f"no DNS in tests: {host}")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port))]
+
+    async def installed():
+        return [{"name": "llama3:latest"}]
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(ollama, "list_models", installed)
+    app = web.Application()
+    app.router.add_post("/api/generate", generate)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    state.port = site.port
+    try:
+        yield state
+    finally:
+        await runner.cleanup()
+
+
+def _ollama_lab(port: int, *, ticked: bool) -> dict:
+    """A manual sovereign provider the connectivity probe treats as Ollama."""
+    provider = {
+        "id": "ollama-lab",
+        "name": "ollama-lab",
+        "provider_type": "sovereign",
+        "base_url": f"http://ollama.test:{port}",
+        "models": [{"id": "llama3:latest"}],
+    }
+    if ticked:
+        provider["egress_guard"] = True
+    return provider
+
+
+async def test_ollama_probe_guards_only_protected(ollama_upstream, recorders):
+    probe = model_availability._probe_ollama_provider
+    ticked = _ollama_lab(ollama_upstream.port, ticked=True)
+    assert netguard.is_protected(ticked)
+    assert model_availability._is_ollama_provider_dict(ticked)
+
+    refused = await probe(ticked, kinds={"ollama"}, now_str="t", timeout_s=5)
+    entry = refused["ollama-lab:llama3:latest"]
+    assert entry["connected"] is False and entry["reason"] == "egress_refused"
+    assert ollama_upstream.calls == 0
+    assert recorders.reports == [("ollama-lab", "ollama.test", "probe")]
+
+    plain = _ollama_lab(ollama_upstream.port, ticked=False)
+    reached = await probe(plain, kinds={"ollama"}, now_str="t", timeout_s=5)
+    assert reached["ollama-lab:llama3:latest"]["connected"] is True
+    assert ollama_upstream.calls == 1
