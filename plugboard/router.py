@@ -29,7 +29,7 @@ from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
 
 import aiohttp
 
-from plugboard import envcompat, metrics
+from plugboard import envcompat, metrics, netguard
 from plugboard.alerts import record_provider_failure, record_provider_success
 from plugboard.circuit_breaker import is_request_too_long
 from plugboard.cli_subprocess import MAX_RETRY_AFTER_S
@@ -104,6 +104,22 @@ class ProviderNetworkError(RuntimeError):
     def __init__(self, message: str, *, provider_id: str):
         super().__init__(message)
         self.provider_id = provider_id
+
+
+class ProviderEgressRefused(ProviderNetworkError):
+    """The egress guard refused a protected provider's non-public address (PLU-7).
+
+    The gateway's decision, not the provider's failure: it never counts
+    against the circuit breaker nor the provider_down alert. The message names
+    the host, so it stays with the server log and the admin.
+    """
+
+    def __init__(self, provider_id: str, host: str):
+        super().__init__(
+            f"[{provider_id}] egress refused: {host} resolves to a non-public address",
+            provider_id=provider_id,
+        )
+        self.host = host
 
 
 # OpenAI-style error type that blames the request (unsupported parameter...);
@@ -726,11 +742,12 @@ async def forward(
         check_circuit(_circuit_key(route_provider, route_model))
 
     last_err: Optional[Exception] = None
-    # PERF-2: reuse the app-wide pooled session (keepalive + DNS cache)
+    # PERF-2: reuse the app-wide pooled sessions (keepalive + DNS cache)
     # instead of opening a new TCP+TLS connection per forwarded request.
-    from plugboard.http_pool import get_session as _get_http_session
+    # PLU-7: the session is picked per candidate, public-only for a
+    # protected provider. Looked up at call time so a fake intercepts.
+    from plugboard.http_pool import session_for
 
-    session = await _get_http_session()
     for provider, real_model in candidates:
         if route_guard is not None:
             route_guard(provider, real_model)
@@ -817,6 +834,7 @@ async def forward(
                     pass
                 continue
 
+        session = await session_for(provider)
         effective_timeout = timeout
         url = openai_url(provider["base_url"], "chat/completions")
         try:
@@ -928,6 +946,16 @@ async def forward(
                         metrics.record(provider["id"], 0.0, error=True)
                     except Exception:
                         pass
+                    if netguard.is_egress_refusal(exc):
+                        # The guard refused a non-public address: no socket
+                        # was opened. Not the provider's fault (no circuit,
+                        # no provider_down count), reported once per window,
+                        # never retried: next provider.
+                        last_err = ProviderEgressRefused(provider["id"], exc.host)
+                        netguard.report_refusal(provider["id"], exc.host, "forward")
+                        provider_fault = False
+                        provider_failed = True
+                        break
                     detail = str(exc) or type(exc).__name__
                     last_err = ProviderNetworkError(
                         f"[{provider['id']}] network error: {detail[:200]}",
