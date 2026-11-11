@@ -450,7 +450,9 @@ async def test_direct_test_is_public_only_for_presets(client, monkeypatch):
         seen.append(kwargs.get("public_only"))
         return {"status": "ok"}
 
-    monkeypatch.setattr(app_mod, "_test_openai_endpoint", fake)
+    # By name: the module the client serves, which a test that re-imports
+    # plugboard.app (test_audit_e2e) makes another object than app_mod.
+    monkeypatch.setattr("plugboard.app._test_openai_endpoint", fake)
     await client.post(
         "/admin/direct-providers/test",
         headers=AUTH,
