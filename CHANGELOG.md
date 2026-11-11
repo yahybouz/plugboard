@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **Keyless mode no longer listens on a network**: with `API_KEY` and `ADMIN_KEY` both empty (allowed with `PLUGBOARD_DEV=1`), every route is open, the admin API and the dashboard included, and `run.py` listened on `0.0.0.0` when `HOST` was unset. `run.py`, and so `make dev`, the Docker image, Railway and the systemd unit, now refuses to start on any `HOST` other than `127.0.0.1`, `localhost` or `::1` in that mode, and says how to fix it: run `make init` (or set `ADMIN_KEY` and `API_KEY`), or set `HOST=127.0.0.1`. Started another way (`uvicorn plugboard.app:app --host 0.0.0.0`), the server answers `403` with the same advice to any request that does not arrive on a loopback interface (a Unix socket included); proxy headers and the `Host` header do not count. An instance with either key set is unchanged, and the default `HOST` stays `0.0.0.0` ([troubleshooting](docs/guide/troubleshooting.md#api_key-and-admin_key-are-both-empty-refusing-to-listen-on-0000)).
+
 ### Fixed
 
 - **A context too long answered `502` outside OpenAI's format**: since 4.5.1 a client key got `400` for a context too long only when the provider said so in OpenAI's shape (a `400` or `422` with `invalid_request_error` or `context_length_exceeded`). llama.cpp (`400` `exceed_context_size_error`, or `500` on older servers), Ollama (`{"error": "prompt is too long"}`), Gemini ("exceeds the maximum number of tokens") and any `5xx` naming `context_length_exceeded` gave `502` "The provider failed", although the circuit breaker already judged them caused by the request. Both now follow one rule, the breaker's list of "too long" messages: such an error gives `400` with the gateway's own message and an `error_ref`, streamed or not, whatever the provider's status and format. A `400` that does not say so (Gemini "API key not valid", a refused region) still gives `502` and still does not count against the route's circuit.
