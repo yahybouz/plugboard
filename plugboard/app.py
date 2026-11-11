@@ -5646,8 +5646,15 @@ async def admin_logout(request: Request):
 
 @app.post("/auth/admin/logout-all", include_in_schema=False, status_code=204)
 async def admin_logout_all(request: Request, _: None = Depends(_require_admin)):
-    """Revoke every admin session (this one included), then clear its cookie."""
+    """Revoke every admin session (this one included), then clear its cookie.
+
+    Browsers remembered for local auto-login are forgotten first: otherwise
+    their next visit to /login would open a new session at once.
+    """
+    from plugboard import local_login
+
     try:
+        local_login.forget_devices()
         admin_sessions.revoke_all()
     except OSError as exc:
         log.error("Admin sessions not revoked: %s", exc)

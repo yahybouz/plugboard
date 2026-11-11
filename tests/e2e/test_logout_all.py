@@ -63,6 +63,25 @@ async def test_log_out_everywhere_signs_out_other_browsers(browser, e2e_server):
         await ctx_b.close()
 
 
+async def test_signed_out_browser_is_not_signed_back_in(browser, e2e_server):
+    # The E2E server is a local install with auto-login: B is a remembered
+    # browser. Reloading must show the login form, not open a new session.
+    ctx_a, a, ctx_b, b = await _two_browsers(browser, e2e_server)
+    try:
+        await a.page.locator("#logout-all-btn").click()
+        await a.page.locator(".confirm-modal").get_by_role("button", name=_OK).click()
+        await a.page.wait_for_url("**/login**", timeout=10_000)
+        await b.page.reload(wait_until="domcontentloaded")
+        assert "/login" in b.page.url, b.page.url
+        assert await _status(b) == 401
+        await a.page.goto(f"{e2e_server}/dashboard", wait_until="domcontentloaded")
+        assert "/login" in a.page.url, a.page.url
+        assert await _status(a) == 401
+    finally:
+        await ctx_a.close()
+        await ctx_b.close()
+
+
 async def test_cancel_keeps_every_session(browser, e2e_server):
     ctx_a, a, ctx_b, b = await _two_browsers(browser, e2e_server)
     try:
