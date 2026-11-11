@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from plugboard import envcompat
+from plugboard import live_requests as _live
 
 log = logging.getLogger(__name__)
 
@@ -1697,6 +1698,7 @@ async def complete(
         t0 = time.perf_counter()
         # Per-backend semaphore: cap concurrent spawns to PLUGBOARD_SUBPROCESS_LIMIT
         # so a burst of requests can't fork-bomb the host (TM-001 mitigation).
+        _live.update(phase="cli_queue")
         async with _get_semaphore(kind):
             try:
                 proc = await asyncio.create_subprocess_exec(
@@ -1728,6 +1730,7 @@ async def complete(
                     model_id=model,
                 ) from exc
 
+            _live.update(phase="cli_running", pid=proc.pid)
             stdin_bytes = (
                 prompt.encode("utf-8") if backend.input_mode == "stdin" else None
             )
@@ -1755,6 +1758,7 @@ async def complete(
                     await _kill_group(proc)
 
     elapsed = time.perf_counter() - t0
+    _live.update(phase="cli_parse")
     stdout_text = (stdout or b"").decode("utf-8", "replace")
     stderr_text = (stderr or b"").decode("utf-8", "replace")
     rate_limited = kind == "claude" and _claude_rate_limited(stdout_text)

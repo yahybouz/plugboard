@@ -35,6 +35,7 @@ from plugboard.alerts import record_provider_failure, record_provider_success
 from plugboard.circuit_breaker import is_request_too_long
 from plugboard.cli_subprocess import MAX_RETRY_AFTER_S, CliSubprocessError
 from plugboard.config import load_providers
+from plugboard import live_requests as _live
 from plugboard.logging_config import _request_id_var
 from plugboard.endpoints import openai_url
 from plugboard.legacy_connectors import (
@@ -819,9 +820,11 @@ async def forward(
                 # one deadline for the whole request (PLUGBOARD_PROVIDER_WAIT_S).
                 if deadline is None:
                     deadline = loop.time() + provider_admission.WAIT_S
+                _live.update(phase="waiting_provider")
                 granted = await provider_admission.wait_acquire(
                     [p for p, _ in busy], deadline - loop.time()
                 )
+                _live.update(phase="running")
                 if granted is None:
                     break
                 pid = granted.provider_id
@@ -1138,9 +1141,11 @@ async def forward_stream(
         route_guard(provider, real_model)
     lease = provider_admission.try_acquire(provider)
     if lease is None:
+        _live.update(phase="waiting_provider")
         lease = await provider_admission.wait_acquire(
             [provider], provider_admission.WAIT_S
         )
+        _live.update(phase="running")
     if lease is None:
         raise ProvidersBusyError([provider["id"]])
     try:

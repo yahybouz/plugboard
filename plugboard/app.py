@@ -97,6 +97,7 @@ from plugboard.config import (
     mask_token,
     update_provider,
 )
+from plugboard import live_requests as _live
 from plugboard.logging_config import _request_id_var, setup_logging
 from plugboard.metrics import get_stats
 from plugboard.ratelimit import check_client_rate_limit, check_rate_limit
@@ -614,7 +615,7 @@ def _get_inflight_sem() -> Optional["_asyncio.Semaphore"]:
     return _inflight_chat_sem
 
 
-async def _inflight_chat_dep():
+async def _inflight_chat_dep(request: Request):
     """FastAPI dependency enforcing the global inflight cap.
 
     Uses the yield-style contract: code before `yield` runs before the
@@ -623,31 +624,42 @@ async def _inflight_chat_dep():
     keeps its slot for the entire stream duration — critical for DoS
     protection, since streaming is where the real resource cost lives.
     """
-    sem = _get_inflight_sem()
-    if sem is None:
-        yield
-        return
-    wait_s = _INFLIGHT_WAIT_S
+    # PLU-13: every chat call is listed in /v1/inflight, cap or not.
+    rid = _request_id_var.get()
+    _live.begin(rid, request.url.path, request.headers.get(_live.SURFACE_HEADER))
     try:
-        # wait_for(timeout=0) races with the acquire; use a 1 ms floor so
-        # a free slot is consistently grabbed while a saturated sem rejects.
-        await _asyncio.wait_for(sem.acquire(), timeout=wait_s if wait_s > 0 else 0.001)
-    except _asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Server overloaded: the limit of concurrent chat requests is "
-                f"reached, retry in {_INFLIGHT_RETRY_AFTER_S} s"
-            ),
-            headers={"Retry-After": str(_INFLIGHT_RETRY_AFTER_S)},
-        )
-    global _inflight_chat_active
-    _inflight_chat_active += 1
-    try:
-        yield
+        sem = _get_inflight_sem()
+        if sem is None:
+            yield
+            return
+        wait_s = _INFLIGHT_WAIT_S
+        if wait_s > 0:
+            _live.update(rid, phase="waiting_slot")
+        try:
+            # wait_for(timeout=0) races with the acquire; use a 1 ms floor so
+            # a free slot is consistently grabbed while a saturated sem rejects.
+            await _asyncio.wait_for(
+                sem.acquire(), timeout=wait_s if wait_s > 0 else 0.001
+            )
+        except _asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Server overloaded: the limit of concurrent chat requests is "
+                    f"reached, retry in {_INFLIGHT_RETRY_AFTER_S} s"
+                ),
+                headers={"Retry-After": str(_INFLIGHT_RETRY_AFTER_S)},
+            )
+        _live.update(rid, phase="running")
+        global _inflight_chat_active
+        _inflight_chat_active += 1
+        try:
+            yield
+        finally:
+            _inflight_chat_active -= 1
+            sem.release()
     finally:
-        _inflight_chat_active -= 1
-        sem.release()
+        _live.finish(rid)
 
 
 # ── Client hang-up while the upstream works (BUG-30) ────────────────────────
@@ -875,8 +887,13 @@ class _RequestIdMiddleware(BaseHTTPMiddleware):
         rid = uuid.uuid4().hex[:16]
         token = _request_id_var.set(rid)
         try:
-            response = await call_next(request)
+            try:
+                response = await call_next(request)
+            except Exception:
+                _live.set_status(rid, 500)
+                raise
             response.headers["X-Request-ID"] = rid
+            _live.set_status(rid, response.status_code)
             return response
         finally:
             _request_id_var.reset(token)
@@ -1950,6 +1967,16 @@ def _require_chat_messages(
             )
 
 
+def _live_note(model: str, client_id: Optional[str]) -> None:
+    """Tell /v1/inflight which model, provider and caller this request is."""
+    provider_id = None
+    try:
+        provider_id = resolve_provider_and_model(model)[0].get("id")
+    except Exception:  # unknown model: the admission checks answer it
+        pass
+    _live.update(client_id=client_id, model=model[:120] or None, provider=provider_id)
+
+
 @app.post(
     "/v1/chat/completions",
     dependencies=[Depends(_inflight_chat_dep), Depends(_session_turn_dep)],
@@ -1979,6 +2006,7 @@ async def chat_completions(
         raise HTTPException(400, "Request body must be a JSON object")
     if not isinstance(body.get("model", ""), str):
         raise HTTPException(400, "model must be a string")
+    _live_note(body.get("model", ""), client_id)
     providers = load_providers()
     try:
         require_supported_model(
@@ -2938,6 +2966,24 @@ async def health_detailed(_: None = Depends(_require_admin)):
 
 
 # -- /usage/me ---------------------------------------------------------------
+
+
+@app.get("/v1/inflight")
+async def inflight_me(client_id: Optional[str] = Depends(_resolve_client)):
+    """Chat calls in flight and the last results (PLU-13).
+
+    The admin sees every call with its provider; a client key sees its own
+    calls only, without routing details.
+    """
+    if client_id is None:
+        raise HTTPException(401, "Authentication required")
+    return _live.snapshot(client_id=client_id, admin=client_id == "admin")
+
+
+@app.get("/admin/inflight", dependencies=[Depends(_require_admin)])
+async def inflight_admin():
+    """Every chat call in flight and the last results, with routing details."""
+    return _live.snapshot(admin=True)
 
 
 @app.get("/usage/me")

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
@@ -1557,6 +1557,148 @@
         "title": "Health",
         "type": "object"
       },
+      "InflightCall": {
+        "additionalProperties": true,
+        "description": "One chat call: running, or finished (then `outcome` is set).",
+        "properties": {
+          "id": {
+            "description": "The call's X-Request-ID.",
+            "title": "Id",
+            "type": "string"
+          },
+          "surface": {
+            "enum": [
+              "api",
+              "playground",
+              "mcp"
+            ],
+            "title": "Surface",
+            "type": "string"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Model"
+          },
+          "phase": {
+            "description": "waiting_slot, running, waiting_provider, cli_queue, cli_running, cli_parse, or done once finished.",
+            "title": "Phase",
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "HTTP status of the answer; null while it runs.",
+            "title": "Status"
+          },
+          "elapsed_s": {
+            "title": "Elapsed S",
+            "type": "number"
+          },
+          "phase_elapsed_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Time in the current phase; running calls only.",
+            "title": "Phase Elapsed S"
+          },
+          "slow": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "True after 60 s. A slow call is still running, not broken.",
+            "title": "Slow"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ok",
+                  "error",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Finished calls only.",
+            "title": "Outcome"
+          }
+        },
+        "required": [
+          "id",
+          "surface",
+          "phase",
+          "elapsed_s"
+        ],
+        "title": "InflightCall",
+        "type": "object"
+      },
+      "InflightResponse": {
+        "description": "The calling key's chat calls running now and its last results.",
+        "properties": {
+          "active_count": {
+            "title": "Active Count",
+            "type": "integer"
+          },
+          "active": {
+            "items": {
+              "$ref": "#/components/schemas/InflightCall"
+            },
+            "title": "Active",
+            "type": "array"
+          },
+          "recent": {
+            "description": "At most 20, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/InflightCall"
+            },
+            "title": "Recent",
+            "type": "array"
+          },
+          "server_time": {
+            "title": "Server Time",
+            "type": "number"
+          }
+        },
+        "required": [
+          "active_count",
+          "active",
+          "recent",
+          "server_time"
+        ],
+        "title": "InflightResponse",
+        "type": "object"
+      },
       "ModelEntry": {
         "additionalProperties": true,
         "properties": {
@@ -3005,6 +3147,49 @@
           },
           "401": {
             "description": "A client API key is required; the admin key is refused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit or monthly spending limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/inflight": {
+      "get": {
+        "summary": "The calling key's chat calls running now, with their phase, and the last results",
+        "operationId": "get_v1_inflight",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InflightResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
             "content": {
               "application/json": {
                 "schema": {

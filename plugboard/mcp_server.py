@@ -169,7 +169,8 @@ def _auth_headers(admin: bool = False, json_body: bool = False) -> dict[str, str
     # Client calls use the client key only: the admin key would bypass the
     # per-key budget, rate and model limits.
     key = _ADMIN_KEY if admin else _API_KEY
-    headers: dict[str, str] = {}
+    # PLU-13: lets /v1/inflight say the call came from the MCP server.
+    headers: dict[str, str] = {"X-Plugboard-Surface": "mcp"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
     if json_body:
@@ -678,6 +679,35 @@ async def check_usage() -> str:
                 f"  - {model}: {stats.get('entries', 0)} calls, ${stats.get('cost_usd', 0):.4f}"
             )
 
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def inflight_requests() -> str:
+    """Show the chat calls running right now and the last results.
+
+    Use it when a call is slow, to tell "still running" from "broken": each
+    running call shows its model, how long it has run and its phase (queued,
+    calling the provider, CLI running...). A call flagged slow is still
+    running. Only the calls made with this client's key are listed.
+    """
+    data = await _api_get("/v1/inflight")
+    if "error" in data:
+        return f"Error: {data['error']}"
+    lines = [f"**In flight:** {data.get('active_count', 0)}"]
+    for e in data.get("active", []):
+        slow = " (slow, still running)" if e.get("slow") else ""
+        lines.append(
+            f"- {e.get('model') or '-'} via {e.get('surface')}: "
+            f"{e.get('elapsed_s')}s, {e.get('phase')}{slow}"
+        )
+    lines.append("")
+    lines.append("**Last results:**")
+    for e in data.get("recent", [])[:10]:
+        lines.append(
+            f"- {e.get('model') or '-'} via {e.get('surface')}: "
+            f"{e.get('outcome')} {e.get('status') or ''} in {e.get('elapsed_s')}s"
+        )
     return "\n".join(lines)
 
 
