@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import errno
+import json
+import logging
 import socket
+import time
 from types import SimpleNamespace
 
 import aiohttp
 import pytest
 from aiohttp import web
 from aiohttp.abc import AbstractResolver, ResolveResult
+from aioresponses import aioresponses
+from yarl import URL
 
-from plugboard import netguard
+from plugboard import alerts, netguard
+from plugboard import audit as audit_mod
 
 NON_PUBLIC = [
     "127.0.0.1",
@@ -251,3 +258,110 @@ async def test_resolver_close_closes_inner():
 def test_who_is_protected(provider, forced, protected):
     assert netguard.guard_is_forced(provider) is forced
     assert netguard.is_protected(provider) is protected
+
+
+# -- refusal report (D-17) ---------------------------------------------------------
+
+
+@pytest.fixture
+def sent(monkeypatch, tmp_path):
+    """Fresh report state, a private audit database and a recording fake alert."""
+    calls: list[tuple[str, str]] = []
+
+    async def fake_alert(provider_id: str, host: str) -> None:
+        calls.append((provider_id, host))
+
+    monkeypatch.setattr(netguard, "_last_report", {})
+    monkeypatch.setattr(netguard, "_tasks", set())
+    monkeypatch.setattr(audit_mod, "_DB_PATH", tmp_path / "audit.db")
+    monkeypatch.setattr(alerts, "send_egress_refused_alert", fake_alert)
+    return calls
+
+
+async def test_report_refusal_once_per_window(monkeypatch, sent, caplog):
+    caplog.set_level(logging.DEBUG, logger="plugboard.netguard")
+    now = [1000.0]
+    monkeypatch.setattr(netguard, "_clock", lambda: now[0])
+    assert netguard.report_refusal("acme", "api.acme.test", "forward") is True
+    assert netguard.report_refusal("acme", "api.acme.test", "forward") is False
+    assert netguard.report_refusal("other", "o.test", "forward") is True
+    now[0] += netguard.REPORT_WINDOW_S - 1
+    assert netguard.report_refusal("acme", "api.acme.test", "probe") is False
+    now[0] += 2
+    assert netguard.report_refusal("acme", "api.acme.test", "watchdog") is True
+    await asyncio.gather(*list(netguard._tasks))
+
+    events = audit_mod.get_audit_log(action="provider.egress_refused")
+    details = [(e["target_id"], json.loads(e["details"])) for e in events]
+    assert {(e["actor"], e["target_type"]) for e in events} == {("system", "provider")}
+    assert sorted((pid, d["host"], d["source"]) for pid, d in details) == [
+        ("acme", "api.acme.test", "forward"),
+        ("acme", "api.acme.test", "watchdog"),
+        ("other", "o.test", "forward"),
+    ]
+    # The audit runs in threads, so the alerts may land in any order.
+    assert sorted(sent) == [
+        ("acme", "api.acme.test"),
+        ("acme", "api.acme.test"),
+        ("other", "o.test"),
+    ]
+    assert netguard._tasks == set()  # finished tasks drop their reference
+    levels = [r.levelno for r in caplog.records if r.name == "plugboard.netguard"]
+    assert levels.count(logging.ERROR) == 3
+    assert levels.count(logging.DEBUG) == 2
+    assert (
+        "[acme] egress refused: api.acme.test resolves to a non-public address"
+        in caplog.text
+    )
+
+
+async def test_report_refusal_does_not_block(monkeypatch, sent):
+    monkeypatch.setattr(audit_mod, "log_action", lambda *a, **k: time.sleep(0.3))
+    t0 = time.perf_counter()
+    assert netguard.report_refusal("slow", "s.test", "forward") is True
+    assert time.perf_counter() - t0 < 0.05
+    await asyncio.gather(*list(netguard._tasks))
+    assert sent == [("slow", "s.test")]
+
+
+async def test_report_refusal_survives_audit_and_alert_failures(monkeypatch, sent):
+    def broken_audit(*a, **k):
+        raise RuntimeError("audit down")
+
+    alerted = []
+
+    async def broken_alert(provider_id, host):
+        alerted.append((provider_id, host))
+        raise RuntimeError("hook down")
+
+    monkeypatch.setattr(audit_mod, "log_action", broken_audit)
+    monkeypatch.setattr(alerts, "send_egress_refused_alert", broken_alert)
+    assert netguard.report_refusal("acme", "api.acme.test", "forward") is True
+    results = await asyncio.gather(*list(netguard._tasks), return_exceptions=True)
+    assert results == [None]
+    assert alerted == [("acme", "api.acme.test")]  # a failed audit still alerts
+
+
+async def test_egress_alert_payload(monkeypatch):
+    monkeypatch.setattr(alerts, "_WEBHOOK_URL", "http://hook.test/alerts")
+    with aioresponses() as m:
+        m.post("http://hook.test/alerts", status=200)
+        await alerts.send_egress_refused_alert("acme", "api.acme.test")
+        (call,) = m.requests[("POST", URL("http://hook.test/alerts"))]
+    assert call.kwargs["json"] == {
+        "type": "provider_egress_refused",
+        "provider_id": "acme",
+        "host": "api.acme.test",
+        "message": (
+            "Provider 'acme': api.acme.test resolves to a non-public address; "
+            "requests are refused"
+        ),
+    }
+    assert call.kwargs["timeout"].total == 5
+
+
+async def test_egress_alert_without_webhook_sends_nothing(monkeypatch):
+    monkeypatch.setattr(alerts, "_WEBHOOK_URL", "")
+    with aioresponses() as m:
+        await alerts.send_egress_refused_alert("acme", "api.acme.test")
+        assert m.requests == {}

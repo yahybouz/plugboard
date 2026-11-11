@@ -7,9 +7,13 @@ any socket is opened.
 
 from __future__ import annotations
 
+import asyncio
 import errno
 import ipaddress
+import json
+import logging
 import socket
+import time
 from collections.abc import Mapping
 from typing import Any
 
@@ -17,7 +21,17 @@ import aiohttp
 import aiohttp.resolver
 from aiohttp.abc import AbstractResolver, ResolveResult
 
+from plugboard import alerts, audit
+
+log = logging.getLogger(__name__)
+
 EGRESS_REFUSED = "egress_refused"
+
+# Refusal report (D-17): one audit entry and one alert per provider per window.
+REPORT_WINDOW_S = 300.0
+_clock = time.monotonic
+_last_report: dict[str, float] = {}
+_tasks: set[asyncio.Task] = set()
 
 _CGNAT = ipaddress.ip_network("100.64.0.0/10")
 _METADATA = ipaddress.ip_address("169.254.169.254")
@@ -150,3 +164,56 @@ def is_protected(provider: Mapping[str, Any]) -> bool:
     return guard_is_forced(provider) or (
         provider.get("egress_guard") is True and _is_http(provider.get("base_url"))
     )
+
+
+def report_refusal(provider_id: str, host: str, source: str) -> bool:
+    """Report a refused connection: once per provider per ``REPORT_WINDOW_S``.
+
+    The first refusal of a window is logged as an error, then audited and
+    alerted by a background task; the caller never waits for it, so a burst of
+    refusals does not block the event loop. Later refusals of the window are
+    logged at debug level only. Nothing is disabled: the next connection is
+    checked again. Returns True when this refusal was reported.
+    """
+    now = _clock()
+    last = _last_report.get(provider_id)
+    if last is not None and now - last < REPORT_WINDOW_S:
+        log.debug(
+            "[%s] egress refused: %s resolves to a non-public address "
+            "(source: %s, already reported)",
+            provider_id,
+            host,
+            source,
+        )
+        return False
+    _last_report[provider_id] = now
+    log.error(
+        "[%s] egress refused: %s resolves to a non-public address (source: %s)",
+        provider_id,
+        host,
+        source,
+    )
+    task = asyncio.get_running_loop().create_task(
+        _audit_and_alert(provider_id, host, source)
+    )
+    _tasks.add(task)  # keep a reference until it finishes
+    task.add_done_callback(_tasks.discard)
+    return True
+
+
+async def _audit_and_alert(provider_id: str, host: str, source: str) -> None:
+    try:
+        await asyncio.to_thread(
+            audit.log_action,
+            "provider.egress_refused",
+            actor="system",
+            target_type="provider",
+            target_id=provider_id,
+            details=json.dumps({"host": host, "source": source}),
+        )
+    except Exception as exc:
+        log.warning("Egress refusal audit failed for %s: %s", provider_id, exc)
+    try:
+        await alerts.send_egress_refused_alert(provider_id, host)
+    except Exception as exc:
+        log.warning("Egress refusal alert failed for %s: %s", provider_id, exc)
