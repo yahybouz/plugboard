@@ -264,8 +264,9 @@ async def test_streamed_http_turn_is_recorded(client, session_db):
     assert session_turns._turns == {}
 
 
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v2/chat/completions"])
 async def test_next_turn_waits_until_the_streamed_answer_is_sent(
-    client, session_db, monkeypatch
+    client, session_db, monkeypatch, path
 ):
     """The turn goes back after the last streamed byte, not when the handler returns.
 
@@ -295,12 +296,10 @@ async def test_next_turn_waits_until_the_streamed_answer_is_sent(
         mock.post(URL_A, body=FAKE_STREAM_BODY, status=200)
         mock.post(URL_A, callback=upstream.reply, repeat=True)
         headers, body = _turn("A", "s6", stream=True)
-        first = asyncio.create_task(
-            client.post("/v1/chat/completions", headers=headers, json=body)
-        )
+        first = asyncio.create_task(client.post(path, headers=headers, json=body))
         await asyncio.wait_for(sending.wait(), 2)
         headers, body = _turn("B", "s6")
-        second = await client.post("/v1/chat/completions", headers=headers, json=body)
+        second = await client.post(path, headers=headers, json=body)
         assert (await first).status_code == second.status_code == 200
     assert upstream.prompts == [
         [
