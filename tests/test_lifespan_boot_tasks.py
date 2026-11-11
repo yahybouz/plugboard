@@ -10,12 +10,23 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import importlib
 
 import pytest
 
 from plugboard import app as app_module
 
 BOOT_TASK_NAMES = {"subprocess-warm-up", "internet-boot-probe"}
+
+
+# `plugboard.app` and `plugboard.tokenizer` are patched on the module objects
+# `_lifespan` really uses, not through a dotted path: other tests of the suite
+# re-import `plugboard.app` (test_audit_e2e) or swap `plugboard.tokenizer` in
+# sys.modules (test_coverage_batch2), and a dotted path then reaches another
+# copy than the one `app_module._lifespan` runs with.
+def _tokenizer_in_use():
+    """The tokenizer `_lifespan` imports (sys.modules), not the package attribute."""
+    return importlib.import_module("plugboard.tokenizer")
 
 
 class _StubScheduler:
@@ -71,10 +82,10 @@ def quiet_lifespan(monkeypatch):
     monkeypatch.setattr(
         "plugboard.cli_subprocess.warm_up_all_installed", _never_warm_up
     )
-    monkeypatch.setattr("plugboard.app.check_all_models_internet_access", _never_probe)
+    monkeypatch.setattr(app_module, "check_all_models_internet_access", _never_probe)
     monkeypatch.setattr("plugboard.change_events.drain", _noop)
     # Loading the tiktoken encoding may download it: never from the suite.
-    monkeypatch.setattr("plugboard.tokenizer._get_encoding", lambda: None)
+    monkeypatch.setattr(_tokenizer_in_use(), "_get_encoding", lambda: None)
     monkeypatch.setattr("plugboard.http_pool.close_session", _noop)
     monkeypatch.setenv("PLUGBOARD_INTERNET_CHECK_ON_BOOT", "1")
 
@@ -123,7 +134,7 @@ async def test_internet_boot_probe_skips_local_models(quiet_lifespan, monkeypatc
     async def _no_delay(_delay, *args, **kwargs):
         await real_sleep(0)
 
-    monkeypatch.setattr("plugboard.app.check_all_models_internet_access", _record)
+    monkeypatch.setattr(app_module, "check_all_models_internet_access", _record)
     # The probe waits 5 s after boot; the test does not.
     monkeypatch.setattr(asyncio, "sleep", _no_delay)
     async with app_module._lifespan(app_module.app):
@@ -144,6 +155,6 @@ async def test_boot_warms_the_tiktoken_encoding(quiet_lifespan, monkeypatch):
         loaded.set()
         return None
 
-    monkeypatch.setattr("plugboard.tokenizer._get_encoding", _load)
+    monkeypatch.setattr(_tokenizer_in_use(), "_get_encoding", _load)
     async with app_module._lifespan(app_module.app):
         assert await asyncio.to_thread(loaded.wait, 5)
