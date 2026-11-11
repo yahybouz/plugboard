@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **The preflight pinged and billed a model no provider knows**: since 4.8.0 the chat routes answer `404 model_not_found` without calling any provider for such a model, but `POST /v1/preflight` did not apply the rule: a pair whose `<provider>:<model>` no provider knows (a mistyped provider ID, for example) was sent to the active providers in turn, as chat requests were before 4.8.0, and a ping one of them answered was billed. Such a pair now answers `"ok": false` with the closed code `"error": "model_not_found"`, for every caller (the admin key included), without a ping and without a usage line. The check comes in the chat route's place: after `budget_exceeded` and `forbidden_model`, so a key limited by `allowed_models` still gets `forbidden_model` and cannot learn which models exist, and before `price_unavailable` and the RPM count. A known model, a known provider prefix and a family alias `/v1/models` publishes are pinged as before. API contract 1.4.0: `model_not_found` added to the preflight's `error` codes ([details](docs/api/README.md#404-model_not_found)).
+
 ## [4.8.0] — 2026-11-11
 
 ### Added

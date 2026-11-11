@@ -2605,22 +2605,43 @@ class _PreflightRequest(BaseModel):
 
 
 def _preflight_refusal(
-    client_id: str, model_str: str, key_record: Optional[Dict[str, Any]]
+    client_id: Optional[str], model_str: str, key_record: Optional[Dict[str, Any]]
 ) -> Optional[str]:
-    """Closed error code of the first chat admission check the item fails."""
+    """Closed error code of the first chat admission check the item fails.
+
+    The chat route's checks, in its order. The key's own checks apply to a
+    client key only; ``model_not_found`` (router.is_unknown_model) applies to
+    every caller, after the key's 403 so a limited key cannot probe which IDs
+    exist, and before the 402 and the rpm count.
+    """
+    keyed = bool(client_id) and client_id != "admin"
+
+    def _known() -> None:
+        if is_unknown_model(model_str):
+            raise HTTPException(404, "model_not_found")
+
     checks = (
-        ("budget_exceeded", lambda: _check_spending_limit(client_id, key_record)),
+        (
+            "budget_exceeded",
+            keyed,
+            lambda: _check_spending_limit(client_id, key_record),
+        ),
         (
             "forbidden_model",
+            keyed,
             lambda: _check_model_access(client_id, model_str, key_record=key_record),
         ),
+        ("model_not_found", True, _known),
         (
             "price_unavailable",
+            keyed,
             lambda: _check_price_known(client_id, model_str, key_record),
         ),
-        ("rate_limited", lambda: _check_client_rpm(client_id, key_record)),
+        ("rate_limited", keyed, lambda: _check_client_rpm(client_id, key_record)),
     )
-    for code, check in checks:
+    for code, applies, check in checks:
+        if not applies:
+            continue
         try:
             check()
         except HTTPException:
@@ -2637,8 +2658,9 @@ async def preflight(
     """Smoke-test a batch of provider+model pairs before a long benchmark.
 
     Each ping goes through the chat admission checks (allowed_models, budget,
-    known price, rpm; the inflight cap holds for the whole batch) and is billed
-    like a chat call. Errors are closed codes, never the provider's text.
+    a model some provider knows, known price, rpm; the inflight cap holds for
+    the whole batch) and is billed like a chat call. Errors are closed codes,
+    never the provider's text.
     """
     key_record = _get_request_key_record(request, client_id=client_id)
     key_id = getattr(request.state, "key_id", "")
@@ -2655,7 +2677,7 @@ async def preflight(
             resolve_provider_and_model(model_str)
         except Exception:
             error = "unknown_model"
-        if error is None and client_id and client_id != "admin":
+        if error is None:
             error = _preflight_refusal(client_id, model_str, key_record)
         if error is None:
             # Minimal ping to verify the pipe is open

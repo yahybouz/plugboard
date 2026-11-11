@@ -178,6 +178,8 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 
 `code` is stable, test it rather than the text. `detail` echoes the model you sent, cut after 100 characters. A key limited by `allowed_models` gets `403` for a model outside its list, whether a provider knows it or not, so the `404` only tells it about models it may use. A budgeted key gets this `404` rather than a `402` for a missing price. A model with a known provider prefix (`anthropic-direct:no-such-model`) is still sent to that provider, which answers for it (`502` when it refuses).
 
+`POST /v1/preflight` applies the same rule to each pair, read as `<provider>:<model>`: such a pair answers `"ok": false` with `"error": "model_not_found"`, and is neither pinged nor billed. As on chat, a limited key gets `forbidden_model` first, and a budgeted key gets `model_not_found` rather than `price_unavailable`.
+
 ## MCP
 
 The MCP server (stdio, SSE or streamable HTTP) wraps the same API for MCP clients: `chat`, `chat_stream`, `list_models`, `embed`, `list_embedding_models`, `list_decision_models`, `decide`, `check_usage`, `provider_status`, plus the update-registry tools. [`mcp.json`](mcp.json) gives each tool's input schema; [MCP server](../guide/mcp.md) explains how to install, configure and connect it.

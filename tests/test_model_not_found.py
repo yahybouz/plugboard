@@ -7,16 +7,20 @@ provider lists it), the gateway now answers 404 ``model_not_found`` with a
 hint, without calling any provider. Any ID a provider could still serve keeps
 today's routing: a bare Ollama tag a provider lists, a family alias /v1/models
 publishes for dated snapshots, a provider prefix, a model of a provider whose
-model list is unknown.
+model list is unknown. POST /v1/preflight applies the same rule to each pair
+(BUG-42): error ``model_not_found``, no ping, nothing billed.
 """
 
 from __future__ import annotations
+
+import copy
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
 from plugboard import api_contract
 from tests.conftest import _setup_providers
+from tests.factories import FAKE_COMPLETION
 
 OLLAMA = {
     "id": "ollama-gpu",
@@ -373,6 +377,122 @@ async def test_an_unknown_id_is_routed_when_a_provider_has_no_model_list(
 
     assert resp.status_code == 502, resp.text
     assert calls == ["nope:model-x"]
+
+
+# ── What the preflight answers ──────────────────────────────────────────────
+
+
+@pytest.fixture
+def pinged(http, tmp_path, monkeypatch):
+    """http, with every ping answered and billed to a usage store of its own."""
+    import plugboard.app as app_module
+    from plugboard import usage
+
+    client, auth, calls = http
+
+    async def _forward(body, **_kwargs):
+        calls.append(body.get("model"))
+        return copy.deepcopy(FAKE_COMPLETION)
+
+    monkeypatch.setattr(app_module, "forward", _forward)
+    monkeypatch.setattr(usage, "_DB_PATH", tmp_path / "usage.db")
+    monkeypatch.setattr(usage, "_schema_ready", {})
+    return client, auth, calls
+
+
+def _usage_rows() -> list:
+    from plugboard import billing, usage
+
+    return usage.get_usage(billing.current_pricing_month())
+
+
+async def _preflight(client, auth, provider: str, model: str) -> dict:
+    resp = await client.post(
+        "/v1/preflight",
+        headers=auth,
+        json={"items": [{"provider": provider, "model": model}]},
+    )
+    assert resp.status_code == 200, resp.text
+    api_contract.PreflightResponse.model_validate(resp.json())
+    (result,) = resp.json()["results"]
+    return result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("caller", ["client key", "admin key"])
+async def test_preflight_answers_model_not_found_without_a_ping(listed, pinged, caller):
+    client, auth, calls = pinged
+    if caller == "admin key":
+        auth = {"Authorization": "Bearer admin-key-for-tests"}
+
+    result = await _preflight(client, auth, "nope", "model-x")
+
+    assert result["ok"] is False
+    assert result["error"] == "model_not_found"
+    assert (result["provider"], result["model"]) == ("nope", "model-x")
+    assert calls == [], "no provider is pinged for a model no provider knows"
+    assert _usage_rows() == [], "a ping that was not sent is not billed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [("acme-direct", "acme-large"), ("acme-direct", "not-listed")],
+)
+async def test_preflight_pings_a_known_model_as_before(listed, pinged, provider, model):
+    client, auth, calls = pinged
+
+    result = await _preflight(client, auth, provider, model)
+
+    assert result["ok"] is True, result
+    assert "error" not in result
+    assert calls == [f"{provider}:{model}"]
+    assert [row["provider_id"] for row in _usage_rows()] == [provider]
+
+
+@pytest.mark.asyncio
+async def test_preflight_pings_a_family_alias_as_before(dated_only, pinged):
+    client, auth, calls = pinged
+
+    result = await _preflight(client, auth, "anthropic-direct", "claude-sonnet-4-5")
+
+    assert result["ok"] is True, result
+    assert calls == ["anthropic-direct:claude-sonnet-4-5"]
+    assert [row["provider_id"] for row in _usage_rows()] == ["anthropic-direct"]
+
+
+@pytest.mark.asyncio
+async def test_preflight_gives_a_limited_key_forbidden_model_first(listed, pinged):
+    """As on chat: a limited key cannot learn which IDs exist elsewhere."""
+    from plugboard import apikeys
+
+    client, _auth, calls = pinged
+    key = apikeys.create_key("acme", "limited", allowed_models=["acme-large"])["key"]
+
+    result = await _preflight(
+        client, {"Authorization": f"Bearer {key}"}, "nope", "model-x"
+    )
+
+    assert result["error"] == "forbidden_model"
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_preflight_gives_a_budgeted_key_model_not_found_not_a_price(
+    listed, pinged
+):
+    from plugboard import apikeys
+
+    client, _auth, calls = pinged
+    key = apikeys.create_key("acme", "budget", monthly_limit_usd=5.0)["key"]
+
+    result = await _preflight(
+        client, {"Authorization": f"Bearer {key}"}, "nope", "model-x"
+    )
+
+    assert result["error"] == "model_not_found"
+    assert calls == []
+    assert _usage_rows() == []
 
 
 # ── The contract ────────────────────────────────────────────────────────────

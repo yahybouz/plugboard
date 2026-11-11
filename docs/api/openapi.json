@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "1.3.0",
+    "version": "1.4.0",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
@@ -2271,6 +2271,7 @@
                 "enum": [
                   "unknown_model",
                   "forbidden_model",
+                  "model_not_found",
                   "budget_exceeded",
                   "price_unavailable",
                   "rate_limited",
@@ -2283,7 +2284,7 @@
               }
             ],
             "default": null,
-            "description": "Why the pair failed (closed code, never the provider's text): the model does not resolve, is not allowed for the key, the monthly budget is spent, the key has a budget and the model no known price, the key's rpm limit is reached, or the provider failed.",
+            "description": "Why the pair failed (closed code, never the provider's text): the model does not resolve, is not allowed for the key, no provider knows it (the chat routes' 404 model_not_found; not pinged), the monthly budget is spent, the key has a budget and the model no known price, the key's rpm limit is reached, or the provider failed.",
             "title": "Error"
           }
         },
