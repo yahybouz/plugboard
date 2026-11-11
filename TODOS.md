@@ -114,18 +114,16 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 **Priority:** P1
 **Depends on:** None
 
-### Remaining public-surface and robustness items
+### Docker data volume created `0755`
 
-**What:** A `model_not_found` 404 with a hint for an unknown provider prefix; `DOCS_BASE_URL` and a bundled guide at `/guide`; a cutover runbook for an existing install.
+**What:** Make a new Docker volume start `0700`: `chmod 700 /app/data` in the Dockerfile, or let the server tighten a `data/` directory it owns.
 
-**Done:** provider preset `setup_steps` in English; data directory created `0700` and SQLite stores `0600`; a short or placeholder `ADMIN_KEY` refused outside dev mode; an unreadable `providers.json` logged once instead of on every call; the tiktoken encoding warmed at startup; local Ollama models skipped by the boot internet probe; an SDK status line and an OpenAI JS snippet in `docs/api/README.md`.
+**Why:** The image creates `/app/data` with mode `0755` at build time and a new named volume takes that mode, so the `0700` the server gives a data directory it creates does not apply to Docker installs. The files inside are `0600`.
 
-**Why:** Review findings and plan items that do not block the private merge request.
+**Context:** Found while closing the public-surface items (see Completed). Needs an owner decision and a check on a real image build. The [move runbook](docs/runbooks/move-install.md) sets `0700` on a restored volume.
 
-**Context:** Deferred from plan: design-brief.md (Stage 2) and the stage 2 ship review. Each item left needs an owner decision first: the 404 changes what clients get for a model ID whose prefix names no provider (a bare Ollama tag such as `gpt-oss:20b-cloud` is routed today, and the chat contract documents no 404); `/guide` is a new public route; the runbook needs its source and target install named (the LLM Enabler 3.x upgrade steps are in the 4.0.0 CHANGELOG entry). The Docker image still creates `/app/data` with mode `0755` at build time, so a new volume starts `0755`.
-
-**Effort:** M
-**Priority:** P1
+**Effort:** S
+**Priority:** P2
 **Depends on:** None
 
 ## Auth
@@ -233,6 +231,12 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 **Depends on:** None
 
 ## Completed
+
+### Remaining public-surface and robustness items
+
+**Done:** the ten items, except the bundled guide at `/guide`, dropped (see Context). Provider preset `setup_steps` in English; data directory created `0700` and SQLite stores `0600`; a short or placeholder `ADMIN_KEY` refused outside dev mode; an unreadable `providers.json` logged once instead of on every call; the tiktoken encoding warmed at startup; local Ollama models skipped by the boot internet probe; an SDK status line and an OpenAI JS snippet in `docs/api/README.md`. Then, after the owner's decision: a chat model no provider knows answers `404 model_not_found` with a hint, while any ID a provider may serve keeps its routing (API contract 1.3.0, [details](docs/api/README.md#404-model_not_found)); `PLUGBOARD_DOCS_BASE_URL` turns the `docs/guide/...` references the dashboard gets into links; a [runbook](docs/runbooks/move-install.md) moves a 4.x install to another machine.
+
+**Context:** Deferred from plan: design-brief.md (Stage 2) and the stage 2 ship review. The bundled guide at `/guide` was dropped by the owner's decision: Plugboard serves no guide page, `PLUGBOARD_DOCS_BASE_URL` points to where the repository is published.
 
 ## Models
 
