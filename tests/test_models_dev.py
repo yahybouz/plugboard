@@ -133,6 +133,15 @@ async def test_refresh_rejects_oversized_catalog(catalog_env, raw, monkeypatch):
     assert models_dev.status()["state"] == "unavailable"
 
 
+async def test_infinite_size_cap_gives_the_default_cap(catalog_env, raw, monkeypatch):
+    # int(inf * 1024 * 1024) raised OverflowError: every refresh failed.
+    monkeypatch.setenv("PLUGBOARD_CATALOG_MAX_MB", "inf")
+    with aioresponses() as m:
+        m.get(URL, status=200, body=json.dumps(raw))
+        result = await models_dev.refresh_catalog()
+    assert result["state"] == "updated", result
+
+
 async def test_refresh_rejects_shrunk_catalog(catalog_env, raw):
     _store(catalog_env, raw)
     with aioresponses() as m:

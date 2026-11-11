@@ -118,6 +118,72 @@ def test_invalid_number_gives_the_default_and_a_warning(
     assert "PB_TEST_BAD" in caplog.text
 
 
+@pytest.mark.parametrize(
+    "reader, raw, default",
+    [
+        ("get_float", "inf", 1.5),
+        ("get_float", "-inf", 1.5),
+        ("get_float", "+Infinity", 1.5),
+        ("get_float", "1e999", 1.5),  # too large: read as infinity
+        ("get_float", "-nan", 1.5),
+        ("get_int", "inf", 7),
+        ("get_int", "-inf", 7),
+        ("get_int", "nan", 7),
+    ],
+)
+def test_infinite_number_gives_the_default_and_a_warning(
+    monkeypatch, caplog, reader, raw, default
+):
+    # Infinity passes every lower bound: a cap set to inf is no cap, and
+    # int(inf) raises OverflowError where the setting is used.
+    monkeypatch.setenv("PB_TEST_INF", raw)
+
+    with caplog.at_level("WARNING", logger="plugboard.envcompat"):
+        assert getattr(envcompat, reader)("PB_TEST_INF", default=default) == default
+
+    assert "PB_TEST_INF" in caplog.text
+
+
+def test_infinity_outside_the_bounds_gives_the_default(monkeypatch):
+    monkeypatch.setenv("PB_TEST_FLOAT", "-inf")
+    assert envcompat.get_float("PB_TEST_FLOAT", default=0.3, minimum=0.0) == 0.3
+    monkeypatch.setenv("PB_TEST_FLOAT", "inf")
+    assert envcompat.get_float("PB_TEST_FLOAT", default=20.0, above=0) == 20.0
+
+
+def test_very_long_whole_number_is_read_without_error(monkeypatch):
+    # Too large for a float: checking it as one raised OverflowError.
+    monkeypatch.setenv("PB_TEST_INT", "9" * 400)
+
+    assert envcompat.get_int("PB_TEST_INT", default=3) == int("9" * 400)
+
+
+def test_infinite_model_cap_does_not_stop_the_llm_pricing_pass(monkeypatch):
+    # int(inf) raised OverflowError: the pass stopped with an error.
+    from plugboard import llm_pricing
+
+    monkeypatch.setenv("PLUGBOARD_LLM_PRICING_MAX_MODELS", "inf")
+
+    assert llm_pricing.max_models_per_pass() == 20
+
+
+def test_infinite_budget_does_not_lift_the_llm_pricing_cap(monkeypatch):
+    from plugboard import llm_pricing
+
+    monkeypatch.setenv("PLUGBOARD_LLM_PRICING_MAX_USD", "inf")
+
+    assert llm_pricing.max_usd_per_day() == 0.50
+
+
+def test_infinite_drift_threshold_still_holds_price_changes(monkeypatch):
+    # inf held no price change for review, however large.
+    from plugboard import pricing_merge
+
+    monkeypatch.setenv("PLUGBOARD_PRICE_DRIFT_PCT", "inf")
+
+    assert pricing_merge.drift_threshold_pct() == 20.0
+
+
 def test_invalid_number_is_reported_once(monkeypatch, caplog):
     monkeypatch.setenv("PB_TEST_ONCE", "twice?")
 
@@ -178,3 +244,85 @@ def test_numeric_settings_share_the_one_reader():
         if hasattr(module, name)
     ]
     assert left == []
+
+
+def test_no_numeric_setting_is_read_inline():
+    # int(os.environ[...]) raised, at import for most settings, on a value
+    # that is not a number, and float() let nan and inf through: every
+    # numeric setting goes through envcompat.get_int / get_float.
+    import ast
+    from pathlib import Path
+
+    package = Path(envcompat.__file__).resolve().parent
+
+    def reads_env(node):
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Attribute) and sub.attr in ("environ", "getenv"):
+                return True
+            if (
+                isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Name)
+                and "env" in sub.func.id
+            ):
+                return True
+        return False
+
+    inline = [
+        f"{path.relative_to(package.parent)}:{node.lineno}"
+        for path in sorted(package.rglob("*.py"))
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("int", "float")
+        and node.args
+        and reads_env(node.args[0])
+    ]
+    assert inline == []
+
+
+def test_no_private_copy_of_the_number_reader():
+    # A function that reads a variable, then converts it with int() / float()
+    # itself, is a copy of the reader: its own messages, bounds and NaN rules.
+    import ast
+    from pathlib import Path
+
+    package = Path(envcompat.__file__).resolve().parent
+
+    def reads_env(node):
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Attribute) and sub.attr in ("environ", "getenv"):
+                return True
+            if (
+                isinstance(sub, ast.Attribute)
+                and sub.attr == "get"
+                and isinstance(sub.value, ast.Name)
+                and sub.value.id == "envcompat"
+            ):
+                return True
+        return False
+
+    copies = []
+    for path in sorted(package.rglob("*.py")):
+        if path.name == "envcompat.py":
+            continue
+        for func in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            from_env = {
+                target.id
+                for node in ast.walk(func)
+                if isinstance(node, ast.Assign) and reads_env(node.value)
+                for target in node.targets
+                if isinstance(target, ast.Name)
+            }
+            copies += [
+                f"{path.relative_to(package.parent)}:{node.lineno}"
+                for node in ast.walk(func)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in ("int", "float")
+                and node.args
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id in from_env
+            ]
+    assert sorted(set(copies)) == []

@@ -6,6 +6,8 @@ Plugboard is configured with environment variables. `run.py` and the server load
 
 Boolean flags accept `1`, `true`, `yes`, `on` unless stated otherwise. Values below are the defaults applied when the variable is unset.
 
+**Numbers.** A numeric setting whose value is not a finite number (text, `1.5` where a whole number is expected, `nan`, `inf`) keeps its default: the gateway logs one warning naming the variable and starts. `PORT` and `MCP_PORT`, read by the launch scripts `run.py` and `scripts/run_mcp.py`, are the exception: a value that is not a whole number stops them.
+
 ## Security and authentication
 
 | Variable | Default | Description |

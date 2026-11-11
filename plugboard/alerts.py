@@ -9,13 +9,15 @@ from typing import Dict
 
 import aiohttp
 
+from plugboard import envcompat
+
 log = logging.getLogger(__name__)
 
 _WEBHOOK_URL = os.environ.get("ALERT_WEBHOOK_URL", "").strip()
 
 # -- Provider failure tracking ------------------------------------------------
 
-_ALERT_THRESHOLD = int(os.environ.get("ALERT_FAILURE_THRESHOLD", "3"))
+_ALERT_THRESHOLD = envcompat.get_int("ALERT_FAILURE_THRESHOLD", default=3)
 _provider_failures: Dict[str, int] = {}
 _provider_alerted: Dict[str, float] = {}  # last alert timestamp (monotonic)
 _ALERT_COOLDOWN = 300.0  # 5 minutes between alerts for same provider

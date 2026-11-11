@@ -1288,10 +1288,7 @@ def _subprocess_extra_models(
 
 
 def _claude_latest_n() -> int:
-    try:
-        return max(1, int(os.environ.get("PLUGBOARD_CLAUDE_LATEST_N", "2")))
-    except (TypeError, ValueError):
-        return 2
+    return max(1, envcompat.get_int("PLUGBOARD_CLAUDE_LATEST_N", default=2))
 
 
 def _strip_date_tail(name: str) -> str:

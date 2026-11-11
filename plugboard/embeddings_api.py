@@ -37,6 +37,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
+from plugboard import envcompat
 from plugboard.apikeys import get_key_record
 from plugboard.embeddings_schema import EmbeddingRequest
 from plugboard.ratelimit import check_client_rate_limit
@@ -64,10 +65,7 @@ _SLOTS: dict[str, object] = {}
 
 
 def _concurrency() -> int:
-    try:
-        value = int(os.environ.get(CONCURRENCY_ENV, "") or DEFAULT_CONCURRENCY)
-    except ValueError:
-        return DEFAULT_CONCURRENCY
+    value = envcompat.get_int(CONCURRENCY_ENV, default=DEFAULT_CONCURRENCY)
     return value if 1 <= value <= 64 else DEFAULT_CONCURRENCY
 
 
@@ -103,10 +101,7 @@ def allowed_identities() -> frozenset[str]:
 
 
 def _timeout() -> float:
-    try:
-        value = float(os.environ.get(TIMEOUT_ENV, "") or DEFAULT_TIMEOUT)
-    except ValueError:
-        return DEFAULT_TIMEOUT
+    value = envcompat.get_float(TIMEOUT_ENV, default=DEFAULT_TIMEOUT)
     return value if 0 < value <= 600 else DEFAULT_TIMEOUT
 
 

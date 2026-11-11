@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import collections
-import os
 import time
 from typing import Dict
 
-_LIMIT = int(os.environ.get("RATE_LIMIT", "60"))
+from plugboard import envcompat
+
+_LIMIT = envcompat.get_int("RATE_LIMIT", default=60)
 _WINDOW = 60.0  # seconds
 
 _buckets: Dict[str, collections.deque] = {}

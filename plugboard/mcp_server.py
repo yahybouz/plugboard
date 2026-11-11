@@ -40,6 +40,7 @@ from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+from plugboard import envcompat
 from plugboard.legacy_connectors import is_removed_model, REMOVED_CONNECTOR_ERROR
 from plugboard.storage import data_dir, private_sqlite_file
 
@@ -50,7 +51,7 @@ log = logging.getLogger(__name__)
 _BASE_URL = os.environ.get("PLUGBOARD_URL", "http://localhost:8765")
 _API_KEY = os.environ.get("PLUGBOARD_API_KEY", "")
 _ADMIN_KEY = os.environ.get("PLUGBOARD_ADMIN_KEY", "")
-_TIMEOUT = int(os.environ.get("PLUGBOARD_MCP_TIMEOUT", "900"))
+_TIMEOUT = envcompat.get_int("PLUGBOARD_MCP_TIMEOUT", default=900)
 _DECISION_TIMEOUT = max(1, min(_TIMEOUT, 45))
 _DECISION_RESPONSE_LIMIT = 512 * 1024
 _EMBEDDING_TIMEOUT = max(1, min(_TIMEOUT, 120))

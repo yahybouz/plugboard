@@ -32,10 +32,11 @@ list short; set a number here to also cap each provider.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+
+from plugboard import envcompat
 
 log = logging.getLogger(__name__)
 
@@ -209,12 +210,9 @@ def _resolve_top_n(override: Optional[int]) -> int:
     """Read the top-N from explicit param > env > default."""
     if override is not None:
         return max(0, int(override))
-    raw = os.environ.get("PLUGBOARD_TOP_N_PER_PROVIDER", "")
-    try:
-        n = int(raw)
-        return max(0, n)
-    except (TypeError, ValueError):
-        return DEFAULT_TOP_N
+    return max(
+        0, envcompat.get_int("PLUGBOARD_TOP_N_PER_PROVIDER", default=DEFAULT_TOP_N)
+    )
 
 
 def top_n_per_provider(
