@@ -153,11 +153,30 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 | `401` | Missing, unknown or revoked key | Check the key |
 | `402` | The key has a monthly budget and the model has no known price; nothing was called | Ask the operator to price the model, or use a priced one |
 | `403` | The key may not use this model | Pick a model where `account_compatible` is true |
+| `404` | Chat only, `code` is `model_not_found`: no provider knows the model, so nothing was called (below) | Send an `id` from `GET /v1/models` |
 | `413` | Body over `MAX_BODY_BYTES` (10 MB) | Send less |
 | `429` | IP rate limit, key RPM limit or monthly budget | Back off; `GET /v1/me` shows the budget left |
 | `429` | The last provider tried has exhausted its quota or rate limit (a streamed request to an HTTP provider is not offered to another one); `detail` names the provider | Retry after `Retry-After` / `retry_after` seconds when set (at most 7 days), else later or with another model |
 | `502` | The provider failed | Retry later or use another model |
 | `503` | Gateway at capacity, or provider timeout | Retry after `Retry-After` / `retry_after` seconds |
+
+### `404 model_not_found`
+
+`POST /v1/chat/completions` and `/v2/chat/completions`, streamed or not, answer `404` without calling any provider when no provider knows the model:
+
+- no registered provider ID prefixes it (`<provider-id>:`, inactive providers included), and no display alias (`claude-code:`, `Codex:`, `Gemini:`) or older CLI prefix (`claude-cli:`, `codex-cli:`, `gemini-cli:`) picks an active provider;
+- no provider, active or not, lists it as a model, an extra model ID or its default model. The comparison ignores case, surrounding spaces and a `:latest` tag, as Ollama does, so `GPT-OSS:20B-Cloud` and `llama3` count as listed when `gpt-oss:20b-cloud` and `llama3:latest` are. A vendor spelling of a model a CLI provider lists counts too (`openai:gpt-6.1-sol` for the Codex CLI's `gpt-6.1-sol`);
+- every active provider has a model list. A provider without one (a custom endpoint never discovered) may serve any name: the request is then sent to the providers as before, and a model none of them serves still ends in `502`.
+
+```json
+{
+  "detail": "Model 'gpt-5-turbo' not found: no provider ID prefixes it and no provider lists it.",
+  "code": "model_not_found",
+  "hint": "GET /v1/models lists the model IDs this gateway serves: send one as written there, <provider-id>:<model>."
+}
+```
+
+`code` is stable, test it rather than the text. `detail` echoes the model you sent, cut after 100 characters. A key limited by `allowed_models` gets `403` for a model outside its list, whether a provider knows it or not, so the `404` only tells it about models it may use. A budgeted key gets this `404` rather than a `402` for a missing price. A model with a known provider prefix (`anthropic-direct:no-such-model`) is still sent to that provider, which answers for it (`502` when it refuses).
 
 ## MCP
 

@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "1.2.0"
+CONTRACT_VERSION = "1.3.0"
 _JSON = "application/json"
 
 
@@ -447,10 +447,19 @@ class ErrorResponse(_Open):
     """FastAPI's error body. Upstream timeouts (503) add `retry_after` and a
     Retry-After header, as does an exhausted provider quota (429) when the
     provider gave a delay; a failing CLI provider (502) adds its exit details
-    for the admin only."""
+    for the admin only. A chat model no provider knows (404) adds `code` and
+    `hint`."""
 
     detail: Union[str, List[Any], Dict[str, Any]]
     retry_after: Optional[int] = None
+    code: Optional[str] = Field(
+        default=None,
+        description="Stable reason for programs, when the route gives one: "
+        "model_not_found (chat, 404).",
+    )
+    hint: Optional[str] = Field(
+        default=None, description="What to do next, when the gateway knows."
+    )
 
 
 # ── Embeddings ──────────────────────────────────────────────────────────────
@@ -519,6 +528,9 @@ _CHAT_ERRORS = {
     " provider tried is exhausted (retry_after and Retry-After when it gives a delay).",
     "402": "The key has a monthly budget and the model no known price; nothing was called.",
     "403": "The key may not use this model.",
+    "404": "No provider knows the model: no provider ID prefixes it, no provider"
+    " lists it, and every active provider has a model list. code is"
+    " model_not_found, hint says what to send; nothing was called.",
     "413": "Request body larger than MAX_BODY_BYTES (10 MB by default).",
     "502": "The provider failed or answered with an error.",
     "503": "Provider timeout (retry_after) or too many concurrent requests.",

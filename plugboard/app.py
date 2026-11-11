@@ -119,6 +119,7 @@ from plugboard.router import (
     forward,
     forward_stream,
     invalidate_models_cache,
+    is_unknown_model,
     list_models,
     resolve_provider_and_model,
     served_by as _served_by,
@@ -1699,6 +1700,30 @@ def _cli_error_response(
     return JSONResponse(status_code=429, content=content, headers=headers)
 
 
+MODEL_NOT_FOUND_HINT = (
+    "GET /v1/models lists the model IDs this gateway serves: "
+    "send one as written there, <provider-id>:<model>."
+)
+
+
+def _model_not_found_response(model: str) -> JSONResponse:
+    """404 for a model ID no provider knows (router.is_unknown_model).
+
+    ``code`` is stable for programs, ``hint`` says what to do. The ID is
+    echoed, shortened, so a typo or a stray space shows.
+    """
+    shown = model if len(model) <= 100 else model[:100] + "..."
+    return JSONResponse(
+        status_code=404,
+        content={
+            "detail": f"Model '{shown}' not found: no provider ID prefixes it "
+            "and no provider lists it.",
+            "code": "model_not_found",
+            "hint": MODEL_NOT_FOUND_HINT,
+        },
+    )
+
+
 def _require_chat_messages(body: Dict[str, Any]) -> None:
     """400 for a messages field no provider can answer.
 
@@ -1799,6 +1824,11 @@ async def chat_completions(
     if route_guard is not None:
         route_guard(*resolve_provider_and_model(body.get("model", "")))
         route_options["route_guard"] = route_guard
+
+    # After the key's 403, so a limited key cannot probe which IDs exist;
+    # before the 402, which would blame a price for a model that is not there.
+    if is_unknown_model(body.get("model", "")):
+        return _model_not_found_response(body["model"])
 
     # A budget cannot hold a call whose price is unknown (402, nothing called)
     if client_id and client_id != "admin":
