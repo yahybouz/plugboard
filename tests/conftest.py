@@ -135,11 +135,17 @@ def _restore_process_state():
 
 
 @pytest.fixture(autouse=True)
-def _reset_load_state(monkeypatch: pytest.MonkeyPatch):
+def _reset_load_state():
     """Provider leases, route pauses, circuits and session turns start empty
     in every test (PLU-9, PLU-8): a circuit left open by a test must not
     reorder the next one's routes, a turn left held must not block its
-    session."""
+    session.
+
+    Without ``monkeypatch``: autouse fixtures are set up in name order, so
+    requesting it here would set it up before ``_restore_process_state``
+    and undo a test's ``setattr`` after that fixture's reset (a test that
+    sets ``decision_api._usage_down_since`` would leave the breaker open).
+    """
     from plugboard import (
         circuit_breaker,
         provider_admission,
@@ -147,13 +153,15 @@ def _reset_load_state(monkeypatch: pytest.MonkeyPatch):
         session_turns,
     )
 
+    saved = (circuit_breaker._circuits, session_turns._turns)
     provider_admission.reset()
     route_pauses.reset()
-    monkeypatch.setattr(circuit_breaker, "_circuits", {})
-    monkeypatch.setattr(session_turns, "_turns", {})
+    circuit_breaker._circuits = {}
+    session_turns._turns = {}
     yield
     provider_admission.reset()
     route_pauses.reset()
+    circuit_breaker._circuits, session_turns._turns = saved
 
 
 def _setup_providers(
