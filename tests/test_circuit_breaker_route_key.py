@@ -31,7 +31,6 @@ def breaker(monkeypatch):
 
     monkeypatch.setattr(cb, "_circuits", {})
     monkeypatch.setattr(router, "_DELAYS", [0, 0, 0])
-    monkeypatch.setattr(router, "_IN_FLIGHT_BY_PROVIDER", {})
     monkeypatch.setattr(
         router.metrics,
         "get_stats",

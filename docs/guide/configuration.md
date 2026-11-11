@@ -77,7 +77,7 @@ A completed rotation also signs out every dashboard session and forgets the brow
 |---|---|---|
 | `PLUGBOARD_RETRY_DELAYS` | `2,5,15` | Seconds to wait before each retry on `429`/`5xx` from an HTTP provider. An error saying the context is too long is not retried. |
 | `PLUGBOARD_LB_ERROR_RATE_WEIGHT` | `5.0` | Weight of the error rate in the provider score used for fallback ordering. |
-| `PLUGBOARD_LB_INFLIGHT_WEIGHT` | `0.35` | Weight of in-flight requests in that score. |
+| `PLUGBOARD_LB_INFLIGHT_WEIGHT` | `0.35` | Weight of in-flight requests in that score. Streamed requests and CLI calls count as in flight. |
 | `PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT` | `1` | Concurrent requests a local provider (Ollama, `sovereign`, loopback or private address) takes when its record sets no `max_concurrency`. `0` means no cap. |
 | `PLUGBOARD_PROVIDER_WAIT_S` | `10` | How long a request waits when every candidate provider is at its cap, before `503 providers_busy`. `0` answers at once. |
 | `PLUGBOARD_HTTP_POOL_SIZE` | `100` | Shared HTTP connection pool size. |

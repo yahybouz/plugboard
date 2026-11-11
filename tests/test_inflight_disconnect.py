@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 from aioresponses import CallbackResult, aioresponses
 
-from plugboard import cli_subprocess
+from plugboard import cli_subprocess, provider_admission
 from tests.factories import (
     FAKE_COMPLETION,
     FAKE_STREAM_BODY,
@@ -386,6 +386,7 @@ async def test_hang_up_before_http_answer_frees_slot_and_cancels_upstream(
     assert _rows_for(usage_store, PROVIDER_A["id"]) == []
     assert SLOW_HTTP not in side_effects["cached"]
     assert inflight_cap._inflight_chat_active == 0
+    assert provider_admission._active == {}
 
 
 async def test_hang_up_during_preflight_frees_slot_and_kills_cli(

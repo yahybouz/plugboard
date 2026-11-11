@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **A provider takes a limited number of requests at once**: a local provider (Ollama, `sovereign`, loopback or private `base_url`) now takes one request at a time by default (`PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT`, `0` restores 4.8.0), and any provider takes at most its `max_concurrency` when its record sets one. Every request holds a slot on its provider while it runs, streamed or not, CLI included, and gives it back when it ends, fails or the client hangs up. A request for a model without provider prefix goes to the next candidate when one is full; a full provider counts neither against its circuit breaker nor as an error.
+
+### Changed
+
+- **The load-balancing score counts every request in flight**: the in-flight part of the score that orders the candidates of a model without provider prefix (`PLUGBOARD_LB_INFLIGHT_WEIGHT`) only counted HTTP requests that were not streamed; it now counts streamed requests and CLI calls too, so the order of candidates for a model without prefix can change.
+
 ## [4.8.0] — 2026-11-11
 
 ### Added

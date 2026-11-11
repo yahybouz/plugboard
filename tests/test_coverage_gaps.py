@@ -183,7 +183,7 @@ async def test_discover_models_filters_prose(_providers_file):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# router.py — _resolve_all_providers, _track_in_flight
+# router.py — _resolve_all_providers
 # ══════════════════════════════════════════════════════════════════════════════
 
 
@@ -205,32 +205,6 @@ def test_resolve_all_no_prefix_match(tmp_path, monkeypatch):
     assert len(results) >= 2
     # First entry should use the model as-is
     assert results[0][1] == "unknown-model"
-
-
-def test_track_in_flight_cleanup():
-    """_track_in_flight cleans up counter on zero."""
-    from plugboard.router import _track_in_flight, _IN_FLIGHT_BY_PROVIDER
-
-    pid = "test-track"
-    _IN_FLIGHT_BY_PROVIDER.pop(pid, None)
-    with _track_in_flight(pid):
-        assert _IN_FLIGHT_BY_PROVIDER.get(pid) == 1
-    # After exit, should be cleaned up (popped, not 0)
-    assert pid not in _IN_FLIGHT_BY_PROVIDER
-
-
-def test_track_in_flight_nested():
-    """_track_in_flight handles nested requests."""
-    from plugboard.router import _track_in_flight, _IN_FLIGHT_BY_PROVIDER
-
-    pid = "test-nested"
-    _IN_FLIGHT_BY_PROVIDER.pop(pid, None)
-    with _track_in_flight(pid):
-        assert _IN_FLIGHT_BY_PROVIDER[pid] == 1
-        with _track_in_flight(pid):
-            assert _IN_FLIGHT_BY_PROVIDER[pid] == 2
-        assert _IN_FLIGHT_BY_PROVIDER[pid] == 1
-    assert pid not in _IN_FLIGHT_BY_PROVIDER
 
 
 # ══════════════════════════════════════════════════════════════════════════════

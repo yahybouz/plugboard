@@ -14,8 +14,9 @@ the default provider is used with the full model string as-is.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
-from contextlib import contextmanager
+from collections import deque
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,11 +26,11 @@ import os
 import re
 import time as _time
 import uuid as _uuid
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional
 
 import aiohttp
 
-from plugboard import envcompat, metrics
+from plugboard import envcompat, metrics, provider_admission
 from plugboard.alerts import record_provider_failure, record_provider_success
 from plugboard.circuit_breaker import is_request_too_long
 from plugboard.cli_subprocess import MAX_RETRY_AFTER_S
@@ -104,6 +105,22 @@ class ProviderNetworkError(RuntimeError):
     def __init__(self, message: str, *, provider_id: str):
         super().__init__(message)
         self.provider_id = provider_id
+
+
+class ProvidersBusyError(RuntimeError):
+    """Every candidate provider stayed at its concurrency cap (D-23).
+
+    A full provider is neither down nor at fault: this counts against no
+    circuit, no error metric and no alert. ``provider_ids`` names the full
+    candidates; ``retry_after`` is the delay, in seconds, the client is
+    told to wait.
+    """
+
+    retry_after = 5
+
+    def __init__(self, provider_ids: List[str]):
+        super().__init__("All candidate providers are busy: " + ", ".join(provider_ids))
+        self.provider_ids = list(provider_ids)
 
 
 # OpenAI-style error type that blames the request (unsupported parameter...);
@@ -300,7 +317,6 @@ _INFLIGHT_WEIGHT = envcompat.get_float(
     "PLUGBOARD_LB_INFLIGHT_WEIGHT", default=0.35, minimum=0.0
 )
 _DELAYS = _read_retry_delays()
-_IN_FLIGHT_BY_PROVIDER: Dict[str, int] = {}
 _LEGACY_PROVIDER_PREFIX_TO_AUTH_SOURCE: Dict[str, str] = {
     # BENCH-004: avoid fallback/latency when clients still send legacy
     # subprocess prefixes.
@@ -316,20 +332,6 @@ _LEGACY_PROVIDER_PREFIX_TO_AUTH_SOURCE: Dict[str, str] = {
 }
 
 
-@contextmanager
-def _track_in_flight(provider_id: str) -> Iterator[None]:
-    """Track in-flight requests per provider to improve load balancing decisions."""
-    _IN_FLIGHT_BY_PROVIDER[provider_id] = _IN_FLIGHT_BY_PROVIDER.get(provider_id, 0) + 1
-    try:
-        yield
-    finally:
-        remaining = _IN_FLIGHT_BY_PROVIDER.get(provider_id, 0) - 1
-        if remaining > 0:
-            _IN_FLIGHT_BY_PROVIDER[provider_id] = remaining
-        else:
-            _IN_FLIGHT_BY_PROVIDER.pop(provider_id, None)
-
-
 def _provider_lb_score(provider_id: str, stats: Dict[str, Dict[str, Any]]) -> float:
     """Lower score is better."""
     s = stats.get(provider_id, {})
@@ -337,7 +339,8 @@ def _provider_lb_score(provider_id: str, stats: Dict[str, Dict[str, Any]]) -> fl
     reqs = s.get("requests", 0)
     errs = s.get("errors", 0)
     error_rate = errs / reqs if reqs > 0 else 0.0
-    inflight = _IN_FLIGHT_BY_PROVIDER.get(provider_id, 0)
+    # Leases held on the provider: HTTP, streamed and CLI requests alike.
+    inflight = provider_admission.in_flight(provider_id)
     return (
         latency
         * (1 + error_rate * _ERROR_RATE_WEIGHT)
@@ -731,12 +734,21 @@ async def forward(
     from plugboard.http_pool import get_session as _get_http_session
 
     session = await _get_http_session()
-    for provider, real_model in candidates:
+    # A candidate at its concurrency cap is skipped, not failed (D-7, D-23):
+    # it goes to ``busy`` and the request moves on to the next one.
+    queue = deque(candidates)
+    busy: List[tuple] = []
+    while queue:
+        provider, real_model = queue.popleft()
         if route_guard is not None:
             route_guard(provider, real_model)
         # Direct CLI providers short-circuit HTTP.
         auth_source = provider.get("auth_source", "")
         if auth_source.startswith("subprocess:"):
+            lease = provider_admission.try_acquire(provider)
+            if lease is None:
+                busy.append((provider, real_model))
+                continue
             try:
                 kind = auth_source.removeprefix("subprocess:")
                 from plugboard import cli_subprocess
@@ -816,6 +828,8 @@ async def forward(
                 except Exception:
                     pass
                 continue
+            finally:
+                lease.release()
 
         effective_timeout = timeout
         url = openai_url(provider["base_url"], "chat/completions")
@@ -838,7 +852,11 @@ async def forward(
         # Whether the last failure counts against the route's circuit: a
         # timeout or a network error does, an HTTP answer per its status.
         provider_fault = True
-        with _track_in_flight(provider["id"]):
+        lease = provider_admission.try_acquire(provider)
+        if lease is None:
+            busy.append((provider, real_model))
+            continue
+        with lease:
             for attempt, delay in enumerate([0] + _DELAYS):
                 if delay:
                     log.warning(
@@ -966,6 +984,8 @@ async def forward(
 
         log.warning("Provider %s failed, trying next...", provider["id"])
 
+    if busy:
+        raise ProvidersBusyError([p["id"] for p, _ in busy])
     raise last_err or RuntimeError("All providers failed")
 
 
@@ -978,7 +998,35 @@ async def forward_stream(
     """
     Forward a streaming /v1/chat/completions request, yielding raw SSE chunks.
     No retry — cannot retry after streaming has begun.
+
+    The route holds a lease on its provider from the first chunk to the
+    last, or until the stream is closed early; a provider at its cap
+    raises ``ProvidersBusyError`` before any call.
     """
+    model_str = body.get("model", "")
+    provider, real_model = resolve_provider_and_model(model_str)
+    if route_guard is not None:
+        route_guard(provider, real_model)
+    lease = provider_admission.try_acquire(provider)
+    if lease is None:
+        raise ProvidersBusyError([provider["id"]])
+    try:
+        async with contextlib.aclosing(
+            _stream_route(body, provider, real_model, timeout)
+        ) as chunks:
+            async for chunk in chunks:
+                yield chunk
+    finally:
+        lease.release()
+
+
+async def _stream_route(
+    body: Dict[str, Any],
+    provider: Dict[str, Any],
+    real_model: str,
+    timeout: float,
+) -> AsyncIterator[bytes]:
+    """Stream ``body`` from ``provider`` (the body of ``forward_stream``)."""
     from plugboard.circuit_breaker import (
         check_circuit,
         is_provider_fault,
@@ -986,10 +1034,6 @@ async def forward_stream(
         record_success as cb_success,
     )
 
-    model_str = body.get("model", "")
-    provider, real_model = resolve_provider_and_model(model_str)
-    if route_guard is not None:
-        route_guard(provider, real_model)
     # The route's circuit is read and recorded as in forward(): the read
     # moves an open circuit past its cooldown to half-open, so a success
     # closes it. An open circuit never refuses the request.
