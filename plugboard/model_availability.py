@@ -55,7 +55,7 @@ _OLLAMA_PROBE_TIMEOUT_S = 10
 
 # Global timeout for the entire run_connectivity_probes() call (seconds).
 _PROBE_TOTAL_TIMEOUT_S = max(
-    10, int(os.environ.get("PLUGBOARD_PROBE_TOTAL_TIMEOUT_S", "60") or "60")
+    10, envcompat.get_int("PLUGBOARD_PROBE_TOTAL_TIMEOUT_S", default=60)
 )
 
 # Max concurrent subprocess probes within a single provider (Semaphore cap).
@@ -64,7 +64,7 @@ _PROBE_SUBPROCESS_CONCURRENCY = 4
 # Re-check interval for Ollama daemon when models remain offline (seconds).
 _OLLAMA_RECHECK_INTERVAL_S = max(
     30,
-    int(os.environ.get("PLUGBOARD_OLLAMA_RECHECK_INTERVAL_S", "300") or "300"),
+    envcompat.get_int("PLUGBOARD_OLLAMA_RECHECK_INTERVAL_S", default=300),
 )
 
 log = logging.getLogger(__name__)

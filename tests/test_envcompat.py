@@ -244,3 +244,37 @@ def test_numeric_settings_share_the_one_reader():
         if hasattr(module, name)
     ]
     assert left == []
+
+
+def test_no_numeric_setting_is_read_inline():
+    # int(os.environ[...]) raised, at import for most settings, on a value
+    # that is not a number, and float() let nan and inf through: every
+    # numeric setting goes through envcompat.get_int / get_float.
+    import ast
+    from pathlib import Path
+
+    package = Path(envcompat.__file__).resolve().parent
+
+    def reads_env(node):
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Attribute) and sub.attr in ("environ", "getenv"):
+                return True
+            if (
+                isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Name)
+                and "env" in sub.func.id
+            ):
+                return True
+        return False
+
+    inline = [
+        f"{path.relative_to(package.parent)}:{node.lineno}"
+        for path in sorted(package.rglob("*.py"))
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("int", "float")
+        and node.args
+        and reads_env(node.args[0])
+    ]
+    assert inline == []

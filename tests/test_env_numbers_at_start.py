@@ -105,6 +105,10 @@ AT_IMPORT = {
         "PLUGBOARD_LOG_BACKUPS": ("_LOG_BACKUP_COUNT", 5),
     },
     "plugboard.mcp_server": {"PLUGBOARD_MCP_TIMEOUT": ("_TIMEOUT", 900)},
+    "plugboard.model_availability": {
+        "PLUGBOARD_PROBE_TOTAL_TIMEOUT_S": ("_PROBE_TOTAL_TIMEOUT_S", 60),
+        "PLUGBOARD_OLLAMA_RECHECK_INTERVAL_S": ("_OLLAMA_RECHECK_INTERVAL_S", 300),
+    },
 }
 
 # Good values, old names and the bounds each setting applies:
@@ -145,6 +149,14 @@ WELL_SET = {
     },
     "plugboard.mcp_server": {
         "LLM_ENABLER_MCP_TIMEOUT": ("30", "_DECISION_TIMEOUT", 30)
+    },
+    "plugboard.model_availability": {
+        "PLUGBOARD_PROBE_TOTAL_TIMEOUT_S": ("5", "_PROBE_TOTAL_TIMEOUT_S", 10),
+        "LLM_ENABLER_OLLAMA_RECHECK_INTERVAL_S": (
+            "600",
+            "_OLLAMA_RECHECK_INTERVAL_S",
+            600,
+        ),
     },
 }
 
@@ -287,3 +299,14 @@ def test_embedding_engine_limits(
     assert getattr(embeddings_api, reader)() == expected
     if raw in ("abc", "inf", "nan"):
         assert variable in warnings_seen.text  # it fell back in silence
+
+
+@pytest.mark.parametrize("raw, expected", [("abc", 2), ("inf", 2), ("0", 1), ("4", 4)])
+def test_latest_claude_models_listed(monkeypatch, warnings_seen, raw, expected):
+    from plugboard import router
+
+    monkeypatch.setenv("PLUGBOARD_CLAUDE_LATEST_N", raw)
+
+    assert router._claude_latest_n() == expected
+    if raw in ("abc", "inf"):
+        assert "PLUGBOARD_CLAUDE_LATEST_N" in warnings_seen.text  # was silent
