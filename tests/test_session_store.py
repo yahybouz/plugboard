@@ -9,16 +9,18 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _isolated_session_db(tmp_path, monkeypatch):
-    """Point session_store to a throwaway SQLite file."""
-    monkeypatch.setenv("PLUGBOARD_DATA", str(tmp_path))
-    # Re-import after env patch so the module-level paths resolve correctly.
-    import importlib
+    """Point session_store to a throwaway SQLite file, for this test only.
 
+    Patched, not reloaded: a reload left the module on the last test's file,
+    deleted once that test passed (tmp_path_retention_policy = failed), with
+    its schema marked as created, so a later chat request with a session
+    failed with "no such table: chat_sessions".
+    """
     from plugboard import session_store
 
-    importlib.reload(session_store)
-    # Also reset the initialised flag so each test creates its own schema.
-    session_store._INITIALISED = False
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "sessions.db")
+    # Each test creates its own schema.
+    monkeypatch.setattr(session_store, "_INITIALISED", False)
     return session_store
 
 
