@@ -68,6 +68,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from plugboard import __version__
 from plugboard import admin_sessions
 from plugboard import envcompat
+from plugboard import netguard
 from plugboard import billing as _billing
 from plugboard import usage as _usage
 from plugboard.alerts import check_and_alert as _check_and_alert
@@ -3535,6 +3536,8 @@ class ProviderCreate(BaseModel):
     provider_type: str = "cloud"
     auth_header_name: str = "Authorization"
     auth_header_prefix: str = "Bearer"
+    # Public addresses only (D-18 c): unticked by default for a manual provider.
+    egress_guard: bool = False
 
 
 class ProviderUpdate(BaseModel):
@@ -3554,10 +3557,18 @@ class ProviderUpdate(BaseModel):
     pinned_models: Optional[
         List[Annotated[str, Field(min_length=1, max_length=200)]]
     ] = Field(default=None, max_length=500)
+    egress_guard: Optional[bool] = None
 
 
 def _mask(p: Dict[str, Any]) -> Dict[str, Any]:
-    masked = {**p, "bearer_token": mask_token(p.get("bearer_token", ""))}
+    masked = {
+        **p,
+        "bearer_token": mask_token(p.get("bearer_token", "")),
+        # The effective protection, not the stored field: catalogue and
+        # built-in cloud presets are always guarded (egress_guard_forced).
+        "egress_guard": netguard.is_protected(p),
+        "egress_guard_forced": netguard.guard_is_forced(p),
+    }
     if is_removed_provider(p):
         masked.update(
             is_active=False, migration_required=True, error=REMOVED_CONNECTOR_ERROR
@@ -3572,6 +3583,8 @@ async def get_providers(_: None = Depends(_require_admin)):
 
 @app.post("/providers", status_code=201)
 async def add_provider(body: ProviderCreate, _: None = Depends(_require_admin)):
+    if body.egress_guard:
+        await _require_guard_allows("", body.base_url)
     try:
         record = create_provider(
             name=body.name,
@@ -3583,6 +3596,7 @@ async def add_provider(body: ProviderCreate, _: None = Depends(_require_admin)):
             provider_type=body.provider_type,
             auth_header_name=body.auth_header_name,
             auth_header_prefix=body.auth_header_prefix,
+            egress_guard=body.egress_guard,
         )
     except _cfg_mod.ProviderDomainNotAllowed as exc:
         _audit(
@@ -4083,11 +4097,12 @@ def _docs_link(path: str) -> str:
     return base.rstrip("/") + "/" + path
 
 
-async def _require_public_host(base_url: str) -> list:
-    """Refuse a catalog preset whose host resolves to a non-public address.
+async def _require_public_host(base_url: str, *, label: str = "Catalog preset") -> list:
+    """Refuse a base URL whose host resolves to a non-public address.
 
     Catalog base URLs come from a third-party feed; an admin key must not be
-    sent to an internal address because that feed says so.
+    sent to an internal address because that feed says so. ``label`` names
+    what is refused in the error message.
     """
     from urllib.parse import urlsplit
 
@@ -4100,8 +4115,29 @@ async def _require_public_host(base_url: str) -> list:
         return await _resolve_public(parts.hostname or "", parts.port or 443)
     except UnsafeURL as exc:
         if str(exc).startswith("cannot resolve"):
-            raise HTTPException(503, f"Catalog preset host unreachable: {exc}")
-        raise HTTPException(422, f"Catalog preset refused: {exc}")
+            raise HTTPException(503, f"{label} host unreachable: {exc}")
+        raise HTTPException(422, f"{label} refused: {exc}")
+
+
+async def _require_guard_allows(provider_id: str, base_url: str) -> None:
+    """Refuse to guard a provider whose base_url is not a public http(s) URL.
+
+    The egress guard would refuse every connection of such a provider, so it
+    is refused up front (D-18 c, D-19). Every refusal is audited as
+    ``provider.egress.rejected`` before it is raised.
+    """
+    try:
+        if not base_url.lower().startswith(("http://", "https://")):
+            raise HTTPException(422, "The egress guard needs an http(s) base_url")
+        await _require_public_host(base_url, label="Provider base_url")
+    except HTTPException as exc:
+        _audit(
+            "provider.egress.rejected",
+            target_type="provider",
+            target_id=provider_id,
+            details=json.dumps({"base_url": base_url, "reason": exc.detail}),
+        )
+        raise
 
 
 async def _test_openai_endpoint(

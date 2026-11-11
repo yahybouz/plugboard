@@ -325,6 +325,7 @@ def create_provider(
     auth_header_name: str = "Authorization",
     auth_header_prefix: str = "Bearer",
     auth_source: str = "",
+    egress_guard: bool = False,
 ) -> Dict[str, Any]:
     provider_id = _slugify(name)
     require_supported_provider(
@@ -352,6 +353,9 @@ def create_provider(
             "timeout": timeout,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
+        if egress_guard:
+            # Written only when ticked: an absent field means unguarded.
+            record["egress_guard"] = True
         data.setdefault("providers", []).append(record)
         _write(data)
     return record
