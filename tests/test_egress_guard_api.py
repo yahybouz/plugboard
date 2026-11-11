@@ -186,3 +186,167 @@ async def test_get_providers_exposes_effective_guard(client, guard_providers):
         "guarded": (True, False),
         "ollama": (False, False),
     }
+
+
+# --- PUT /providers/{id}: editing a protected provider (D-19) ---------------
+
+
+@pytest.fixture
+def preset_key():
+    """Preset of ``forced_provider``; a test overrides it by parametrizing."""
+    return "catalog-acme"
+
+
+@pytest.fixture
+def forced_provider(_providers_file, preset_key):
+    """A provider whose guard is imposed (catalogue or built-in cloud preset)."""
+    providers = json.loads(_providers_file.read_text())["providers"]
+    providers.append(
+        {
+            **PROVIDER_A,
+            "id": "acme",
+            "name": "Acme",
+            "base_url": "https://api.acme.test/v1",
+            "preset_key": preset_key,
+        }
+    )
+    _providers_file.write_text(json.dumps({"providers": providers}))
+    return "acme"
+
+
+@pytest.fixture
+def ollama_provider(_providers_file):
+    providers = json.loads(_providers_file.read_text())["providers"]
+    providers.append(PROVIDER_OLLAMA)
+    _providers_file.write_text(json.dumps({"providers": providers}))
+    return "ollama"
+
+
+@pytest.fixture
+def system_resolver(monkeypatch):
+    """Answer ``localhost`` like the system resolver (127.0.0.1 and ::1).
+
+    The real ``_resolve_public`` and its address check run; only the system
+    lookup is faked, so no test sends a DNS query.
+    """
+    import socket
+
+    def _getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        if host != "localhost":
+            raise socket.gaierror(socket.EAI_NONAME, f"unexpected lookup of {host}")
+        return [
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::1", port, 0, 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port)),
+        ]
+
+    monkeypatch.setattr(socket, "getaddrinfo", _getaddrinfo)
+
+
+@pytest.mark.parametrize("preset_key", ["catalog-acme", "openai"])
+async def test_put_internal_base_url_on_forced_provider_is_422(
+    client, private, forced_provider, preset_key, audit_db
+):
+    r = await client.put(
+        f"/providers/{forced_provider}",
+        headers=AUTH,
+        json={"base_url": "http://10.0.0.5"},
+    )
+    assert r.status_code == 422
+    assert "non-public" in r.json()["detail"]
+    assert config.get_provider(forced_provider)["base_url"] == (
+        "https://api.acme.test/v1"
+    )
+    events = audit_mod.get_audit_log(action="provider.egress.rejected")
+    assert len(events) == 1
+    assert events[0]["target_id"] == forced_provider
+    assert json.loads(events[0]["details"])["base_url"] == "http://10.0.0.5"
+
+
+async def test_put_unchanged_base_url_makes_no_lookup(
+    client, no_lookup, forced_provider, audit_db
+):
+    r = await client.put(
+        f"/providers/{forced_provider}",
+        headers=AUTH,
+        json={
+            "base_url": "https://api.acme.test/v1/",
+            "name": "Renamed",
+            "egress_guard": True,
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["egress_guard"] is True
+    stored = config.get_provider(forced_provider)
+    assert stored["name"] == "Renamed"
+    assert "egress_guard" not in stored
+
+
+async def test_put_cannot_turn_off_forced_guard(
+    client, no_lookup, forced_provider, audit_db
+):
+    r = await client.put(
+        f"/providers/{forced_provider}",
+        headers=AUTH,
+        json={"egress_guard": False},
+    )
+    assert r.status_code == 422
+    assert r.json()["detail"] == (
+        "The egress guard is always on for catalog and built-in cloud presets"
+    )
+    assert "egress_guard" not in config.get_provider(forced_provider)
+
+
+async def test_put_checking_guard_on_local_ollama_is_422(
+    client, system_resolver, ollama_provider, audit_db
+):
+    r = await client.put(
+        f"/providers/{ollama_provider}", headers=AUTH, json={"egress_guard": True}
+    )
+    assert r.status_code == 422
+    assert "non-public" in r.json()["detail"]
+    assert "egress_guard" not in config.get_provider(ollama_provider)
+    assert audit_mod.get_audit_log(action="provider.egress.rejected")
+
+
+async def test_put_manual_guard_toggle(client, public, monkeypatch, audit_db):
+    r = await client.put(
+        "/providers/test-provider", headers=AUTH, json={"egress_guard": True}
+    )
+    assert r.status_code == 200
+    assert r.json()["egress_guard"] is True
+    assert r.json()["egress_guard_forced"] is False
+    assert config.get_provider("test-provider")["egress_guard"] is True
+
+    r = await client.put(
+        "/providers/test-provider", headers=AUTH, json={"egress_guard": False}
+    )
+    assert r.status_code == 200
+    assert config.get_provider("test-provider")["egress_guard"] is False
+
+    async def _fail(host, port):
+        pytest.fail("no lookup once the guard is off")
+
+    monkeypatch.setattr("plugboard.llm_pricing._resolve_public", _fail)
+    r = await client.put(
+        "/providers/test-provider", headers=AUTH, json={"base_url": "http://10.0.0.5"}
+    )
+    assert r.status_code == 200
+    assert config.get_provider("test-provider")["base_url"] == "http://10.0.0.5"
+
+
+async def test_put_guarded_manual_provider_to_internal_url_is_422(
+    client, private, audit_db, _providers_file
+):
+    providers = json.loads(_providers_file.read_text())["providers"]
+    providers[0]["egress_guard"] = True
+    _providers_file.write_text(json.dumps({"providers": providers}))
+    r = await client.put(
+        "/providers/test-provider", headers=AUTH, json={"base_url": "http://10.0.0.5"}
+    )
+    assert r.status_code == 422
+    assert config.get_provider("test-provider")["base_url"] == "http://fake-llm.test"
+
+
+async def test_put_unknown_provider_is_404_without_lookup(client, no_lookup):
+    r = await client.put("/providers/nope", headers=AUTH, json={"egress_guard": True})
+    assert r.status_code == 404

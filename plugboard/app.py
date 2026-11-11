@@ -3631,6 +3631,8 @@ async def patch_provider(
 ):
     updates = body.model_dump(exclude_none=True)
     before = get_provider(provider_id)
+    if before is not None:
+        await _check_guard_on_edit(provider_id, before, updates)
     try:
         record = update_provider(provider_id, updates)
     except _cfg_mod.ProviderDomainNotAllowed as exc:
@@ -4117,6 +4119,38 @@ async def _require_public_host(base_url: str, *, label: str = "Catalog preset") 
         if str(exc).startswith("cannot resolve"):
             raise HTTPException(503, f"{label} host unreachable: {exc}")
         raise HTTPException(422, f"{label} refused: {exc}")
+
+
+async def _check_guard_on_edit(
+    provider_id: str, before: Dict[str, Any], updates: Dict[str, Any]
+) -> None:
+    """Apply the egress guard rules to ``PUT /providers/{id}`` (D-19).
+
+    An imposed guard cannot be turned off (422) and is never written. When
+    the provider is protected after the edit, a changed ``base_url`` (compared
+    without a trailing ``/``) or a guard just ticked must point to a public
+    http(s) address. A ``base_url`` sent back unchanged triggers no lookup:
+    the edit form always sends it. ``updates`` is changed in place.
+    """
+    forced = netguard.guard_is_forced(before)
+    if forced and "egress_guard" in updates:
+        if updates["egress_guard"] is False:
+            raise HTTPException(
+                422,
+                "The egress guard is always on for catalog and built-in cloud presets",
+            )
+        del updates["egress_guard"]
+    protected_after = forced or updates.get(
+        "egress_guard", before.get("egress_guard") is True
+    )
+    if not protected_after:
+        return
+    current_url = before.get("base_url") or ""
+    new_url = updates.get("base_url", current_url)
+    url_changed = new_url.rstrip("/") != current_url.rstrip("/")
+    turned_on = not netguard.is_protected(before)
+    if url_changed or turned_on:
+        await _require_guard_allows(provider_id, new_url)
 
 
 async def _require_guard_allows(provider_id: str, base_url: str) -> None:
