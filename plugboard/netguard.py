@@ -12,6 +12,8 @@ import ipaddress
 import socket
 
 import aiohttp
+import aiohttp.resolver
+from aiohttp.abc import AbstractResolver, ResolveResult
 
 EGRESS_REFUSED = "egress_refused"
 
@@ -53,3 +55,63 @@ def refuse_non_public(addr_info: aiohttp.AddrInfoType) -> socket.socket:
     if not ip_is_public(sockaddr[0]):
         raise EgressRefused(errno.EACCES, "non-public address refused")
     return socket.socket(family=family, type=type_, proto=proto)
+
+
+class PublicOnlyResolver(AbstractResolver):
+    """Resolver that refuses a name as soon as one of its answers is not public.
+
+    The same rule as at creation: a name answering both public and private
+    addresses is refused, never raced. aiohttp caches no failed lookup, so the
+    next request resolves again.
+    """
+
+    def __init__(self, inner: AbstractResolver | None = None) -> None:
+        self._inner = inner if inner is not None else aiohttp.resolver.DefaultResolver()
+
+    async def resolve(
+        self, host: str, port: int = 0, family: socket.AddressFamily = socket.AF_INET
+    ) -> list[ResolveResult]:
+        answers = await self._inner.resolve(host, port, family)
+        if any(not ip_is_public(answer["host"]) for answer in answers):
+            raise EgressRefused(errno.EACCES, "non-public address refused")
+        return answers
+
+    async def close(self) -> None:
+        await self._inner.close()
+
+
+def public_connector(
+    *,
+    resolver: AbstractResolver | None = None,
+    inner: AbstractResolver | None = None,
+    **kw,
+) -> aiohttp.TCPConnector:
+    """A connector that reaches public addresses only.
+
+    The resolver refuses non-public names; ``refuse_non_public`` is the net
+    for IP literals, a redirect's included, which never reach the resolver.
+    """
+    return aiohttp.TCPConnector(
+        resolver=resolver or PublicOnlyResolver(inner),
+        socket_factory=refuse_non_public,
+        **kw,
+    )
+
+
+def client_session(public_only: bool, **kw) -> aiohttp.ClientSession:
+    """A session for one provider: public-only and proxy-free when guarded.
+
+    Unguarded, it is ``aiohttp.ClientSession(**kw)`` with nothing added.
+    """
+    if public_only:
+        if "connector" not in kw:
+            kw["connector"] = public_connector()
+        kw["trust_env"] = False
+    return aiohttp.ClientSession(**kw)
+
+
+def is_egress_refusal(exc: BaseException) -> bool:
+    """True when a connection failed because the guard refused the address."""
+    return isinstance(exc, aiohttp.ClientConnectorError) and isinstance(
+        exc.os_error, EgressRefused
+    )
