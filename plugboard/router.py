@@ -26,14 +26,14 @@ import os
 import re
 import time as _time
 import uuid as _uuid
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Set
 
 import aiohttp
 
-from plugboard import envcompat, metrics, provider_admission
+from plugboard import envcompat, metrics, provider_admission, route_pauses
 from plugboard.alerts import record_provider_failure, record_provider_success
 from plugboard.circuit_breaker import is_request_too_long
-from plugboard.cli_subprocess import MAX_RETRY_AFTER_S
+from plugboard.cli_subprocess import MAX_RETRY_AFTER_S, CliSubprocessError
 from plugboard.config import load_providers
 from plugboard.logging_config import _request_id_var
 from plugboard.endpoints import openai_url
@@ -698,6 +698,35 @@ def _circuit_key(provider: Dict[str, Any], real_model: str) -> str:
     return f"{provider['id']}:{real_model}"
 
 
+def _retry_quota_here(retry_after: Optional[int], attempt: int) -> bool:
+    """Whether a 429 at ``attempt`` is retried on the same route.
+
+    It is when a retry delay is left (``PLUGBOARD_RETRY_DELAYS``) and the
+    provider gave no ``Retry-After`` or one no longer than that delay. A
+    longer wait goes to the next candidate, or to the client, at once.
+    """
+    if attempt >= len(_DELAYS):
+        return False
+    return retry_after is None or retry_after <= _DELAYS[attempt]
+
+
+def _order_routes(candidates: List[tuple], open_routes: Set[str]) -> List[tuple]:
+    """``candidates`` with the paused or open routes last (D-23, rule 3).
+
+    Paused or open routes come after the others, the shortest pause left
+    first, then in their order; the others keep their order. Nothing is
+    dropped: a paused or open route is still tried when the others failed.
+    """
+
+    def rank(item: tuple) -> tuple:
+        index, (provider, real_model) = item
+        key = _circuit_key(provider, real_model)
+        left = route_pauses.paused_for(key)
+        return (left > 0 or key in open_routes, left, index)
+
+    return [route for _, route in sorted(enumerate(candidates), key=rank)]
+
+
 async def forward(
     body: Dict[str, Any],
     timeout: float = _TIMEOUT,
@@ -727,9 +756,14 @@ async def forward(
 
     # Read each route's circuit under the key its outcomes are recorded under:
     # an open circuit past its cooldown goes half-open, so a success closes
-    # it. An open circuit never refuses the request nor changes its model.
+    # it. An open circuit never refuses the request nor changes its model: it
+    # places the route last, with the routes paused after a 429.
+    open_routes: Set[str] = set()
     for route_provider, route_model in candidates:
-        check_circuit(_circuit_key(route_provider, route_model))
+        key = _circuit_key(route_provider, route_model)
+        if not check_circuit(key)["allowed"]:
+            open_routes.add(key)
+    candidates = _order_routes(candidates, open_routes)
 
     last_err: Optional[Exception] = None
     # PERF-2: reuse the app-wide pooled session (keepalive + DNS cache)
@@ -826,6 +860,7 @@ async def forward(
                     try:
                         record_provider_success(provider["id"])
                         cb_success(_circuit_key(provider, real_model))
+                        route_pauses.clear(_circuit_key(provider, real_model))
                     except Exception:
                         pass
                     _served_by.set((provider, real_model))
@@ -861,6 +896,11 @@ async def forward(
                         if is_provider_fault(reason):
                             cb_failure(_circuit_key(provider, real_model))
                             await record_provider_failure(provider["id"])
+                        # A CLI quota pauses the route, as an HTTP 429 does.
+                        if isinstance(exc, CliSubprocessError) and exc.quota:
+                            route_pauses.pause(
+                                _circuit_key(provider, real_model), exc.retry_after
+                            )
                     except Exception:
                         pass
                     continue
@@ -929,6 +969,14 @@ async def forward(
                                     # A 5xx saying the context is too long fails
                                     # the same way again: next provider (PLU-5).
                                     break
+                                if isinstance(
+                                    last_err, ProviderQuotaError
+                                ) and not _retry_quota_here(
+                                    last_err.retry_after, attempt
+                                ):
+                                    # The provider asks for a longer wait than
+                                    # the next retry: next provider at once.
+                                    break
                                 continue
                             if resp.status != 200:
                                 text = await resp.text()
@@ -951,6 +999,7 @@ async def forward(
                             try:
                                 record_provider_success(provider["id"])
                                 cb_success(_circuit_key(provider, real_model))
+                                route_pauses.clear(_circuit_key(provider, real_model))
                             except Exception:
                                 pass
                             _served_by.set((provider, real_model))
@@ -998,6 +1047,15 @@ async def forward(
 
                     if provider_failed:
                         break
+
+            # Its last answer was a 429: the route is tried last for a while.
+            if (
+                isinstance(last_err, ProviderQuotaError)
+                and last_err.provider_id == provider["id"]
+            ):
+                route_pauses.pause(
+                    _circuit_key(provider, real_model), last_err.retry_after
+                )
 
             # The provider failed: count it against the route's circuit, unless
             # the request caused the error (400, 413, 422, a prompt too long...).
@@ -1128,13 +1186,14 @@ async def _stream_route(
                         terminal_reason="model_unavailable",
                     )
                     invalidate_models_cache()
+                # A CLI quota pauses the route, as an HTTP 429 does.
+                if isinstance(exc, CliSubprocessError) and exc.quota:
+                    route_pauses.pause(circuit_key, exc.retry_after)
             except Exception:
                 pass
             err_payload: Dict[str, Any] = {
                 "error": {"message": str(exc), "type": "subprocess_error"}
             }
-            from plugboard.cli_subprocess import CliSubprocessError
-
             if isinstance(exc, CliSubprocessError):
                 err_payload["error"]["exit_code"] = exc.exit_code
                 err_payload["error"]["stderr"] = exc.stderr
@@ -1146,6 +1205,7 @@ async def _stream_route(
             yield b"data: [DONE]\n\n"
             return
         cb_success(circuit_key)
+        route_pauses.clear(circuit_key)
         reported = _pop_reported_usage(result)
         reported_usage = result.get("usage") or {}
         content = result["choices"][0]["message"]["content"]
@@ -1249,8 +1309,12 @@ async def _stream_route(
                 text = await resp.text()
                 if is_provider_fault(text, resp.status):
                     cb_failure(circuit_key)
-                raise _http_error(provider["id"], resp.status, text, resp.headers)
+                err = _http_error(provider["id"], resp.status, text, resp.headers)
+                if isinstance(err, ProviderQuotaError):
+                    route_pauses.pause(circuit_key, err.retry_after)
+                raise err
             cb_success(circuit_key)
+            route_pauses.clear(circuit_key)
             streaming = True
             async for chunk in resp.content.iter_any():
                 yield chunk

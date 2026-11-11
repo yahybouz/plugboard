@@ -135,13 +135,18 @@ def _restore_process_state():
 
 
 @pytest.fixture(autouse=True)
-def _reset_load_state():
-    """Provider leases start empty in every test (PLU-9)."""
-    from plugboard import provider_admission
+def _reset_load_state(monkeypatch: pytest.MonkeyPatch):
+    """Provider leases, route pauses and circuits start empty in every test
+    (PLU-9): a circuit left open by a test must not reorder the next one's
+    routes."""
+    from plugboard import circuit_breaker, provider_admission, route_pauses
 
     provider_admission.reset()
+    route_pauses.reset()
+    monkeypatch.setattr(circuit_breaker, "_circuits", {})
     yield
     provider_admission.reset()
+    route_pauses.reset()
 
 
 def _setup_providers(
