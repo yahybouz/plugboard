@@ -10,11 +10,15 @@ DNS answers are faked: no test resolves a real name.
 from __future__ import annotations
 
 import json
+import socket
+from types import SimpleNamespace
 
 import pytest
+from aiohttp import web
 
+from plugboard import app as app_mod
 from plugboard import audit as audit_mod
-from plugboard import config
+from plugboard import config, netguard
 from plugboard.llm_pricing import UnsafeURL
 from tests.factories import PROVIDER_A, PROVIDER_OLLAMA
 
@@ -350,3 +354,111 @@ async def test_put_guarded_manual_provider_to_internal_url_is_422(
 async def test_put_unknown_provider_is_404_without_lookup(client, no_lookup):
     r = await client.put("/providers/nope", headers=AUTH, json={"egress_guard": True})
     assert r.status_code == 404
+
+
+# --- Connection test of a protected preset ----------------------------------
+
+
+@pytest.fixture
+def closed_port() -> int:
+    """A local port nothing listens on."""
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+@pytest.fixture
+async def redirecting_server():
+    """A local server whose answers redirect to an internal path.
+
+    ``/v1``: ``GET /models`` answers 302 to ``/internal/models``.
+    ``/ok/v1``: ``GET /models`` lists a model, ``POST /chat/completions``
+    answers 302 to ``/internal/chat``. Every request to ``/internal/...`` is
+    counted in ``internal_calls``.
+    """
+    state = SimpleNamespace(internal_calls=0, port=0)
+
+    async def redirect_models(request: web.Request) -> web.Response:
+        raise web.HTTPFound("/internal/models")
+
+    async def redirect_chat(request: web.Request) -> web.Response:
+        raise web.HTTPFound("/internal/chat")
+
+    async def models(request: web.Request) -> web.Response:
+        return web.json_response({"data": [{"id": "m"}]})
+
+    async def internal(request: web.Request) -> web.Response:
+        state.internal_calls += 1
+        return web.json_response({"data": [{"id": "internal"}]})
+
+    app = web.Application()
+    app.router.add_get("/v1/models", redirect_models)
+    app.router.add_get("/ok/v1/models", models)
+    app.router.add_post("/ok/v1/chat/completions", redirect_chat)
+    app.router.add_route("*", "/internal/{tail:.*}", internal)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    state.port = site.port
+    try:
+        yield state
+    finally:
+        await runner.cleanup()
+
+
+async def test_protected_connection_test_does_not_follow_redirects(
+    redirecting_server, monkeypatch
+):
+    monkeypatch.setattr(netguard, "ip_is_public", lambda address: True)
+    r = await app_mod._test_openai_endpoint(
+        f"http://127.0.0.1:{redirecting_server.port}/v1", "k", False, public_only=True
+    )
+    assert r["status"] == "not_openai_compatible"
+    assert "HTTP 302" in r["message"]
+    assert redirecting_server.internal_calls == 0
+
+
+async def test_protected_test_token_does_not_follow_redirects(
+    redirecting_server, monkeypatch
+):
+    monkeypatch.setattr(netguard, "ip_is_public", lambda address: True)
+    r = await app_mod._test_openai_endpoint(
+        f"http://127.0.0.1:{redirecting_server.port}/ok/v1",
+        "k",
+        True,
+        public_only=True,
+    )
+    assert r["status"] == "ok"
+    assert r["completion_status"] == 302 and r["completion_ok"] is False
+    assert redirecting_server.internal_calls == 0
+
+
+async def test_protected_connection_test_reports_egress_refused(closed_port):
+    r = await app_mod._test_openai_endpoint(
+        f"http://127.0.0.1:{closed_port}/v1", "k", False, public_only=True
+    )
+    assert r["status"] == "egress_refused"
+    assert r["message"] == "Refused: 127.0.0.1 resolves to a non-public address."
+    assert r["docs"].endswith("#test-the-connection")
+
+
+async def test_direct_test_is_public_only_for_presets(client, monkeypatch):
+    seen = []
+
+    async def fake(*args, **kwargs):
+        seen.append(kwargs.get("public_only"))
+        return {"status": "ok"}
+
+    monkeypatch.setattr(app_mod, "_test_openai_endpoint", fake)
+    await client.post(
+        "/admin/direct-providers/test",
+        headers=AUTH,
+        json={"preset_key": "openai", "api_key": "k"},
+    )
+    await client.post(
+        "/admin/direct-providers/test",
+        headers=AUTH,
+        json={"base_url": "https://custom.test/v1", "api_key": "k"},
+    )
+    assert seen == [True, False]

@@ -4180,11 +4180,17 @@ async def _test_openai_endpoint(
     send_test_token: bool,
     pinned: Optional[list] = None,
     preset: Optional[Dict[str, Any]] = None,
+    *,
+    public_only: bool = False,
 ) -> Dict[str, Any]:
     """GET /models (and optionally a 1-token completion) against an endpoint.
 
     A preset's own auth header and extra headers are used (Anthropic takes
     ``x-api-key`` plus ``anthropic-version``, not a bearer token).
+
+    ``public_only`` (a protected preset): the egress guard's session, which
+    refuses a non-public address and ignores ``HTTPS_PROXY``; no redirect is
+    followed, so the key never reaches a host the check did not see.
     """
     from urllib.parse import urlsplit
 
@@ -4203,19 +4209,32 @@ async def _test_openai_endpoint(
         prefix = "Bearer" if prefix is None else prefix
         headers[header_name] = f"{prefix} {api_key}".strip() if prefix else api_key
     timeout = aiohttp.ClientTimeout(total=15)
+    # Fakes of aiohttp.ClientSession take no allow_redirects: the unguarded
+    # path passes nothing new.
+    no_redirect: Dict[str, Any] = {"allow_redirects": False} if public_only else {}
     try:
-        connector = None
-        if pinned:
+        if public_only:
             from plugboard.llm_pricing import _PinnedResolver
 
-            connector = aiohttp.TCPConnector(
-                resolver=_PinnedResolver(host, pinned), use_dns_cache=False
+            session_cm = netguard.client_session(
+                True,
+                timeout=timeout,
+                connector=netguard.public_connector(
+                    resolver=_PinnedResolver(host, pinned) if pinned else None
+                ),
             )
-        async with aiohttp.ClientSession(
-            timeout=timeout, connector=connector
-        ) as session:
+        else:
+            connector = None
+            if pinned:
+                from plugboard.llm_pricing import _PinnedResolver
+
+                connector = aiohttp.TCPConnector(
+                    resolver=_PinnedResolver(host, pinned), use_dns_cache=False
+                )
+            session_cm = aiohttp.ClientSession(timeout=timeout, connector=connector)
+        async with session_cm as session:
             async with session.get(
-                openai_url(base_url, "models"), headers=headers
+                openai_url(base_url, "models"), headers=headers, **no_redirect
             ) as resp:
                 if resp.status in (401, 403):
                     return {
@@ -4279,11 +4298,18 @@ async def _test_openai_endpoint(
                         "messages": [{"role": "user", "content": "ping"}],
                         "max_tokens": 1,
                     },
+                    **no_redirect,
                 ) as resp:
                     result["completion_ok"] = resp.status == 200
                     result["completion_status"] = resp.status
             return result
     except (aiohttp.ClientError, _asyncio.TimeoutError) as exc:
+        if public_only and netguard.is_egress_refusal(exc):
+            return {
+                "status": netguard.EGRESS_REFUSED,
+                "message": f"Refused: {host} resolves to a non-public address.",
+                "docs": _docs_link(_TEST_DOCS),
+            }
         return {
             "status": "unreachable",
             "message": f"Unreachable: {host} did not answer ({type(exc).__name__}). "
@@ -4324,16 +4350,18 @@ async def test_direct_provider(
         check_provider_domain_allowed(base_url)
     except ProviderDomainNotAllowed as exc:
         raise HTTPException(422, str(exc))
-    if pinned:
-        return await _test_openai_endpoint(
-            base_url,
-            body.api_key.strip(),
-            body.send_test_token,
-            pinned=pinned,
-            preset=preset,
-        )
+    # Catalogue and built-in HTTP presets are tested as they will be used:
+    # through the egress guard. A custom endpoint is not protected.
+    public_only = preset is not None and netguard.guard_is_forced(
+        {"preset_key": body.preset_key}
+    )
     return await _test_openai_endpoint(
-        base_url, body.api_key.strip(), body.send_test_token, preset=preset
+        base_url,
+        body.api_key.strip(),
+        body.send_test_token,
+        pinned=pinned,
+        preset=preset,
+        public_only=public_only,
     )
 
 
