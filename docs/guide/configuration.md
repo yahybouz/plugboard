@@ -215,7 +215,7 @@ The catalog is downloaded with each price update. A download that fails, is inva
 | Variable | Default | Description |
 |---|---|---|
 | `ALERT_WEBHOOK_URL` | empty | URL receiving `provider_down` and `spending_alert` JSON alerts. |
-| `ALERT_FAILURE_THRESHOLD` | `3` | Consecutive provider failures before a `provider_down` alert. |
+| `ALERT_FAILURE_THRESHOLD` | `3` | Consecutive provider failures (circuit breaker's rule, never an error the request caused) before a `provider_down` alert. |
 | `WEBHOOK_URLS` | empty | Comma-separated URLs receiving lifecycle events. |
 | `WEBHOOK_EVENTS` | empty (all) | Comma-separated list of events to send. |
 | `WEBHOOK_SECRET` | empty | Secret used to sign event payloads with HMAC-SHA256. |
