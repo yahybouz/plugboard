@@ -277,6 +277,12 @@
                 <input type="text" id="pf-pinned" placeholder="Comma-separated, never removed">
               </div>
             </div>
+            <div class="form-row">
+              <div class="form-group form-check">
+                <label><input type="checkbox" id="pf-egress-guard" aria-describedby="pf-egress-guard-hint"> Public addresses only</label>
+                <span class="muted small" id="pf-egress-guard-hint">Refuses private, loopback and link-local addresses at every connection. Ignores HTTPS_PROXY: the server needs direct internet access. Leave off for Ollama or another local server.</span>
+              </div>
+            </div>
             <input type="hidden" id="pf-edit-id">
             <div class="form-actions">
               <button type="submit" class="btn btn-primary" id="pf-submit-btn">Save</button>
@@ -479,7 +485,7 @@
 </div>
 
 <div class="toast-container" id="toast-container"></div>
-<script src="/dashboard/app.js?v=21"></script>
+<script src="/dashboard/app.js?v=22"></script>
 <script src="/dashboard/auto_update.js?v=5"></script>
 <script type="module" src="/dashboard/live3d.js?v=5"></script>
 </body>

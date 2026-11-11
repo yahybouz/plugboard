@@ -131,6 +131,14 @@ With HTTPS in place, the admin session cookie is marked `Secure` automatically (
 
 Keep the `Host` header as the examples do (Caddy keeps it by default). Over plain HTTP to a non-local address, browsers send no `Sec-Fetch-Site`, and Plugboard checks the dashboard's changes by comparing their `Origin` with `Host` ([details](monitoring.md#changes-made-with-a-dashboard-session)).
 
+## Outbound network
+
+Protected providers (catalog presets, built-in presets with an HTTP(S) URL, and custom endpoints with **Public addresses only** ticked) connect to the internet directly: they ignore `HTTPS_PROXY` and `HTTP_PROXY`, because Plugboard's egress guard checks itself every address they connect to ([Public addresses only](providers-and-subscriptions.md#public-addresses-only)).
+
+- The server needs direct outbound HTTPS access to these providers' hosts. Behind a mandatory proxy they cannot connect: add each one as a custom endpoint to the same URL with the box left unticked, which keeps using `HTTPS_PROXY`.
+- Custom endpoints with the box left unticked and Ollama are unchanged.
+- The egress guard is not a firewall. As defence in depth, filter the server's outbound traffic too: allow only the provider hosts you use and block private ranges and the cloud metadata address `169.254.169.254`. `PLUGBOARD_PROVIDER_DOMAINS_ALLOWED` also limits the hosts a provider base URL may name.
+
 ## Platform deployments
 
 `railway.toml` builds the Dockerfile on Railway and checks `/health`. On Railway or any similar platform: set the variables of the checklist as secrets, attach a persistent volume at `/app/data` (and at `/home/app` if you sign in to CLIs inside the container), and keep one replica. `scripts/setup_railway_providers.py` creates API-key providers on a remote instance without opening a shell (see [Providers](providers-and-subscriptions.md#add-providers-from-env-or-scripts)).

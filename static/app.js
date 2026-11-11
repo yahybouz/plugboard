@@ -505,6 +505,8 @@ async function loadUsage() {
 
 const providerFormContainer = document.getElementById("provider-form-container");
 const providerForm = document.getElementById("provider-form");
+const _EGRESS_GUARD_HINT = document.getElementById("pf-egress-guard-hint").textContent;
+const _EGRESS_GUARD_FORCED_HINT = "Always on for catalog and built-in cloud presets.";
 
 document.getElementById("btn-add-provider").addEventListener("click", function () {
   providerFormContainer.classList.remove("hidden");
@@ -518,6 +520,9 @@ document.getElementById("btn-add-provider").addEventListener("click", function (
   document.getElementById("pf-token").required = true;
   document.getElementById("pf-auto-discover").checked = false;
   document.getElementById("pf-pinned").value = "";
+  document.getElementById("pf-egress-guard").checked = false;
+  document.getElementById("pf-egress-guard").disabled = false;
+  document.getElementById("pf-egress-guard-hint").textContent = _EGRESS_GUARD_HINT;
 });
 document.getElementById("btn-cancel-provider").addEventListener("click", function () { providerFormContainer.classList.add("hidden"); });
 
@@ -769,6 +774,7 @@ const _TEST_LABELS = {
   invalid_key: "Invalid key",
   not_openai_compatible: "Not a standard chat API",
   unreachable: "Unreachable",
+  egress_refused: "Refused: non-public address",
 };
 
 async function _testDirectProvider() {
@@ -1075,6 +1081,7 @@ providerForm.addEventListener("submit", async function (e) {
     timeout: parseFloat(document.getElementById("pf-timeout").value) || 60,
   };
   const tokenVal = document.getElementById("pf-token").value.trim();
+  body.egress_guard = document.getElementById("pf-egress-guard").checked;
 
   if (editId) {
     if (tokenVal) body.bearer_token = tokenVal;
@@ -1086,7 +1093,14 @@ providerForm.addEventListener("submit", async function (e) {
     toast("Provider updated", "success");
   } else {
     body.bearer_token = tokenVal;
-    await api("POST", "/providers", body);
+    const cres = await api("POST", "/providers", body);
+    if (!cres.ok) {
+      let detail = "";
+      try { detail = (await cres.json()).detail; } catch (err) { console.debug("create error body unreadable:", err); }
+      if (detail && typeof detail !== "string") detail = JSON.stringify(detail);
+      toast("Create failed: " + (detail || cres.status), "error");
+      return;
+    }
     toast("Provider created", "success");
   }
   providerFormContainer.classList.add("hidden");
@@ -1121,7 +1135,8 @@ async function loadProviders() {
         ch.error ? h("div", { className: "text-red small" }, ch.error) : null);
       return h("tr", null,
         h("td", null, h("strong", null, p.name), h("br"), h("code", null, p.id),
-          p.preset_key && p.preset_key.indexOf("catalog-") === 0 ? h("div", null, h("span", { className: "badge badge-orange" }, "catalog · unverified")) : null),
+          p.preset_key && p.preset_key.indexOf("catalog-") === 0 ? h("div", null, h("span", { className: "badge badge-orange" }, "catalog · unverified")) : null,
+          p.egress_guard === true ? h("div", null, h("span", { className: "badge badge-muted" }, "public only")) : null),
         h("td", null, h("code", null, p.base_url)),
         h("td", null, p.default_model || "—"),
         h("td", null, (p.timeout || 60) + "s"),
@@ -1152,6 +1167,10 @@ function editProvider(p) {
   document.getElementById("pf-timeout").value = p.timeout || 60;
   document.getElementById("pf-auto-discover").checked = p.auto_discover === true;
   document.getElementById("pf-pinned").value = (p.pinned_models || []).join(", ");
+  const guardForced = p.egress_guard_forced === true;
+  document.getElementById("pf-egress-guard").checked = p.egress_guard === true;
+  document.getElementById("pf-egress-guard").disabled = guardForced;
+  document.getElementById("pf-egress-guard-hint").textContent = guardForced ? _EGRESS_GUARD_FORCED_HINT : _EGRESS_GUARD_HINT;
   document.getElementById("pf-token").value = "";
   document.getElementById("pf-token").placeholder = "Leave empty to keep current";
   document.getElementById("pf-token").required = false;

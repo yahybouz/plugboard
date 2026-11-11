@@ -68,6 +68,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from plugboard import __version__
 from plugboard import admin_sessions
 from plugboard import envcompat
+from plugboard import netguard
 from plugboard import billing as _billing
 from plugboard import usage as _usage
 from plugboard.alerts import check_and_alert as _check_and_alert
@@ -3535,6 +3536,8 @@ class ProviderCreate(BaseModel):
     provider_type: str = "cloud"
     auth_header_name: str = "Authorization"
     auth_header_prefix: str = "Bearer"
+    # Public addresses only (D-18 c): unticked by default for a manual provider.
+    egress_guard: bool = False
 
 
 class ProviderUpdate(BaseModel):
@@ -3554,10 +3557,18 @@ class ProviderUpdate(BaseModel):
     pinned_models: Optional[
         List[Annotated[str, Field(min_length=1, max_length=200)]]
     ] = Field(default=None, max_length=500)
+    egress_guard: Optional[bool] = None
 
 
 def _mask(p: Dict[str, Any]) -> Dict[str, Any]:
-    masked = {**p, "bearer_token": mask_token(p.get("bearer_token", ""))}
+    masked = {
+        **p,
+        "bearer_token": mask_token(p.get("bearer_token", "")),
+        # The effective protection, not the stored field: catalogue and
+        # built-in cloud presets are always guarded (egress_guard_forced).
+        "egress_guard": netguard.is_protected(p),
+        "egress_guard_forced": netguard.guard_is_forced(p),
+    }
     if is_removed_provider(p):
         masked.update(
             is_active=False, migration_required=True, error=REMOVED_CONNECTOR_ERROR
@@ -3572,6 +3583,8 @@ async def get_providers(_: None = Depends(_require_admin)):
 
 @app.post("/providers", status_code=201)
 async def add_provider(body: ProviderCreate, _: None = Depends(_require_admin)):
+    if body.egress_guard:
+        await _require_guard_allows("", body.base_url)
     try:
         record = create_provider(
             name=body.name,
@@ -3583,6 +3596,7 @@ async def add_provider(body: ProviderCreate, _: None = Depends(_require_admin)):
             provider_type=body.provider_type,
             auth_header_name=body.auth_header_name,
             auth_header_prefix=body.auth_header_prefix,
+            egress_guard=body.egress_guard,
         )
     except _cfg_mod.ProviderDomainNotAllowed as exc:
         _audit(
@@ -3617,6 +3631,8 @@ async def patch_provider(
 ):
     updates = body.model_dump(exclude_none=True)
     before = get_provider(provider_id)
+    if before is not None:
+        await _check_guard_on_edit(provider_id, before, updates)
     try:
         record = update_provider(provider_id, updates)
     except _cfg_mod.ProviderDomainNotAllowed as exc:
@@ -4083,11 +4099,12 @@ def _docs_link(path: str) -> str:
     return base.rstrip("/") + "/" + path
 
 
-async def _require_public_host(base_url: str) -> list:
-    """Refuse a catalog preset whose host resolves to a non-public address.
+async def _require_public_host(base_url: str, *, label: str = "Catalog preset") -> list:
+    """Refuse a base URL whose host resolves to a non-public address.
 
     Catalog base URLs come from a third-party feed; an admin key must not be
-    sent to an internal address because that feed says so.
+    sent to an internal address because that feed says so. ``label`` names
+    what is refused in the error message.
     """
     from urllib.parse import urlsplit
 
@@ -4100,8 +4117,61 @@ async def _require_public_host(base_url: str) -> list:
         return await _resolve_public(parts.hostname or "", parts.port or 443)
     except UnsafeURL as exc:
         if str(exc).startswith("cannot resolve"):
-            raise HTTPException(503, f"Catalog preset host unreachable: {exc}")
-        raise HTTPException(422, f"Catalog preset refused: {exc}")
+            raise HTTPException(503, f"{label} host unreachable: {exc}")
+        raise HTTPException(422, f"{label} refused: {exc}")
+
+
+async def _check_guard_on_edit(
+    provider_id: str, before: Dict[str, Any], updates: Dict[str, Any]
+) -> None:
+    """Apply the egress guard rules to ``PUT /providers/{id}`` (D-19).
+
+    An imposed guard cannot be turned off (422) and is never written. When
+    the provider is protected after the edit, a changed ``base_url`` (compared
+    without a trailing ``/``) or a guard just ticked must point to a public
+    http(s) address. A ``base_url`` sent back unchanged triggers no lookup:
+    the edit form always sends it. ``updates`` is changed in place.
+    """
+    forced = netguard.guard_is_forced(before)
+    if forced and "egress_guard" in updates:
+        if updates["egress_guard"] is False:
+            raise HTTPException(
+                422,
+                "The egress guard is always on for catalog and built-in cloud presets",
+            )
+        del updates["egress_guard"]
+    protected_after = forced or updates.get(
+        "egress_guard", before.get("egress_guard") is True
+    )
+    if not protected_after:
+        return
+    current_url = before.get("base_url") or ""
+    new_url = updates.get("base_url", current_url)
+    url_changed = new_url.rstrip("/") != current_url.rstrip("/")
+    turned_on = not netguard.is_protected(before)
+    if url_changed or turned_on:
+        await _require_guard_allows(provider_id, new_url)
+
+
+async def _require_guard_allows(provider_id: str, base_url: str) -> None:
+    """Refuse to guard a provider whose base_url is not a public http(s) URL.
+
+    The egress guard would refuse every connection of such a provider, so it
+    is refused up front (D-18 c, D-19). Every refusal is audited as
+    ``provider.egress.rejected`` before it is raised.
+    """
+    try:
+        if not base_url.lower().startswith(("http://", "https://")):
+            raise HTTPException(422, "The egress guard needs an http(s) base_url")
+        await _require_public_host(base_url, label="Provider base_url")
+    except HTTPException as exc:
+        _audit(
+            "provider.egress.rejected",
+            target_type="provider",
+            target_id=provider_id,
+            details=json.dumps({"base_url": base_url, "reason": exc.detail}),
+        )
+        raise
 
 
 async def _test_openai_endpoint(
@@ -4110,11 +4180,17 @@ async def _test_openai_endpoint(
     send_test_token: bool,
     pinned: Optional[list] = None,
     preset: Optional[Dict[str, Any]] = None,
+    *,
+    public_only: bool = False,
 ) -> Dict[str, Any]:
     """GET /models (and optionally a 1-token completion) against an endpoint.
 
     A preset's own auth header and extra headers are used (Anthropic takes
     ``x-api-key`` plus ``anthropic-version``, not a bearer token).
+
+    ``public_only`` (a protected preset): the egress guard's session, which
+    refuses a non-public address and ignores ``HTTPS_PROXY``; no redirect is
+    followed, so the key never reaches a host the check did not see.
     """
     from urllib.parse import urlsplit
 
@@ -4133,19 +4209,32 @@ async def _test_openai_endpoint(
         prefix = "Bearer" if prefix is None else prefix
         headers[header_name] = f"{prefix} {api_key}".strip() if prefix else api_key
     timeout = aiohttp.ClientTimeout(total=15)
+    # Fakes of aiohttp.ClientSession take no allow_redirects: the unguarded
+    # path passes nothing new.
+    no_redirect: Dict[str, Any] = {"allow_redirects": False} if public_only else {}
     try:
-        connector = None
-        if pinned:
+        if public_only:
             from plugboard.llm_pricing import _PinnedResolver
 
-            connector = aiohttp.TCPConnector(
-                resolver=_PinnedResolver(host, pinned), use_dns_cache=False
+            session_cm = netguard.client_session(
+                True,
+                timeout=timeout,
+                connector=netguard.public_connector(
+                    resolver=_PinnedResolver(host, pinned) if pinned else None
+                ),
             )
-        async with aiohttp.ClientSession(
-            timeout=timeout, connector=connector
-        ) as session:
+        else:
+            connector = None
+            if pinned:
+                from plugboard.llm_pricing import _PinnedResolver
+
+                connector = aiohttp.TCPConnector(
+                    resolver=_PinnedResolver(host, pinned), use_dns_cache=False
+                )
+            session_cm = aiohttp.ClientSession(timeout=timeout, connector=connector)
+        async with session_cm as session:
             async with session.get(
-                openai_url(base_url, "models"), headers=headers
+                openai_url(base_url, "models"), headers=headers, **no_redirect
             ) as resp:
                 if resp.status in (401, 403):
                     return {
@@ -4209,11 +4298,18 @@ async def _test_openai_endpoint(
                         "messages": [{"role": "user", "content": "ping"}],
                         "max_tokens": 1,
                     },
+                    **no_redirect,
                 ) as resp:
                     result["completion_ok"] = resp.status == 200
                     result["completion_status"] = resp.status
             return result
     except (aiohttp.ClientError, _asyncio.TimeoutError) as exc:
+        if public_only and netguard.is_egress_refusal(exc):
+            return {
+                "status": netguard.EGRESS_REFUSED,
+                "message": f"Refused: {host} resolves to a non-public address.",
+                "docs": _docs_link(_TEST_DOCS),
+            }
         return {
             "status": "unreachable",
             "message": f"Unreachable: {host} did not answer ({type(exc).__name__}). "
@@ -4254,16 +4350,18 @@ async def test_direct_provider(
         check_provider_domain_allowed(base_url)
     except ProviderDomainNotAllowed as exc:
         raise HTTPException(422, str(exc))
-    if pinned:
-        return await _test_openai_endpoint(
-            base_url,
-            body.api_key.strip(),
-            body.send_test_token,
-            pinned=pinned,
-            preset=preset,
-        )
+    # Catalogue and built-in HTTP presets are tested as they will be used:
+    # through the egress guard. A custom endpoint is not protected.
+    public_only = preset is not None and netguard.guard_is_forced(
+        {"preset_key": body.preset_key}
+    )
     return await _test_openai_endpoint(
-        base_url, body.api_key.strip(), body.send_test_token, preset=preset
+        base_url,
+        body.api_key.strip(),
+        body.send_test_token,
+        pinned=pinned,
+        preset=preset,
+        public_only=public_only,
     )
 
 

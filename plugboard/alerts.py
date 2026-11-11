@@ -72,6 +72,35 @@ async def _send_provider_alert(provider_id: str, failure_count: int) -> None:
         log.warning("Provider alert webhook failed: %s", exc)
 
 
+async def send_egress_refused_alert(provider_id: str, host: str) -> None:
+    """Alert that a protected provider's host resolves to a non-public address."""
+    if not _WEBHOOK_URL:
+        return
+    payload = {
+        "type": "provider_egress_refused",
+        "provider_id": provider_id,
+        "host": host,
+        "message": (
+            f"Provider '{provider_id}': {host} resolves to a non-public address; "
+            "requests are refused"
+        ),
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                _WEBHOOK_URL,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                log.info(
+                    "Egress refused alert sent for %s (HTTP %d)",
+                    provider_id,
+                    resp.status,
+                )
+    except Exception as exc:
+        log.warning("Egress refused alert webhook failed: %s", exc)
+
+
 # -- Spending alerts ----------------------------------------------------------
 
 

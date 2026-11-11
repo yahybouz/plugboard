@@ -67,6 +67,7 @@ A model hidden by exposure filters can still be called with its unambiguous expl
 A provider created from a catalog preset:
 
 - keeps the base URL it was created with; a later catalog change never redirects your key;
+- connects to public addresses only, checked at every connection, even if its host name later points inside your network (see [Public addresses only](#public-addresses-only));
 - starts with the catalog's model list, then discovers what your key can really use in the background (the row shows **Discovering…**);
 - has `auto_discover` on: its list is refreshed every 6 hours (see [Monitoring](monitoring.md#model-catalog-and-connectivity));
 - is priced with its own prices when they differ from the vendor's (see [Prices per provider](pricing.md#prices-per-provider)).
@@ -84,6 +85,7 @@ Models that the catalog marks as needing another API (Anthropic Messages, OpenAI
 | Invalid key (401/403) | The key is wrong, revoked, or belongs to another region or project of the same vendor. |
 | Not a standard chat API | The host did not answer `GET /models` in the standard format. Check the base URL, or add it as a custom endpoint. |
 | Unreachable | No answer: network, proxy, firewall or a wrong host. |
+| Refused: non-public address | A catalog or built-in preset whose host resolves to a private, loopback or link-local address: nothing was sent. These presets are tested as they are used, without a proxy and without following redirects (see [Public addresses only](#public-addresses-only)). |
 
 **Also send one test token** additionally sends a one-token chat completion to the first listed model. It is off by default because the provider bills it.
 
@@ -109,10 +111,28 @@ Use **+ Add Custom Provider** for any server that implements `POST /v1/chat/comp
 | Bearer Token | Optional; sent as `Authorization: Bearer <token>` |
 | Default Model | Used when a request names this provider without a model |
 | Timeout (s) | Request timeout (default 60) |
+| Public addresses only | Off by default; see [below](#public-addresses-only). Leave it off for Ollama or another local server. |
 
 Then click **Discover**. Discovery calls `GET <base>/v1/models`; if that fails it falls back to the preset's known models, then to asking the default model for its list.
 
 If `PLUGBOARD_PROVIDER_DOMAINS_ALLOWED` is set, a base URL whose host is not on that list is refused.
+
+### Public addresses only
+
+A protected provider only connects to public addresses, so its key and prompts never reach `127.0.0.1`, `10.x` or `169.254.169.254` because its host name was later pointed there (DNS rebinding).
+
+- **Protected providers**: every catalog preset, every built-in preset with an HTTP(S) URL (the API key presets, the subscriptions through CLI credentials and the GitHub sign-in presets), and any custom endpoint with **Public addresses only** ticked (`egress_guard`). Ollama, the subscriptions through an official CLI and custom endpoints left unticked are not protected.
+- **Forced for presets**: on a catalog or built-in preset the box is ticked and greyed out, and `egress_guard: false` is refused with `422`. The Providers page shows **public only** on a protected row; `GET /providers` returns `egress_guard` (protection in effect) and `egress_guard_forced`.
+- **Checked at every connection**: each DNS answer (one non-public address refuses the whole name), an IP address written in the URL, and the target of a redirect.
+- **A refused connection** sends nothing: the request goes to the next candidate provider, or the client gets `502` when there is none. The provider stays active, the circuit breaker does not count the refusal, and requests work again as soon as the name resolves to public addresses.
+- **Reported at most every 5 minutes per provider**: the gateway log names the provider and host; the first refusal of each 5 minutes is also recorded in the audit log as `provider.egress_refused` and sent to `ALERT_WEBHOOK_URL` as `provider_egress_refused` ([alert webhook](monitoring.md#alert-webhook)). The watchdog reports `egress_refused` and never restarts the provider for it.
+- **Editing**: a new base URL on a protected provider, or ticking the box, must be a public `http(s)` address, otherwise `POST /providers` or `PUT /providers/{id}` answers `422` (`503` when the name does not resolve) and records `provider.egress.rejected`. A base URL sent back unchanged is not checked again.
+- **No proxy**: protected providers ignore `HTTPS_PROXY` and connect directly, so the server needs direct internet access ([outbound network](deployment.md#outbound-network)).
+
+Two cases need a custom endpoint with the box left unticked:
+
+- a preset whose base URL was changed by hand to an internal address before this release is refused from its first request: recreate it as a custom endpoint to the same URL;
+- behind a mandatory proxy, protected providers cannot connect: add a custom endpoint to the same URL with the same key, which keeps using the proxy.
 
 ### Ollama
 

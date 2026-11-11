@@ -17,6 +17,12 @@ Integration points are strictly the HTTP callers on hot paths
 watchdog). Callers pass `timeout` per request — we never hard-code it
 at the session level to preserve per-endpoint budgets.
 
+A second singleton, the public session (PLU-7), serves the providers
+the egress guard protects (`netguard.is_protected`): it connects
+directly, never through HTTPS_PROXY / HTTP_PROXY, and only to public
+addresses, checked at every connection. `session_for(provider)` picks
+the right one.
+
 Lifecycle: created lazily on first use, closed by the FastAPI lifespan
 on shutdown. Tests that create/destroy event loops should call
 :func:`close_session` in teardown.
@@ -26,11 +32,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+from collections.abc import Mapping
+from typing import Any, Optional
 
 import aiohttp
 
-from plugboard import envcompat
+from plugboard import envcompat, netguard
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +47,8 @@ _CONN_PER_HOST = envcompat.get_int("PLUGBOARD_HTTP_POOL_PER_HOST", default=20)
 _DNS_TTL = envcompat.get_int("PLUGBOARD_HTTP_DNS_TTL", default=300)
 
 _session: Optional[aiohttp.ClientSession] = None
+_public_session: Optional[aiohttp.ClientSession] = None
+_public_resolver: Optional[netguard.PublicOnlyResolver] = None
 _lock = asyncio.Lock()
 
 
@@ -77,15 +86,71 @@ async def get_session() -> aiohttp.ClientSession:
     return _session
 
 
+async def get_public_session() -> aiohttp.ClientSession:
+    """Return the public-only session of protected providers (PLU-7).
+
+    Direct (``trust_env=False``: a proxy would resolve the name itself,
+    out of the guard's sight) and public addresses only, checked by the
+    resolver and by the socket factory at every connection.
+    """
+    global _public_session, _public_resolver
+    if _public_session is not None and not _public_session.closed:
+        return _public_session
+    async with _lock:
+        # Double-check under lock — racing callers on first access.
+        if _public_session is None or _public_session.closed:
+            if _public_resolver is None:
+                _public_resolver = netguard.PublicOnlyResolver()
+            connector = netguard.public_connector(
+                resolver=_public_resolver,
+                limit=_CONN_LIMIT,
+                limit_per_host=_CONN_PER_HOST,
+                ttl_dns_cache=_DNS_TTL,
+            )
+            _public_session = aiohttp.ClientSession(
+                connector=connector,
+                # No default timeout here — callers set their own.
+                raise_for_status=False,
+                trust_env=False,  # never through a proxy (D-20)
+            )
+            log.info("http_pool: public-only session created")
+    return _public_session
+
+
+async def session_for(provider: Mapping[str, Any]) -> aiohttp.ClientSession:
+    """The session to reach ``provider``'s base URL with.
+
+    Protected providers get the public-only session, the others the
+    shared one. ``get_session`` is looked up at call time, so a fake set
+    on ``http_pool.get_session`` still intercepts.
+    """
+    if netguard.is_protected(provider):
+        return await get_public_session()
+    return await get_session()
+
+
 async def close_session() -> None:
-    """Close the singleton. Call from FastAPI lifespan on shutdown."""
-    global _session
+    """Close both singletons. Call from FastAPI lifespan on shutdown."""
+    global _session, _public_session, _public_resolver
     if _session is not None and not _session.closed:
         try:
             await _session.close()
         except Exception as exc:  # pragma: no cover
             log.warning("http_pool: close error (ignored): %s", exc)
     _session = None
+    if _public_session is not None and not _public_session.closed:
+        try:
+            await _public_session.close()
+        except Exception as exc:  # pragma: no cover
+            log.warning("http_pool: public close error (ignored): %s", exc)
+    _public_session = None
+    # The connector does not own a resolver it was given: close it here.
+    if _public_resolver is not None:
+        try:
+            await _public_resolver.close()
+        except Exception as exc:  # pragma: no cover
+            log.warning("http_pool: resolver close error (ignored): %s", exc)
+    _public_resolver = None
 
 
 async def reset_for_tests() -> None:

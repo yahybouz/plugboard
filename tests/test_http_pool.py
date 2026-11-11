@@ -6,6 +6,9 @@ Covers the three invariants we care about:
      same session (one build, not N).
   3. Idempotent close — calling close_session() twice is safe, and
      get_session() after close rebuilds a fresh session.
+
+and the public-only session of the egress guard (PLU-7): direct (no proxy),
+picked per provider by ``session_for``, closed with the shared one.
 """
 
 from __future__ import annotations
@@ -14,7 +17,7 @@ import asyncio
 
 import pytest
 
-from plugboard import http_pool
+from plugboard import http_pool, netguard
 
 
 @pytest.fixture(autouse=True)
@@ -90,3 +93,49 @@ async def test_closed_session_triggers_rebuild(monkeypatch):
     s2 = await http_pool.get_session()
     assert s2 is not s1
     assert not s2.closed
+
+
+async def test_public_session_ignores_proxy_env(monkeypatch):
+    """The public session never goes through HTTPS_PROXY; the shared one still does."""
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    pub, shared = await http_pool.get_public_session(), await http_pool.get_session()
+    assert pub is not shared and pub is await http_pool.get_public_session()
+    assert pub.trust_env is False and shared.trust_env is True
+    assert pub.connector._socket_factory is netguard.refuse_non_public
+    assert isinstance(pub.connector._resolver, netguard.PublicOnlyResolver)
+
+
+async def test_public_session_single_build_under_concurrency():
+    """N concurrent first callers share one public session, as with get_session."""
+    tasks = [asyncio.create_task(http_pool.get_public_session()) for _ in range(20)]
+    sessions = await asyncio.gather(*tasks)
+    assert all(s is sessions[0] for s in sessions)
+    assert not sessions[0].closed
+
+
+async def test_session_for_picks_by_provider():
+    protected = {"preset_key": "catalog-x", "base_url": "https://a.test"}
+    assert (
+        await http_pool.session_for(protected) is await http_pool.get_public_session()
+    )
+    plain = {"base_url": "http://x.test"}
+    assert await http_pool.session_for(plain) is await http_pool.get_session()
+
+
+async def test_session_for_uses_patched_get_session(monkeypatch):
+    """A fake set on http_pool.get_session still intercepts unprotected providers."""
+    sentinel = object()
+
+    async def fake():
+        return sentinel
+
+    monkeypatch.setattr(http_pool, "get_session", fake)
+    assert await http_pool.session_for({"base_url": "http://x.test"}) is sentinel
+
+
+async def test_close_session_closes_both():
+    pub, shared = await http_pool.get_public_session(), await http_pool.get_session()
+    await http_pool.close_session()
+    assert pub.closed and shared.closed
+    rebuilt = await http_pool.get_public_session()
+    assert rebuilt is not pub and not rebuilt.closed

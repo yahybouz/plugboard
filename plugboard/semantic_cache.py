@@ -689,9 +689,14 @@ async def _embed(text: str) -> Optional[List[float]]:
 
     import aiohttp
 
+    from plugboard import netguard
+
     try:
         timeout = aiohttp.ClientTimeout(total=_EMBED_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        # PLU-7: public-only and proxy-free for a protected provider.
+        async with netguard.client_session(
+            netguard.is_protected(provider), timeout=timeout
+        ) as session:
             async with session.post(
                 f"{base_url}/embeddings",
                 json={"model": embed_model, "input": text},
@@ -709,6 +714,10 @@ async def _embed(text: str) -> Optional[List[float]]:
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        if netguard.is_egress_refusal(exc):
+            # The guard refused a non-public address: reported once per window.
+            netguard.report_refusal(provider_id, exc.host, "embed")
+            return None
         log.warning("embed call failed: %s", exc)
         return None
 

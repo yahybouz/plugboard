@@ -18,6 +18,8 @@ import time
 from typing import Any, Dict
 
 import aiohttp
+
+from plugboard import netguard
 from plugboard.legacy_connectors import (
     require_supported_model,
     require_supported_provider,
@@ -79,11 +81,16 @@ async def _probe_subprocess(auth_source: str) -> Dict[str, Any]:
 
 
 async def _probe_http(
-    url: str, headers: Dict[str, str], timeout_s: float = 5.0
+    url: str,
+    headers: Dict[str, str],
+    timeout_s: float = 5.0,
+    *,
+    public_only: bool = False,
 ) -> Dict[str, Any]:
     t0 = time.perf_counter()
     try:
-        async with aiohttp.ClientSession() as session:
+        # PLU-7: public-only and proxy-free for a protected provider.
+        async with netguard.client_session(public_only) as session:
             async with session.get(
                 url,
                 headers=headers,
@@ -100,6 +107,15 @@ async def _probe_http(
                 }
     except Exception as exc:
         latency = (time.perf_counter() - t0) * 1000
+        if netguard.is_egress_refusal(exc):
+            # The guard refused a non-public address: no socket was opened.
+            return {
+                "ok": False,
+                "error": netguard.EGRESS_REFUSED,
+                "host": exc.host,
+                "url": url,
+                "latency_ms": round(latency, 1),
+            }
         return {
             "ok": False,
             "error": str(exc)[:200],
@@ -130,4 +146,10 @@ async def probe_provider(provider: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         headers = {}
     headers.setdefault("Accept", "application/json")
-    return await _probe_http(url, headers)
+    if not netguard.is_protected(provider):
+        # The two-argument call fakes of _probe_http still accept.
+        return await _probe_http(url, headers)
+    result = await _probe_http(url, headers, public_only=True)
+    if result.get("error") == netguard.EGRESS_REFUSED:
+        netguard.report_refusal(provider.get("id", ""), result["host"], "health")
+    return result

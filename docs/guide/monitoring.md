@@ -145,6 +145,12 @@ Set `ALERT_WEBHOOK_URL` to receive JSON alerts (for example on a Slack or Discor
   {"type": "spending_alert", "status": "warning", "client_id": "billing-service", "current_cost_usd": 8.12, "limit_usd": 10, "percentage": 81.2, "message": "..."}
   ```
 
+- `provider_egress_refused`: the host of a protected provider resolves to a non-public address, so its requests are refused before anything is sent ([public addresses only](providers-and-subscriptions.md#public-addresses-only)). At most one alert per provider every five minutes; the provider stays active.
+
+  ```json
+  {"type": "provider_egress_refused", "provider_id": "catalog-provider", "host": "api.example.com", "message": "..."}
+  ```
+
 ### Event webhooks
 
 `WEBHOOK_URLS` (comma-separated) receives lifecycle events: `key.created`, `key.revoked`, `key.rotated`, `provider.created`, `provider.deleted`, and the automatic-update events below. Restrict them with `WEBHOOK_EVENTS` (comma-separated, default all). Each delivery is a POST of:
