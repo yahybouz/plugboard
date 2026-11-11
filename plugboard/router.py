@@ -1173,9 +1173,11 @@ async def forward_stream(
     log.info("→ stream %s | model=%s | provider=%s", url, real_model, provider["id"])
 
     # PERF-2: pooled session for streaming (same TCP/TLS reuse benefit).
-    from plugboard.http_pool import get_session as _get_http_session
+    # PLU-7: public-only for a protected provider. Looked up at call time so
+    # a fake intercepts.
+    from plugboard.http_pool import session_for
 
-    session = await _get_http_session()
+    session = await session_for(provider)
     streaming = False
     # aiohttp's text names the provider's host and port: typed like forward().
     try:
@@ -1203,6 +1205,11 @@ async def forward_stream(
             f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}"
         ) from exc
     except aiohttp.ClientError as exc:
+        if netguard.is_egress_refusal(exc):
+            # The guard refused a non-public address: no socket was opened.
+            # Not the provider's fault (no circuit), reported once per window.
+            netguard.report_refusal(provider["id"], exc.host, "stream")
+            raise ProviderEgressRefused(provider["id"], exc.host) from exc
         if not streaming:
             cb_failure(circuit_key)
         detail = str(exc) or type(exc).__name__
@@ -2122,9 +2129,10 @@ async def discover_models(provider: Dict[str, Any]) -> List[Dict[str, str]]:
 
     # Provider-native catalog APIs. These avoid static fallbacks when the
     # upstream gives us an authoritative account-scoped model list.
-    from plugboard.http_pool import get_session as _get_http_session
+    # PLU-7: public-only session for a protected provider.
+    from plugboard.http_pool import session_for
 
-    session = await _get_http_session()
+    session = await session_for(provider)
     for discoverer in (
         _discover_ollama_models,
         _discover_anthropic_api_models,

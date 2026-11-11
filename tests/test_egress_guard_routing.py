@@ -18,7 +18,15 @@ from types import SimpleNamespace
 import pytest
 from aiohttp import web
 
-from plugboard import alerts, circuit_breaker, metrics, netguard, router
+from plugboard import (
+    alerts,
+    circuit_breaker,
+    http_pool,
+    metrics,
+    model_availability,
+    netguard,
+    router,
+)
 from tests.factories import FAKE_COMPLETION, PROVIDER_A
 
 _CHAT = {"model": "m", "messages": [{"role": "user", "content": "hi"}]}
@@ -151,3 +159,32 @@ async def test_refusal_gives_502_admin_text_and_client_reference(
     assert body["error_ref"] in body["detail"]
     assert recorders.cb_failures == [] and recorders.provider_failures == []
     assert [r[:2] for r in recorders.reports] == [("acme", "127.0.0.1")] * 2
+
+
+async def test_stream_refusal_gives_502_without_breaker(
+    client, client_key, protected_unreachable, recorders
+):
+    chat = {**_CHAT, "model": "acme:fake:model-v1", "cache": False, "stream": True}
+    resp = await client.post("/v1/chat/completions", headers=client_key, json=chat)
+    assert resp.status_code == 502, resp.text
+    assert "127.0.0.1" not in resp.text and "egress" not in resp.text
+    assert recorders.cb_failures == [] and recorders.provider_failures == []
+    assert recorders.reports == [("acme", "127.0.0.1", "stream")]
+
+
+async def test_discovery_paths_use_session_for(acme, monkeypatch):
+    seen = []
+
+    class _Called(Exception):
+        pass
+
+    async def fake(provider):
+        seen.append(provider["id"])
+        raise _Called
+
+    monkeypatch.setattr(http_pool, "session_for", fake)
+    with pytest.raises(_Called):
+        await router.discover_models(acme)
+    entries, reason = await model_availability.discover_openai_models(acme)
+    assert entries is None and reason.startswith("GET /models failed")
+    assert seen == ["acme", "acme"]

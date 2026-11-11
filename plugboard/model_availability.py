@@ -950,9 +950,10 @@ async def discover_openai_models(
     url = openai_url(provider.get("base_url", ""), "models")
     try:
         headers = await router_mod._build_auth_header_async(provider)
-        from plugboard.http_pool import get_session
+        from plugboard.http_pool import session_for
 
-        session = await get_session()
+        # PLU-7: public-only session for a protected provider.
+        session = await session_for(provider)
         async with session.get(
             url, headers=headers, timeout=aiohttp.ClientTimeout(total=20)
         ) as resp:
