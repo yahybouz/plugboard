@@ -128,6 +128,7 @@ def _why_unusable(
     value: Union[int, float],
     minimum: Optional[Union[int, float]],
     above: Optional[Union[int, float]],
+    maximum: Optional[Union[int, float]] = None,
 ) -> Optional[str]:
     """Why ``value`` cannot be used, or None when it can."""
     # A whole number is always finite (and may be too large for a float).
@@ -139,6 +140,8 @@ def _why_unusable(
         return f"is below {minimum}"
     if above is not None and value <= above:
         return f"must be above {above}"
+    if maximum is not None and value > maximum:
+        return f"is above {maximum}"
     return None
 
 
@@ -183,12 +186,14 @@ def get_floats(
     *legacy: str,
     default: List[float],
     minimum: Optional[float] = None,
+    maximum: Optional[float] = None,
 ) -> List[float]:
     """Comma-separated numbers from ``name`` (or a legacy name), else ``default``.
 
     Empty items are skipped, and a value with no item gives the default. One
-    item that is not a finite number (NaN or infinity) or is below ``minimum``
-    gives the whole default, with one warning per value.
+    item that is not a finite number (NaN or infinity), is below ``minimum``
+    or is above ``maximum`` gives the whole default, with one warning per
+    value.
     """
     raw = get(name, *legacy)
     values: List[float] = []
@@ -201,7 +206,7 @@ def get_floats(
         except ValueError:
             problem: Optional[str] = "is not a number"
         else:
-            problem = _why_unusable(value, minimum, None)
+            problem = _why_unusable(value, minimum, None, maximum)
         if problem is not None:
             _report(name, raw, f"item {item!r} {problem}", default)
             return list(default)

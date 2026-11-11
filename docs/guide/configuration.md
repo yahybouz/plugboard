@@ -6,7 +6,7 @@ Plugboard is configured with environment variables. `run.py` and the server load
 
 Boolean flags accept `1`, `true`, `yes`, `on` unless stated otherwise. Values below are the defaults applied when the variable is unset.
 
-**Numbers.** A numeric setting whose value is not a finite number (text, `1.5` where a whole number is expected, `nan`, `inf`) keeps its default: the gateway logs one warning naming the variable and starts. A list of numbers (`PLUGBOARD_RETRY_DELAYS`) keeps its whole default when one item is not a finite number or is below the setting's minimum. `PORT` and `MCP_PORT`, read by the launch scripts `run.py` and `scripts/run_mcp.py`, are the exception: a value that is not a whole number stops them.
+**Numbers.** A numeric setting whose value is not a finite number (text, `1.5` where a whole number is expected, `nan`, `inf`) keeps its default: the gateway logs one warning naming the variable and starts. A list of numbers (`PLUGBOARD_RETRY_DELAYS`) keeps its whole default when one item is not a finite number or is outside the setting's bounds. `PORT` and `MCP_PORT`, read by the launch scripts `run.py` and `scripts/run_mcp.py`, are the exception: a value that is not a whole number stops them.
 
 ## Security and authentication
 
@@ -75,7 +75,7 @@ A completed rotation also signs out every dashboard session and forgets the brow
 
 | Variable | Default | Description |
 |---|---|---|
-| `PLUGBOARD_RETRY_DELAYS` | `2,5,15` | Comma-separated seconds to wait before each retry on `429`/`5xx` or a timeout from an HTTP provider. Each item must be a finite number, `0` or more: `inf`, `nan` or a negative item gives the default, with a warning (see **Numbers** at the top of this page). An error saying the context is too long is not retried. |
+| `PLUGBOARD_RETRY_DELAYS` | `2,5,15` | Comma-separated seconds to wait before each retry on `429`/`5xx` or a timeout from an HTTP provider. Each item must be a finite number from `0` to `604800` (7 days): `inf`, `nan`, a negative item or a longer delay gives the default, with a warning (see **Numbers** at the top of this page). An error saying the context is too long is not retried. |
 | `PLUGBOARD_LB_ERROR_RATE_WEIGHT` | `5.0` | Weight of the error rate in the provider score used for fallback ordering. |
 | `PLUGBOARD_LB_INFLIGHT_WEIGHT` | `0.35` | Weight of in-flight requests in that score. |
 | `PLUGBOARD_HTTP_POOL_SIZE` | `100` | Shared HTTP connection pool size. |

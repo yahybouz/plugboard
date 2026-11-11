@@ -223,6 +223,13 @@ def test_number_list_reader_skips_empty_items(monkeypatch, caplog):
     assert values == [0.5, 2.0, 0.0]
     assert caplog.text == ""
 
+    # The maximum itself is kept.
+    monkeypatch.setenv("PB_TEST_LIST", "60,0")
+    assert envcompat.get_floats("PB_TEST_LIST", default=[1.0], maximum=60.0) == [
+        60.0,
+        0.0,
+    ]
+
     monkeypatch.setenv("PB_TEST_LIST", " , ")
     assert envcompat.get_floats("PB_TEST_LIST", default=[1.0]) == [1.0]
     monkeypatch.delenv("PB_TEST_LIST")
@@ -237,15 +244,18 @@ def test_number_list_reader_skips_empty_items(monkeypatch, caplog):
         ("nan,1", "'nan' is not a number"),
         ("1,x", "'x' is not a number"),
         ("1,-0.5", "'-0.5' is below 0.0"),
+        ("1,60.5", "'60.5' is above 60.0"),
+        ("1e300", "'1e300' is above 60.0"),
     ],
 )
 def test_one_bad_item_gives_the_whole_default_list(monkeypatch, caplog, raw, problem):
     monkeypatch.setattr(envcompat, "_bad_numbers", set())
     monkeypatch.setenv("PB_TEST_LIST", raw)
+    bounds = {"default": [1.0, 2.0], "minimum": 0.0, "maximum": 60.0}
 
     with caplog.at_level("WARNING", logger="plugboard.envcompat"):
-        first = envcompat.get_floats("PB_TEST_LIST", default=[1.0, 2.0], minimum=0.0)
-        envcompat.get_floats("PB_TEST_LIST", default=[1.0, 2.0], minimum=0.0)
+        first = envcompat.get_floats("PB_TEST_LIST", **bounds)
+        envcompat.get_floats("PB_TEST_LIST", **bounds)
 
     assert first == [1.0, 2.0]
     assert caplog.text.count("PB_TEST_LIST") == 1

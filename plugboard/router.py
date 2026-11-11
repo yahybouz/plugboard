@@ -266,11 +266,16 @@ def _read_retry_delays() -> List[float]:
     Comma-separated seconds, e.g.:
       "2,5,15" (default)
       "0.05,0.1,0.2" (fast CI)
-    One item that is not a finite number of seconds, zero or more, gives the
-    default with one warning: asyncio.sleep(inf) or sleep(nan) never returns.
+    One item that is not a finite number of seconds from zero to
+    MAX_RETRY_AFTER_S (7 days) gives the default with one warning:
+    asyncio.sleep(inf) or sleep(nan) never returns, and sleep(1e300) as good
+    as never.
     """
     return envcompat.get_floats(
-        "PLUGBOARD_RETRY_DELAYS", default=[2.0, 5.0, 15.0], minimum=0.0
+        "PLUGBOARD_RETRY_DELAYS",
+        default=[2.0, 5.0, 15.0],
+        minimum=0.0,
+        maximum=float(MAX_RETRY_AFTER_S),
     )
 
 

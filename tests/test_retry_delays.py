@@ -1,4 +1,4 @@
-"""PLUGBOARD_RETRY_DELAYS takes finite seconds, zero or more, only."""
+"""PLUGBOARD_RETRY_DELAYS takes finite seconds, from zero to seven days, only."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import math
 import pytest
 
 from plugboard import envcompat, router
+from plugboard.cli_subprocess import MAX_RETRY_AFTER_S
 
 DEFAULT = [2.0, 5.0, 15.0]
 
@@ -34,6 +35,29 @@ def test_a_delay_that_is_not_finite_or_is_negative_keeps_the_default(
     assert delays == DEFAULT
     assert all(math.isfinite(delay) for delay in delays)
     assert caplog.text.count("PLUGBOARD_RETRY_DELAYS") == 1
+
+
+@pytest.mark.parametrize("raw", ["1e300", "1e9", "2,604801,15"])
+def test_a_delay_longer_than_seven_days_keeps_the_default(monkeypatch, caplog, raw):
+    # A finite but huge delay held the retried request as surely as inf did.
+    monkeypatch.setenv("PLUGBOARD_RETRY_DELAYS", raw)
+
+    with caplog.at_level("WARNING"):
+        delays = router._read_retry_delays()
+
+    assert delays == DEFAULT
+    assert caplog.text.count("PLUGBOARD_RETRY_DELAYS") == 1
+    assert f"is above {float(MAX_RETRY_AFTER_S)}" in caplog.text
+
+
+def test_a_delay_of_seven_days_is_kept(monkeypatch, caplog):
+    monkeypatch.setenv("PLUGBOARD_RETRY_DELAYS", str(MAX_RETRY_AFTER_S))
+
+    with caplog.at_level("WARNING"):
+        delays = router._read_retry_delays()
+
+    assert delays == [float(MAX_RETRY_AFTER_S)]
+    assert "PLUGBOARD_RETRY_DELAYS" not in caplog.text
 
 
 @pytest.mark.parametrize(
