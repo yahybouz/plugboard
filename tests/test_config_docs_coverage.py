@@ -89,7 +89,7 @@ def variables_read(source: str) -> set[str]:
             if (
                 (owner.endswith("environ") and called in {"get", "pop", "setdefault"})
                 or called == "getenv"
-                or (owner == "envcompat" and called == "get")
+                or (owner == "envcompat" and called in {"get", "get_int", "get_float"})
                 or "env" in called.lower()
                 or any(PREFIXED.match(arg) for arg in args)
             ):
@@ -123,6 +123,8 @@ os.environ.get(NAMED_ENV)
 envcompat.get("PLUGBOARD_NEW", "OLD_NAME")
 _hours("PLUGBOARD_HOURS", ("OLDER_HOURS",), 6)
 _env_int("VIA_HELPER", 3)
+envcompat.get_int("VIA_GET_INT", 1)
+envcompat.get_float("VIA_GET_FLOAT", 0.5)
 LABEL = "not a variable"
 """
     assert variables_read(source) == {
@@ -136,6 +138,8 @@ LABEL = "not a variable"
         "PLUGBOARD_HOURS",
         "OLDER_HOURS",
         "VIA_HELPER",
+        "VIA_GET_INT",
+        "VIA_GET_FLOAT",
     }
 
 
