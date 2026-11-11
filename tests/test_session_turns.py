@@ -264,6 +264,54 @@ async def test_streamed_http_turn_is_recorded(client, session_db):
     assert session_turns._turns == {}
 
 
+async def test_next_turn_waits_until_the_streamed_answer_is_sent(
+    client, session_db, monkeypatch
+):
+    """The turn goes back after the last streamed byte, not when the handler returns.
+
+    ``_session_turn_dep`` must stay a yield dependency of scope "request":
+    with scope "function" it ends before the body is sent, and the next turn
+    reads the session before the streamed answer is recorded.
+    """
+    import contextlib
+
+    import plugboard.app
+
+    real_stream = plugboard.app.forward_stream
+    sending = asyncio.Event()
+
+    async def slow_stream(body, **options):
+        async with contextlib.aclosing(real_stream(body, **options)) as chunks:
+            yield await chunks.__anext__()
+            sending.set()  # the handler has returned: the body is on its way
+            await asyncio.sleep(0.3)
+            async for chunk in chunks:
+                yield chunk
+
+    monkeypatch.setattr("plugboard.app.forward_stream", slow_stream)
+    upstream = _Upstream()
+    upstream.gate.set()  # only the second, non-streamed turn calls it
+    with aioresponses() as mock:
+        mock.post(URL_A, body=FAKE_STREAM_BODY, status=200)
+        mock.post(URL_A, callback=upstream.reply, repeat=True)
+        headers, body = _turn("A", "s6", stream=True)
+        first = asyncio.create_task(
+            client.post("/v1/chat/completions", headers=headers, json=body)
+        )
+        await asyncio.wait_for(sending.wait(), 2)
+        headers, body = _turn("B", "s6")
+        second = await client.post("/v1/chat/completions", headers=headers, json=body)
+        assert (await first).status_code == second.status_code == 200
+    assert upstream.prompts == [
+        [
+            {"role": "user", "content": "A"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": "B"},
+        ]
+    ]
+    assert session_turns._turns == {}
+
+
 async def test_streamed_cli_turn_is_recorded(
     client, session_db, _providers_file, monkeypatch
 ):
