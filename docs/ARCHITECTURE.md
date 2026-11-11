@@ -36,8 +36,8 @@ A `POST /v1/chat/completions` goes through these steps:
 1. **Middleware**: per-IP rate limit (`RATE_LIMIT`), body size limit, request ID, security headers.
 2. **Concurrency cap** (optional, `PLUGBOARD_MAX_INFLIGHT_CHAT`).
 3. **Client resolution** (`_resolve_client` in `app.py`): an admin session cookie, the `ADMIN_KEY`, or a client key looked up by its SHA-256 hash in `data/api_keys.json`. In strict tenant mode (the default) a chat request without a client is refused.
-4. **Session merge** (optional): when the request has a `session_id`, it first takes the session's turn (`session_turns`: one turn at a time per client and session, waiting for the previous one), then stored history is prepended.
-5. **Checks** for client keys: monthly budget against the month's recorded spend, allowed models, RPM limit.
+4. **Checks**: the shape of `messages`, then for client keys the monthly budget against the month's recorded spend, allowed models, known price and RPM limit.
+5. **Session merge** (optional): when the request has a `session_id`, it takes the session's turn (`session_turns`: one turn at a time per client and session, waiting for the previous one), then stored history is prepended. The turn comes after every check, so a refused request never waits for it.
 6. **Cache lookup**: exact-match cache keyed on the client, the model, the messages and sampling parameters (`data/cache.db`); then, if enabled, the semantic cache. A hit is returned immediately and is not billed.
 7. **Forwarding** (`router.forward` or `router.forward_stream`):
    - the model string is resolved to a list of `(provider, model)` candidates. An explicit `<provider-id>:` prefix selects one provider; otherwise all active providers are candidates, ordered by a score of latency × error rate × in-flight requests;

@@ -251,6 +251,67 @@ async def test_turn_refused_after_taking_its_turn_gives_it_back(client, session_
     assert session_turns._turns == {}
 
 
+def _key(tmp_path, monkeypatch, **limits):
+    import plugboard.apikeys as ak
+
+    monkeypatch.setattr(ak, "_DATA_DIR", tmp_path)
+    monkeypatch.setattr(ak, "KEYS_FILE", tmp_path / "api_keys.json")
+    monkeypatch.setattr(ak, "KEYS_LOCK", tmp_path / "api_keys.json.lock")
+    return ak.create_key("turns-client", "turns", **limits)["key"]
+
+
+@pytest.mark.parametrize(
+    "limits, second, status",
+    [
+        ({}, {"model": "nope:model-x"}, 404),
+        ({"allowed_models": [MODEL]}, {"model": "other-provider:other:model-v2"}, 403),
+        ({"rpm_limit": 1}, {}, 429),
+        ({}, {"messages": ["hi"]}, 400),
+    ],
+    ids=["unknown-model", "model-not-allowed", "rpm", "bad-messages"],
+)
+async def test_refused_turn_does_not_wait_for_the_running_one(
+    client, session_db, _providers_file, tmp_path, monkeypatch, limits, second, status
+):
+    """A request its admission refuses is answered at once, not after the
+    turn its session is running; it never takes the turn."""
+    from plugboard import router
+    from tests.factories import PROVIDER_A, PROVIDER_B
+
+    # Every provider lists its models: an unlisted name is then unknown (404).
+    listed = {**PROVIDER_A, "models": [{"id": "fake:model-v1", "name": "V1"}]}
+    _providers_file.write_text(json.dumps({"providers": [listed, PROVIDER_B]}))
+    router.invalidate_models_cache()
+    headers = {
+        "Authorization": f"Bearer {_key(tmp_path, monkeypatch, **limits)}",
+        "X-LLM-Session-ID": "s7",
+    }
+    upstream = _Upstream()
+    with aioresponses() as mock:
+        mock.post(URL_A, callback=upstream.reply, repeat=True)
+        first = asyncio.create_task(
+            client.post("/v1/chat/completions", headers=headers, json=_turn("A")[1])
+        )
+        await _until(lambda: len(upstream.prompts) == 1)
+        try:
+            refused = await asyncio.wait_for(
+                client.post(
+                    "/v1/chat/completions",
+                    headers=headers,
+                    json={**_turn("B")[1], **second},
+                ),
+                1.0,
+            )
+            first_still_running = not first.done()
+        finally:
+            upstream.gate.set()
+        assert (await first).status_code == 200
+    assert refused.status_code == status, refused.text
+    assert first_still_running
+    assert len(upstream.prompts) == 1
+    assert session_turns._turns == {}
+
+
 async def test_streamed_http_turn_is_recorded(client, session_db):
     with aioresponses() as mock:
         mock.post(URL_A, body=FAKE_STREAM_BODY, status=200)

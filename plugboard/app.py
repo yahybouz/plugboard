@@ -1921,12 +1921,19 @@ def _model_not_found_response(model: str) -> JSONResponse:
     )
 
 
-def _require_chat_messages(body: Dict[str, Any]) -> None:
+def _require_chat_messages(
+    body: Dict[str, Any], *, history_may_follow: bool = False
+) -> None:
     """400 for a messages field no provider can answer.
 
     Without it, an empty or malformed list reached the provider and came back
     as a 502 carrying the upstream parser error (or the CLI's "Empty prompt").
+    With ``history_may_follow`` (a session turn, before its history is merged)
+    an absent or empty list passes: the stored history may fill it, and the
+    full check runs again after the merge.
     """
+    if history_may_follow and body.get("messages", []) == []:
+        return
     messages = body.get("messages")
     if not isinstance(messages, list) or not messages:
         raise HTTPException(400, "messages must be a non-empty array")
@@ -2007,20 +2014,8 @@ async def chat_completions(
         or request.headers.get("x-llm-session-id")
         or body.pop("session_id", None)
     )
-    if session_id and client_id:
-        from plugboard.session_store import merge_history_into_body
-
-        # D-24: the previous turn of this session is answered and recorded
-        # first, so this one sees it; the turn comes back after the response.
-        try:
-            await _unless_client_gone(
-                request, _take_session_turn(request, client_id, session_id)
-            )
-        except _ClientGone:
-            return _client_gone_response(body.get("model", "?"))
-        body = merge_history_into_body(client_id, session_id, body)
-
-    _require_chat_messages(body)
+    in_session = bool(session_id and client_id)
+    _require_chat_messages(body, history_may_follow=in_session)
 
     # Issue #5: check spending limit before processing request
     if client_id and client_id != "admin":
@@ -2045,6 +2040,22 @@ async def chat_completions(
     # Per-client rate limit (rpm_limit on key record)
     if client_id and client_id != "admin":
         _check_client_rpm(client_id, key_record=key_record)
+
+    if in_session:
+        from plugboard.session_store import merge_history_into_body
+
+        # D-24: the previous turn of this session is answered and recorded
+        # first, so this one sees it; the turn comes back after the response.
+        # Taken after every refusal above: a request that is refused does not
+        # wait for the turn its session is running.
+        try:
+            await _unless_client_gone(
+                request, _take_session_turn(request, client_id, session_id)
+            )
+        except _ClientGone:
+            return _client_gone_response(body.get("model", "?"))
+        body = merge_history_into_body(client_id, session_id, body)
+        _require_chat_messages(body)
 
     # Response cache — disabled only when caller sets cache=false.
     # For streaming requests we still check the cache; on HIT we replay the
