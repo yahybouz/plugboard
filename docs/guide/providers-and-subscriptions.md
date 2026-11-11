@@ -22,8 +22,9 @@ Presets marked *roadmap* in the dashboard (for example *Claude Pro (roadmap)*) c
 
 A model is addressed as `<provider-id>:<model>`, for example `anthropic-direct:claude-haiku-5-5` or `ollama:qwen3:8b`. The provider ID is derived from the provider name when you create it (*OpenAI Direct* becomes `openai-direct`) and is shown on the Providers page.
 
-- With an explicit provider prefix, the request goes to that provider only. Plugboard retries it on `429`, `500`, `502`, `503` and `529` with backoff, but does not switch provider.
-- Without a matching prefix, Plugboard tries the active providers in turn, ordered by a score that combines latency, error rate and requests in flight.
+- With an explicit provider prefix, the request goes to that provider only. Plugboard retries it on `429`, `500`, `502`, `503` and `529` with backoff, but does not switch provider. An error saying the context or the message is too long is not retried: the request would fail the same way, and the client gets `400`.
+- Without a matching prefix, Plugboard tries the active providers in turn, ordered by a score that combines latency, error rate and requests in flight. A context too long goes straight to the next provider.
+- When no provider knows the model at all (no provider ID prefixes it, no provider lists it, and every active provider has a model list), the client gets `404` with `"code": "model_not_found"` and no provider is called ([details](../api/README.md#404-model_not_found)). A model pulled with the `ollama` command rather than the Ollama page is not listed until the next refresh: click **Discover** on the provider, or send it as `<provider-id>:<model>`.
 - `/v1/models` uses short display prefixes for the CLI providers: `claude-code:`, `Codex:` and `Gemini:`. A registered provider ID takes precedence over a display alias; when multiple registered prefixes match, the longest wins. The catalogue checks each display alias and its canonical fallback against **all registered owners**, including inactive and quarantined legacy records. It uses the canonical spelling when an alias is reserved by another owner.
 - If neither existing spelling identifies the exact provider and native model, the catalogue omits that model until the configuration is unambiguous. For example, `owner` with native model `qwen3:latest` cannot publish `owner:qwen3:latest` when `owner:qwen3` is also registered: that ID selects the longer owner. This limit uses the existing grammar; no new separator or encoding is introduced. Unaffected models remain listed. Namespace additions, removals, quarantine and activity changes refresh cached publication on the next catalogue request.
 
@@ -85,6 +86,8 @@ Models that the catalog marks as needing another API (Anthropic Messages, OpenAI
 | Unreachable | No answer: network, proxy, firewall or a wrong host. |
 
 **Also send one test token** additionally sends a one-token chat completion to the first listed model. It is off by default because the provider bills it.
+
+A failed test names this section as `docs/guide/providers-and-subscriptions.md#test-the-connection`. Set `PLUGBOARD_DOCS_BASE_URL` to where the repository is published (its GitLab `-/blob/main` page, for example) to get it as a link ([configuration](configuration.md#server)).
 
 ### Keep model lists up to date
 

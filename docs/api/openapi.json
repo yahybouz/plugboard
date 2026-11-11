@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
@@ -1436,7 +1436,7 @@
       },
       "ErrorResponse": {
         "additionalProperties": true,
-        "description": "FastAPI's error body. Upstream timeouts (503) add `retry_after` and a\nRetry-After header, as does an exhausted provider quota (429) when the\nprovider gave a delay; a failing CLI provider (502) adds its exit details\nfor the admin only.",
+        "description": "FastAPI's error body. Upstream timeouts (503) add `retry_after` and a\nRetry-After header, as does an exhausted provider quota (429) when the\nprovider gave a delay; a failing CLI provider (502) adds its exit details\nfor the admin only. A chat model no provider knows (404) adds `code` and\n`hint`.",
         "properties": {
           "detail": {
             "anyOf": [
@@ -1465,6 +1465,32 @@
             ],
             "default": null,
             "title": "Retry After"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Stable reason for programs, when the route gives one: model_not_found (chat, 404).",
+            "title": "Code"
+          },
+          "hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "What to do next, when the gateway knows.",
+            "title": "Hint"
           }
         },
         "required": [
@@ -2633,6 +2659,16 @@
               }
             }
           },
+          "404": {
+            "description": "No provider knows the model: no provider ID prefixes it, no provider lists it, and every active provider has a model list. code is model_not_found, hint says what to send; nothing was called.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "413": {
             "description": "Request body larger than MAX_BODY_BYTES (10 MB by default).",
             "content": {
@@ -3419,6 +3455,16 @@
           },
           "403": {
             "description": "The key may not use this model.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No provider knows the model: no provider ID prefixes it, no provider lists it, and every active provider has a model list. code is model_not_found, hint says what to send; nothing was called.",
             "content": {
               "application/json": {
                 "schema": {

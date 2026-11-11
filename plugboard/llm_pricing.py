@@ -42,6 +42,7 @@ from urllib.parse import urljoin, urlsplit
 import aiohttp
 from aiohttp.abc import AbstractResolver, ResolveResult
 
+from plugboard import envcompat
 from plugboard.pricing_merge import MAX_PRICE, MAX_RATIO, MIN_RATIO
 
 log = logging.getLogger(__name__)
@@ -74,27 +75,14 @@ def enabled() -> bool:
     }
 
 
-def _float_env(name: str, default: float) -> float:
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        log.warning("%s is not a number; using %s", name, default)
-        return default
-    if value < 0:
-        log.warning("%s cannot be negative; using %s", name, default)
-        return default
-    return value
-
-
 def max_usd_per_day() -> float:
-    return _float_env("PLUGBOARD_LLM_PRICING_MAX_USD", 0.50)
+    return envcompat.get_float("PLUGBOARD_LLM_PRICING_MAX_USD", default=0.50, minimum=0)
 
 
 def max_models_per_pass() -> int:
-    return int(_float_env("PLUGBOARD_LLM_PRICING_MAX_MODELS", 20))
+    return int(
+        envcompat.get_float("PLUGBOARD_LLM_PRICING_MAX_MODELS", default=20, minimum=0)
+    )
 
 
 def configured_pages() -> Dict[str, str]:

@@ -23,7 +23,7 @@ import asyncio
 import re
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import aiohttp
 
@@ -35,6 +35,10 @@ from plugboard.billing import (
     pricing_lock,
     save_pricing,
 )
+from plugboard.storage import to_thread_to_the_end
+
+if TYPE_CHECKING:
+    from plugboard.change_events import ChangeBatch
 
 log = logging.getLogger(__name__)
 
@@ -693,7 +697,8 @@ async def _fetch_sources(
     if ollama_native:
         by_space.setdefault("ollama", {})["provider_native"] = ollama_native
     if "models_dev" in order:
-        vendor, resellers = _models_dev_pricing()
+        # Reading the stored catalogue parses up to 20 MB: not on the event loop.
+        vendor, resellers = await asyncio.to_thread(_models_dev_pricing)
         fetched["models_dev"] = vendor
         for space, prices in resellers.items():
             by_space.setdefault(space, {})["models_dev"] = prices
@@ -817,36 +822,25 @@ def _legacy_source_label(sources: Dict[str, Dict[str, Any]], order: List[str]) -
 _last_space_sources: Dict[str, Dict[str, Prices]] = {}
 
 
-async def update_current_pricing(
-    provider_models: Optional[List[str]] = None,
-) -> Dict[str, Any]:
-    """Refresh the current month's grid from every configured source.
+def _merge_and_save(
+    month: str,
+    order: List[str],
+    sources: Dict[str, Prices],
+    by_space: Dict[str, Dict[str, Prices]],
+    provider_models: Optional[List[str]],
+    drift_pct: float,
+    action: str,
+) -> Tuple[Dict[str, Any], Optional["ChangeBatch"]]:
+    """Re-read, merge and write the month's grid under its lock, then queue
+    the price changes held for review.
 
-    Sources are fetched first, outside any lock. The grid is then re-read,
-    merged and written under the month's lock, so a concurrent admin edit is
-    never lost. Previous months are read (inheritance) but never written.
+    Blocking file work: update_current_pricing() runs it in a worker thread.
+    The month's lock is held per thread and is reentrant, so save_pricing()
+    takes it again here; an admin edit made meanwhile waits for it.
 
-    Returns: {month, added, updated, inherited, total, source, sources,
-    drifts, rejected, provider_prices} plus {persisted: False,
-    sentinel_refused: True} when the shrink guard refuses to write.
+    Returns (summary, pricing.changed batch); the batch is None when the
+    shrink guard refused to write.
     """
-    month = current_pricing_month()
-    order = pricing_merge.source_order(external_configured=bool(_source_url()))
-    sources, by_space = await _fetch_sources(order)
-    if "official" in order:
-        sources["official"] = official_prices.prices_for_month(month)
-        freshness = official_prices.status()
-        if freshness["stale"]:
-            log.warning(
-                "Official price table checked %s is older than %d days: check the "
-                "vendors' pages and update plugboard/official_prices.py. See "
-                "docs/runbooks/pricing-scheduler.md#official-price-table",
-                freshness["checked"],
-                freshness["max_age_days"],
-            )
-    drift_pct = pricing_merge.drift_threshold_pct()
-    action = pricing_merge.drift_action()
-
     with pricing_lock(month):
         try:
             existing = load_pricing(month, strict=True)
@@ -948,7 +942,7 @@ async def update_current_pricing(
                 prev_month,
                 prev_total,
             )
-            return {**summary, "persisted": False, "sentinel_refused": True}
+            return {**summary, "persisted": False, "sentinel_refused": True}, None
 
         reviewed_all = {k: v for k, v in reviewed_all.items() if v}
         if (
@@ -999,8 +993,57 @@ async def update_current_pricing(
     batch = price_change_events(
         month, merged.updated + space_updated, new_drifts, drift_pct
     )
-    if len(batch):
+    return summary, batch
+
+
+async def update_current_pricing(
+    provider_models: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Refresh the current month's grid from every configured source.
+
+    Sources are fetched first, outside any lock. The grid is then re-read,
+    merged and written under the month's lock, in a worker thread, so a
+    concurrent admin edit is never lost and the event loop is not blocked.
+    Previous months are read (inheritance) but never written.
+
+    Returns: {month, added, updated, inherited, total, source, sources,
+    drifts, rejected, provider_prices} plus {persisted: False,
+    sentinel_refused: True} when the shrink guard refuses to write.
+    """
+    month = current_pricing_month()
+    order = pricing_merge.source_order(external_configured=bool(_source_url()))
+    sources, by_space = await _fetch_sources(order)
+    if "official" in order:
+        sources["official"] = official_prices.prices_for_month(month)
+        freshness = official_prices.status()
+        if freshness["stale"]:
+            log.warning(
+                "Official price table checked %s is older than %d days: check the "
+                "vendors' pages and update plugboard/official_prices.py. See "
+                "docs/runbooks/pricing-scheduler.md#official-price-table",
+                freshness["checked"],
+                freshness["max_age_days"],
+            )
+    drift_pct = pricing_merge.drift_threshold_pct()
+    action = pricing_merge.drift_action()
+
+    # File work in a worker thread: the event loop keeps serving requests.
+    # Cancelled meanwhile (the scheduler's timeout), the update still waits
+    # for the write, so the changes it made are journaled and announced.
+    (summary, batch), cancelled = await to_thread_to_the_end(
+        _merge_and_save,
+        month,
+        order,
+        sources,
+        by_space,
+        provider_models,
+        drift_pct,
+        action,
+    )
+    if batch is not None and len(batch):
         summary["webhooks"] = batch.flush_in_background()
+    if cancelled is not None:
+        raise cancelled
     return summary
 
 

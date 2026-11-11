@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import threading
 
 import pytest
 from aioresponses import aioresponses
@@ -238,6 +240,31 @@ async def test_webhook_cap_sends_a_summary(monkeypatch, sent, tmp_path):
     assert stats == {"journaled": 5, "sent": 2, "truncated": 3}
     assert sent[-1] == ("pricing.changed", {"truncated": 3})
     assert len(change_events.read_journal()) == 5
+
+
+def test_drain_returns_when_a_delivery_already_ended(monkeypatch, sent, tmp_path):
+    """A delivery that ended stays listed until its done callback runs.
+
+    gather() of finished tasks returns without giving the loop a turn: drain()
+    then looped on it for ever, and the shutdown hung, its timeout included.
+    """
+    monkeypatch.setenv("PLUGBOARD_DATA", str(tmp_path))
+
+    async def flush_then_drain():
+        batch = change_events.ChangeBatch()
+        batch.add("pricing.changed", {"model": "m"})
+        batch.flush_in_background()
+        await asyncio.sleep(0)  # the delivery runs and ends; its cleanup is queued
+        await change_events.drain()
+
+    # In its own thread: a spinning loop would otherwise hang the test run.
+    runner = threading.Thread(
+        target=asyncio.run, args=(flush_then_drain(),), daemon=True
+    )
+    runner.start()
+    runner.join(10)
+    assert not runner.is_alive(), "drain() spins on a delivery that already ended"
+    assert sent == [("pricing.changed", {"model": "m"})]
 
 
 def test_journal_is_bounded(monkeypatch, tmp_path):

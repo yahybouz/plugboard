@@ -26,17 +26,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from typing import Optional
 
 import aiohttp
 
+from plugboard import envcompat
+
 log = logging.getLogger(__name__)
 
 # Tunables (env overridable)
-_CONN_LIMIT = int(os.environ.get("PLUGBOARD_HTTP_POOL_SIZE", "100"))
-_CONN_PER_HOST = int(os.environ.get("PLUGBOARD_HTTP_POOL_PER_HOST", "20"))
-_DNS_TTL = int(os.environ.get("PLUGBOARD_HTTP_DNS_TTL", "300"))
+_CONN_LIMIT = envcompat.get_int("PLUGBOARD_HTTP_POOL_SIZE", default=100)
+_CONN_PER_HOST = envcompat.get_int("PLUGBOARD_HTTP_POOL_PER_HOST", default=20)
+_DNS_TTL = envcompat.get_int("PLUGBOARD_HTTP_DNS_TTL", default=300)
 
 _session: Optional[aiohttp.ClientSession] = None
 _lock = asyncio.Lock()

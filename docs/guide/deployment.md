@@ -21,6 +21,7 @@ Then:
 
 - [ ] TLS in front of Plugboard (reverse proxy, below); port 8765 not reachable from the internet.
 - [ ] `data/` on persistent storage and backed up (it holds encrypted credentials, key hashes, usage and pricing history).
+- [ ] `data/` readable by the server's account only: Plugboard creates it with mode `0700` and its SQLite stores `0600`, but a `data/` that already exists keeps its mode (`chmod 700 data`).
 - [ ] Optional: `PLUGBOARD_ADMIN_MFA_REQUIRED=1` after enrolling a TOTP secret.
 - [ ] Optional: `PLUGBOARD_PROVIDER_DOMAINS_ALLOWED` to restrict where provider requests may go.
 - [ ] Optional: `ALERT_WEBHOOK_URL` for provider and budget alerts.
@@ -128,6 +129,8 @@ When the proxy runs on the same machine as a loopback-bound Plugboard, also set 
 
 With HTTPS in place, the admin session cookie is marked `Secure` automatically (`COOKIE_SECURE=auto`).
 
+Keep the `Host` header as the examples do (Caddy keeps it by default). Over plain HTTP to a non-local address, browsers send no `Sec-Fetch-Site`, and Plugboard checks the dashboard's changes by comparing their `Origin` with `Host` ([details](monitoring.md#changes-made-with-a-dashboard-session)).
+
 ## Platform deployments
 
 `railway.toml` builds the Dockerfile on Railway and checks `/health`. On Railway or any similar platform: set the variables of the checklist as secrets, attach a persistent volume at `/app/data` (and at `/home/app` if you sign in to CLIs inside the container), and keep one replica. `scripts/setup_railway_providers.py` creates API-key providers on a remote instance without opening a shell (see [Providers](providers-and-subscriptions.md#add-providers-from-env-or-scripts)).
@@ -136,6 +139,7 @@ With HTTPS in place, the admin session cookie is marked `Secure` automatically (
 
 - Back up `data/` (and `ENCRYPTION_KEY` if it is set in the environment, or `data/.encryption_key` if it was generated). Without the encryption key, stored provider credentials cannot be decrypted.
 - To upgrade: back up `data/`, pull the new version, run `make setup` (or rebuild the image), restart, and check `/health`. To go back, follow the [rollback runbook](../runbooks/rollback-release.md).
+- To move the install to another machine, follow the [move runbook](../runbooks/move-install.md).
 
 ## MCP server
 

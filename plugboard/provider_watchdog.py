@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import secrets
 import sqlite3
 import subprocess  # noqa: F401 — compatibility hook; restarts never launch commands
@@ -24,13 +23,14 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
+from plugboard import envcompat
 from plugboard.config import get_provider, load_providers
 from plugboard.legacy_connectors import (
     is_removed_provider,
     require_supported_model,
     require_supported_provider,
 )
-from plugboard.storage import data_dir
+from plugboard.storage import data_dir, private_sqlite_file
 from plugboard.endpoints import openai_url
 
 log = logging.getLogger(__name__)
@@ -41,14 +41,14 @@ _DB_PATH = _DATA_DIR / "watchdog.db"
 _PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 # Configuration (overridable via env)
-_CHECK_INTERVAL = int(os.environ.get("WATCHDOG_INTERVAL", "30"))  # seconds
-_FAILURE_THRESHOLD = int(os.environ.get("WATCHDOG_FAILURES", "3"))  # consecutive
-_RESTART_COOLDOWN = int(os.environ.get("WATCHDOG_RESTART_COOLDOWN", "120"))  # seconds
-_MAX_RESTARTS = int(os.environ.get("WATCHDOG_MAX_RESTARTS", "5"))  # per hour
-_HEALTH_TIMEOUT = int(os.environ.get("WATCHDOG_HEALTH_TIMEOUT", "10"))  # seconds
-_DEEP_CHECK_TIMEOUT = int(os.environ.get("WATCHDOG_DEEP_TIMEOUT", "60"))  # seconds
-_DEEP_CHECK_INTERVAL = int(
-    os.environ.get("WATCHDOG_DEEP_INTERVAL", "3")
+_CHECK_INTERVAL = envcompat.get_int("WATCHDOG_INTERVAL", default=30)  # seconds
+_FAILURE_THRESHOLD = envcompat.get_int("WATCHDOG_FAILURES", default=3)  # consecutive
+_RESTART_COOLDOWN = envcompat.get_int("WATCHDOG_RESTART_COOLDOWN", default=120)  # s
+_MAX_RESTARTS = envcompat.get_int("WATCHDOG_MAX_RESTARTS", default=5)  # per hour
+_HEALTH_TIMEOUT = envcompat.get_int("WATCHDOG_HEALTH_TIMEOUT", default=10)  # seconds
+_DEEP_CHECK_TIMEOUT = envcompat.get_int("WATCHDOG_DEEP_TIMEOUT", default=60)  # seconds
+_DEEP_CHECK_INTERVAL = envcompat.get_int(
+    "WATCHDOG_DEEP_INTERVAL", default=3
 )  # every N checks
 
 # --- SQLite setup ---
@@ -71,7 +71,7 @@ _CREATE_INDEX2 = (
 
 
 def _get_conn() -> sqlite3.Connection:
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    private_sqlite_file(_DB_PATH)
     conn = sqlite3.connect(str(_DB_PATH), timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")

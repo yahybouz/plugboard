@@ -20,6 +20,7 @@ already created from a preset: their base_url is frozen at creation.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 import re
@@ -33,7 +34,8 @@ from urllib.parse import urlsplit
 import aiohttp
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from plugboard.storage import atomic_write_json, data_dir
+from plugboard import envcompat
+from plugboard.storage import atomic_write_json, data_dir, to_thread_to_the_end
 
 log = logging.getLogger(__name__)
 
@@ -72,15 +74,6 @@ def catalog_url() -> str:
     if "PLUGBOARD_CATALOG_URL" in os.environ:
         return os.environ["PLUGBOARD_CATALOG_URL"].strip()
     return DEFAULT_CATALOG_URL
-
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        value = float(os.environ.get(name, "") or default)
-    except ValueError:
-        log.error("%s is not a number; using %s", name, default)
-        return default
-    return value if value > 0 else default
 
 
 def _catalog_dir() -> Path:
@@ -261,8 +254,11 @@ class CatalogTooLarge(ValueError):
 
 
 async def _download(url: str, etag: str) -> Tuple[int, Optional[bytes], str]:
-    timeout = aiohttp.ClientTimeout(total=_env_float("PLUGBOARD_CATALOG_TIMEOUT_S", 20))
-    max_bytes = int(_env_float("PLUGBOARD_CATALOG_MAX_MB", 20) * 1024 * 1024)
+    timeout = aiohttp.ClientTimeout(
+        total=envcompat.get_float("PLUGBOARD_CATALOG_TIMEOUT_S", default=20.0, above=0)
+    )
+    max_mb = envcompat.get_float("PLUGBOARD_CATALOG_MAX_MB", default=20.0, above=0)
+    max_bytes = int(max_mb * 1024 * 1024)
     headers = {"Accept": "application/json"}
     if etag:
         headers["If-None-Match"] = etag
@@ -284,6 +280,38 @@ async def _download(url: str, etag: str) -> Tuple[int, Optional[bytes], str]:
             return 200, b"".join(chunks), resp.headers.get("ETag", "")
 
 
+def _store_catalog(
+    body: bytes, meta: Dict[str, Any]
+) -> Tuple[Dict[str, CatalogProvider], int]:
+    """Validate a downloaded catalog and keep it as the last good copy.
+
+    Blocking work, run in a worker thread by refresh_catalog(). Raises
+    ValueError when the document is not valid JSON or lost too many entries.
+    Returns the valid providers and the number of invalid entries skipped.
+    """
+    raw = json.loads(body)
+    providers, invalid = parse_catalog(raw)
+    previous = load_catalog()
+    old_p = len(previous) or int(meta.get("providers") or 0)
+    old_m = _model_count(previous) or int(meta.get("models") or 0)
+    # Compare with the counts of the last good copy, even when that copy
+    # can no longer be read, so a damaged file does not open the gate.
+    if (old_p and len(providers) < old_p * (1 - _MAX_SHRINK)) or (
+        old_m and _model_count(providers) < old_m * (1 - _MAX_SHRINK)
+    ):
+        raise ValueError(
+            f"catalog shrank from {old_p} to {len(providers)} providers "
+            f"({old_m} to {_model_count(providers)} models); kept the previous copy"
+        )
+    _catalog_dir().mkdir(parents=True, exist_ok=True)
+    path = _catalog_file()
+    atomic_write_json(path, raw)
+    # Keep the parsed copy, so the next load_catalog() on the event loop
+    # does not parse the new file again.
+    _cache.update(mtime=path.stat().st_mtime, providers=providers)
+    return providers, invalid
+
+
 async def refresh_catalog() -> Dict[str, Any]:
     """Fetch the catalog and keep the last good copy on any failure.
 
@@ -296,6 +324,7 @@ async def refresh_catalog() -> Dict[str, Any]:
     meta = _read_meta()
     now = datetime.now(timezone.utc).isoformat()
     meta["checked_at"] = now
+    cancelled: Optional[asyncio.CancelledError] = None
     try:
         code, body, etag = await _download(
             url, meta.get("etag", "") if _catalog_file().exists() else ""
@@ -306,22 +335,12 @@ async def refresh_catalog() -> Dict[str, Any]:
             return {"state": "unchanged"}
         if body is None:
             raise ValueError("empty catalog response")
-        raw = json.loads(body)
-        providers, invalid = parse_catalog(raw)
-        previous = load_catalog()
-        old_p = len(previous) or int(meta.get("providers") or 0)
-        old_m = _model_count(previous) or int(meta.get("models") or 0)
-        # Compare with the counts of the last good copy, even when that copy
-        # can no longer be read, so a damaged file does not open the gate.
-        if (old_p and len(providers) < old_p * (1 - _MAX_SHRINK)) or (
-            old_m and _model_count(providers) < old_m * (1 - _MAX_SHRINK)
-        ):
-            raise ValueError(
-                f"catalog shrank from {old_p} to {len(providers)} providers "
-                f"({old_m} to {_model_count(providers)} models); kept the previous copy"
-            )
-        _catalog_dir().mkdir(parents=True, exist_ok=True)
-        atomic_write_json(_catalog_file(), raw)
+        # Parsing and validating up to 20 MB: not on the event loop. Cancelled
+        # meanwhile (the scheduler's timeout), the refresh still waits for the
+        # new copy to be written and records it before giving way.
+        (providers, invalid), cancelled = await to_thread_to_the_end(
+            _store_catalog, body, meta
+        )
         meta.update(
             etag=etag,
             fetched_at=now,
@@ -337,7 +356,7 @@ async def refresh_catalog() -> Dict[str, Any]:
             _model_count(providers),
             invalid,
         )
-        return {
+        result = {
             "state": "updated",
             "providers": len(providers),
             "invalid_entries": invalid,
@@ -352,7 +371,10 @@ async def refresh_catalog() -> Dict[str, Any]:
             "models.dev catalog refresh failed (%s); keeping the last good copy",
             meta["last_error"],
         )
-        return {"state": "error", "error": meta["last_error"]}
+        result = {"state": "error", "error": meta["last_error"]}
+    if cancelled is not None:
+        raise cancelled
+    return result
 
 
 # -- Presets --------------------------------------------------------------------

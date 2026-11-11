@@ -40,42 +40,6 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 **Priority:** P2
 **Depends on:** None
 
-### Session revocation
-
-**What:** Add a session epoch bumped on logout and on key rotation.
-
-**Why:** Admin sessions are stateless HMAC tokens valid 8 h; logout only clears the cookie.
-
-**Context:** `_create_admin_session_token` / `_is_admin_session` in `plugboard/app.py`.
-
-**Effort:** S
-**Priority:** P2
-**Depends on:** None
-
-### Keyless dev mode on a public bind
-
-**What:** Refuse a non-loopback bind when `API_KEY` and `ADMIN_KEY` are both empty, or default `HOST` to `127.0.0.1` in `run.py`.
-
-**Why:** In keyless mode every route is open to any peer while `run.py` binds `0.0.0.0` by default.
-
-**Context:** `_require_admin` and `_check_dashboard_auth` return early when both keys are empty.
-
-**Effort:** S
-**Priority:** P2
-**Depends on:** None
-
-### Same-site CSRF on admin POSTs
-
-**What:** Reject state-changing admin requests whose `Sec-Fetch-Site` is not `same-origin`.
-
-**Why:** A page served on another localhost port is same-site, so the `SameSite=Strict` cookie does not stop it.
-
-**Context:** Admin routes in `plugboard/app.py`.
-
-**Effort:** S
-**Priority:** P2
-**Depends on:** None
-
 ## Release hardening (deferred from the stage 2 plan)
 
 ### Private companion and identity checks before publication
@@ -104,26 +68,28 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 
 ### Missing tests and checks from the stage 2 plan
 
-**What:** Tests for the registry path (override, default, legacy fallback), `make init` never overwriting `.env`, an env-coverage test that `docs/guide/configuration.md` lists every variable the code reads, a Docker image content check, `scripts/run_mcp.py` legacy names; a link checker in CI.
+**What:** Two checks are left: list the files of the built image in the CI `docker-build` step (no `.pyc`, `.env`, key, tests or docs inside), and check external documentation links (needs network, so not in the test suite).
+
+**Done:** the registry path, override, default and legacy fallback (`tests/test_registry_path.py`); `make init` never overwriting `.env` (`tests/test_make_init.py`); every variable the code reads listed in `docs/guide/configuration.md` (`tests/test_config_docs_coverage.py`, seven names added); the image content read from the `Dockerfile` and `.dockerignore` without Docker (`tests/test_docker_image_content.py`, which found bytecode and key files of copied directories reaching the image, now fixed); `scripts/run_mcp.py` legacy names (`tests/test_run_mcp_legacy_names.py`); relative links and heading anchors of the docs, checked by the test suite and so in CI (`tests/test_docs_links.py`).
 
 **Why:** These behaviours are documented but only checked by hand.
 
 **Context:** Deferred from plan: design-brief.md (Stage 2).
 
-**Effort:** M
+**Effort:** S
 **Priority:** P1
 **Depends on:** None
 
-### Remaining public-surface and robustness items
+### Docker data volume created `0755`
 
-**What:** Translate the provider preset `setup_steps` in `plugboard/direct_providers.py` to English; a `model_not_found` 404 with a hint for an unknown provider prefix; `DOCS_BASE_URL` and a bundled guide at `/guide`; data directory created `0700` and SQLite stores `0600`; refuse a short or placeholder `ADMIN_KEY` outside dev mode; log an unreadable `providers.json` once instead of on every call; warm the tiktoken encoding at startup; skip local Ollama models in the boot internet probe; cutover runbook for an existing install; SDK status line and an OpenAI JS snippet in the docs.
+**What:** Make a new Docker volume start `0700`: `chmod 700 /app/data` in the Dockerfile, or let the server tighten a `data/` directory it owns.
 
-**Why:** Review findings and plan items that do not block the private merge request.
+**Why:** The image creates `/app/data` with mode `0755` at build time and a new named volume takes that mode, so the `0700` the server gives a data directory it creates does not apply to Docker installs. The files inside are `0600`.
 
-**Context:** Deferred from plan: design-brief.md (Stage 2) and the stage 2 ship review.
+**Context:** Found while closing the public-surface items (see Completed). Needs an owner decision and a check on a real image build. The [move runbook](docs/runbooks/move-install.md) sets `0700` on a restored volume.
 
-**Effort:** L
-**Priority:** P1
+**Effort:** S
+**Priority:** P2
 **Depends on:** None
 
 ## Auth
@@ -138,7 +104,7 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 
 **Effort:** L
 **Priority:** P1
-**Depends on:** Session revocation
+**Depends on:** None
 
 ## MCP
 
@@ -232,6 +198,12 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 
 ## Completed
 
+### Remaining public-surface and robustness items
+
+**Done:** the ten items, except the bundled guide at `/guide`, dropped (see Context). Provider preset `setup_steps` in English; data directory created `0700` and SQLite stores `0600`; a short or placeholder `ADMIN_KEY` refused outside dev mode; an unreadable `providers.json` logged once instead of on every call; the tiktoken encoding warmed at startup; local Ollama models skipped by the boot internet probe; an SDK status line and an OpenAI JS snippet in `docs/api/README.md`. Then, after the owner's decision: a chat model no provider knows answers `404 model_not_found` with a hint, while any ID a provider may serve keeps its routing (API contract 1.3.0, [details](docs/api/README.md#404-model_not_found)); `PLUGBOARD_DOCS_BASE_URL` turns the `docs/guide/...` references the dashboard gets into links; a [runbook](docs/runbooks/move-install.md) moves a 4.x install to another machine.
+
+**Context:** Deferred from plan: design-brief.md (Stage 2) and the stage 2 ship review. The bundled guide at `/guide` was dropped by the owner's decision: Plugboard serves no guide page, `PLUGBOARD_DOCS_BASE_URL` points to where the repository is published.
+
 ## Models
 
 ### Model family aliases
@@ -298,10 +270,12 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 
 ### Remaining review follow-ups
 
-**What:** Move the locked load/merge/save of the price update and the catalog parse off the event loop (`asyncio.to_thread`); cache negative price lookups across the twelve-month walk-back; share one env-number parser; pin catalog provider traffic (not only the connection test) to the checked address.
+**What:** Keep the traffic of a provider created from a catalog preset away from non-public addresses after it is created, not only during the connection test (pinned) and the creation check.
 
-**Why:** Informational findings of the pre-landing review and the CSO audit of the auto-update stack.
+**Why:** Informational findings of the pre-landing review and the CSO audit of the auto-update stack. A catalog base URL comes from a third-party feed. Chat, streaming and model discovery go through the shared HTTP pool, which resolves the host again (DNS cache 300 s): a name re-pointed inside the network after the check (DNS rebinding) would receive the provider key.
+
+**Context:** Done: the price update's locked read/merge/save, the queueing of held drifts and the catalog parse run in a worker thread (`storage.to_thread_to_the_end`: a scheduler timeout that falls during that work waits for it, then journals and announces the price changes and records the catalog meta before it is raised; it still counts as a failure for the circuit breaker, although the grid was written); misses of the twelve-month price walk-back are cached; every numeric setting of the package goes through `envcompat.get_int` / `get_float` (the inline `int(os.environ…)` / `float(os.environ…)` reads and the five private parsers included; two tests fail on a new one), and the reader refuses `inf` like `nan` (decision D-16): a bad value gives the default with one warning instead of stopping the start. Only `PORT` (`run.py`) and `MCP_PORT` (`scripts/run_mcp.py`) still stop on a value that is not a whole number: falling back to the default port is a product choice. Waiting on a product choice: pin each catalog host to the address checked at creation (breaks when the provider moves) or check every new resolution of that host with `llm_pricing.ip_is_public` (keeps address changes working); count a timeout that fell during a write that went through as a failure or not. `llm_pricing._resolve_public` and `_PinnedResolver` already exist. The pool trusts `HTTPS_PROXY`, which a DNS check cannot cover.
 
 **Effort:** M
 **Priority:** P3
-**Depends on:** none
+**Depends on:** the pinning and write-timeout decisions

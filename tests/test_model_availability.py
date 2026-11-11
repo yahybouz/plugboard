@@ -35,8 +35,10 @@ def test_env_helpers_and_probe_kind_parsing(monkeypatch):
     monkeypatch.setenv("BAD_INT", "oops")
     monkeypatch.setenv("BAD_FLOAT", "nope")
     monkeypatch.setenv("PLUGBOARD_MODEL_REFRESH_PROBE_KINDS", " codex, all , ")
-    assert ma._env_int("BAD_INT", 7) == 7
-    assert ma._env_float("BAD_FLOAT", 1.5) == 1.5
+    from plugboard import envcompat
+
+    assert envcompat.get_int("BAD_INT", default=7) == 7
+    assert envcompat.get_float("BAD_FLOAT", default=1.5) == 1.5
     assert ma._probe_kinds_from_env() == {"codex", "all"}
     assert ma._model_entries(["m1"]) == [{"id": "m1", "name": "m1"}]
 

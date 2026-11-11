@@ -39,20 +39,9 @@ def mode() -> str:
 
 
 def versions() -> int:
-    raw = envcompat.get("PLUGBOARD_MODEL_EXPOSE_VERSIONS")
-    if not raw:
-        return DEFAULT_VERSIONS
-    try:
-        value = int(raw)
-    except ValueError:
-        if "versions" not in _warned:
-            _warned.add("versions")
-            log.warning(
-                "PLUGBOARD_MODEL_EXPOSE_VERSIONS=%r is not a number; using %d",
-                raw,
-                DEFAULT_VERSIONS,
-            )
-        return DEFAULT_VERSIONS
+    value = envcompat.get_int(
+        "PLUGBOARD_MODEL_EXPOSE_VERSIONS", default=DEFAULT_VERSIONS
+    )
     return max(1, min(10, value))
 
 

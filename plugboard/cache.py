@@ -17,20 +17,20 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import sqlite3
 import time
 
 
 from typing import Any, Dict, Optional
-from plugboard.storage import data_dir
+from plugboard import envcompat
+from plugboard.storage import data_dir, private_sqlite_file
 
 log = logging.getLogger(__name__)
 
 _DATA_DIR = data_dir()
 _DB_PATH = _DATA_DIR / "cache.db"
-_DEFAULT_TTL = int(os.environ.get("CACHE_TTL", "300"))  # 5 min default
-_MAX_CACHE_SIZE = int(os.environ.get("CACHE_MAX_SIZE", "10000"))
+_DEFAULT_TTL = envcompat.get_int("CACHE_TTL", default=300)  # 5 min default
+_MAX_CACHE_SIZE = envcompat.get_int("CACHE_MAX_SIZE", default=10000)
 
 
 # ARCH-DEBT-023 closed: SEC-001 strict-tenant gate factored to
@@ -94,7 +94,7 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
 
 
 def _get_conn() -> sqlite3.Connection:
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    private_sqlite_file(_DB_PATH)
     conn = sqlite3.connect(str(_DB_PATH), timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")

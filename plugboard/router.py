@@ -29,8 +29,9 @@ from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
 
 import aiohttp
 
-from plugboard import metrics
+from plugboard import envcompat, metrics
 from plugboard.alerts import record_provider_failure, record_provider_success
+from plugboard.circuit_breaker import is_request_too_long
 from plugboard.cli_subprocess import MAX_RETRY_AFTER_S
 from plugboard.config import load_providers
 from plugboard.logging_config import _request_id_var
@@ -105,22 +106,24 @@ class ProviderNetworkError(RuntimeError):
         self.provider_id = provider_id
 
 
-# OpenAI-style error type and code that blame the request (context too long,
-# unsupported parameter); "invalid_api_key" shares the type but blames the
-# gateway's key.
+# OpenAI-style error type that blames the request (unsupported parameter...);
+# "invalid_api_key" shares the type but blames the gateway's key.
 _REQUEST_ERROR_TYPES = frozenset({"invalid_request_error"})
-_REQUEST_ERROR_CODES = frozenset({"context_length_exceeded"})
 _GATEWAY_ERROR_CODES = frozenset({"invalid_api_key"})
 
 
 def _names_the_request(status: int, text: str) -> bool:
-    """True when a 4xx answer says the request itself is at fault.
+    """True when an error answer says the request itself is at fault.
 
-    413 says so by its status. A 400 or 422 must say it in its body
-    (``error.type`` or ``error.code``): providers also answer 400 for their
-    own key or region (Gemini: INVALID_ARGUMENT, FAILED_PRECONDITION).
+    An answer saying the context or the message is too long does, whatever
+    its status and format (llama.cpp, Ollama, Gemini, a 5xx...), by the
+    circuit breaker's own rule (``is_request_too_long``): an error the breaker
+    leaves to the request for its length gives the client 400. 413 says so by
+    its status. Otherwise a 400 or 422 must say it by its OpenAI
+    ``error.type``: providers also answer 400 for their own key or region
+    (Gemini: INVALID_ARGUMENT, FAILED_PRECONDITION).
     """
-    if status == 413:
+    if status == 413 or is_request_too_long(text):
         return True
     if status not in (400, 422):
         return False
@@ -138,7 +141,7 @@ def _names_the_request(status: int, text: str) -> bool:
     kind = kind if isinstance(kind, str) else ""
     if code in _GATEWAY_ERROR_CODES:
         return False
-    return code in _REQUEST_ERROR_CODES or kind in _REQUEST_ERROR_TYPES
+    return kind in _REQUEST_ERROR_TYPES
 
 
 def _retry_after_seconds(value: Optional[str]) -> Optional[int]:
@@ -257,30 +260,6 @@ def _adapt_payload(model: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
-def _read_env_float(name: str, default: float, *, min_value: float = 0.0) -> float:
-    """Read float env var with validation and sane fallback."""
-    raw = os.environ.get(name, "").strip()
-    if not raw:
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        log.warning(
-            "Invalid %s=%r (float expected) — using default %.3f", name, raw, default
-        )
-        return default
-    if value < min_value:
-        log.warning(
-            "Invalid %s=%.3f (must be >= %.3f) — using default %.3f",
-            name,
-            value,
-            min_value,
-            default,
-        )
-        return default
-    return value
-
-
 def _read_retry_delays() -> List[float]:
     """Read retry backoff delays from env with robust fallback.
 
@@ -314,8 +293,12 @@ def _read_retry_delays() -> List[float]:
     return out if out else [2.0, 5.0, 15.0]
 
 
-_ERROR_RATE_WEIGHT = _read_env_float("PLUGBOARD_LB_ERROR_RATE_WEIGHT", 5.0)
-_INFLIGHT_WEIGHT = _read_env_float("PLUGBOARD_LB_INFLIGHT_WEIGHT", 0.35)
+_ERROR_RATE_WEIGHT = envcompat.get_float(
+    "PLUGBOARD_LB_ERROR_RATE_WEIGHT", default=5.0, minimum=0.0
+)
+_INFLIGHT_WEIGHT = envcompat.get_float(
+    "PLUGBOARD_LB_INFLIGHT_WEIGHT", default=0.35, minimum=0.0
+)
 _DELAYS = _read_retry_delays()
 _IN_FLIGHT_BY_PROVIDER: Dict[str, int] = {}
 _LEGACY_PROVIDER_PREFIX_TO_AUTH_SOURCE: Dict[str, str] = {
@@ -480,6 +463,94 @@ def resolve_provider_and_model(model_str: str) -> tuple[Dict[str, Any], str]:
     return _model_route(active[0], model_str).candidate()
 
 
+def _listed_models(provider: Dict[str, Any]) -> List[str]:
+    """Native model IDs the provider record lists (models, extra_model_ids)."""
+    listed = [
+        m["id"]
+        for m in provider.get("models") or []
+        if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"]
+    ]
+    return listed + [
+        m for m in provider.get("extra_model_ids") or [] if isinstance(m, str) and m
+    ]
+
+
+def _loose_model_name(name: str) -> str:
+    """The form Ollama resolves: any case, no surrounding spaces, ``:latest``
+    implied. Looser than any provider, so it never hides a model one serves."""
+    return name.strip().casefold().removesuffix(":latest")
+
+
+def _family_aliases(provider: Dict[str, Any]) -> List[str]:
+    """Family names ``/v1/models`` gives this provider's models as ``aliases``.
+
+    A family whose listed IDs are all dated snapshots is published under its
+    bare name too (``claude-sonnet-4-5`` for ``claude-sonnet-4-5-20250929``,
+    model_catalog.dedupe_family_snapshots rule 3). Computed from the provider
+    record with the catalogue's own functions, not from the alias cache,
+    which stays empty until ``/v1/models`` is called.
+    """
+    from plugboard.model_catalog import dedupe_family_snapshots, enrich
+
+    native = _listed_models(provider)
+    default = provider.get("default_model")
+    if not native and isinstance(default, str) and default:
+        native = [default]  # list_models publishes it only without a list
+    entries = [
+        {"id": f"{provider['id']}:{m}", "owned_by": provider["id"]} for m in native
+    ]
+    return [
+        alias
+        for entry in dedupe_family_snapshots(enrich(entries))
+        for alias in entry.get("aliases") or []
+        if isinstance(alias, str) and alias
+    ]
+
+
+def is_unknown_model(model_str: str) -> bool:
+    """True when no provider knows ``model_str``: answer 404, call nobody.
+
+    All of these must hold: no registered provider ID (active or not)
+    prefixes it and no display or legacy alias selects a provider; no
+    provider record lists it (models, extra_model_ids, default model or a
+    family alias the catalogue publishes, inactive providers included), in
+    the loose form Ollama accepts; the configured-model lookup of
+    resolve_provider_and_model finds nothing; and every active provider has
+    a model list, since one without a list may serve any name. Otherwise the
+    request is routed as before.
+    """
+    if not isinstance(model_str, str) or not model_str.strip():
+        return False
+    try:
+        active, selected = _select_request(model_str)
+    except ValueError:
+        return False  # the chat route answers these as before
+    if selected is not None:
+        return False
+    registry = [p for p in load_providers() if not is_removed_provider(p)]
+    if registered_model_owner(model_str, (p["id"] for p in registry)) is not None:
+        return False
+    if any(not _listed_models(p) for p in active):
+        return False
+    wanted = _loose_model_name(model_str)
+    for provider in registry:
+        names = (
+            _listed_models(provider)
+            + [provider.get("default_model") or ""]
+            + _family_aliases(provider)
+        )
+        if any(
+            isinstance(n, str) and n and _loose_model_name(n) == wanted for n in names
+        ):
+            return False
+    requested_clean = _clean_model_id(model_str)
+    return not any(
+        _clean_model_id(f"{p['id']}:{native}") == requested_clean
+        for p in active
+        for native in _listed_models(p) + _family_aliases(p)
+    )
+
+
 def _extra_headers(provider: Dict[str, Any]) -> Dict[str, str]:
     """Fixed headers a provider needs on every call.
 
@@ -633,6 +704,8 @@ async def forward(
     """
     Forward a /v1/chat/completions request to the resolved provider.
     Retries on transient errors per provider, then falls back to next provider.
+    An error saying the context is too long is not retried: the same request
+    would fail again, so it goes straight to the next provider.
     """
     from plugboard.circuit_breaker import (
         check_circuit,
@@ -734,11 +807,12 @@ async def forward(
                             terminal_reason="model_unavailable",
                         )
                         invalidate_models_cache()
-                    # A quota, an unavailable model or a failed run counts;
-                    # a prompt the CLI found too long is the request's fault.
+                    # A quota, an unavailable model or a failed run counts,
+                    # for the circuit and the provider_down alert alike; a
+                    # prompt the CLI found too long is the request's fault.
                     if is_provider_fault(reason):
                         cb_failure(_circuit_key(provider, real_model))
-                    await record_provider_failure(provider["id"])
+                        await record_provider_failure(provider["id"])
                 except Exception:
                     pass
                 continue
@@ -794,6 +868,13 @@ async def forward(
                                 limit=200,
                             )
                             provider_fault = is_provider_fault(text, resp.status)
+                            if (
+                                isinstance(last_err, ProviderHTTPError)
+                                and last_err.request_rejected
+                            ):
+                                # A 5xx saying the context is too long fails
+                                # the same way again: next provider (PLU-5).
+                                break
                             continue
                         if resp.status != 200:
                             text = await resp.text()
@@ -876,10 +957,12 @@ async def forward(
             except Exception:
                 pass
 
-        try:
-            await record_provider_failure(provider["id"])
-        except Exception:
-            pass
+        # The provider_down alert counts by the circuit's rule (provider_fault).
+        if provider_fault:
+            try:
+                await record_provider_failure(provider["id"])
+            except Exception:
+                pass
 
         log.warning("Provider %s failed, trying next...", provider["id"])
 
@@ -1205,10 +1288,7 @@ def _subprocess_extra_models(
 
 
 def _claude_latest_n() -> int:
-    try:
-        return max(1, int(os.environ.get("PLUGBOARD_CLAUDE_LATEST_N", "2")))
-    except (TypeError, ValueError):
-        return 2
+    return max(1, envcompat.get_int("PLUGBOARD_CLAUDE_LATEST_N", default=2))
 
 
 def _strip_date_tail(name: str) -> str:

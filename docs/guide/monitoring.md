@@ -4,6 +4,12 @@ Plugboard monitors itself and its providers without external services: everythin
 
 All `/admin/*` and `/metrics*` routes require `Authorization: Bearer $ADMIN_KEY` (or a dashboard session).
 
+### Changes made with a dashboard session
+
+A dashboard session changes nothing from another page. A `POST`, `PUT`, `PATCH` or `DELETE` authenticated by the session cookie, on an admin route or on the Playground's chat routes, is refused with `403 Cross-site request refused` when the browser says another page sent it: a `Sec-Fetch-Site` header other than `same-origin`, or, from a browser that sends no `Sec-Fetch-Site` (plain HTTP to a non-local address), an `Origin` whose host or port differs from the `Host` header. The cookie is `SameSite=Strict`, but a page served on another port of the same host counts as the same site, so the browser would send the cookie with its requests.
+
+The dashboard and `/suivi` call the API from their own origin and are not affected, nor are reads, the admin key in `Authorization`, client keys, requests without browser headers (`curl -b admin.cookies` below) and `POST /auth/admin/login`. Behind a proxy, keep the `Host` header (see [Deployment](deployment.md#behind-a-reverse-proxy)).
+
 ### Admin API with MFA
 
 When MFA is enforced (`PLUGBOARD_ADMIN_MFA_REQUIRED=1` and a secret enrolled), the admin key alone is refused with 401 on every admin route (`/admin/*`, `/providers*`, `/metrics*`, `/docs`, the dashboard). A script either:
@@ -18,7 +24,7 @@ curl -s -b admin.cookies http://localhost:8765/admin/watchdog
 curl -s -b admin.cookies -X POST http://localhost:8765/auth/admin/logout
 ```
 
-Sessions are stored on the server (`data/admin_sessions.json`) and last `ADMIN_SESSION_MAX_AGE` (8 hours). Logout revokes that session; enrolling, rotating or disabling MFA revokes every session; a session opened without a code stops working once MFA is enforced. Keep the cookie file private and delete it after use. Without enforced MFA the bearer alone works as before.
+Sessions are stored on the server (`data/admin_sessions.json`) and last `ADMIN_SESSION_MAX_AGE` (8 hours). Logout revokes that session; `POST /auth/admin/logout-all` (dashboard: **Log out everywhere**) revokes every session, this one included, and forgets every browser remembered for local auto-login (sign in again with the link `make dev` opens, or with `ADMIN_KEY`); enrolling, rotating or disabling MFA revokes every session; a session opened without a code stops working once MFA is enforced. Keep the cookie file private and delete it after use. Without enforced MFA the bearer alone works as before.
 
 Once a secret is enrolled, changing the second factor needs a current code from it, even from an open session: `DELETE /admin/mfa` takes it in the `X-Plugboard-Admin-TOTP` header, and rotating through `POST /admin/mfa/setup` takes it as `current_code` next to the new `secret` and `code`. Without it the call is refused with 403; wrong codes count towards the login lockout. With a lost authenticator, run `scripts/admin_mfa_setup.py --rotate` on the host.
 
@@ -47,7 +53,7 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 `GET /health` is public and cheap, suitable for load balancers and container health checks:
 
 ```json
-{"ok": true, "version": "4.6.0", "providers": 3, "active": ["anthropic-direct", "ollama", "claude-via-claude-cli"]}
+{"ok": true, "version": "4.8.0", "providers": 3, "active": ["anthropic-direct", "ollama", "claude-via-claude-cli"]}
 ```
 
 When `API_KEY` is empty it also returns `"auth_disabled": true` and `"dev_mode"`, so a deployment gate can refuse an instance whose client authentication is off.
@@ -99,7 +105,7 @@ Before any observation, `/v1/models` returns `connected: false` and `last_probed
 - **How a list changes.** A new model is added at once. A model is removed only after `PLUGBOARD_MODEL_REMOVAL_PASSES` (2) refreshes in a row that answered correctly without it; a refresh that fails, answers in another format or returns an empty list changes nothing; a refresh that would drop more than half of the list is treated as a provider problem, not applied, and reported in `errors`. The `default_model` and the models listed in `pinned_models` are never removed. A removed model disappears from `GET /v1/models`; a request that names `provider:model` explicitly is still forwarded. `POST /providers/{id}/discover` is an explicit admin action and removes at once (`?dry_run=true` shows what would change).
 - `GET /admin/models/scheduler/status` shows the scheduler and `last_changes` (added, removed and pending removals per provider, errors). `stale: true` means no successful refresh for two intervals (48 hours in daily mode).
 - `POST /admin/models/refresh` runs the connectivity probe on demand (at most once every `PLUGBOARD_REFRESH_COOLDOWN_S` seconds); `GET /admin/models/status` returns the stored status.
-- **Internet-access check**: at startup Plugboard asks every model a question that only a model with live web access can answer, to show which models can browse. This sends one real request to each model; set `PLUGBOARD_INTERNET_CHECK_ON_BOOT=0` to skip it. The Playground buttons run the same check on demand (`POST /admin/models/check-internet` and `/admin/models/check-internet/all`).
+- **Internet-access check**: at startup Plugboard asks every model a question that only a model with live web access can answer, to show which models can browse. This sends one real request to each model, except local Ollama models (they have no web access, and the check would make the host load and run each of them; Ollama Cloud models are checked); set `PLUGBOARD_INTERNET_CHECK_ON_BOOT=0` to skip it. The Playground buttons run the same check on demand (`POST /admin/models/check-internet` and `/admin/models/check-internet/all`, which checks local models too unless the body holds `"skip_local": true`).
 
 ## Automatic updates at a glance
 
@@ -127,7 +133,7 @@ curl -s "http://localhost:8765/admin/audit?action=auth.login_failed" -H "Authori
 
 Set `ALERT_WEBHOOK_URL` to receive JSON alerts (for example on a Slack or Discord incoming webhook, or your own endpoint):
 
-- `provider_down`: a provider failed `ALERT_FAILURE_THRESHOLD` consecutive forwarded requests (default 3); at most one alert per provider every five minutes.
+- `provider_down`: a provider failed `ALERT_FAILURE_THRESHOLD` consecutive forwarded requests (default 3) on its own side, by the circuit breaker's rule (`429`, `5xx`, timeouts, network errors, `401`/`403`, CLI quota or failed run; never a `400`, `413`, `422` or a prompt too long); a streamed request to an HTTP provider is not counted. At most one alert per provider every five minutes.
 
   ```json
   {"type": "provider_down", "provider_id": "anthropic-direct", "consecutive_failures": 3, "message": "..."}

@@ -306,8 +306,9 @@ async def test_auth_disabled_when_api_key_empty(_providers_file, monkeypatch):
     from plugboard.app import app
     from httpx import AsyncClient, ASGITransport
 
+    # Keyless mode answers on a loopback interface only.
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
+        transport=ASGITransport(app=app), base_url="http://127.0.0.1"
     ) as c:
         # /v1 remains accessible when client auth is disabled.
         resp_v1 = await c.get("/v1/models")

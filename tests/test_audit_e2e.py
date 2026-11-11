@@ -396,8 +396,9 @@ class TestSecurityHeaders:
 
         from plugboard.app import app
 
+        # Keyless mode answers on a loopback interface only.
         async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
+            transport=ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as c:
             statuses = [await c.get("/health") for _ in range(6)]
             codes = [r.status_code for r in statuses]

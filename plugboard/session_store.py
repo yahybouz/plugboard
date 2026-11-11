@@ -26,17 +26,17 @@ Not in scope (future):
 from __future__ import annotations
 
 import json
-import os
 import sqlite3
 import time
 from threading import Lock
 from typing import Any, Dict, List, Optional
-from plugboard.storage import data_dir
+from plugboard import envcompat
+from plugboard.storage import data_dir, private_sqlite_file
 
 _DATA_DIR = data_dir()
 _DB_PATH = _DATA_DIR / "sessions.db"
-_TTL_S = int(os.environ.get("PLUGBOARD_SESSION_TTL_S", str(24 * 3600)))
-_MAX_TURNS = int(os.environ.get("PLUGBOARD_SESSION_MAX_TURNS", "50"))
+_TTL_S = envcompat.get_int("PLUGBOARD_SESSION_TTL_S", default=24 * 3600)
+_MAX_TURNS = envcompat.get_int("PLUGBOARD_SESSION_MAX_TURNS", default=50)
 
 _INIT_LOCK = Lock()
 _INITIALISED = False
@@ -57,7 +57,7 @@ _INDEX = "CREATE INDEX IF NOT EXISTS idx_sessions_updated ON chat_sessions(updat
 
 def _get_conn() -> sqlite3.Connection:
     global _INITIALISED
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    private_sqlite_file(_DB_PATH)
     conn = sqlite3.connect(str(_DB_PATH), timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")

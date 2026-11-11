@@ -6,14 +6,16 @@ Plugboard is configured with environment variables. `run.py` and the server load
 
 Boolean flags accept `1`, `true`, `yes`, `on` unless stated otherwise. Values below are the defaults applied when the variable is unset.
 
+**Numbers.** A numeric setting whose value is not a finite number (text, `1.5` where a whole number is expected, `nan`, `inf`) keeps its default: the gateway logs one warning naming the variable and starts. `PORT` and `MCP_PORT`, read by the launch scripts `run.py` and `scripts/run_mcp.py`, are the exception: a value that is not a whole number stops them.
+
 ## Security and authentication
 
 | Variable | Default | Description |
 |---|---|---|
-| `ADMIN_KEY` | empty | Admin secret for the dashboard and `/admin/*`. Required: the server refuses to start without it, or with fewer than 16 characters, unless `PLUGBOARD_DEV=1`. `make init` generates one. |
+| `ADMIN_KEY` | empty | Admin secret for the dashboard and `/admin/*`. Required: the server refuses to start without it, with fewer than 16 characters, or with a placeholder written `<...>` as in these guides, unless `PLUGBOARD_DEV=1`. `make init` generates one. |
 | `API_KEY` | empty | Any non-empty value turns on client authentication for `/v1/*` (clients use `pb_` keys). The value itself is not a client key. Empty: client authentication is off, a critical warning is logged every five minutes and `/health` reports `auth_disabled`. |
 | `ENCRYPTION_KEY` | empty | Key used to encrypt provider tokens, OAuth credentials and the MFA secret at rest. Empty: a key is generated once in `data/.encryption_key`. Changing it makes stored credentials unreadable. |
-| `PLUGBOARD_DEV` | empty | `1` marks a development instance: the server may start without `ADMIN_KEY`, and the empty-`API_KEY` warning is logged once instead of repeated. |
+| `PLUGBOARD_DEV` | empty | `1` marks a development instance: the server may start without `ADMIN_KEY`, and the empty-`API_KEY` warning is logged once instead of repeated. With `API_KEY` empty too, every route is open, so `run.py` then listens on a loopback `HOST` only, and the server answers only requests that arrive on a loopback interface. |
 | `PLUGBOARD_LOCAL_AUTO_LOGIN` | `auto` | Dashboard auto-login. `auto`: only when `run.py` listens on a loopback address. `1`: also when listening on another interface (personal workstation). `0`: never. Unknown values count as `0`. See [Security notes](../../README.md#security-notes). |
 | `PLUGBOARD_OPEN_BROWSER` | empty | `1` (set by `make dev`): once the server answers, `run.py` opens the dashboard with the one-time login token from `data/.login_token`. Loopback bind only. |
 | `PLUGBOARD_ADMIN_MFA_REQUIRED` | empty | `1` requires a TOTP code at admin login, and refuses the admin key alone as a bearer ([admin API with MFA](monitoring.md#admin-api-with-mfa)), once a secret is enrolled (`POST /admin/mfa/begin`, then `POST /admin/mfa/setup`, or `make admin-mfa-setup`). Without an enrolled secret it has no effect, so it cannot lock you out. |
@@ -38,11 +40,13 @@ make rotate-encryption-key ARGS="--new-key-file ~/plugboard-new.key --generate"
 
 The command reads every secret with the current key and re-encrypts it with the new one, after copying the files to `data/backups/rekey-<time>/`. If one secret cannot be read, nothing is written and the command lists where it is. The new key is written to the file you name (mode 0600), never printed. When `ENCRYPTION_KEY` is set, put the content of that file in `ENCRYPTION_KEY` before starting the server; when it is empty, the command replaces `data/.encryption_key` itself. Use it to replace a key that held comment text from an older `.env.example`.
 
+A completed rotation also signs out every dashboard session and forgets the browsers remembered for local auto-login (a dry run or a refused rotation signs out nobody). If the session store cannot be rewritten, the rotation still completes and says so: use **Log out everywhere** in the dashboard once the server runs again.
+
 ## Server
 
 | Variable | Default | Description |
 |---|---|---|
-| `HOST` | `0.0.0.0` | Interface `run.py` listens on. `.env.example` sets `127.0.0.1` (local install). |
+| `HOST` | `0.0.0.0` | Interface `run.py` listens on. `.env.example` sets `127.0.0.1` (local install). With `API_KEY` and `ADMIN_KEY` both empty, `run.py` refuses any value other than `127.0.0.1`, `localhost` or `::1` ([details](troubleshooting.md#api_key-and-admin_key-are-both-empty-refusing-to-listen-on-0000)). |
 | `PORT` | `8765` | Listening port. |
 | `RELOAD` | `false` | `true` enables hot reload (`make dev` sets it). |
 | `PLUGBOARD_DATA` | `data` | Directory for all state (JSON files, SQLite databases, pricing grids). The pricing scheduler's `cb_state.json` always lives in the `data/` directory of the installation. |
@@ -56,6 +60,7 @@ The command reads every secret with the current key and re-encrypts it with the 
 | `PLUGBOARD_LOG_MAX_BYTES` | `20971520` | Size of one log file before rotation. |
 | `PLUGBOARD_LOG_BACKUPS` | `5` | Rotated log files to keep. |
 | `APP_NAME`, `SERVICE_NAME` | `plugboard` | Values of the `application` and `service` fields in JSON logs. |
+| `PLUGBOARD_DOCS_BASE_URL` | empty | Where this repository's files are published, for example `https://gitlab.com/<group>/plugboard/-/blob/main`. The dashboard then shows the `docs/guide/...` references it gets (provider connection test) as links to `<base>/docs/guide/...`. Empty: they stay repository paths. Only an `http(s)` URL with a host is used; anything else is logged and ignored. No guide is served by Plugboard itself. |
 
 ## Client keys
 
@@ -70,7 +75,7 @@ The command reads every secret with the current key and re-encrypts it with the 
 
 | Variable | Default | Description |
 |---|---|---|
-| `PLUGBOARD_RETRY_DELAYS` | `2,5,15` | Seconds to wait before each retry on `429`/`5xx` from an HTTP provider. |
+| `PLUGBOARD_RETRY_DELAYS` | `2,5,15` | Seconds to wait before each retry on `429`/`5xx` from an HTTP provider. An error saying the context is too long is not retried. |
 | `PLUGBOARD_LB_ERROR_RATE_WEIGHT` | `5.0` | Weight of the error rate in the provider score used for fallback ordering. |
 | `PLUGBOARD_LB_INFLIGHT_WEIGHT` | `0.35` | Weight of in-flight requests in that score. |
 | `PLUGBOARD_HTTP_POOL_SIZE` | `100` | Shared HTTP connection pool size. |
@@ -90,6 +95,8 @@ The command reads every secret with the current key and re-encrypts it with the 
 | `PLUGBOARD_SUBPROCESS_ENV_PASSTHROUGH` | empty | Extra environment variable names passed to CLI processes, comma-separated. CLI processes otherwise get an allowlist; server secrets and `PLUGBOARD_*` names are always refused. |
 | `PLUGBOARD_CODEX_SANDBOX` | `read-only` | codex access to its spawn directory: `read-only` or `workspace-write`; the rest of the disk is denied. `danger-full-access` disables the sandbox. |
 | `PLUGBOARD_OAUTH_CALLBACK_BASE` | `http://localhost:8765` | Public base URL used to build OAuth callback URLs (`/oauth/callback/<source>`). |
+| `GEMINI_CLI_HOME` | the server account's home | The Gemini CLI's own variable, read from the server's environment: the operator's `.gemini` directory under it holds the sign-in that each Gemini call links to and the auth method it keeps. Each call still runs with a private `GEMINI_CLI_HOME` of its own. |
+| `CODEX_HOME` | `~/.codex` | The codex CLI's own variable: Plugboard reads the model list the signed-in account caches there (`models_cache.json`). |
 
 ## Providers bootstrapped from the environment
 
@@ -108,6 +115,7 @@ The removed connector's `OPENCLAW_URL`, `OPENCLAW_KEY`, `OPENCLAW_MODEL` and
 | `PLUGBOARD_LOCAL_MODEL_DOWNLOADS` | `1` | `0` refuses Ollama pulls of local (non-cloud) models; only `:cloud` / `-cloud` ids of the official library (no `user/` namespace, no other registry) can be added, and such a pull is stopped if its layers exceed 64 MB. An admin can flip it on the **Ollama** page; that choice is saved in `<data>/ollama_settings.json` and wins over this variable. |
 | `PLUGBOARD_OLLAMA_MIN_FREE_GB` | `5` | Free disk space, in GB, that a local pull must leave. A pull whose registry size does not fit is refused with 507; a pull of unknown size is stopped as soon as it would cross this margin. |
 | `PLUGBOARD_OLLAMA_DISK_PATH` | data dir | Path whose filesystem is checked for free space (must be on the same disk as the Ollama models). |
+| `PLUGBOARD_OLLAMA_REGISTRY_URL` | `https://registry.ollama.ai` | Registry asked for a model's manifest to learn its download size before a pull (redirects are not followed). A model named `host/user/model` comes from another registry: its size is unknown. |
 | `PLUGBOARD_OLLAMA_CLOUD_FAMILIES` | deepseek, kimi, qwen, glm, gemma, nemotron, minimax, gpt-oss, gemini, beam | Ollama cloud model families added automatically (comma-separated, `all` for the whole catalogue). |
 
 ## Caching
@@ -215,11 +223,22 @@ The catalog is downloaded with each price update. A download that fails, is inva
 | Variable | Default | Description |
 |---|---|---|
 | `ALERT_WEBHOOK_URL` | empty | URL receiving `provider_down` and `spending_alert` JSON alerts. |
-| `ALERT_FAILURE_THRESHOLD` | `3` | Consecutive provider failures before a `provider_down` alert. |
+| `ALERT_FAILURE_THRESHOLD` | `3` | Consecutive provider failures (circuit breaker's rule, never an error the request caused) before a `provider_down` alert. |
 | `WEBHOOK_URLS` | empty | Comma-separated URLs receiving lifecycle events. |
 | `WEBHOOK_EVENTS` | empty (all) | Comma-separated list of events to send. |
 | `WEBHOOK_SECRET` | empty | Secret used to sign event payloads with HMAC-SHA256. |
 | `PLUGBOARD_WEBHOOK_MAX_PER_RUN` | `50` | Maximum `models.changed` / `pricing.changed` events sent by one automatic update; the rest is summarised as `{"truncated": N}`. |
+
+## Decision engines
+
+See [typed decisions](decisions.md) and the [local decision runtime](decisions-runtime.md).
+
+| Variable | Default | Description |
+|---|---|---|
+| `PLUGBOARD_JEV_API_KEY` | empty | TypeSafe credential for the hosted `jev` engine on `POST /v1/decisions`. Without it, `jev` answers 503. The network MCP server drops it from its environment. |
+| `PLUGBOARD_DECISION_PYTHON` | empty | Absolute path to the Python of the isolated environment that runs the local `laya` and `laya-multilingual` engines. Never the gateway's own environment. |
+| `PLUGBOARD_DECISION_ASSETS` | empty | Directory of the pinned assets downloaded with `scripts/decision_download.py`. Without it or `PLUGBOARD_DECISION_PYTHON`, the local engines are unavailable. |
+| `PLUGBOARD_JEV_PRICE_PER_CALL_USD` | unset | Obsolete and ignored: Jev is billed at its official per-token price. If it is set, the server logs one warning per process (never its value). |
 
 ## Data and integrations
 

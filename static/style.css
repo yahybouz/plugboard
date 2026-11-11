@@ -208,6 +208,7 @@ a:hover { color: var(--accent-dark); }
 .sidebar-footer {
   padding: 1rem 1.25rem; border-top: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 0.25rem;
 }
 
 /* Main content */

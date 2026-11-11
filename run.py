@@ -1,6 +1,7 @@
 """Entry point: python run.py"""
 
 import os
+import sys
 import uvicorn
 
 try:
@@ -19,6 +20,23 @@ def login_url(host: str, port: int, token: str):
         return None
     netloc = f"[{host}]" if ":" in host else host
     return f"http://{netloc}:{port}/login?token={token}"
+
+
+def keyless_bind_refusal(host: str):
+    """Why the server must not listen on ``host``, or None.
+
+    With API_KEY and ADMIN_KEY both empty every route is open, the admin API
+    and the dashboard included: only this machine may reach it.
+    """
+    if host in _LOOPBACK or os.environ.get("API_KEY") or os.environ.get("ADMIN_KEY"):
+        return None
+    return (
+        "API_KEY and ADMIN_KEY are both empty: refusing to listen on "
+        f"{host or 'every interface'}, where every route (admin API and "
+        "dashboard included) would be open to anyone who can reach it. "
+        "Run `make init` (or set random ADMIN_KEY and API_KEY values in .env), "
+        "or set HOST=127.0.0.1 to listen on this machine only."
+    )
 
 
 def _open_dashboard_when_ready(host: str, port: int) -> None:
@@ -62,6 +80,9 @@ def _open_dashboard_when_ready(host: str, port: int) -> None:
 
 if __name__ == "__main__":
     host = os.environ.get("HOST", "0.0.0.0")
+    refusal = keyless_bind_refusal(host)
+    if refusal:
+        sys.exit(refusal)
     # The app decides whether this is a local install from the real bind.
     os.environ["PLUGBOARD_BIND_HOST"] = host
     if os.environ.get("PLUGBOARD_OPEN_BROWSER") == "1":

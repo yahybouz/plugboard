@@ -16,15 +16,15 @@ docs/runbooks/pricing-scheduler.md#official-price-table.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional
+
+from plugboard import envcompat
 
 log = logging.getLogger(__name__)
 
 MAX_AGE_ENV = "PLUGBOARD_OFFICIAL_PRICES_MAX_AGE_DAYS"
 DEFAULT_MAX_AGE_DAYS = 35
-_warned: set = set()
 
 CHECKED = "2026-10-24"
 _ANTHROPIC = "https://platform.claude.com/docs/en/about-claude/pricing"
@@ -109,21 +109,7 @@ def _today() -> date:
 
 
 def _max_age_days() -> int:
-    raw = os.environ.get(MAX_AGE_ENV, "").strip()
-    try:
-        value = int(raw) if raw else DEFAULT_MAX_AGE_DAYS
-    except ValueError:
-        value = 0
-    if value <= 0:
-        if raw not in _warned:
-            _warned.add(raw)
-            log.warning(
-                "%s must be a positive integer; using %d",
-                MAX_AGE_ENV,
-                DEFAULT_MAX_AGE_DAYS,
-            )
-        return DEFAULT_MAX_AGE_DAYS
-    return value
+    return envcompat.get_int(MAX_AGE_ENV, default=DEFAULT_MAX_AGE_DAYS, minimum=1)
 
 
 def status(today: Optional[date] = None) -> Dict[str, Any]:

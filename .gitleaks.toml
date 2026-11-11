@@ -72,6 +72,17 @@ condition = "AND"
 paths = ['''(?:^|/)tests/test_final_audit_(?:parent|v9)\.py$''']
 regexes = ['''^synthetic-[a-z-]+$''', '''^synthetic-[a-z-]+-[0-9a-f]+$''']
 
+# Synthetic pre-rename client key that tests/test_run_mcp_legacy_names.py
+# writes to a scratch .env to prove scripts/run_mcp.py still reads it.
+# targetRules keeps this a rule allowlist: a global allowlist with paths
+# skips the whole file for every rule, whatever its condition.
+[[allowlists]]
+description = "MCP launcher legacy-name test values"
+targetRules = ["plugboard-env-secret"]
+condition = "AND"
+paths = ['''(?:^|/)tests/test_run_mcp_legacy_names\.py$''']
+regexes = ['''^synthetic-[a-z-]+$''']
+
 # Prose in the OpenClaw migration guide that the generic rule reads as a key.
 [[allowlists]]
 description = "OpenClaw removal guide prose"

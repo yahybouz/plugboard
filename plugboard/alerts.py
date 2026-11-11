@@ -9,20 +9,28 @@ from typing import Dict
 
 import aiohttp
 
+from plugboard import envcompat
+
 log = logging.getLogger(__name__)
 
 _WEBHOOK_URL = os.environ.get("ALERT_WEBHOOK_URL", "").strip()
 
 # -- Provider failure tracking ------------------------------------------------
 
-_ALERT_THRESHOLD = int(os.environ.get("ALERT_FAILURE_THRESHOLD", "3"))
+_ALERT_THRESHOLD = envcompat.get_int("ALERT_FAILURE_THRESHOLD", default=3)
 _provider_failures: Dict[str, int] = {}
 _provider_alerted: Dict[str, float] = {}  # last alert timestamp (monotonic)
 _ALERT_COOLDOWN = 300.0  # 5 minutes between alerts for same provider
 
 
 async def record_provider_failure(provider_id: str) -> None:
-    """Increment failure count and alert if threshold reached."""
+    """Increment failure count and alert if threshold reached.
+
+    Call it only for a failure of the provider itself, judged by the circuit
+    breaker's rule (circuit_breaker.is_provider_fault): an error the request
+    caused (HTTP 400, 413, 422, a prompt too long...) neither counts nor
+    resets the count.
+    """
     _provider_failures[provider_id] = _provider_failures.get(provider_id, 0) + 1
     count = _provider_failures[provider_id]
 

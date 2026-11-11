@@ -15,6 +15,8 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 
+from plugboard import envcompat
+
 _request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 
 _APPLICATION = os.environ.get("APP_NAME", "plugboard")
@@ -25,8 +27,8 @@ _PID = os.getpid()
 # we also write to disk with rotation. Rotation defaults: 20MB per file,
 # keep 5 backups => 100MB ceiling per service.
 _LOG_FILE = os.environ.get("PLUGBOARD_LOG_FILE", "").strip()
-_LOG_MAX_BYTES = int(os.environ.get("PLUGBOARD_LOG_MAX_BYTES", str(20 * 1024 * 1024)))
-_LOG_BACKUP_COUNT = int(os.environ.get("PLUGBOARD_LOG_BACKUPS", "5"))
+_LOG_MAX_BYTES = envcompat.get_int("PLUGBOARD_LOG_MAX_BYTES", default=20 * 1024 * 1024)
+_LOG_BACKUP_COUNT = envcompat.get_int("PLUGBOARD_LOG_BACKUPS", default=5)
 
 
 def _source_service(logger_name: str) -> str:

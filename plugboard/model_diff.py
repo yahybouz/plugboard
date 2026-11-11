@@ -25,10 +25,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+
+from plugboard import envcompat
 
 log = logging.getLogger(__name__)
 
@@ -37,14 +38,7 @@ MAX_DROP_RATIO = 0.5
 
 
 def removal_passes() -> int:
-    raw = os.environ.get("PLUGBOARD_MODEL_REMOVAL_PASSES", "").strip()
-    if not raw:
-        return 2
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        log.warning("PLUGBOARD_MODEL_REMOVAL_PASSES is not a number; using 2")
-        return 2
+    return max(1, envcompat.get_int("PLUGBOARD_MODEL_REMOVAL_PASSES", default=2))
 
 
 def _state_path() -> Path:

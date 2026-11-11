@@ -13,10 +13,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+
+from plugboard import envcompat
 
 log = logging.getLogger(__name__)
 
@@ -30,15 +31,7 @@ def _journal_path() -> Path:
 
 
 def max_per_run() -> int:
-    raw = os.environ.get("PLUGBOARD_WEBHOOK_MAX_PER_RUN", "").strip()
-    if not raw:
-        return 50
-    try:
-        value = int(raw)
-    except ValueError:
-        log.warning("PLUGBOARD_WEBHOOK_MAX_PER_RUN is not a number; using 50")
-        return 50
-    return max(0, value)
+    return max(0, envcompat.get_int("PLUGBOARD_WEBHOOK_MAX_PER_RUN", default=50))
 
 
 def _now() -> str:
@@ -160,5 +153,11 @@ _pending: set = set()
 
 async def drain() -> None:
     """Wait for background webhook deliveries (tests, shutdown)."""
-    while _pending:
-        await asyncio.gather(*list(_pending), return_exceptions=True)
+    # Only the unfinished ones: a delivery that ended stays listed until its
+    # done callback runs, and gather() of finished tasks returns without
+    # giving the loop that turn, so waiting on it again would spin for ever.
+    while True:
+        running = [task for task in _pending if not task.done()]
+        if not running:
+            return
+        await asyncio.gather(*running, return_exceptions=True)

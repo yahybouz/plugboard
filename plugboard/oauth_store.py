@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import sqlite3
 import time
 from contextlib import contextmanager
@@ -21,7 +20,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterator, List, Optional
 
 from plugboard.config import _decrypt_token, _encrypt_token
-from plugboard.storage import data_dir
+from plugboard.storage import data_dir, private_sqlite_file
 
 log = logging.getLogger(__name__)
 
@@ -88,16 +87,11 @@ CREATE INDEX IF NOT EXISTS idx_flows_expiry ON oauth_flows(expires_at);
 
 @contextmanager
 def _conn() -> Iterator[sqlite3.Connection]:
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    private_sqlite_file(_DB_PATH)  # credentials: owner-only (0600)
     conn = sqlite3.connect(str(_DB_PATH))
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(_SCHEMA)
-        # Restrict file perms (0600)
-        try:
-            os.chmod(_DB_PATH, 0o600)
-        except OSError:
-            pass
         yield conn
         conn.commit()
     finally:

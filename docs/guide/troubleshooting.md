@@ -16,6 +16,17 @@ A real key may start with `#`; only `#` alone or `#` followed by whitespace is r
 
 If the log says the same about `ENCRYPTION_KEY`, the server starts but logs a critical message: your stored credentials are encrypted with a guessable key. Do not change the value blindly (stored tokens and the MFA secret would become unreadable): protect `data/`, then re-create the providers with a new `ENCRYPTION_KEY`.
 
+### `API_KEY and ADMIN_KEY are both empty: refusing to listen on 0.0.0.0`
+
+With both keys empty (possible only with `PLUGBOARD_DEV=1`), every route is open, the admin API and the dashboard included. `run.py` (and so `make dev`, the Docker image and the systemd unit) then listens on this machine only, and refuses `HOST=0.0.0.0` (the default when `HOST` is unset), `::`, a LAN address or an empty value. Either:
+
+- run `make init`, or set random values for `ADMIN_KEY` and `API_KEY` in `.env` (`openssl rand -hex 24`); a container needs `ADMIN_KEY`, since it listens on `0.0.0.0`;
+- or, for throwaway local work, set `HOST=127.0.0.1` (`localhost` and `::1` also work).
+
+Only `API_KEY` and `ADMIN_KEY` count: `PLUGBOARD_API_KEY` and `PLUGBOARD_ADMIN_KEY` are MCP client settings that the server does not read.
+
+Started without `run.py` (`uvicorn plugboard.app:app --host 0.0.0.0`), the server starts, but answers `403` (`API_KEY and ADMIN_KEY are both empty: every route is open, so this server only answers on a loopback interface…`) to any request that does not arrive on a loopback interface, a Unix socket included; the log records the first refusal. Proxy headers and the `Host` header do not change it. The same two fixes apply: set the keys, or listen on `127.0.0.1` (the `uvicorn` default).
+
 ### `Invalid configuration: STRICT_TENANT explicitly enabled while API_KEY is empty`
 
 `PLUGBOARD_STRICT_TENANT=1` (or its old name) with an empty `API_KEY` is refused. Set `API_KEY`, or remove the variable.
@@ -60,6 +71,7 @@ With `PLUGBOARD_ADMIN_MFA_REQUIRED=1`, an `admin_mfa.json` that exists but canno
 - **`Too many failed attempts`**: after 5 failures within a minute, the client IP is locked out for 15 minutes.
 - **Signed out after a while**: sessions last `ADMIN_SESSION_MAX_AGE` (8 hours). Changing `ADMIN_KEY` invalidates every session.
 - **Cookie not kept over plain HTTP on a server**: with `COOKIE_SECURE=auto` the cookie is `Secure` for any host other than localhost, so the browser drops it over `http://`. Serve the dashboard over HTTPS (see [Deployment](deployment.md#behind-a-reverse-proxy)).
+- **`403 Cross-site request refused`**: a change was sent with the dashboard session from a page other than the dashboard (another port or host name). If the dashboard itself gets it, it is served over plain HTTP through a proxy that rewrites the `Host` header: keep `Host` at the proxy, or serve over HTTPS. Scripts send the admin key in `Authorization` instead of the cookie ([details](monitoring.md#changes-made-with-a-dashboard-session)).
 
 ## Client errors
 
@@ -68,6 +80,7 @@ With `PLUGBOARD_ADMIN_MFA_REQUIRED=1`, an `admin_mfa.json` that exists but canno
 | `401 Invalid API key` | Unknown, revoked or mistyped key. Check it under **API Keys**; create a new one if it was lost (keys cannot be recovered). |
 | `401 Authentication required: missing client_id` | A chat request without a key. Send `Authorization: Bearer pb_...`. |
 | `403 Model '...' not allowed` | The model is outside the key's `allowed_models`. Entries are exact IDs: the bare model name, `<provider-id>:<model>` or the full ID `/v1/models` lists (`Codex:gpt-6.1-sol`). Since 4.3.1 a provider prefix or part of a name no longer allows the models it used to cover, and a display prefix alone (`Codex:`) allows nothing either. The message names the ID that was checked as `<provider-id>:<model>` (`chatgpt-via-codex-cli:gpt-6.1-sol` for the Codex CLI): if it is the provider and model you mean to allow, create a new key that lists it in one of these spellings; otherwise have the client send `<provider-id>:<model>` or the ID `/v1/models` lists, since a name without a provider prefix can be routed to another provider ([allowed models](clients-and-keys.md#allowed-models)). |
+| `404` with `"code": "model_not_found"` | No provider knows the model: its prefix is no provider ID and no provider lists it. Check the spelling against `GET /v1/models`, or send `<provider-id>:<model>`. A model pulled with the `ollama` command rather than the dashboard's Ollama page is listed after the next refresh, or at once with **Discover** on the provider ([details](../api/README.md#404-model_not_found)). |
 | `429 Rate limit exceeded` | The per-IP limit (`RATE_LIMIT`, 60 per minute). Behind a reverse proxy all clients share the proxy's address: raise `RATE_LIMIT` or set it to `0` and limit traffic at the proxy. |
 | `429 Client rate limit exceeded` | The key's RPM limit. |
 | `429 Monthly spending limit exceeded` | The key's monthly budget. Raise it or wait for the next month (UTC). |

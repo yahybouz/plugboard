@@ -67,6 +67,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from plugboard import __version__
 from plugboard import admin_sessions
+from plugboard import envcompat
 from plugboard import billing as _billing
 from plugboard import usage as _usage
 from plugboard.alerts import check_and_alert as _check_and_alert
@@ -119,6 +120,7 @@ from plugboard.router import (
     forward,
     forward_stream,
     invalidate_models_cache,
+    is_unknown_model,
     list_models,
     resolve_provider_and_model,
     served_by as _served_by,
@@ -140,7 +142,7 @@ log = logging.getLogger("plugboard.app")
 # attacker timing the response. Default 0 = off (the leak requires a
 # co-located adversary which is out of scope for most deployments).
 _CACHE_RESPONSE_FLOOR_MS = max(
-    0, int(os.environ.get("PLUGBOARD_CACHE_RESPONSE_FLOOR_MS", "0") or "0")
+    0, envcompat.get_int("PLUGBOARD_CACHE_RESPONSE_FLOOR_MS", default=0)
 )
 
 
@@ -229,10 +231,19 @@ def _require_admin_key_outside_dev(admin_key: str, dev_mode: bool) -> None:
             f"ADMIN_KEY is shorter than {_ADMIN_KEY_MIN_LENGTH} characters: use a "
             "random value (`make init` generates 48 hex characters)."
         )
+    # The documentation writes values to fill in as `<...>`
+    # (`ADMIN_KEY=<openssl rand -hex 24>`): copied as is, that public text
+    # passes the length check.
+    stripped = (admin_key or "").strip()
+    if not dev_mode and stripped.startswith("<") and stripped.endswith(">"):
+        raise RuntimeError(
+            "ADMIN_KEY is a placeholder written as <...> in the documentation: "
+            "set a random value (openssl rand -hex 24) and restart."
+        )
 
 
 _require_admin_key_outside_dev(_ADMIN_KEY, _DEV_MODE)
-_ADMIN_SESSION_MAX_AGE = int(os.environ.get("ADMIN_SESSION_MAX_AGE", "28800"))  # 8h
+_ADMIN_SESSION_MAX_AGE = envcompat.get_int("ADMIN_SESSION_MAX_AGE", default=28800)  # 8h
 _COOKIE_SECURE_MODE = os.environ.get("COOKIE_SECURE", "auto").strip().lower()
 
 if not _API_KEY:
@@ -365,6 +376,12 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
 
     _spawn_boot_task(_warm(), "subprocess-warm-up")
 
+    # Load the tiktoken encoding (read from its cache, or downloaded) now,
+    # off the event loop: the first token count of a request would block it.
+    from plugboard.tokenizer import warm_up_in_background
+
+    warm_up_in_background()
+
     # Repeat the auth-disabled warning every 5 minutes in non-dev contexts so
     # long-running deployments can't forget they are wide open (TM-007).
     async def _auth_nag():
@@ -426,7 +443,11 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
         await _asyncio.sleep(5.0)
         try:
             log.info("internet_check_on_boot: starting bulk probe (persist=True)")
-            summary = await check_all_models_internet_access({"persist": True})
+            # Local Ollama models have no web access, and probing them makes
+            # the host load and run each installed model in turn.
+            summary = await check_all_models_internet_access(
+                {"persist": True, "skip_local": True}
+            )
             log.info(
                 "internet_check_on_boot: completed total=%s online=%s offline=%s failed=%s elapsed=%.1fs",
                 summary.get("total"),
@@ -554,8 +575,8 @@ async def _value_error_handler(request: Request, exc: ValueError):
     )
 
 
-_MAX_BODY_BYTES = int(
-    os.environ.get("MAX_BODY_BYTES", str(10 * 1024 * 1024))
+_MAX_BODY_BYTES = envcompat.get_int(
+    "MAX_BODY_BYTES", default=10 * 1024 * 1024
 )  # 10 MB default
 
 
@@ -568,22 +589,12 @@ _MAX_BODY_BYTES = int(
 # to PLUGBOARD_INFLIGHT_WAIT_S for a slot and then get 503 + Retry-After.
 
 
-def _env_int(name: str, default: int) -> int:
-    try:
-        return max(0, int(os.environ.get(name, str(default)) or str(default)))
-    except ValueError:
-        return default
-
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        return max(0.0, float(os.environ.get(name, str(default)) or str(default)))
-    except ValueError:
-        return default
-
-
-_INFLIGHT_CHAT_MAX = _env_int("PLUGBOARD_MAX_INFLIGHT_CHAT", 0)
-_INFLIGHT_WAIT_S = _env_float("PLUGBOARD_INFLIGHT_WAIT_S", 0.0)
+_INFLIGHT_CHAT_MAX = envcompat.get_int(
+    "PLUGBOARD_MAX_INFLIGHT_CHAT", default=0, minimum=0
+)
+_INFLIGHT_WAIT_S = envcompat.get_float(
+    "PLUGBOARD_INFLIGHT_WAIT_S", default=0.0, minimum=0.0
+)
 _INFLIGHT_RETRY_AFTER_S = 5
 _inflight_chat_sem: Optional["_asyncio.Semaphore"] = None
 _inflight_chat_active = 0  # observability counter; only accurate when sem is used
@@ -830,6 +841,69 @@ class _RateLimitMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+_KEYLESS_REFUSAL = (
+    "API_KEY and ADMIN_KEY are both empty: every route is open, so this server "
+    "only answers on a loopback interface. Run `make init` (or set random "
+    "ADMIN_KEY and API_KEY values), or listen on 127.0.0.1."
+)
+_keyless_refusal_logged = False
+
+
+def _arrived_on_loopback(scope) -> bool:
+    """True when the connection arrived on a loopback interface.
+
+    ``scope["server"]`` is the local address of the connection (uvicorn: the
+    socket's sockname); proxy headers, the Host header and the peer never
+    change it. A Unix socket or an unknown address is not loopback.
+    """
+    server = scope.get("server")
+    if not server:
+        return False
+    try:
+        address = ipaddress.ip_address(str(server[0]))
+    except ValueError:
+        return False
+    mapped = getattr(address, "ipv4_mapped", None)
+    return (mapped or address).is_loopback
+
+
+class _KeylessLoopbackOnlyMiddleware:
+    """Keyless mode (API_KEY and ADMIN_KEY empty) answers on loopback only.
+
+    Every route is open then. run.py refuses to listen elsewhere; this covers
+    a server started another way, e.g. ``uvicorn plugboard.app:app --host
+    0.0.0.0``.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if (
+            scope["type"] in ("http", "websocket")
+            and not _API_KEY
+            and not _ADMIN_KEY
+            and not _arrived_on_loopback(scope)
+        ):
+            global _keyless_refusal_logged
+            if not _keyless_refusal_logged:
+                _keyless_refusal_logged = True
+                log.critical(
+                    "%s Refused a request on %s.", _KEYLESS_REFUSAL, scope.get("server")
+                )
+            if scope["type"] == "websocket":
+                await send({"type": "websocket.close", "code": 1008})
+                return
+            refusal = JSONResponse(
+                status_code=403, content={"detail": _KEYLESS_REFUSAL}
+            )
+            await refusal(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
+# Added first = innermost: the refusal still gets the security headers.
+app.add_middleware(_KeylessLoopbackOnlyMiddleware)
 app.add_middleware(_SecurityHeadersMiddleware)
 app.add_middleware(_BodySizeLimitMiddleware)
 app.add_middleware(_RequestIdMiddleware)
@@ -930,6 +1004,74 @@ def _is_admin_session(token: str) -> bool:
     return bool(record.get("mfa")) or not _mfa.is_required()
 
 
+# PB-SEC-06: SameSite=Strict keeps the session cookie off cross-site requests
+# only. A page served on another port of the same host is same-site, so the
+# browser still attaches the cookie to the forms and fetches that page sends.
+_STATE_CHANGING_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_CROSS_SITE_REFUSED = "Cross-site request refused"
+
+
+def _origin_is_this_host(origin: str, request: Request) -> bool:
+    """``Origin`` names the host and port the request was sent to.
+
+    The scheme is not compared: behind a TLS proxy the app sees plain HTTP.
+    """
+    from urllib.parse import urlsplit
+
+    try:
+        sent_from = urlsplit(origin)
+        sent_to = urlsplit("//" + request.headers.get("host", ""))
+        default_port = {"http": 80, "https": 443}.get(sent_from.scheme)
+        return bool(sent_from.hostname) and (
+            sent_from.hostname == sent_to.hostname
+            and (sent_from.port or default_port) == (sent_to.port or default_port)
+        )
+    except ValueError:
+        return False
+
+
+def _is_cross_origin_browser_request(request: Request) -> bool:
+    """The browser says another origin sent this request.
+
+    ``Sec-Fetch-Site`` decides when present (anything but ``same-origin``);
+    otherwise ``Origin`` when present. A page cannot set either header; a
+    request without both does not come from a browser page.
+    """
+    site = request.headers.get("sec-fetch-site")
+    if site is not None:
+        return site.strip().lower() != "same-origin"
+    origin = request.headers.get("origin")
+    if origin is not None:
+        return not _origin_is_this_host(origin, request)
+    return False
+
+
+def _refuse_cross_site_session(request: Request) -> None:
+    """403 for a state-changing request that the dashboard session cookie
+    authenticates but another origin sent (CSRF).
+
+    The admin key in ``Authorization`` carries its own authority: such a
+    request is not refused, nor any request the cookie does not authenticate.
+    """
+    if request.method not in _STATE_CHANGING_METHODS:
+        return
+    if not _is_cross_origin_browser_request(request):
+        return
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if _is_admin_key(token):
+        return
+    if not _is_admin_session(request.cookies.get(_ADMIN_COOKIE_NAME, "")):
+        return
+    log.warning(
+        "auth rejected reason=cross_site_session method=%s path=%s",
+        request.method,
+        request.url.path,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN, detail=_CROSS_SITE_REFUSED
+    )
+
+
 def _should_use_secure_cookie(request: Request) -> bool:
     """Resolve cookie secure policy from env; default 'auto' secures non-local hosts."""
     if _COOKIE_SECURE_MODE in {"true", "1", "yes", "on"}:
@@ -1013,6 +1155,7 @@ def _resolve_client(request: Request) -> Optional[str]:
     if not bearer_is_lle:
         session_token = request.cookies.get(_ADMIN_COOKIE_NAME, "")
         if _is_admin_session(session_token):
+            _refuse_cross_site_session(request)
             request.state.key_id = "admin"
             log.debug(
                 "auth resolved client_id=admin via=admin_cookie dev_mode=%s",
@@ -1161,6 +1304,7 @@ def _require_admin(request: Request) -> None:
 
     outcome = _admin_request_auth(request)
     if outcome == "ok":
+        _refuse_cross_site_session(request)
         return
     if outcome == "locked":
         raise HTTPException(
@@ -1595,9 +1739,10 @@ def _provider_http_error_response(
 ) -> JSONResponse:
     """400 when an HTTP provider rejected the request, 502 for its other errors.
 
-    The provider rejected the request when its answer says so (413, or an
-    error type or code naming the request: ``exc.request_rejected``); the
-    status alone does not, a provider also answers 400 for its own key. A
+    The provider rejected the request when its answer says so (413, an error
+    saying the context is too long in any format, or an error type naming the
+    request: ``exc.request_rejected``); the status alone does not, a provider
+    also answers 400 for its own key. A
     provider that could not be reached gives a 502. The provider's body can
     name its account or organisation, and a network error its host and port:
     only the admin gets them. A client key gets a reason written here and a
@@ -1678,6 +1823,30 @@ def _cli_error_response(
         return JSONResponse(status_code=502, content=content)
     headers = _retry_after_headers(content, exc.retry_after)
     return JSONResponse(status_code=429, content=content, headers=headers)
+
+
+MODEL_NOT_FOUND_HINT = (
+    "GET /v1/models lists the model IDs this gateway serves: "
+    "send one as written there, <provider-id>:<model>."
+)
+
+
+def _model_not_found_response(model: str) -> JSONResponse:
+    """404 for a model ID no provider knows (router.is_unknown_model).
+
+    ``code`` is stable for programs, ``hint`` says what to do. The ID is
+    echoed, shortened, so a typo or a stray space shows.
+    """
+    shown = model if len(model) <= 100 else model[:100] + "..."
+    return JSONResponse(
+        status_code=404,
+        content={
+            "detail": f"Model '{shown}' not found: no provider ID prefixes it "
+            "and no provider lists it.",
+            "code": "model_not_found",
+            "hint": MODEL_NOT_FOUND_HINT,
+        },
+    )
 
 
 def _require_chat_messages(body: Dict[str, Any]) -> None:
@@ -1780,6 +1949,11 @@ async def chat_completions(
     if route_guard is not None:
         route_guard(*resolve_provider_and_model(body.get("model", "")))
         route_options["route_guard"] = route_guard
+
+    # After the key's 403, so a limited key cannot probe which IDs exist;
+    # before the 402, which would blame a price for a model that is not there.
+    if is_unknown_model(body.get("model", "")):
+        return _model_not_found_response(body["model"])
 
     # A budget cannot hold a call whose price is unknown (402, nothing called)
     if client_id and client_id != "admin":
@@ -2899,13 +3073,32 @@ async def check_model_internet_access(
 # via env. Cooldown is shared with /admin/models/refresh to prevent admins
 # from spamming both endpoints.
 _BULK_INTERNET_CONCURRENCY = max(
-    1, int(os.environ.get("PLUGBOARD_BULK_INTERNET_CONCURRENCY", "3") or "3")
+    1, envcompat.get_int("PLUGBOARD_BULK_INTERNET_CONCURRENCY", default=3)
 )
 _BULK_INTERNET_PER_MODEL_TIMEOUT_S = max(
     5.0,
-    float(os.environ.get("PLUGBOARD_BULK_INTERNET_PER_MODEL_TIMEOUT_S", "25") or "25"),
+    envcompat.get_float("PLUGBOARD_BULK_INTERNET_PER_MODEL_TIMEOUT_S", default=25.0),
 )
 _BULK_INTERNET_LOCK = _asyncio.Lock()
+
+
+def _without_local_ollama_models(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """``items`` minus the models a local Ollama runs on this host.
+
+    Ollama Cloud models (``<name>:cloud``, a tag ending in ``-cloud``) are
+    served remotely and kept.
+    """
+    from plugboard.model_identity import catalogue_native_model
+    from plugboard.ollama_admin import is_cloud_id
+    from plugboard.router import _is_ollama_provider
+
+    ollama_ids = {p["id"] for p in load_providers() if _is_ollama_provider(p)}
+
+    def _local(m: Dict[str, Any]) -> bool:
+        owner = m.get("provider") or m.get("owned_by")
+        return owner in ollama_ids and not is_cloud_id(catalogue_native_model(m))
+
+    return [m for m in items if not _local(m)]
 
 
 @app.post("/admin/models/check-internet/all")
@@ -2923,13 +3116,17 @@ async def check_all_models_internet_access(
 
     Pass ``"persist": true`` (default ``false``) to write ``internet_access``
     back into ``providers.json`` for each tested model. Pass ``"provider":
-    "<provider_id>"`` to restrict the scan to one provider.
+    "<provider_id>"`` to restrict the scan to one provider. Pass
+    ``"skip_local": true`` to leave local Ollama models out (the boot probe
+    does): they have no web access, and probing one makes the host load and
+    run it. Ollama Cloud models are still probed.
     """
     import time as _time
 
     body = body or {}
     persist: bool = bool(body.get("persist", False))
     provider_filter: Optional[str] = body.get("provider")
+    skip_local: bool = body.get("skip_local") is True
 
     if _BULK_INTERNET_LOCK.locked():
         raise HTTPException(
@@ -2949,6 +3146,14 @@ async def check_all_models_internet_access(
                     or m.get("provider") == provider_filter
                 )
             ]
+        if skip_local:
+            before = len(items)
+            items = _without_local_ollama_models(items)
+            if before != len(items):
+                log.info(
+                    "bulk_internet_check: %d local Ollama model(s) skipped",
+                    before - len(items),
+                )
 
         semaphore = _asyncio.Semaphore(_BULK_INTERNET_CONCURRENCY)
         results: List[Dict[str, Any]] = []
@@ -3173,8 +3378,8 @@ async def admin_watchdog_restart_stats(
 
 _MODEL_REFRESH_LOCK = _asyncio.Lock()
 _MODEL_REFRESH_TIMEOUT_S = 120
-_MODEL_REFRESH_COOLDOWN_S: float = float(
-    os.environ.get("PLUGBOARD_REFRESH_COOLDOWN_S", "60") or "60"
+_MODEL_REFRESH_COOLDOWN_S: float = envcompat.get_float(
+    "PLUGBOARD_REFRESH_COOLDOWN_S", default=60.0
 )
 _LAST_REFRESH_AT: float = 0.0  # time.monotonic() stamp of last successful refresh
 
@@ -3855,6 +4060,29 @@ class DirectProviderTest(BaseModel):
 _TEST_DOCS = "docs/guide/providers-and-subscriptions.md#test-the-connection"
 
 
+def _docs_link(path: str) -> str:
+    """A ``docs/...`` path of the repository, for the dashboard.
+
+    With ``PLUGBOARD_DOCS_BASE_URL`` (where the repository's files are
+    published, such as its GitLab ``-/blob/main`` page) the path becomes an
+    absolute URL under it, which the dashboard shows as a link. Only an
+    http(s) URL with a host is used: anything else is logged and ignored.
+    """
+    from urllib.parse import urlsplit
+
+    base = os.environ.get("PLUGBOARD_DOCS_BASE_URL", "").strip()
+    if not base:
+        return path
+    parts = urlsplit(base)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        log.warning(
+            "PLUGBOARD_DOCS_BASE_URL ignored: an http(s) URL is expected, "
+            "such as https://gitlab.com/<group>/plugboard/-/blob/main"
+        )
+        return path
+    return base.rstrip("/") + "/" + path
+
+
 async def _require_public_host(base_url: str) -> list:
     """Refuse a catalog preset whose host resolves to a non-public address.
 
@@ -3924,7 +4152,7 @@ async def _test_openai_endpoint(
                         "status": "invalid_key",
                         "message": f"{resp.status} invalid key: check that this key belongs to {host} "
                         "(some providers issue separate keys per region or project).",
-                        "docs": _TEST_DOCS,
+                        "docs": _docs_link(_TEST_DOCS),
                     }
                 body = None
                 if resp.status == 200:
@@ -3941,7 +4169,7 @@ async def _test_openai_endpoint(
                         "status": "not_openai_compatible",
                         "message": f"Not a standard chat API: {host} did not answer GET /models in the "
                         f"standard format (HTTP {resp.status}). Add it as a custom endpoint or check its base URL.",
-                        "docs": _TEST_DOCS,
+                        "docs": _docs_link(_TEST_DOCS),
                     }
             models = [
                 m.get("id") for m in body["data"] if isinstance(m, dict) and m.get("id")
@@ -3990,7 +4218,7 @@ async def _test_openai_endpoint(
             "status": "unreachable",
             "message": f"Unreachable: {host} did not answer ({type(exc).__name__}). "
             "Check the network, a proxy or the base URL.",
-            "docs": _TEST_DOCS,
+            "docs": _docs_link(_TEST_DOCS),
         }
 
 
@@ -4384,21 +4612,15 @@ class KeyCreate(BaseModel):
 def _default_rpm_limit() -> int:
     """Production-safe default applied when a key is created without an
     explicit rpm_limit. Operators can raise/lower via env without code change."""
-    try:
-        return max(0, int(os.environ.get("PLUGBOARD_DEFAULT_RPM_LIMIT", "60")))
-    except ValueError:
-        return 60
+    return max(0, envcompat.get_int("PLUGBOARD_DEFAULT_RPM_LIMIT", default=60))
 
 
 def _default_monthly_limit_usd() -> float:
     """Production-safe default applied when a key is created without an
     explicit monthly_limit_usd. 0 disables the default entirely."""
-    try:
-        return max(
-            0.0, float(os.environ.get("PLUGBOARD_DEFAULT_MONTHLY_LIMIT_USD", "10"))
-        )
-    except ValueError:
-        return 10.0
+    return max(
+        0.0, envcompat.get_float("PLUGBOARD_DEFAULT_MONTHLY_LIMIT_USD", default=10.0)
+    )
 
 
 @app.get("/admin/keys")
@@ -5636,6 +5858,31 @@ async def admin_logout(request: Request):
     nonce = _admin_session_nonce(request.cookies.get(_ADMIN_COOKIE_NAME, ""))
     if nonce and admin_sessions.revoke(nonce):
         _audit("auth.logout", details="admin session revoked")
+    resp = Response(status_code=204)
+    resp.delete_cookie(_ADMIN_COOKIE_NAME, path="/")
+    resp.delete_cookie("llm_admin_key", path="/")
+    return resp
+
+
+@app.post("/auth/admin/logout-all", include_in_schema=False, status_code=204)
+async def admin_logout_all(request: Request, _: None = Depends(_require_admin)):
+    """Revoke every admin session (this one included), then clear its cookie.
+
+    Browsers remembered for local auto-login are forgotten first: otherwise
+    their next visit to /login would open a new session at once.
+    """
+    from plugboard import local_login
+
+    try:
+        local_login.forget_devices()
+        admin_sessions.revoke_all()
+    except OSError as exc:
+        log.error("Admin sessions not revoked: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="Sessions could not be revoked: the session store is not writable.",
+        ) from exc
+    _audit("auth.logout_all", details="every admin session revoked")
     resp = Response(status_code=204)
     resp.delete_cookie(_ADMIN_COOKIE_NAME, path="/")
     resp.delete_cookie("llm_admin_key", path="/")

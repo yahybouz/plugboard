@@ -102,12 +102,9 @@ def source_order(external_configured: Optional[bool] = None) -> List[str]:
 
 
 def drift_threshold_pct() -> float:
-    try:
-        value = float(os.environ.get("PLUGBOARD_PRICE_DRIFT_PCT", "") or 20)
-    except ValueError:
-        _warn_once("drift", "PLUGBOARD_PRICE_DRIFT_PCT is not a number; using 20")
-        return 20.0
-    return value if value > 0 else 20.0
+    from plugboard import envcompat
+
+    return envcompat.get_float("PLUGBOARD_PRICE_DRIFT_PCT", default=20.0, above=0)
 
 
 def drift_action() -> str:

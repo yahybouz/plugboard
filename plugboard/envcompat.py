@@ -1,15 +1,20 @@
-"""Accept the environment variable names used before the Plugboard rename.
+"""Read environment variables, old names included.
 
 Every ``LLM_ENABLER_<NAME>`` variable is copied to ``PLUGBOARD_<NAME>`` when
 the new name is not set, so existing ``.env`` files, cron entries and
 deployments keep working. The code itself only reads ``PLUGBOARD_*`` names.
+
+``get_int`` and ``get_float`` are the one reader of numeric settings: a value
+that is not a finite number (``nan`` and ``inf`` included), or is outside the
+bounds the caller gives, falls back to the default with one warning.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 import os
-from typing import List, MutableMapping, Optional
+from typing import Callable, List, MutableMapping, Optional, TypeVar, Union
 
 OLD_PREFIX = "LLM_" + "ENABLER_"  # split so the rename sweep leaves it alone
 NEW_PREFIX = "PLUGBOARD_"
@@ -17,6 +22,7 @@ NEW_PREFIX = "PLUGBOARD_"
 log = logging.getLogger(__name__)
 _warned: set = set()
 _conflicts: set = set()
+_bad_numbers: set = set()  # (name, raw) already reported
 
 # Opt-outs where the stricter value wins when both names are set: an
 # operator who disabled a feature under the old name keeps it disabled.
@@ -89,3 +95,69 @@ def get(name: str, *legacy: str, default: str = "") -> str:
                 log.warning("%s is deprecated: rename it to %s", old, name)
             return old_value
     return default
+
+
+N = TypeVar("N", int, float)
+
+
+def _number(
+    name: str,
+    legacy: tuple,
+    default: N,
+    cast: Callable[[str], N],
+    minimum: Optional[Union[int, float]],
+    above: Optional[Union[int, float]],
+) -> N:
+    raw = get(name, *legacy)
+    if not raw:
+        return default
+    try:
+        value = cast(raw)
+    except ValueError:
+        problem = "is not a whole number" if cast is int else "is not a number"
+    else:
+        # A whole number is always finite (and may be too large for a float).
+        if isinstance(value, float) and math.isnan(value):
+            problem = "is not a number"
+        elif isinstance(value, float) and math.isinf(value):
+            problem = "is not a finite number"
+        elif minimum is not None and value < minimum:
+            problem = f"is below {minimum}"
+        elif above is not None and value <= above:
+            problem = f"must be above {above}"
+        else:
+            return value
+    if (name, raw) not in _bad_numbers:
+        _bad_numbers.add((name, raw))
+        log.warning("%s=%r %s; using %s", name, raw, problem, default)
+    return default
+
+
+def get_int(
+    name: str,
+    *legacy: str,
+    default: int,
+    minimum: Optional[int] = None,
+) -> int:
+    """Whole number from ``name`` (or a legacy name), else ``default``.
+
+    A value that is not a whole number or is below ``minimum`` gives the
+    default, with one warning per value.
+    """
+    return _number(name, legacy, default, int, minimum, None)
+
+
+def get_float(
+    name: str,
+    *legacy: str,
+    default: float,
+    minimum: Optional[float] = None,
+    above: Optional[float] = None,
+) -> float:
+    """Number from ``name`` (or a legacy name), else ``default``.
+
+    A value that is not a finite number (NaN or infinity), is below
+    ``minimum``, or is not greater than ``above`` gives the default, with one
+    warning per value.
+    """
+    return _number(name, legacy, default, float, minimum, above)

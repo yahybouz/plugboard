@@ -32,6 +32,28 @@ async function logout(explicit) {
   location.href = explicit ? "/login?logged_out=1" : "/login";
 }
 
+// Revoke every dashboard session, this one included (stolen cookie, lost
+// device). A refusal leaves every session open, so the page stays and says so.
+async function logoutEverywhere() {
+  if (!await confirmAction(
+    "Log out every browser and device signed in to this dashboard, this one included?",
+    "Log out everywhere")) return;
+  let res;
+  try {
+    res = await fetch("/auth/admin/logout-all", { method: "POST" });
+  } catch (e) {
+    console.debug("logout-all request failed:", e);
+    toast("Could not log out everywhere (network error). Try again.", "error");
+    return;
+  }
+  // 401: this session was already revoked, which is the goal anyway.
+  if (res.status === 204 || res.status === 401) {
+    location.href = "/login?logged_out=1";
+    return;
+  }
+  toast("Could not log out everywhere (HTTP " + res.status + "). Sessions are unchanged.", "error");
+}
+
 function currentMonth() {
   const d = new Date();
   return d.getFullYear() + "_" + String(d.getMonth() + 1).padStart(2, "0");
@@ -107,6 +129,7 @@ async function refreshVersionBadge() {
 })();
 
 document.getElementById("logout-btn").addEventListener("click", function () { logout(true); });
+document.getElementById("logout-all-btn").addEventListener("click", logoutEverywhere);
 
 // Mobile menu
 const mobileBtn = document.getElementById("mobile-menu-btn");
@@ -627,6 +650,15 @@ function _safeHref(s) {
   }
 }
 
+// A docs reference from the server: a link when PLUGBOARD_DOCS_BASE_URL made
+// it an absolute http(s) URL, else the repository path as text.
+function _docsHtml(docs) {
+  const text = String(docs == null ? "" : docs);
+  if (!/^https?:\/\//i.test(text)) return _escape(text);
+  return '<a href="' + _escape(_safeHref(text)) + '" target="_blank" rel="noopener noreferrer">' +
+    _escape(text) + '</a>';
+}
+
 let _dpTested = null;  // {key, ok} for the preset/key pair last tested
 
 function _presetGroup(p) {
@@ -762,7 +794,7 @@ async function _testDirectProvider() {
     let html = '<span class="' + tone + '">' +
       (ok ? "✓ " : "✗ ") + _escape(label) + '</span> <span class="muted">' + _escape(r.message || "") + '</span>';
     if (r.completion_status != null) html += ' <span class="muted">· test token: HTTP ' + _escape(r.completion_status) + '</span>';
-    if (r.docs) html += ' <span class="muted small">See ' + _escape(r.docs) + '</span>';
+    if (r.docs) html += ' <span class="muted small">See ' + _docsHtml(r.docs) + '</span>';
     if (!ok) html += ' <button type="button" class="btn btn-sm" id="dp-save-anyway">Save anyway</button>';
     statusEl.innerHTML = html;
     const anyway = document.getElementById("dp-save-anyway");

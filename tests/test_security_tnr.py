@@ -178,7 +178,7 @@ async def test_rate_limit_actually_blocks(tmp_path, monkeypatch):
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
-        base_url="http://test",
+        base_url="http://127.0.0.1",  # keyless mode answers on loopback only
     ) as c:
         statuses = []
         for _ in range(6):

@@ -10,8 +10,12 @@ provider, or an OAuth-connected source) stops answering or returns errors.
   `Retry-After` header when the upstream timed out).
 - The alert webhook (`ALERT_WEBHOOK_URL`, if set) receives a payload with
   `"type": "provider_down"` after `ALERT_FAILURE_THRESHOLD` (default 3)
-  consecutive failures. Alerts for the same provider are sent at most once
-  every 5 minutes.
+  consecutive failures of the provider itself, counted like the circuit
+  breaker: `429`, `5xx`, timeouts, network errors, `401`/`403`, a CLI quota
+  or failed run, and a failed automatic restart by the watchdog. An error the
+  request caused (`400`, `413`, `422`, a prompt too long) never counts, and a
+  streamed request to an HTTP provider is not counted. Alerts for the same
+  provider are sent at most once every 5 minutes.
 - Logs contain lines such as `Watchdog: provider '<id>' unhealthy` or
   `Circuit OPENED for <model>`.
 
@@ -104,7 +108,8 @@ export ADMIN_KEY=$(grep '^ADMIN_KEY=' .env | cut -d= -f2-)
 provider's public status page confirms an incident. Nothing to fix locally:
 the router retries transient errors (`429`, `500`, `502`, `503`, `529`) on the
 same provider, then, for model names sent without a provider prefix, moves to
-the next active provider. Requests that pin a provider (`<provider_id>:<model>`)
+the next active provider. A `5xx` saying the context is too long is not
+retried: it moves to the next provider at once. Requests that pin a provider (`<provider_id>:<model>`)
 do not cascade to other providers and fail until it recovers. Monitor until
 the upstream recovers, or disable the provider (see Mitigation) if clients
 keep hitting it.

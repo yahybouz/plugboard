@@ -41,6 +41,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
+from plugboard import envcompat
+
 log = logging.getLogger(__name__)
 
 
@@ -115,7 +117,7 @@ def _clean_spawn_cwd() -> str:
 # Cap concurrent CLI spawns per kind so a single client can't OOM the machine
 # by spamming 100 parallel `gemini` processes. Tunable via env:
 #   PLUGBOARD_SUBPROCESS_LIMIT=<int>   (applies to all backends)
-_CONCURRENCY_LIMIT = max(1, int(os.environ.get("PLUGBOARD_SUBPROCESS_LIMIT", "4")))
+_CONCURRENCY_LIMIT = max(1, envcompat.get_int("PLUGBOARD_SUBPROCESS_LIMIT", default=4))
 _semaphores: Dict[str, asyncio.Semaphore] = {}
 
 

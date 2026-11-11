@@ -19,13 +19,15 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 
 import aiohttp
 
+from plugboard import envcompat
+
 log = logging.getLogger(__name__)
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
 _OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
 _OLLAMA_ENABLED = os.environ.get("OLLAMA_ENABLED", "auto").strip().lower()
-_OLLAMA_TIMEOUT = int(os.environ.get("OLLAMA_TIMEOUT", "30"))
+_OLLAMA_TIMEOUT = envcompat.get_int("OLLAMA_TIMEOUT", default=30)
 # Bearer token for an Ollama behind an authenticating proxy (e.g. a relay that
 # lets only the gateway's network in). Sent to OLLAMA_URL only, never to the
 # public ollama.com catalogue.
