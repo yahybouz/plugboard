@@ -1,0 +1,121 @@
+"""A numeric setting that is not a number never stops the gateway.
+
+Every numeric setting goes through the shared reader (``envcompat.get_int`` /
+``get_float``): a value that is not a finite number gives the default, with
+one warning. Settings read when their module is imported are checked in a
+fresh interpreter, which is where a bad value used to stop the start.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+
+_PROBE = """
+import importlib, json, sys
+from plugboard import envcompat
+values = {}
+for wanted in sys.argv[1:]:
+    module, attr = wanted.split(":")
+    values[wanted] = getattr(importlib.import_module(module), attr)
+reported = sorted({name for name, _ in envcompat._bad_numbers})
+print("PROBE " + json.dumps({"values": values, "reported": reported}))
+"""
+
+
+def _start(tmp_path: Path, settings: dict, wanted: list) -> dict:
+    """Import the modules of ``wanted`` (``module:attr``) with ``settings``."""
+    env = {k: v for k, v in os.environ.items() if k not in settings}
+    env.update(PLUGBOARD_SKIP_DOTENV="1", PLUGBOARD_DATA=str(tmp_path), **settings)
+    proc = subprocess.run(
+        [sys.executable, "-c", _PROBE, *wanted],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if proc.returncode != 0:
+        return {"error": proc.stderr[-3000:]}
+    line = next(x for x in proc.stdout.splitlines() if x.startswith("PROBE "))
+    return json.loads(line[len("PROBE ") :])
+
+
+# Settings read at import: module -> {variable: (attribute, default)}.
+AT_IMPORT = {
+    "plugboard.http_pool": {
+        "PLUGBOARD_HTTP_POOL_SIZE": ("_CONN_LIMIT", 100),
+        "PLUGBOARD_HTTP_POOL_PER_HOST": ("_CONN_PER_HOST", 20),
+        "PLUGBOARD_HTTP_DNS_TTL": ("_DNS_TTL", 300),
+    },
+}
+
+# Good values, old names and the bounds each setting applies:
+# module -> {variable: (value, attribute, expected)}.
+WELL_SET = {
+    "plugboard.http_pool": {
+        "LLM_ENABLER_HTTP_POOL_SIZE": ("50", "_CONN_LIMIT", 50),
+        "PLUGBOARD_HTTP_POOL_PER_HOST": (" 8 ", "_CONN_PER_HOST", 8),
+    },
+}
+
+
+@pytest.fixture(scope="module")
+def bad_start(tmp_path_factory):
+    # A whole number gets text, a decimal one infinity: both raised or went
+    # through before.
+    settings = {
+        name: "inf" if isinstance(default, float) else "abc"
+        for spec in AT_IMPORT.values()
+        for name, (_, default) in spec.items()
+    }
+    wanted = [
+        f"{module}:{attr}"
+        for module, spec in AT_IMPORT.items()
+        for attr, _ in spec.values()
+    ]
+    return _start(tmp_path_factory.mktemp("bad-start"), settings, wanted)
+
+
+@pytest.fixture(scope="module")
+def good_start(tmp_path_factory):
+    settings = {
+        name: raw for spec in WELL_SET.values() for name, (raw, _, _) in spec.items()
+    }
+    wanted = [
+        f"{module}:{attr}"
+        for module, spec in WELL_SET.items()
+        for _, attr, _ in spec.values()
+    ]
+    return _start(tmp_path_factory.mktemp("good-start"), settings, wanted)
+
+
+@pytest.mark.parametrize("module", sorted(AT_IMPORT))
+def test_bad_value_read_at_import_gives_the_default(bad_start, module):
+    assert "error" not in bad_start, bad_start.get("error")
+    spec = AT_IMPORT[module]
+    found = {
+        name: bad_start["values"][f"{module}:{a}"] for name, (a, _) in spec.items()
+    }
+
+    assert found == {name: default for name, (_, default) in spec.items()}
+    assert set(spec) <= set(bad_start["reported"])  # one warning each
+
+
+@pytest.mark.parametrize("module", sorted(WELL_SET))
+def test_good_value_read_at_import_is_kept(good_start, module):
+    assert "error" not in good_start, good_start.get("error")
+    spec = WELL_SET[module]
+    found = {
+        name: good_start["values"][f"{module}:{a}"] for name, (_, a, _) in spec.items()
+    }
+
+    assert found == {name: expected for name, (_, _, expected) in spec.items()}
+    assert good_start["reported"] == []
