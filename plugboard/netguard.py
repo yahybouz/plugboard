@@ -10,6 +10,8 @@ from __future__ import annotations
 import errno
 import ipaddress
 import socket
+from collections.abc import Mapping
+from typing import Any
 
 import aiohttp
 import aiohttp.resolver
@@ -114,4 +116,37 @@ def is_egress_refusal(exc: BaseException) -> bool:
     """True when a connection failed because the guard refused the address."""
     return isinstance(exc, aiohttp.ClientConnectorError) and isinstance(
         exc.os_error, EgressRefused
+    )
+
+
+def _is_http(url: Any) -> bool:
+    # aiohttp lowercases the scheme: "HTTPS://" is still a connection to guard.
+    return isinstance(url, str) and url.lower().startswith(("http://", "https://"))
+
+
+def guard_is_forced(provider: Mapping[str, Any]) -> bool:
+    """True when the guard is imposed: catalogue providers and built-in HTTP presets.
+
+    ``subprocess://`` presets never open an HTTP connection, so they are not
+    guarded.
+    """
+    from plugboard import direct_providers, models_dev
+
+    key = provider.get("preset_key")
+    if not isinstance(key, str) or not key:
+        return False
+    if key.startswith(models_dev.PRESET_PREFIX):
+        return True
+    preset = direct_providers.PRESETS.get(key)
+    return preset is not None and _is_http(preset.get("base_url"))
+
+
+def is_protected(provider: Mapping[str, Any]) -> bool:
+    """True when the provider's connections go through the egress guard.
+
+    Imposed by ``guard_is_forced``, or chosen by the admin (``egress_guard``)
+    for a provider that reaches an HTTP(S) ``base_url``.
+    """
+    return guard_is_forced(provider) or (
+        provider.get("egress_guard") is True and _is_http(provider.get("base_url"))
     )

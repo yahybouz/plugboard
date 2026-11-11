@@ -198,3 +198,56 @@ async def test_resolver_close_closes_inner():
     )
     await resolver.close()
     assert fake.closed is True
+
+
+@pytest.mark.parametrize(
+    "provider,forced,protected",
+    [
+        (
+            {"preset_key": "catalog-acme", "base_url": "https://api.acme.test/v1"},
+            True,
+            True,
+        ),
+        ({"preset_key": "openai", "base_url": "https://api.openai.com/v1"}, True, True),
+        (
+            {"preset_key": "anthropic", "base_url": "https://api.anthropic.com/v1"},
+            True,
+            True,
+        ),
+        (
+            {
+                "preset_key": "github-broker",
+                "base_url": "https://models.github.ai/inference",
+            },
+            True,
+            True,
+        ),
+        (
+            {
+                "preset_key": "chatgpt-oauth",
+                "base_url": "https://chatgpt.com/backend-api/codex",
+            },
+            True,
+            True,
+        ),
+        (
+            {"preset_key": "agy-cli-subprocess", "base_url": "subprocess://agy"},
+            False,
+            False,
+        ),
+        ({"preset_key": "", "base_url": "https://x.test"}, False, False),
+        ({"base_url": "http://fake-llm.test"}, False, False),
+        (
+            {"base_url": "http://localhost:11434", "provider_type": "sovereign"},
+            False,
+            False,
+        ),
+        ({"base_url": "https://x.test", "egress_guard": True}, False, True),
+        # aiohttp lowercases the scheme, so an upper-case one is still HTTP(S).
+        ({"base_url": "HTTPS://x.test", "egress_guard": True}, False, True),
+        ({"base_url": "subprocess://agy", "egress_guard": True}, False, False),
+    ],
+)
+def test_who_is_protected(provider, forced, protected):
+    assert netguard.guard_is_forced(provider) is forced
+    assert netguard.is_protected(provider) is protected
