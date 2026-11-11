@@ -27,9 +27,10 @@ CLI = {
 
 @pytest.fixture
 def capped_a(_providers_file, monkeypatch):
-    """test-provider takes one request at a time and comes first."""
+    """test-provider takes one request at a time and comes first, then
+    other-provider. No CLI among the candidates of a model without prefix."""
     a = {**PROVIDER_A, "max_concurrency": 1}
-    _providers_file.write_text(json.dumps({"providers": [a, PROVIDER_B, CLI]}))
+    _providers_file.write_text(json.dumps({"providers": [a, PROVIDER_B]}))
     router.invalidate_models_cache()
     monkeypatch.setattr(
         router.metrics,
@@ -42,7 +43,15 @@ def capped_a(_providers_file, monkeypatch):
     monkeypatch.setattr(router, "_DELAYS", [0, 0, 0])
     monkeypatch.setattr(provider_admission, "WAIT_S", 0.0)
     monkeypatch.setattr(circuit_breaker, "_circuits", {})
-    return a
+    unfaked_cli_runs = []
+
+    async def no_real_cli(kind, body, *, timeout_s=None):
+        unfaked_cli_runs.append(kind)
+        raise RuntimeError("tests never run a real CLI")
+
+    monkeypatch.setattr(cli_subprocess, "complete", no_real_cli)
+    yield a
+    assert unfaked_cli_runs == [], "a test reached a CLI it did not fake"
 
 
 def _calls(mock, url):
@@ -108,7 +117,11 @@ async def test_slot_is_released_whatever_the_outcome(capped_a, answer):
     assert provider_admission._active == {}
 
 
-async def test_cli_call_counts_in_flight_and_frees_its_slot(capped_a, monkeypatch):
+async def test_cli_call_counts_in_flight_and_frees_its_slot(
+    capped_a, _providers_file, monkeypatch
+):
+    _providers_file.write_text(json.dumps({"providers": [capped_a, PROVIDER_B, CLI]}))
+    router.invalidate_models_cache()
     gate = asyncio.Event()
 
     async def fake_complete(kind, body, *, timeout_s=None):
