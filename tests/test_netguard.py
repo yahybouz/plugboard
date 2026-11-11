@@ -131,14 +131,27 @@ async def test_rebinding_to_loopback_is_refused(upstream):
     assert fake.calls == 2  # a refusal is never cached
 
 
-async def test_mixed_answer_is_refused(upstream):
+async def test_mixed_answer_is_refused(upstream, monkeypatch):
     fake = FakeResolver(["1.1.1.1", "127.0.0.1"])
+    with pytest.raises(netguard.EgressRefused):
+        await netguard.PublicOnlyResolver(fake).resolve("rebind.test", 443)
+
+    # The refusal must come from the resolver: no socket is ever asked for,
+    # and none is opened even if the resolver lets the public answer through.
+    asked = []
+
+    def no_socket(addr_info):
+        asked.append(addr_info[4][0])
+        raise netguard.EgressRefused(errno.EACCES, "test: no socket")
+
+    monkeypatch.setattr(netguard, "refuse_non_public", no_socket)
     async with netguard.client_session(
         True, connector=netguard.public_connector(inner=fake)
     ) as s:
-        with pytest.raises(aiohttp.ClientConnectorError) as exc:
+        with pytest.raises(aiohttp.ClientConnectorDNSError) as exc:
             await s.get(f"http://rebind.test:{upstream.port}/v1/models")
     assert netguard.is_egress_refusal(exc.value)
+    assert asked == []
     assert upstream.calls == 0
 
 
