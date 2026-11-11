@@ -21,11 +21,15 @@ from aiohttp import web
 from plugboard import (
     alerts,
     circuit_breaker,
+    config,
+    health_probe,
     http_pool,
     metrics,
     model_availability,
     netguard,
+    provider_watchdog,
     router,
+    semantic_cache,
 )
 from tests.factories import FAKE_COMPLETION, PROVIDER_A
 
@@ -188,3 +192,109 @@ async def test_discovery_paths_use_session_for(acme, monkeypatch):
     entries, reason = await model_availability.discover_openai_models(acme)
     assert entries is None and reason.startswith("GET /models failed")
     assert seen == ["acme", "acme"]
+
+
+async def test_probe_http_public_only_refuses_loopback(closed_port):
+    url = f"http://127.0.0.1:{closed_port}/health"
+    r = await health_probe._probe_http(url, {}, public_only=True)
+    assert r["ok"] is False and r["error"] == "egress_refused"
+    assert r["host"] == "127.0.0.1" and r["url"] == url and "latency_ms" in r
+
+
+async def test_probe_provider_passes_public_only_only_when_protected(
+    monkeypatch, recorders
+):
+    calls = []
+
+    async def http(url, headers, **kw):
+        calls.append(kw)
+        return {"ok": False, "error": "egress_refused", "host": "h"}
+
+    monkeypatch.setattr(health_probe, "_probe_http", http)
+    await health_probe.probe_provider(
+        {"id": "acme", "preset_key": "catalog-acme", "base_url": "https://a.test"}
+    )
+    await health_probe.probe_provider({"id": "plain", "base_url": "https://p.test"})
+    assert calls == [{"public_only": True}, {}]
+    assert recorders.reports == [("acme", "h", "health")]
+
+
+async def test_shallow_health_public_only_refuses_loopback(closed_port):
+    r = await provider_watchdog._shallow_health(
+        f"http://127.0.0.1:{closed_port}", public_only=True
+    )
+    assert r["ok"] is False and r["error"] == "egress_refused"
+    assert r["host"] == "127.0.0.1"
+
+
+async def test_sovereign_health_public_only_refuses_loopback(closed_port):
+    r = await provider_watchdog._sovereign_health(
+        f"http://127.0.0.1:{closed_port}", public_only=True
+    )
+    assert r["error"] == "egress_refused" and r["host"] == "127.0.0.1"
+
+
+async def test_deep_health_public_only_refuses_loopback(closed_port):
+    r = await provider_watchdog._deep_health(
+        f"http://127.0.0.1:{closed_port}", "", "m", public_only=True
+    )
+    assert r["error"] == "egress_refused" and r["host"] == "127.0.0.1"
+
+
+async def test_ping_provider_guards_only_protected(monkeypatch, closed_port):
+    seen = []
+
+    async def shallow(base_url, *, public_only=False):
+        seen.append(public_only)
+        return {"ok": False, "error": "down", "latency_ms": 0.0}
+
+    providers = {
+        "acme": _provider("acme", closed_port, protected=True),
+        "plain": _provider("plain", closed_port, protected=False),
+    }
+    monkeypatch.setattr(provider_watchdog, "get_provider", providers.get)
+    monkeypatch.setattr(provider_watchdog, "_shallow_health", shallow)
+    await provider_watchdog.ping_provider("acme")
+    await provider_watchdog.ping_provider("plain")
+    assert seen == [True, False]
+
+
+async def test_watchdog_skips_restart_on_egress_refusal(
+    monkeypatch, tmp_path, closed_port, recorders
+):
+    wd = provider_watchdog
+    monkeypatch.setattr(wd, "_DB_PATH", tmp_path / "watchdog.db")
+    monkeypatch.setattr(wd, "_states", {})
+    monkeypatch.setattr(wd, "_running", False)
+    monkeypatch.setattr(wd, "_CHECK_INTERVAL", 0)
+    monkeypatch.setattr(wd, "_FAILURE_THRESHOLD", 1)
+    monkeypatch.setattr(
+        wd, "load_providers", lambda: [_provider("acme", closed_port, protected=True)]
+    )
+
+    async def ping(pid):
+        wd._running = False  # one pass of the loop
+        return {"ok": False, "error": "egress_refused", "host": "h", "check": "shallow"}
+
+    async def provider_down(pid):
+        pytest.fail("an egress refusal must not raise provider_down")
+
+    def restart(pid):
+        pytest.fail("an egress refusal must not restart the provider")
+
+    monkeypatch.setattr(wd, "ping_provider", ping)
+    monkeypatch.setattr(wd, "restart_provider", restart)
+    monkeypatch.setattr(alerts, "record_provider_failure", provider_down)
+    await wd._watchdog_loop()
+    assert recorders.reports == [("acme", "h", "watchdog")]
+    assert wd._states["acme"].consecutive_failures == 1
+
+
+async def test_embed_refusal_is_reported(monkeypatch, closed_port, recorders):
+    acme = _provider("acme", closed_port, protected=True)
+    monkeypatch.setattr(semantic_cache, "embed_is_enabled", lambda: True)
+    monkeypatch.setenv("PLUGBOARD_EMBED_PROVIDER_ID", "acme")
+    monkeypatch.setenv("PLUGBOARD_EMBED_MODEL", "e")
+    monkeypatch.setattr(config, "get_provider", {"acme": acme}.get)
+    assert await semantic_cache._embed("hello") is None
+    assert recorders.reports == [("acme", "127.0.0.1", "embed")]

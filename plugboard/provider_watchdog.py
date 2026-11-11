@@ -23,7 +23,7 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-from plugboard import envcompat
+from plugboard import envcompat, netguard
 from plugboard.config import get_provider, load_providers
 from plugboard.legacy_connectors import (
     is_removed_provider,
@@ -225,11 +225,27 @@ def _get_state(provider_id: str) -> _ProviderState:
 _check_counter: Dict[str, int] = {}
 
 
-async def _sovereign_health(base_url: str) -> Dict[str, Any]:
+def _failure(exc: BaseException, t0: float) -> Dict[str, Any]:
+    """The result of a health check that raised ``exc``."""
+    latency = round((time.perf_counter() - t0) * 1000, 1)
+    if netguard.is_egress_refusal(exc):
+        # PLU-7: the guard refused a non-public address, no socket was opened.
+        return {
+            "ok": False,
+            "error": netguard.EGRESS_REFUSED,
+            "host": exc.host,
+            "latency_ms": latency,
+        }
+    return {"ok": False, "error": str(exc)[:200], "latency_ms": latency}
+
+
+async def _sovereign_health(
+    base_url: str, *, public_only: bool = False
+) -> Dict[str, Any]:
     """Ping a sovereign provider (e.g. Ollama) via GET / instead of /health."""
     t0 = time.perf_counter()
     try:
-        async with aiohttp.ClientSession() as session:
+        async with netguard.client_session(public_only) as session:
             async with session.get(
                 base_url,
                 timeout=aiohttp.ClientTimeout(total=_HEALTH_TIMEOUT),
@@ -242,8 +258,7 @@ async def _sovereign_health(base_url: str) -> Dict[str, Any]:
                     "latency_ms": round(latency, 1),
                 }
     except Exception as exc:
-        latency = (time.perf_counter() - t0) * 1000
-        return {"ok": False, "error": str(exc)[:200], "latency_ms": round(latency, 1)}
+        return _failure(exc, t0)
 
 
 async def ping_provider(provider_id: str, force_deep: bool = False) -> Dict[str, Any]:
@@ -284,13 +299,16 @@ async def ping_provider(provider_id: str, force_deep: bool = False) -> Dict[str,
         result = await probe_provider(provider)
         return {**result, "check": "subprocess"}
 
+    # PLU-7: a protected provider is checked through the public-only session.
+    public_only = netguard.is_protected(provider)
+
     # Sovereign providers: simple GET / health, no deep check
     if provider_type == "sovereign":
-        result = await _sovereign_health(base_url)
+        result = await _sovereign_health(base_url, public_only=public_only)
         return {**result, "check": "sovereign"}
 
     # Step 1: Shallow health check
-    shallow = await _shallow_health(base_url)
+    shallow = await _shallow_health(base_url, public_only=public_only)
     if not shallow["ok"]:
         return {**shallow, "check": "shallow"}
 
@@ -302,7 +320,7 @@ async def ping_provider(provider_id: str, force_deep: bool = False) -> Dict[str,
     if do_deep:
         bearer = provider.get("bearer_token", "")
         model = provider.get("default_model", "")
-        deep = await _deep_health(base_url, bearer, model)
+        deep = await _deep_health(base_url, bearer, model, public_only=public_only)
         if not deep["ok"]:
             return {**deep, "check": "deep", "shallow_ok": True}
         return {
@@ -315,12 +333,14 @@ async def ping_provider(provider_id: str, force_deep: bool = False) -> Dict[str,
     return {**shallow, "check": "shallow"}
 
 
-async def _shallow_health(base_url: str) -> Dict[str, Any]:
+async def _shallow_health(
+    base_url: str, *, public_only: bool = False
+) -> Dict[str, Any]:
     """Ping /health endpoint."""
     url = base_url + "/health"
     t0 = time.perf_counter()
     try:
-        async with aiohttp.ClientSession() as session:
+        async with netguard.client_session(public_only) as session:
             async with session.get(
                 url,
                 timeout=aiohttp.ClientTimeout(total=_HEALTH_TIMEOUT),
@@ -333,12 +353,11 @@ async def _shallow_health(base_url: str) -> Dict[str, Any]:
                     "latency_ms": round(latency, 1),
                 }
     except Exception as exc:
-        latency = (time.perf_counter() - t0) * 1000
-        return {"ok": False, "error": str(exc)[:200], "latency_ms": round(latency, 1)}
+        return _failure(exc, t0)
 
 
 async def _deep_health(
-    base_url: str, bearer_token: str, model: str = ""
+    base_url: str, bearer_token: str, model: str = "", *, public_only: bool = False
 ) -> Dict[str, Any]:
     """Send a real LLM completion to verify the full pipeline works. Uses max_tokens=1."""
     try:
@@ -357,7 +376,7 @@ async def _deep_health(
     }
     t0 = time.perf_counter()
     try:
-        async with aiohttp.ClientSession() as session:
+        async with netguard.client_session(public_only) as session:
             async with session.post(
                 url,
                 json=body,
@@ -391,8 +410,7 @@ async def _deep_health(
             "latency_ms": round(latency, 1),
         }
     except Exception as exc:
-        latency = (time.perf_counter() - t0) * 1000
-        return {"ok": False, "error": str(exc)[:200], "latency_ms": round(latency, 1)}
+        return _failure(exc, t0)
 
 
 # --- Restart logic ---
@@ -483,6 +501,12 @@ async def _watchdog_loop() -> None:
                         _FAILURE_THRESHOLD,
                         error_msg,
                     )
+                    if result.get("error") == netguard.EGRESS_REFUSED:
+                        # PLU-7: the gateway refused the address, the provider
+                        # did not fail: reported once per window, no restart,
+                        # no provider_down alert.
+                        netguard.report_refusal(pid, result.get("host", ""), "watchdog")
+                        continue
 
                     # Auto-restart if threshold reached
                     # Skip restart for sovereign providers (lifecycle managed externally)
