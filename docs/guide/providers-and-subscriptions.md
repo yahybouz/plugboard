@@ -87,6 +87,8 @@ Models that the catalog marks as needing another API (Anthropic Messages, OpenAI
 
 **Also send one test token** additionally sends a one-token chat completion to the first listed model. It is off by default because the provider bills it.
 
+A failed test names this section as `docs/guide/providers-and-subscriptions.md#test-the-connection`. Set `PLUGBOARD_DOCS_BASE_URL` to where the repository is published (its GitLab `-/blob/main` page, for example) to get it as a link ([configuration](configuration.md#server)).
+
 ### Keep model lists up to date
 
 Each provider has two settings, in **Edit** on the Providers page or through `PUT /providers/{id}`:

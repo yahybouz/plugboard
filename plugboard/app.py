@@ -3937,6 +3937,29 @@ class DirectProviderTest(BaseModel):
 _TEST_DOCS = "docs/guide/providers-and-subscriptions.md#test-the-connection"
 
 
+def _docs_link(path: str) -> str:
+    """A ``docs/...`` path of the repository, for the dashboard.
+
+    With ``PLUGBOARD_DOCS_BASE_URL`` (where the repository's files are
+    published, such as its GitLab ``-/blob/main`` page) the path becomes an
+    absolute URL under it, which the dashboard shows as a link. Only an
+    http(s) URL with a host is used: anything else is logged and ignored.
+    """
+    from urllib.parse import urlsplit
+
+    base = os.environ.get("PLUGBOARD_DOCS_BASE_URL", "").strip()
+    if not base:
+        return path
+    parts = urlsplit(base)
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        log.warning(
+            "PLUGBOARD_DOCS_BASE_URL ignored: an http(s) URL is expected, "
+            "such as https://gitlab.com/<group>/plugboard/-/blob/main"
+        )
+        return path
+    return base.rstrip("/") + "/" + path
+
+
 async def _require_public_host(base_url: str) -> list:
     """Refuse a catalog preset whose host resolves to a non-public address.
 
@@ -4006,7 +4029,7 @@ async def _test_openai_endpoint(
                         "status": "invalid_key",
                         "message": f"{resp.status} invalid key: check that this key belongs to {host} "
                         "(some providers issue separate keys per region or project).",
-                        "docs": _TEST_DOCS,
+                        "docs": _docs_link(_TEST_DOCS),
                     }
                 body = None
                 if resp.status == 200:
@@ -4023,7 +4046,7 @@ async def _test_openai_endpoint(
                         "status": "not_openai_compatible",
                         "message": f"Not a standard chat API: {host} did not answer GET /models in the "
                         f"standard format (HTTP {resp.status}). Add it as a custom endpoint or check its base URL.",
-                        "docs": _TEST_DOCS,
+                        "docs": _docs_link(_TEST_DOCS),
                     }
             models = [
                 m.get("id") for m in body["data"] if isinstance(m, dict) and m.get("id")
@@ -4072,7 +4095,7 @@ async def _test_openai_endpoint(
             "status": "unreachable",
             "message": f"Unreachable: {host} did not answer ({type(exc).__name__}). "
             "Check the network, a proxy or the base URL.",
-            "docs": _TEST_DOCS,
+            "docs": _docs_link(_TEST_DOCS),
         }
 
 

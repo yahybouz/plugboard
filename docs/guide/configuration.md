@@ -56,6 +56,7 @@ The command reads every secret with the current key and re-encrypts it with the 
 | `PLUGBOARD_LOG_MAX_BYTES` | `20971520` | Size of one log file before rotation. |
 | `PLUGBOARD_LOG_BACKUPS` | `5` | Rotated log files to keep. |
 | `APP_NAME`, `SERVICE_NAME` | `plugboard` | Values of the `application` and `service` fields in JSON logs. |
+| `PLUGBOARD_DOCS_BASE_URL` | empty | Where this repository's files are published, for example `https://gitlab.com/<group>/plugboard/-/blob/main`. The dashboard then shows the `docs/guide/...` references it gets (provider connection test) as links to `<base>/docs/guide/...`. Empty: they stay repository paths. Only an `http(s)` URL with a host is used; anything else is logged and ignored. No guide is served by Plugboard itself. |
 
 ## Client keys
 
