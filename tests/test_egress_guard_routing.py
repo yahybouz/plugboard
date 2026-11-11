@@ -29,7 +29,9 @@ from plugboard import (
     model_availability,
     netguard,
     ollama,
+    provider_admission,
     provider_watchdog,
+    route_pauses,
     router,
     semantic_cache,
 )
@@ -176,6 +178,84 @@ async def test_stream_refusal_gives_502_without_breaker(
     assert "127.0.0.1" not in resp.text and "egress" not in resp.text
     assert recorders.cb_failures == [] and recorders.provider_failures == []
     assert recorders.reports == [("acme", "127.0.0.1", "stream")]
+
+
+# ── Egress guard and provider leases (PLU-7 x PLU-9) ────────────────────────
+
+
+async def test_refusal_gives_the_provider_slot_back(
+    upstream, plain, closed_port, monkeypatch, recorders
+):
+    """A refused protected provider hands its lease back before the next
+    candidate is tried; the refusal neither pauses the route nor makes the
+    provider look busy to the next request."""
+    refused = {**_provider("acme", closed_port, protected=True), "max_concurrency": 1}
+    monkeypatch.setattr(
+        router, "_resolve_all_providers", lambda m: [(refused, "m"), (plain, "m")]
+    )
+    acme_leases_seen = []
+    real_session_for = http_pool.session_for
+
+    async def session_for(provider):
+        acme_leases_seen.append((provider["id"], provider_admission.in_flight("acme")))
+        return await real_session_for(provider)
+
+    monkeypatch.setattr(http_pool, "session_for", session_for)
+    assert await router.forward(_CHAT) == FAKE_COMPLETION
+    assert router.served_by()[0]["id"] == "plain" and upstream.calls == 1
+    assert acme_leases_seen == [("acme", 0), ("plain", 0)]
+    assert provider_admission._active == {}
+    assert route_pauses.paused_for("acme:m") == 0
+    assert recorders.cb_failures == [] and recorders.provider_failures == []
+    assert recorders.reports == [("acme", "127.0.0.1", "forward")]
+
+    # Its only slot is free again: refused again, not busy, without a wait.
+    monkeypatch.setattr(provider_admission, "WAIT_S", 0.0)
+    monkeypatch.setattr(router, "_resolve_all_providers", lambda m: [(refused, "m")])
+    with pytest.raises(router.ProviderEgressRefused):
+        await router.forward(_CHAT)
+    assert provider_admission._active == {}
+
+
+async def test_stream_refusal_gives_the_provider_slot_back(
+    closed_port, monkeypatch, recorders
+):
+    refused = {**_provider("acme", closed_port, protected=True), "max_concurrency": 1}
+    monkeypatch.setattr(router, "resolve_provider_and_model", lambda m: (refused, "m"))
+    monkeypatch.setattr(provider_admission, "WAIT_S", 0.0)
+    for _ in range(2):  # a slot left held would make the second one busy
+        with pytest.raises(router.ProviderEgressRefused):
+            async for _chunk in router.forward_stream({**_CHAT, "stream": True}):
+                pass
+        assert provider_admission._active == {}
+    assert recorders.reports == [("acme", "127.0.0.1", "stream")] * 2
+    assert recorders.cb_failures == []
+
+
+async def test_full_protected_provider_hands_over_to_the_next(
+    upstream, acme, plain, monkeypatch, recorders
+):
+    """A protected provider at its cap is skipped like any other, before any
+    connection: no egress check, no refusal report, no breaker count."""
+    capped = {**acme, "max_concurrency": 1}
+    held = provider_admission.try_acquire(capped)
+    monkeypatch.setattr(
+        router, "_resolve_all_providers", lambda m: [(capped, "m"), (plain, "m")]
+    )
+    assert await router.forward(_CHAT) == FAKE_COMPLETION
+    assert router.served_by()[0]["id"] == "plain" and upstream.calls == 1
+    assert recorders.reports == []
+    assert recorders.cb_failures == [] and recorders.provider_failures == []
+    assert provider_admission.in_flight("acme") == 1
+
+    # Alone and full: busy, still never connected.
+    monkeypatch.setattr(provider_admission, "WAIT_S", 0.0)
+    monkeypatch.setattr(router, "_resolve_all_providers", lambda m: [(capped, "m")])
+    with pytest.raises(router.ProvidersBusyError) as err:
+        await router.forward(_CHAT)
+    assert err.value.provider_ids == ["acme"] and recorders.reports == []
+    held.release()
+    assert provider_admission._active == {}
 
 
 async def test_discovery_paths_use_session_for(acme, monkeypatch):
