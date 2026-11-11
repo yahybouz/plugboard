@@ -35,7 +35,7 @@ import aiohttp
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from plugboard import envcompat
-from plugboard.storage import atomic_write_json, data_dir
+from plugboard.storage import atomic_write_json, data_dir, to_thread_to_the_end
 
 log = logging.getLogger(__name__)
 
@@ -324,6 +324,7 @@ async def refresh_catalog() -> Dict[str, Any]:
     meta = _read_meta()
     now = datetime.now(timezone.utc).isoformat()
     meta["checked_at"] = now
+    cancelled: Optional[asyncio.CancelledError] = None
     try:
         code, body, etag = await _download(
             url, meta.get("etag", "") if _catalog_file().exists() else ""
@@ -334,8 +335,12 @@ async def refresh_catalog() -> Dict[str, Any]:
             return {"state": "unchanged"}
         if body is None:
             raise ValueError("empty catalog response")
-        # Parsing and validating up to 20 MB: not on the event loop.
-        providers, invalid = await asyncio.to_thread(_store_catalog, body, meta)
+        # Parsing and validating up to 20 MB: not on the event loop. Cancelled
+        # meanwhile (the scheduler's timeout), the refresh still waits for the
+        # new copy to be written and records it before giving way.
+        (providers, invalid), cancelled = await to_thread_to_the_end(
+            _store_catalog, body, meta
+        )
         meta.update(
             etag=etag,
             fetched_at=now,
@@ -351,7 +356,7 @@ async def refresh_catalog() -> Dict[str, Any]:
             _model_count(providers),
             invalid,
         )
-        return {
+        result = {
             "state": "updated",
             "providers": len(providers),
             "invalid_entries": invalid,
@@ -366,7 +371,10 @@ async def refresh_catalog() -> Dict[str, Any]:
             "models.dev catalog refresh failed (%s); keeping the last good copy",
             meta["last_error"],
         )
-        return {"state": "error", "error": meta["last_error"]}
+        result = {"state": "error", "error": meta["last_error"]}
+    if cancelled is not None:
+        raise cancelled
+    return result
 
 
 # -- Presets --------------------------------------------------------------------

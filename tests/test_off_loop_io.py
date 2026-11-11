@@ -7,6 +7,7 @@ long as it took. They now run in a worker thread (``asyncio.to_thread``).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from pathlib import Path
@@ -14,7 +15,7 @@ from pathlib import Path
 import pytest
 from aioresponses import aioresponses
 
-from plugboard import billing, models_dev, pricing_scraper
+from plugboard import billing, change_events, models_dev, pricing_scraper, storage
 
 FIXTURE = Path(__file__).parent / "fixtures" / "models_dev_small.json"
 URL = "https://catalog.test/api.json"
@@ -96,3 +97,124 @@ async def test_catalog_refresh_parses_off_the_event_loop(tmp_path, monkeypatch):
     assert "acme" in models_dev.load_catalog()
 
     assert parsed and loop_thread not in parsed
+
+
+# -- A cancellation does not cut the write half-way ------------------------------
+#
+# The scheduler runs each update under asyncio.wait_for(): its timeout cancels
+# the update. While the write ran on the event loop, a timeout could not fall
+# in it. A worker thread cannot be stopped: cancelled meanwhile, the update
+# waits for the write to end and finishes its follow-up (journal, webhooks,
+# catalog meta) before it gives way to the cancellation.
+
+
+def _hold_in_thread(monkeypatch, module, name):
+    """Make module.name wait, in its thread, until the test releases it."""
+    real = getattr(module, name)
+    started, release = threading.Event(), threading.Event()
+
+    def held(*args, **kwargs):
+        started.set()
+        release.wait(5)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(module, name, held)
+    return started, release
+
+
+async def _cancel_while_held(coro, started, release):
+    """Cancel coro while its file work runs, as the scheduler's timeout does."""
+    task = asyncio.ensure_future(coro)
+    assert await asyncio.to_thread(started.wait, 5), "the file work never started"
+    task.cancel()
+    await asyncio.sleep(0)  # the cancellation reaches the update first
+    release.set()
+    # The cancellation is not lost, and is raised once the follow-up is done.
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await change_events.drain()  # webhooks are sent in the background
+
+
+@pytest.mark.asyncio
+async def test_price_update_cancelled_during_the_write_still_journals_and_announces(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("PLUGBOARD_DATA", str(tmp_path))
+    monkeypatch.setattr(billing, "_PRICING_DIR", tmp_path)
+
+    async def no_sources(order):
+        return {}, {}
+
+    monkeypatch.setattr(pricing_scraper, "_fetch_sources", no_sources)
+    monkeypatch.setattr(pricing_scraper, "_PRICING_SOURCE_URL", "")
+    monkeypatch.setattr(pricing_scraper, "_last_sources", {})
+    monkeypatch.setattr(pricing_scraper, "_last_space_sources", {})
+    sent = []
+
+    async def fake_emit(event, data):
+        sent.append((event, data))
+        return 1
+
+    monkeypatch.setattr("plugboard.webhooks.emit", fake_emit)
+
+    def one_change(month, updated, drifts, drift_pct):
+        batch = change_events.ChangeBatch()
+        batch.add("pricing.changed", {"month": month, "model": "m"})
+        return batch
+
+    monkeypatch.setattr(pricing_scraper, "price_change_events", one_change)
+    month = billing.current_pricing_month()
+    (tmp_path / f"{month}.json").write_text(
+        json.dumps(
+            {"month": month, "models": {"m": {"input_price": 1, "output_price": 2}}}
+        )
+    )
+    held = _hold_in_thread(monkeypatch, pricing_scraper, "_merge_and_save")
+
+    await _cancel_while_held(pricing_scraper.update_current_pricing(), *held)
+
+    assert [e["event"] for e in change_events.read_journal()] == ["pricing.changed"]
+    assert [event for event, _ in sent] == ["pricing.changed"]
+
+
+@pytest.mark.asyncio
+async def test_catalog_refresh_cancelled_while_storing_still_records_its_meta(
+    tmp_path, monkeypatch
+):
+    data = tmp_path / "data"
+    data.mkdir()
+    monkeypatch.setenv("PLUGBOARD_DATA", str(data))
+    monkeypatch.setenv("PLUGBOARD_CATALOG_URL", URL)
+    monkeypatch.delenv("PLUGBOARD_CATALOG", raising=False)
+    monkeypatch.setitem(models_dev._cache, "mtime", None)
+    monkeypatch.setitem(models_dev._cache, "providers", {})
+    held = _hold_in_thread(monkeypatch, models_dev, "_store_catalog")
+
+    with aioresponses() as m:
+        m.get(URL, status=200, body=FIXTURE.read_text(), headers={"ETag": '"v2"'})
+        await _cancel_while_held(models_dev.refresh_catalog(), *held)
+
+    status = models_dev.status()
+    assert status["providers"] > 0, "the catalog was not written"
+    assert status["fetched_at"], "the catalog was written but not recorded"
+    assert models_dev._read_meta()["etag"] == '"v2"'
+
+
+@pytest.mark.asyncio
+async def test_a_cancellation_is_not_lost_when_the_file_work_fails():
+    started, release = threading.Event(), threading.Event()
+
+    def failing():
+        started.set()
+        release.wait(5)
+        raise OSError("disk full")
+
+    task = asyncio.ensure_future(storage.to_thread_to_the_end(failing))
+    assert await asyncio.to_thread(started.wait, 5)
+    task.cancel()
+    await asyncio.sleep(0)
+    release.set()
+
+    # The caller was cancelled: it stops, whatever the thread then raised.
+    with pytest.raises(asyncio.CancelledError):
+        await task

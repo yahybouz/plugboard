@@ -35,6 +35,7 @@ from plugboard.billing import (
     pricing_lock,
     save_pricing,
 )
+from plugboard.storage import to_thread_to_the_end
 
 if TYPE_CHECKING:
     from plugboard.change_events import ChangeBatch
@@ -1027,7 +1028,9 @@ async def update_current_pricing(
     action = pricing_merge.drift_action()
 
     # File work in a worker thread: the event loop keeps serving requests.
-    summary, batch = await asyncio.to_thread(
+    # Cancelled meanwhile (the scheduler's timeout), the update still waits
+    # for the write, so the changes it made are journaled and announced.
+    (summary, batch), cancelled = await to_thread_to_the_end(
         _merge_and_save,
         month,
         order,
@@ -1039,6 +1042,8 @@ async def update_current_pricing(
     )
     if batch is not None and len(batch):
         summary["webhooks"] = batch.flush_in_background()
+    if cancelled is not None:
+        raise cancelled
     return summary
 
 
