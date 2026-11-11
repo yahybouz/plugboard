@@ -100,6 +100,10 @@ AT_IMPORT = {
         "PLUGBOARD_SESSION_TTL_S": ("_TTL_S", 24 * 3600),
         "PLUGBOARD_SESSION_MAX_TURNS": ("_MAX_TURNS", 50),
     },
+    "plugboard.logging_config": {
+        "PLUGBOARD_LOG_MAX_BYTES": ("_LOG_MAX_BYTES", 20 * 1024 * 1024),
+        "PLUGBOARD_LOG_BACKUPS": ("_LOG_BACKUP_COUNT", 5),
+    },
 }
 
 # Good values, old names and the bounds each setting applies:
@@ -134,6 +138,9 @@ WELL_SET = {
     },
     "plugboard.session_store": {
         "LLM_ENABLER_SESSION_MAX_TURNS": ("7", "_MAX_TURNS", 7),
+    },
+    "plugboard.logging_config": {
+        "PLUGBOARD_LOG_BACKUPS": ("2", "_LOG_BACKUP_COUNT", 2)
     },
 }
 
