@@ -763,6 +763,24 @@ async def forward(
         key = _circuit_key(route_provider, route_model)
         if not check_circuit(key)["allowed"]:
             open_routes.add(key)
+
+    # The key's policy is checked before any slot, in the resolved order: the
+    # request may use the routes before the first one it refuses, whatever
+    # order pauses, open circuits or full providers then give them. When they
+    # all fail, that refusal is the answer, as before the reordering.
+    refused: Optional[Exception] = None
+    if route_guard is not None:
+        allowed: List[tuple] = []
+        for route in candidates:
+            try:
+                route_guard(*route)
+            except Exception as exc:
+                refused = exc
+                break
+            allowed.append(route)
+        if refused is not None and not allowed:
+            raise refused
+        candidates = allowed
     candidates = _order_routes(candidates, open_routes)
 
     last_err: Optional[Exception] = None
@@ -808,8 +826,6 @@ async def forward(
                 queue.extend(c for c in busy if c[0]["id"] != pid)
                 busy.clear()
             provider, real_model = queue.popleft()
-            if route_guard is not None:
-                route_guard(provider, real_model)
             # Direct CLI providers short-circuit HTTP.
             auth_source = provider.get("auth_source", "")
             if auth_source.startswith("subprocess:"):
@@ -1080,7 +1096,7 @@ async def forward(
 
         if busy:
             raise ProvidersBusyError([p["id"] for p, _ in busy])
-        raise last_err or RuntimeError("All providers failed")
+        raise refused or last_err or RuntimeError("All providers failed")
     finally:
         if granted is not None:
             granted.release()  # granted by the wait, never used

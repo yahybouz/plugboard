@@ -4,6 +4,7 @@ import pytest
 from aioresponses import aioresponses
 
 from plugboard import circuit_breaker, cli_subprocess, route_pauses, router
+from plugboard.app import _model_route_guard
 from plugboard.cli_subprocess import CliSubprocessError
 from tests.factories import FAKE_COMPLETION, PROVIDER_A, PROVIDER_B
 from tests.test_router_admission import BARE, CLI, ONLY_A, URL_A, URL_B, _body, _calls
@@ -126,6 +127,25 @@ async def test_route_with_open_circuit_goes_last(two_providers):
         mock.post(URL_B, payload=FAKE_COMPLETION, repeat=True)
         await router.forward(_body(BARE))
         assert _calls(mock, URL_A) == 0 and _calls(mock, URL_B) == 1
+
+
+@pytest.mark.parametrize("set_aside", ["paused", "open"])
+async def test_limited_key_keeps_its_route_when_it_goes_last(two_providers, set_aside):
+    """A key allowed test-provider only asks for the bare name: its route,
+    paused or with an open circuit, still serves the request. The route it
+    may not use is not tried first, so it answers no 403."""
+    if set_aside == "paused":
+        route_pauses.pause(ONLY_A, 60)
+    else:
+        for _ in range(3):
+            circuit_breaker.record_failure(ONLY_A)
+    guard = _model_route_guard("c", {"client_id": "c", "allowed_models": [ONLY_A]})
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION, repeat=True)
+        mock.post(URL_B, payload=FAKE_COMPLETION, repeat=True)
+        await router.forward(_body(BARE), route_guard=guard)
+        assert _calls(mock, URL_A) == 1 and _calls(mock, URL_B) == 0
+    assert router.served_by()[0]["id"] == "test-provider"
 
 
 async def test_paused_single_route_is_still_called(two_providers):

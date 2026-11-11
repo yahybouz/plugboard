@@ -197,6 +197,25 @@ async def test_request_waits_for_a_slot_then_is_served(capped_a, monkeypatch):
     assert provider_admission._active == {}
 
 
+async def test_limited_key_waits_for_its_full_route(capped_a, monkeypatch):
+    """A key allowed test-provider only, its route full: the request waits for
+    that slot; the route it may not use answers no 403 meanwhile."""
+    from plugboard.app import _model_route_guard
+
+    monkeypatch.setattr(provider_admission, "WAIT_S", 2.0)
+    held = provider_admission.try_acquire(capped_a)
+    guard = _model_route_guard("c", {"client_id": "c", "allowed_models": [ONLY_A]})
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION, repeat=True)
+        mock.post(URL_B, payload=FAKE_COMPLETION, repeat=True)
+        task = asyncio.create_task(router.forward(_body(BARE), route_guard=guard))
+        await _until(lambda: provider_admission.waiting("test-provider") == 1)
+        held.release()
+        await asyncio.wait_for(task, 2)
+        assert _calls(mock, URL_A) == 1 and _calls(mock, URL_B) == 0
+    assert provider_admission._active == {}
+
+
 async def test_wait_is_bounded_then_providers_busy(capped_a, monkeypatch):
     monkeypatch.setattr(provider_admission, "WAIT_S", 0.1)
     held = provider_admission.try_acquire(capped_a)
