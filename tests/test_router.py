@@ -135,6 +135,7 @@ def test_resolve_all_providers_prefers_lower_inflight_load(
     _providers_file, monkeypatch
 ):
     import plugboard.router as router
+    from plugboard import provider_admission
 
     monkeypatch.setattr(
         router.metrics,
@@ -145,8 +146,8 @@ def test_resolve_all_providers_prefers_lower_inflight_load(
         },
     )
     monkeypatch.setattr(
-        router,
-        "_IN_FLIGHT_BY_PROVIDER",
+        provider_admission,
+        "_active",
         {"test-provider": 4, "other-provider": 0},
     )
 
@@ -158,6 +159,7 @@ def test_resolve_all_providers_keeps_prefixed_provider_first(
     _providers_file, monkeypatch
 ):
     import plugboard.router as router
+    from plugboard import provider_admission
 
     monkeypatch.setattr(
         router.metrics,
@@ -168,8 +170,8 @@ def test_resolve_all_providers_keeps_prefixed_provider_first(
         },
     )
     monkeypatch.setattr(
-        router,
-        "_IN_FLIGHT_BY_PROVIDER",
+        provider_admission,
+        "_active",
         {"test-provider": 6, "other-provider": 0},
     )
 

@@ -36,16 +36,18 @@ A `POST /v1/chat/completions` goes through these steps:
 1. **Middleware**: per-IP rate limit (`RATE_LIMIT`), body size limit, request ID, security headers.
 2. **Concurrency cap** (optional, `PLUGBOARD_MAX_INFLIGHT_CHAT`).
 3. **Client resolution** (`_resolve_client` in `app.py`): an admin session cookie, the `ADMIN_KEY`, or a client key looked up by its SHA-256 hash in `data/api_keys.json`. In strict tenant mode (the default) a chat request without a client is refused.
-4. **Session merge** (optional): when the request has a `session_id`, stored history is prepended.
-5. **Checks** for client keys: monthly budget against the month's recorded spend, allowed models, RPM limit.
+4. **Checks**: the shape of `messages`, then for client keys the monthly budget against the month's recorded spend, allowed models, known price and RPM limit.
+5. **Session merge** (optional): when the request has a `session_id`, it takes the session's turn (`session_turns`: one turn at a time per client and session, waiting for the previous one), then stored history is prepended. The turn comes after every check, so a refused request never waits for it.
 6. **Cache lookup**: exact-match cache keyed on the client, the model, the messages and sampling parameters (`data/cache.db`); then, if enabled, the semantic cache. A hit is returned immediately and is not billed.
 7. **Forwarding** (`router.forward` or `router.forward_stream`):
    - the model string is resolved to a list of `(provider, model)` candidates. An explicit `<provider-id>:` prefix selects one provider; otherwise all active providers are candidates, ordered by a score of latency × error rate × in-flight requests;
-   - a circuit breaker per route (3 provider failures, 60 s cooldown) shows a failing route in `/admin/circuits` and makes the LLM pricing pass skip it; requests are still sent, to the model asked for;
-   - HTTP providers get `POST <base_url>/v1/chat/completions` with their credentials, retried on `429`, `500`, `502`, `503`, `529` after 2, 5 and 15 seconds by default, except an error saying the context is too long, which goes straight to the next candidate;
+   - each candidate takes a slot of its provider (local providers one at a time by default, `max_concurrency` otherwise); a full one passes a non-streamed request to the next (a streamed request has a single route and waits for it only), and when all are full the request waits up to `PLUGBOARD_PROVIDER_WAIT_S` for a slot, then gets `503 providers_busy`;
+   - a circuit breaker per route (3 provider failures, 60 s cooldown) shows a failing route in `/admin/circuits` and makes the LLM pricing pass skip it; requests are still sent, to the model asked for, but the route is tried last;
+   - a route whose provider answered `429` (or a CLI quota error) is paused for the provider's `Retry-After`, else 30 s, 1 min, then 5 min, and is tried last until then; a paused route is never refused, and a success clears its pause;
+   - HTTP providers get `POST <base_url>/v1/chat/completions` with their credentials, retried on `429`, `500`, `502`, `503`, `529` after 2, 5 and 15 seconds by default, except an error saying the context is too long, or a `429` whose `Retry-After` exceeds the next delay, which go straight to the next candidate;
    - CLI providers run the vendor CLI in a neutral working directory, with a per-CLI concurrency limit, and the output is converted to a standard chat response.
 8. **Billing**: token counts from the provider (estimated with a tokenizer when absent), priced with the month's grid, appended to `data/usage.db` with the client and key. The response gets a `billing` object and `X-Cost-*` headers.
-9. **Cache write** and **session record**, then the response.
+9. **Cache write** and **session record** (a streamed HTTP answer once complete; a CLI answer before its replay as a stream, so a hang-up during the replay does not undo it), then the response; the session's turn is given back once the response is sent.
 
 Streaming requests to HTTP providers are proxied chunk by chunk and billed at the end of the stream. Streaming requests to CLI providers are completed first and replayed as server-sent events, which also lets them be cached.
 

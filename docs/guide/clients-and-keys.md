@@ -77,10 +77,13 @@ Checks run in this order on each chat request:
 4. **Allowed models**: a model outside the list returns `403`.
 5. **Known price** (keys with a monthly budget only): a model without a known price returns `402 Model price unavailable for this key`, before any provider call, streamed or not. Such a call would be recorded at 0 and the budget could never stop it. Every provider the request may fall back to is checked. The refusal is logged (key, provider, model; never the prompt). Keys with `monthly_limit_usd` 0 are not affected.
 6. **RPM limit**: a sliding 60-second window per key; exceeding it returns `429 Client rate limit exceeded`.
+7. **Session turn** (requests with a `session_id` only): the request waits until the previous turn of its session is answered ([request options](#request-options)). It comes after every check above, so a refused request is answered at once and never waits for it.
+
+Then each provider takes a limited number of requests at once (**provider concurrency cap**): a local one (`sovereign`, a loopback or private address, or an Ollama over plain `http://`) takes one at a time by default, any provider takes at most its `max_concurrency` ([details](providers-and-subscriptions.md#concurrent-requests-per-provider)). A non-streamed request for a model without provider prefix goes to the next candidate when one is full; a streamed request is sent to a single provider and waits for that one only, even when another candidate is free. When every candidate is full, the request waits up to `PLUGBOARD_PROVIDER_WAIT_S` seconds (default 10) for the first freed slot, oldest request first, then gets `503` with `"code": "providers_busy"` and `Retry-After: 5`; nothing was called. A client that hangs up while it waits leaves the queue at once.
 
 Requests made with the `ADMIN_KEY` (or from the dashboard Playground) are not subject to budgets, model restrictions, price checks or RPM limits.
 
-`POST /v1/preflight` runs the same checks for each pair before its ping, inside the same concurrency cap, and accepts at most 10 pairs (`422` beyond). Each ping counts towards the RPM limit and is billed like a chat call. A refused or failed pair answers `"ok": false` with a closed `error` code, never the provider's message: `unknown_model`, `forbidden_model`, `model_not_found`, `budget_exceeded`, `price_unavailable`, `rate_limited` or `upstream_error` (details stay in the server log). `model_not_found` is the chat routes' [`404 model_not_found`](../api/README.md#404-model_not_found) for that pair, for every caller, the admin key included: no provider knows `<provider>:<model>`, so it is not pinged and nothing is billed.
+`POST /v1/preflight` runs the same checks for each pair before its ping, inside the same concurrency cap, and accepts at most 10 pairs (`422` beyond). Each ping counts towards the RPM limit and is billed like a chat call. A refused or failed pair answers `"ok": false` with a closed `error` code, never the provider's message: `unknown_model`, `forbidden_model`, `model_not_found`, `budget_exceeded`, `price_unavailable`, `rate_limited`, `upstream_error` (details stay in the server log) or `providers_busy` (the provider stayed at its concurrency cap; nothing was called). `model_not_found` is the chat routes' [`404 model_not_found`](../api/README.md#404-model_not_found) for that pair, for every caller, the admin key included: no provider knows `<provider>:<model>`, so it is not pinged and nothing is billed.
 
 ### Which models have a known price
 
@@ -141,7 +144,7 @@ Cache hits are not billed again. Streaming responses (`"stream": true`) are serv
 ### Request options
 
 - `"cache": false` in the request body skips the response cache for that call. With an SDK, send it as an extra body field (for example `extra_body={"cache": False}`).
-- `"session_id": "<uuid>"` in the body keeps the conversation on the server: Plugboard prepends the stored history, so the client only sends the new turn. Sessions are isolated per client, expire after `PLUGBOARD_SESSION_TTL_S` (24 hours) and keep `PLUGBOARD_SESSION_MAX_TURNS` turns (50).
+- `"session_id": "<uuid>"` in the body keeps the conversation on the server: Plugboard prepends the stored history, so the client only sends the new turn. The `X-LLM-Session-ID` header does the same. Sessions are isolated per client, expire after `PLUGBOARD_SESSION_TTL_S` (24 hours) and keep `PLUGBOARD_SESSION_MAX_TURNS` turns (50). The turns of one session run one after the other, in arrival order: a turn sent while the previous one is still being answered waits for it and sees it, and a client that hangs up while it waits leaves the queue. Streamed turns are kept too: an HTTP provider's stream once it is complete (an interrupted one is not), a CLI's answer before it is replayed as a stream (kept even if the client hangs up during the replay). Requests without a session never wait.
 - `/v2/chat/completions` and `/v2/models` behave like the `/v1` routes and add `X-API-Version: 2`.
 
 ### Errors
@@ -155,7 +158,7 @@ Cache hits are not billed again. Streaming responses (`"stream": true`) are serv
 | `413` | Request body larger than `MAX_BODY_BYTES` (10 MB) |
 | `429` | IP rate limit, key RPM limit or monthly budget reached, or the quota of the last provider tried exhausted (`Retry-After` when it gives a delay) |
 | `502` | The provider returned an error or could not be reached, or every candidate provider failed. A client key never gets the provider's own message or address: the `error_ref` finds it in the gateway log |
-| `503` | Server at its concurrency cap, or a CLI provider timed out (`Retry-After` is set) |
+| `503` | Server at its concurrency cap, every provider of the model at its own cap (`"code": "providers_busy"`), or a CLI provider timed out (`Retry-After` is set) |
 
 ## Self-service for clients
 

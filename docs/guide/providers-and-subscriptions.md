@@ -190,6 +190,22 @@ Refreshing an expired Gemini CLI token, and signing in to Gemini from the dashbo
 
 The presets *GitHub Models (OAuth via dashboard)* and *GitHub Copilot (OAuth via dashboard)* use GitHub's device flow: the dashboard shows a code, you open the GitHub page, enter the code and approve. The token is stored encrypted in `data/credentials.db`. When you pick the same preset again, the provider form shows the connected account with **Reconnect** and **Disconnect**; `GET /admin/oauth/connections` lists every connected account.
 
+## Concurrent requests per provider
+
+Each provider takes a limited number of requests at once:
+
+- A **local** provider takes one request at a time by default (`PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT`, `0` for no cap). A provider is local when it is one of:
+  - `provider_type` `sovereign`, whatever its address;
+  - any provider whose `base_url` host is `localhost` or a loopback or private IP address written as digits (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `::1`, `fc00::/7`), over `http://` or `https://`;
+  - an Ollama (its id starts with `ollama`, or its `base_url` uses port `11434`) reached over plain `http://`, whatever its host: `http://ollama:11434` in Docker, but also a Tailscale or CGNAT address (`100.64.0.0/10`) or any other host name.
+
+  Not local: Ollama Cloud (`https://ollama.com`) and any Ollama over `https://` on a host name; any other provider on a CGNAT or Tailscale address or a host name, unless it is `sovereign`; every CLI provider. Set `max_concurrency` to cap one of these, or to lift the cap of a remote Ollama reached over `http://` (`0` for no cap).
+- Any other provider has no cap.
+- A provider's `max_concurrency` wins over both: a whole number, `0` for no cap. Set it with `PUT /providers/{id}` (`{"max_concurrency": 2}`) or in `providers.json`.
+- CLI providers are also capped by `PLUGBOARD_SUBPROCESS_LIMIT` (concurrent processes per CLI).
+
+A full provider passes a non-streamed request for a model without provider prefix to the next candidate; a streamed request has a single route and waits for that provider only, even when another candidate is free. A full provider counts neither against its circuit breaker nor as an error. When every candidate is full, the request waits up to `PLUGBOARD_PROVIDER_WAIT_S` seconds (default 10) for the first freed slot, oldest request first, then gets `503` with `"code": "providers_busy"` and `Retry-After: 5`. Each gateway worker counts its own requests.
+
 ## Add providers from `.env` or scripts
 
 - **Existing OpenClaw installations:** the connector and its environment bootstrap have been removed. Its old variables are ignored and recognizable legacy requests are refused without fallback. [Migrate manually to direct providers](openclaw-removal.md); changing an old provider's name is not a migration.

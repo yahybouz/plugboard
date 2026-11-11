@@ -14,8 +14,9 @@ the default provider is used with the full model string as-is.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
-from contextlib import contextmanager
+from collections import deque
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,14 +26,14 @@ import os
 import re
 import time as _time
 import uuid as _uuid
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Set
 
 import aiohttp
 
-from plugboard import envcompat, metrics, netguard
+from plugboard import envcompat, metrics, netguard, provider_admission, route_pauses
 from plugboard.alerts import record_provider_failure, record_provider_success
 from plugboard.circuit_breaker import is_request_too_long
-from plugboard.cli_subprocess import MAX_RETRY_AFTER_S
+from plugboard.cli_subprocess import MAX_RETRY_AFTER_S, CliSubprocessError
 from plugboard.config import load_providers
 from plugboard.logging_config import _request_id_var
 from plugboard.endpoints import openai_url
@@ -120,6 +121,22 @@ class ProviderEgressRefused(ProviderNetworkError):
             provider_id=provider_id,
         )
         self.host = host
+
+
+class ProvidersBusyError(RuntimeError):
+    """Every candidate provider stayed at its concurrency cap (D-23).
+
+    A full provider is neither down nor at fault: this counts against no
+    circuit, no error metric and no alert. ``provider_ids`` names the full
+    candidates; ``retry_after`` is the delay, in seconds, the client is
+    told to wait.
+    """
+
+    retry_after = 5
+
+    def __init__(self, provider_ids: List[str]):
+        super().__init__("All candidate providers are busy: " + ", ".join(provider_ids))
+        self.provider_ids = list(provider_ids)
 
 
 # OpenAI-style error type that blames the request (unsupported parameter...);
@@ -302,7 +319,6 @@ _INFLIGHT_WEIGHT = envcompat.get_float(
     "PLUGBOARD_LB_INFLIGHT_WEIGHT", default=0.35, minimum=0.0
 )
 _DELAYS = _read_retry_delays()
-_IN_FLIGHT_BY_PROVIDER: Dict[str, int] = {}
 _LEGACY_PROVIDER_PREFIX_TO_AUTH_SOURCE: Dict[str, str] = {
     # BENCH-004: avoid fallback/latency when clients still send legacy
     # subprocess prefixes.
@@ -318,20 +334,6 @@ _LEGACY_PROVIDER_PREFIX_TO_AUTH_SOURCE: Dict[str, str] = {
 }
 
 
-@contextmanager
-def _track_in_flight(provider_id: str) -> Iterator[None]:
-    """Track in-flight requests per provider to improve load balancing decisions."""
-    _IN_FLIGHT_BY_PROVIDER[provider_id] = _IN_FLIGHT_BY_PROVIDER.get(provider_id, 0) + 1
-    try:
-        yield
-    finally:
-        remaining = _IN_FLIGHT_BY_PROVIDER.get(provider_id, 0) - 1
-        if remaining > 0:
-            _IN_FLIGHT_BY_PROVIDER[provider_id] = remaining
-        else:
-            _IN_FLIGHT_BY_PROVIDER.pop(provider_id, None)
-
-
 def _provider_lb_score(provider_id: str, stats: Dict[str, Dict[str, Any]]) -> float:
     """Lower score is better."""
     s = stats.get(provider_id, {})
@@ -339,7 +341,8 @@ def _provider_lb_score(provider_id: str, stats: Dict[str, Dict[str, Any]]) -> fl
     reqs = s.get("requests", 0)
     errs = s.get("errors", 0)
     error_rate = errs / reqs if reqs > 0 else 0.0
-    inflight = _IN_FLIGHT_BY_PROVIDER.get(provider_id, 0)
+    # Leases held on the provider: HTTP, streamed and CLI requests alike.
+    inflight = provider_admission.in_flight(provider_id)
     return (
         latency
         * (1 + error_rate * _ERROR_RATE_WEIGHT)
@@ -697,6 +700,35 @@ def _circuit_key(provider: Dict[str, Any], real_model: str) -> str:
     return f"{provider['id']}:{real_model}"
 
 
+def _retry_quota_here(retry_after: Optional[int], attempt: int) -> bool:
+    """Whether a 429 at ``attempt`` is retried on the same route.
+
+    It is when a retry delay is left (``PLUGBOARD_RETRY_DELAYS``) and the
+    provider gave no ``Retry-After`` or one no longer than that delay. A
+    longer wait goes to the next candidate, or to the client, at once.
+    """
+    if attempt >= len(_DELAYS):
+        return False
+    return retry_after is None or retry_after <= _DELAYS[attempt]
+
+
+def _order_routes(candidates: List[tuple], open_routes: Set[str]) -> List[tuple]:
+    """``candidates`` with the paused or open routes last (D-23, rule 3).
+
+    Paused or open routes come after the others, the shortest pause left
+    first, then in their order; the others keep their order. Nothing is
+    dropped: a paused or open route is still tried when the others failed.
+    """
+
+    def rank(item: tuple) -> tuple:
+        index, (provider, real_model) = item
+        key = _circuit_key(provider, real_model)
+        left = route_pauses.paused_for(key)
+        return (left > 0 or key in open_routes, left, index)
+
+    return [route for _, route in sorted(enumerate(candidates), key=rank)]
+
+
 async def forward(
     body: Dict[str, Any],
     timeout: float = _TIMEOUT,
@@ -708,6 +740,9 @@ async def forward(
     Retries on transient errors per provider, then falls back to next provider.
     An error saying the context is too long is not retried: the same request
     would fail again, so it goes straight to the next provider.
+    A provider at its concurrency cap is skipped; when every candidate left
+    is, the request waits up to ``PLUGBOARD_PROVIDER_WAIT_S`` for the first
+    freed slot, then raises ``ProvidersBusyError``.
     """
     from plugboard.circuit_breaker import (
         check_circuit,
@@ -723,9 +758,32 @@ async def forward(
 
     # Read each route's circuit under the key its outcomes are recorded under:
     # an open circuit past its cooldown goes half-open, so a success closes
-    # it. An open circuit never refuses the request nor changes its model.
+    # it. An open circuit never refuses the request nor changes its model: it
+    # places the route last, with the routes paused after a 429.
+    open_routes: Set[str] = set()
     for route_provider, route_model in candidates:
-        check_circuit(_circuit_key(route_provider, route_model))
+        key = _circuit_key(route_provider, route_model)
+        if not check_circuit(key)["allowed"]:
+            open_routes.add(key)
+
+    # The key's policy is checked before any slot, in the resolved order: the
+    # request may use the routes before the first one it refuses, whatever
+    # order pauses, open circuits or full providers then give them. When they
+    # all fail, that refusal is the answer, as before the reordering.
+    refused: Optional[Exception] = None
+    if route_guard is not None:
+        allowed: List[tuple] = []
+        for route in candidates:
+            try:
+                route_guard(*route)
+            except Exception as exc:
+                refused = exc
+                break
+            allowed.append(route)
+        if refused is not None and not allowed:
+            raise refused
+        candidates = allowed
+    candidates = _order_routes(candidates, open_routes)
 
     last_err: Optional[Exception] = None
     # PERF-2: reuse the app-wide pooled sessions (keepalive + DNS cache)
@@ -734,253 +792,329 @@ async def forward(
     # protected provider. Looked up at call time so a fake intercepts.
     from plugboard.http_pool import session_for
 
-    for provider, real_model in candidates:
-        if route_guard is not None:
-            route_guard(provider, real_model)
-        # Direct CLI providers short-circuit HTTP.
-        auth_source = provider.get("auth_source", "")
-        if auth_source.startswith("subprocess:"):
-            try:
-                kind = auth_source.removeprefix("subprocess:")
-                from plugboard import cli_subprocess
+    # A candidate at its concurrency cap is skipped, not failed (D-7, D-23):
+    # it goes to ``busy`` and the request moves on to the next one.
+    queue = deque(candidates)
+    busy: List[tuple] = []
+    loop = asyncio.get_running_loop()
+    deadline: Optional[float] = None
+    granted: Optional[provider_admission.Lease] = None
 
-                sub_body = {**body, "model": real_model}
-                _t_cli = _time.perf_counter()
+    def _take(provider: Dict[str, Any]) -> Optional[provider_admission.Lease]:
+        """The slot the wait granted, when it is this provider's; else a new one."""
+        nonlocal granted
+        if granted is not None and granted.provider_id == provider["id"]:
+            lease, granted = granted, None
+            return lease
+        return provider_admission.try_acquire(provider)
+
+    try:
+        while queue or busy:
+            if granted is not None:
+                # Its candidate went on without it (auth failed): give it back.
+                granted.release()
+                granted = None
+            if not queue:
+                # Every candidate left is full: wait for the first to free a slot,
+                # one deadline for the whole request (PLUGBOARD_PROVIDER_WAIT_S).
+                if deadline is None:
+                    deadline = loop.time() + provider_admission.WAIT_S
+                granted = await provider_admission.wait_acquire(
+                    [p for p, _ in busy], deadline - loop.time()
+                )
+                if granted is None:
+                    break
+                pid = granted.provider_id
+                queue.extend(c for c in busy if c[0]["id"] == pid)
+                queue.extend(c for c in busy if c[0]["id"] != pid)
+                busy.clear()
+            provider, real_model = queue.popleft()
+            # Direct CLI providers short-circuit HTTP.
+            auth_source = provider.get("auth_source", "")
+            if auth_source.startswith("subprocess:"):
+                lease = _take(provider)
+                if lease is None:
+                    busy.append((provider, real_model))
+                    continue
                 try:
-                    result = await cli_subprocess.complete(
-                        kind,
-                        sub_body,
-                        timeout_s=timeout,
-                    )
-                except Exception:
-                    metrics.record(
-                        provider["id"], _time.perf_counter() - _t_cli, error=True
-                    )
-                    raise
-                metrics.record(provider["id"], _time.perf_counter() - _t_cli)
-                reported = _pop_reported_usage(result)
-                # Most CLIs return usage=0,0,0 since they don't report token
-                # counts. Estimate via tiktoken so clients see a consistent
-                # usage block (identical to the streaming path in
-                # forward_stream()). Counts agy reported, zeros included, stay.
-                try:
-                    usage = result.get("usage") or {}
-                    if not reported and not usage.get("total_tokens"):
-                        from plugboard.tokenizer import (
-                            estimate_completion_tokens as _est_c,
-                            estimate_prompt_tokens as _est_p,
+                    kind = auth_source.removeprefix("subprocess:")
+                    from plugboard import cli_subprocess
+
+                    sub_body = {**body, "model": real_model}
+                    _t_cli = _time.perf_counter()
+                    try:
+                        result = await cli_subprocess.complete(
+                            kind,
+                            sub_body,
+                            timeout_s=timeout,
                         )
-
-                        p_tok = _est_p(body.get("messages", []))
-                        c_tok = _est_c(result)
-                        result["usage"] = {
-                            "prompt_tokens": p_tok,
-                            "completion_tokens": c_tok,
-                            "total_tokens": p_tok + c_tok,
-                        }
-                except Exception as _exc:
-                    log.debug("subprocess usage estimation failed: %s", _exc)
-                try:
-                    record_provider_success(provider["id"])
-                    cb_success(_circuit_key(provider, real_model))
-                except Exception:
-                    pass
-                _served_by.set((provider, real_model))
-                _usage_reported.set(reported)
-                return result
-            except Exception as exc:
-                last_err = exc
-                log.warning("Subprocess provider %s failed: %s", provider["id"], exc)
-                try:
-                    from plugboard.model_quarantine import (
-                        is_account_unsupported_error,
-                        is_terminal_model_unavailable_error,
-                        record_account_unsupported,
-                        record_terminal_unavailable,
-                    )
-
-                    reason = str(exc)
-                    if is_account_unsupported_error(reason):
-                        record_account_unsupported(real_model, reason=reason[:200])
-                        invalidate_models_cache()
-                    elif is_terminal_model_unavailable_error(reason):
-                        record_terminal_unavailable(
-                            real_model,
-                            reason=reason[:200],
-                            terminal_reason="model_unavailable",
+                    except Exception:
+                        metrics.record(
+                            provider["id"], _time.perf_counter() - _t_cli, error=True
                         )
-                        invalidate_models_cache()
-                    # A quota, an unavailable model or a failed run counts,
-                    # for the circuit and the provider_down alert alike; a
-                    # prompt the CLI found too long is the request's fault.
-                    if is_provider_fault(reason):
-                        cb_failure(_circuit_key(provider, real_model))
-                        await record_provider_failure(provider["id"])
-                except Exception:
-                    pass
-                continue
-
-        session = await session_for(provider)
-        effective_timeout = timeout
-        url = openai_url(provider["base_url"], "chat/completions")
-        try:
-            auth_header = await _build_auth_header_async(provider)
-        except RuntimeError as exc:
-            last_err = exc
-            log.warning("Auth resolution failed for %s: %s", provider["id"], exc)
-            continue
-        headers = {
-            "Content-Type": "application/json",
-            **auth_header,
-            "X-Request-ID": _request_id_var.get("-"),
-            "X-Session-ID": _uuid.uuid4().hex,  # unique session per request
-        }
-        payload = _adapt_payload(real_model, {**body, "model": real_model})
-        log.info("→ %s | model=%s | provider=%s", url, real_model, provider["id"])
-
-        provider_failed = False
-        # Whether the last failure counts against the route's circuit: a
-        # timeout or a network error does, an HTTP answer per its status.
-        provider_fault = True
-        with _track_in_flight(provider["id"]):
-            for attempt, delay in enumerate([0] + _DELAYS):
-                if delay:
-                    log.warning(
-                        "Retry %d/%d in %.3gs (provider=%s)",
-                        attempt,
-                        len(_DELAYS),
-                        delay,
-                        provider["id"],
-                    )
-                    await asyncio.sleep(delay)
-
-                try:
-                    req_t0 = _time.perf_counter()
-                    async with session.post(
-                        url,
-                        headers=headers,
-                        json=payload,
-                        timeout=aiohttp.ClientTimeout(total=effective_timeout),
-                    ) as resp:
-                        if resp.status in _RETRYABLE:
-                            text = await resp.text()
-                            last_err = _http_error(
-                                provider["id"],
-                                resp.status,
-                                text,
-                                resp.headers,
-                                limit=200,
+                        raise
+                    metrics.record(provider["id"], _time.perf_counter() - _t_cli)
+                    reported = _pop_reported_usage(result)
+                    # Most CLIs return usage=0,0,0 since they don't report token
+                    # counts. Estimate via tiktoken so clients see a consistent
+                    # usage block (identical to the streaming path in
+                    # forward_stream()). Counts agy reported, zeros included, stay.
+                    try:
+                        usage = result.get("usage") or {}
+                        if not reported and not usage.get("total_tokens"):
+                            from plugboard.tokenizer import (
+                                estimate_completion_tokens as _est_c,
+                                estimate_prompt_tokens as _est_p,
                             )
-                            provider_fault = is_provider_fault(text, resp.status)
-                            if (
-                                isinstance(last_err, ProviderHTTPError)
-                                and last_err.request_rejected
-                            ):
-                                # A 5xx saying the context is too long fails
-                                # the same way again: next provider (PLU-5).
-                                break
-                            continue
-                        if resp.status != 200:
-                            text = await resp.text()
+
+                            p_tok = _est_p(body.get("messages", []))
+                            c_tok = _est_c(result)
+                            result["usage"] = {
+                                "prompt_tokens": p_tok,
+                                "completion_tokens": c_tok,
+                                "total_tokens": p_tok + c_tok,
+                            }
+                    except Exception as _exc:
+                        log.debug("subprocess usage estimation failed: %s", _exc)
+                    try:
+                        record_provider_success(provider["id"])
+                        cb_success(_circuit_key(provider, real_model))
+                        route_pauses.clear(_circuit_key(provider, real_model))
+                    except Exception:
+                        pass
+                    _served_by.set((provider, real_model))
+                    _usage_reported.set(reported)
+                    return result
+                except Exception as exc:
+                    last_err = exc
+                    log.warning(
+                        "Subprocess provider %s failed: %s", provider["id"], exc
+                    )
+                    try:
+                        from plugboard.model_quarantine import (
+                            is_account_unsupported_error,
+                            is_terminal_model_unavailable_error,
+                            record_account_unsupported,
+                            record_terminal_unavailable,
+                        )
+
+                        reason = str(exc)
+                        if is_account_unsupported_error(reason):
+                            record_account_unsupported(real_model, reason=reason[:200])
+                            invalidate_models_cache()
+                        elif is_terminal_model_unavailable_error(reason):
+                            record_terminal_unavailable(
+                                real_model,
+                                reason=reason[:200],
+                                terminal_reason="model_unavailable",
+                            )
+                            invalidate_models_cache()
+                        # A quota, an unavailable model or a failed run counts,
+                        # for the circuit and the provider_down alert alike; a
+                        # prompt the CLI found too long is the request's fault.
+                        if is_provider_fault(reason):
+                            cb_failure(_circuit_key(provider, real_model))
+                            await record_provider_failure(provider["id"])
+                        # A CLI quota pauses the route, as an HTTP 429 does.
+                        if isinstance(exc, CliSubprocessError) and exc.quota:
+                            route_pauses.pause(
+                                _circuit_key(provider, real_model), exc.retry_after
+                            )
+                    except Exception:
+                        pass
+                    continue
+                finally:
+                    lease.release()
+
+            session = await session_for(provider)
+            effective_timeout = timeout
+            url = openai_url(provider["base_url"], "chat/completions")
+            try:
+                auth_header = await _build_auth_header_async(provider)
+            except RuntimeError as exc:
+                last_err = exc
+                log.warning("Auth resolution failed for %s: %s", provider["id"], exc)
+                continue
+            headers = {
+                "Content-Type": "application/json",
+                **auth_header,
+                "X-Request-ID": _request_id_var.get("-"),
+                "X-Session-ID": _uuid.uuid4().hex,  # unique session per request
+            }
+            payload = _adapt_payload(real_model, {**body, "model": real_model})
+            log.info("→ %s | model=%s | provider=%s", url, real_model, provider["id"])
+
+            provider_failed = False
+            # Whether the last failure counts against the route's circuit: a
+            # timeout or a network error does, an HTTP answer per its status.
+            provider_fault = True
+            lease = _take(provider)
+            if lease is None:
+                busy.append((provider, real_model))
+                continue
+            with lease:
+                for attempt, delay in enumerate([0] + _DELAYS):
+                    if delay:
+                        log.warning(
+                            "Retry %d/%d in %.3gs (provider=%s)",
+                            attempt,
+                            len(_DELAYS),
+                            delay,
+                            provider["id"],
+                        )
+                        await asyncio.sleep(delay)
+
+                    try:
+                        req_t0 = _time.perf_counter()
+                        async with session.post(
+                            url,
+                            headers=headers,
+                            json=payload,
+                            timeout=aiohttp.ClientTimeout(total=effective_timeout),
+                        ) as resp:
+                            if resp.status in _RETRYABLE:
+                                text = await resp.text()
+                                last_err = _http_error(
+                                    provider["id"],
+                                    resp.status,
+                                    text,
+                                    resp.headers,
+                                    limit=200,
+                                )
+                                provider_fault = is_provider_fault(text, resp.status)
+                                if (
+                                    isinstance(last_err, ProviderHTTPError)
+                                    and last_err.request_rejected
+                                ):
+                                    # A 5xx saying the context is too long fails
+                                    # the same way again: next provider (PLU-5).
+                                    break
+                                if isinstance(
+                                    last_err, ProviderQuotaError
+                                ) and not _retry_quota_here(
+                                    last_err.retry_after, attempt
+                                ):
+                                    # The provider asks for a longer wait than
+                                    # the next retry: next provider at once.
+                                    break
+                                continue
+                            if resp.status != 200:
+                                text = await resp.text()
+                                try:
+                                    metrics.record(provider["id"], 0.0, error=True)
+                                except Exception:
+                                    pass
+                                last_err = _http_error(
+                                    provider["id"], resp.status, text, resp.headers
+                                )
+                                provider_fault = is_provider_fault(text, resp.status)
+                                provider_failed = True
+                                break  # non-retryable error, try next provider
+                            result = await resp.json()
+                            elapsed = _time.perf_counter() - req_t0
                             try:
-                                metrics.record(provider["id"], 0.0, error=True)
+                                metrics.record(provider["id"], elapsed)
                             except Exception:
                                 pass
-                            last_err = _http_error(
-                                provider["id"], resp.status, text, resp.headers
-                            )
-                            provider_fault = is_provider_fault(text, resp.status)
+                            try:
+                                record_provider_success(provider["id"])
+                                cb_success(_circuit_key(provider, real_model))
+                                route_pauses.clear(_circuit_key(provider, real_model))
+                            except Exception:
+                                pass
+                            _served_by.set((provider, real_model))
+                            return result
+                    except asyncio.TimeoutError:
+                        try:
+                            metrics.record(provider["id"], 0.0, error=True)
+                        except Exception:
+                            pass
+                        last_err = RuntimeError(
+                            f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}"
+                        )
+                        provider_fault = True
+                        log.warning(
+                            "Timeout on %s (attempt %d/%d)",
+                            provider["id"],
+                            attempt + 1,
+                            len(_DELAYS) + 1,
+                        )
+                        # Continue retries — don't break on timeout, the backend
+                        # may have been temporarily overloaded (agents/sub-agents)
+                        continue
+                    except (aiohttp.ClientError, ValueError) as exc:
+                        # Refused or dropped connection, truncated body, or a 200
+                        # whose body is not JSON. The request may already have
+                        # reached the provider, so it is not replayed here: hand
+                        # over to the next provider instead.
+                        try:
+                            metrics.record(provider["id"], 0.0, error=True)
+                        except Exception:
+                            pass
+                        if netguard.is_egress_refusal(exc):
+                            # The guard refused a non-public address: no socket
+                            # was opened. Not the provider's fault (no circuit,
+                            # no provider_down count, no route pause), reported
+                            # once per window, never retried: the lease is given
+                            # back and the next provider is tried.
+                            last_err = ProviderEgressRefused(provider["id"], exc.host)
+                            netguard.report_refusal(provider["id"], exc.host, "forward")
+                            provider_fault = False
                             provider_failed = True
-                            break  # non-retryable error, try next provider
-                        result = await resp.json()
-                        elapsed = _time.perf_counter() - req_t0
-                        try:
-                            metrics.record(provider["id"], elapsed)
-                        except Exception:
-                            pass
-                        try:
-                            record_provider_success(provider["id"])
-                            cb_success(_circuit_key(provider, real_model))
-                        except Exception:
-                            pass
-                        _served_by.set((provider, real_model))
-                        return result
-                except asyncio.TimeoutError:
-                    try:
-                        metrics.record(provider["id"], 0.0, error=True)
-                    except Exception:
-                        pass
-                    last_err = RuntimeError(
-                        f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}"
-                    )
-                    provider_fault = True
-                    log.warning(
-                        "Timeout on %s (attempt %d/%d)",
-                        provider["id"],
-                        attempt + 1,
-                        len(_DELAYS) + 1,
-                    )
-                    # Continue retries — don't break on timeout, the backend
-                    # may have been temporarily overloaded (agents/sub-agents)
-                    continue
-                except (aiohttp.ClientError, ValueError) as exc:
-                    # Refused or dropped connection, truncated body, or a 200
-                    # whose body is not JSON. The request may already have
-                    # reached the provider, so it is not replayed here: hand
-                    # over to the next provider instead.
-                    try:
-                        metrics.record(provider["id"], 0.0, error=True)
-                    except Exception:
-                        pass
-                    if netguard.is_egress_refusal(exc):
-                        # The guard refused a non-public address: no socket
-                        # was opened. Not the provider's fault (no circuit,
-                        # no provider_down count), reported once per window,
-                        # never retried: next provider.
-                        last_err = ProviderEgressRefused(provider["id"], exc.host)
-                        netguard.report_refusal(provider["id"], exc.host, "forward")
-                        provider_fault = False
+                            break
+                        detail = str(exc) or type(exc).__name__
+                        last_err = ProviderNetworkError(
+                            f"[{provider['id']}] network error: {detail[:200]}",
+                            provider_id=provider["id"],
+                        )
+                        log.warning(
+                            "Network error on %s (%s): %s",
+                            provider["id"],
+                            type(exc).__name__,
+                            detail[:200],
+                        )
+                        provider_fault = True
                         provider_failed = True
+
+                    if provider_failed:
                         break
-                    detail = str(exc) or type(exc).__name__
-                    last_err = ProviderNetworkError(
-                        f"[{provider['id']}] network error: {detail[:200]}",
-                        provider_id=provider["id"],
-                    )
-                    log.warning(
-                        "Network error on %s (%s): %s",
-                        provider["id"],
-                        type(exc).__name__,
-                        detail[:200],
-                    )
-                    provider_fault = True
-                    provider_failed = True
 
-                if provider_failed:
-                    break
+            # Its last answer was a 429: the route is tried last for a while.
+            if (
+                isinstance(last_err, ProviderQuotaError)
+                and last_err.provider_id == provider["id"]
+            ):
+                route_pauses.pause(
+                    _circuit_key(provider, real_model), last_err.retry_after
+                )
 
-        # The provider failed: count it against the route's circuit, unless
-        # the request caused the error (400, 413, 422, a prompt too long...).
-        if provider_fault:
-            cb_failure(_circuit_key(provider, real_model))
+            # The provider failed: count it against the route's circuit, unless
+            # the request caused the error (400, 413, 422, a prompt too long...).
+            if provider_fault:
+                cb_failure(_circuit_key(provider, real_model))
 
-        # Record error metrics and try next provider
-        if not provider_failed:
-            try:
-                metrics.record(provider["id"], 0.0, error=True)
-            except Exception:
-                pass
+            # Record error metrics and try next provider
+            if not provider_failed:
+                try:
+                    metrics.record(provider["id"], 0.0, error=True)
+                except Exception:
+                    pass
 
-        # The provider_down alert counts by the circuit's rule (provider_fault).
-        if provider_fault:
-            try:
-                await record_provider_failure(provider["id"])
-            except Exception:
-                pass
+            # The provider_down alert counts by the circuit's rule (provider_fault).
+            if provider_fault:
+                try:
+                    await record_provider_failure(provider["id"])
+                except Exception:
+                    pass
 
-        log.warning("Provider %s failed, trying next...", provider["id"])
+            log.warning("Provider %s failed, trying next...", provider["id"])
 
-    raise last_err or RuntimeError("All providers failed")
+        if busy:
+            raise ProvidersBusyError([p["id"] for p, _ in busy])
+        raise refused or last_err or RuntimeError("All providers failed")
+    finally:
+        if granted is not None:
+            granted.release()  # granted by the wait, never used
 
 
 async def forward_stream(
@@ -992,7 +1126,40 @@ async def forward_stream(
     """
     Forward a streaming /v1/chat/completions request, yielding raw SSE chunks.
     No retry — cannot retry after streaming has begun.
+
+    The route holds a lease on its provider from the first chunk to the
+    last, or until the stream is closed early; a provider at its cap is
+    waited for up to ``PLUGBOARD_PROVIDER_WAIT_S``, then raises
+    ``ProvidersBusyError`` before any call.
     """
+    model_str = body.get("model", "")
+    provider, real_model = resolve_provider_and_model(model_str)
+    if route_guard is not None:
+        route_guard(provider, real_model)
+    lease = provider_admission.try_acquire(provider)
+    if lease is None:
+        lease = await provider_admission.wait_acquire(
+            [provider], provider_admission.WAIT_S
+        )
+    if lease is None:
+        raise ProvidersBusyError([provider["id"]])
+    try:
+        async with contextlib.aclosing(
+            _stream_route(body, provider, real_model, timeout)
+        ) as chunks:
+            async for chunk in chunks:
+                yield chunk
+    finally:
+        lease.release()
+
+
+async def _stream_route(
+    body: Dict[str, Any],
+    provider: Dict[str, Any],
+    real_model: str,
+    timeout: float,
+) -> AsyncIterator[bytes]:
+    """Stream ``body`` from ``provider`` (the body of ``forward_stream``)."""
     from plugboard.circuit_breaker import (
         check_circuit,
         is_provider_fault,
@@ -1000,10 +1167,6 @@ async def forward_stream(
         record_success as cb_success,
     )
 
-    model_str = body.get("model", "")
-    provider, real_model = resolve_provider_and_model(model_str)
-    if route_guard is not None:
-        route_guard(provider, real_model)
     # The route's circuit is read and recorded as in forward(): the read
     # moves an open circuit past its cooldown to half-open, so a success
     # closes it. An open circuit never refuses the request.
@@ -1054,13 +1217,14 @@ async def forward_stream(
                         terminal_reason="model_unavailable",
                     )
                     invalidate_models_cache()
+                # A CLI quota pauses the route, as an HTTP 429 does.
+                if isinstance(exc, CliSubprocessError) and exc.quota:
+                    route_pauses.pause(circuit_key, exc.retry_after)
             except Exception:
                 pass
             err_payload: Dict[str, Any] = {
                 "error": {"message": str(exc), "type": "subprocess_error"}
             }
-            from plugboard.cli_subprocess import CliSubprocessError
-
             if isinstance(exc, CliSubprocessError):
                 err_payload["error"]["exit_code"] = exc.exit_code
                 err_payload["error"]["stderr"] = exc.stderr
@@ -1072,6 +1236,7 @@ async def forward_stream(
             yield b"data: [DONE]\n\n"
             return
         cb_success(circuit_key)
+        route_pauses.clear(circuit_key)
         reported = _pop_reported_usage(result)
         reported_usage = result.get("usage") or {}
         content = result["choices"][0]["message"]["content"]
@@ -1177,8 +1342,12 @@ async def forward_stream(
                 text = await resp.text()
                 if is_provider_fault(text, resp.status):
                     cb_failure(circuit_key)
-                raise _http_error(provider["id"], resp.status, text, resp.headers)
+                err = _http_error(provider["id"], resp.status, text, resp.headers)
+                if isinstance(err, ProviderQuotaError):
+                    route_pauses.pause(circuit_key, err.retry_after)
+                raise err
             cb_success(circuit_key)
+            route_pauses.clear(circuit_key)
             streaming = True
             async for chunk in resp.content.iter_any():
                 yield chunk

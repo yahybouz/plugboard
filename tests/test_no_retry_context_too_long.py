@@ -55,7 +55,6 @@ def isolated(monkeypatch):
     monkeypatch.setattr(alerts, "_provider_alerted", {})
     # Equal load-balancing scores keep the candidates in providers.json order.
     monkeypatch.setattr(metrics, "_stats", {})
-    monkeypatch.setattr(router, "_IN_FLIGHT_BY_PROVIDER", {})
     return router
 
 

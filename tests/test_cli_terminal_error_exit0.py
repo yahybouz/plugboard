@@ -98,7 +98,6 @@ def providers(_providers_file, monkeypatch):
                 "test-provider": {"latency_avg": 2.0, "requests": 100, "errors": 0},
             },
         )
-        monkeypatch.setattr(router, "_IN_FLIGHT_BY_PROVIDER", {})
 
     return _setup
 

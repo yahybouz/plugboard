@@ -359,6 +359,7 @@ class PreflightResult(BaseModel):
             "price_unavailable",
             "rate_limited",
             "upstream_error",
+            "providers_busy",
         ]
     ] = Field(
         default=None,
@@ -367,8 +368,9 @@ class PreflightResult(BaseModel):
             "the model does not resolve, is not allowed for the key, no "
             "provider knows it (the chat routes' 404 model_not_found; not "
             "pinged), the monthly budget is spent, the key has a budget and "
-            "the model no known price, the key's rpm limit is reached, or the "
-            "provider failed."
+            "the model no known price, the key's rpm limit is reached, the "
+            "provider failed, or the provider stayed at its concurrency cap "
+            "(nothing was called)."
         ),
     )
 
@@ -451,14 +453,15 @@ class ErrorResponse(_Open):
     Retry-After header, as does an exhausted provider quota (429) when the
     provider gave a delay; a failing CLI provider (502) adds its exit details
     for the admin only. A chat model no provider knows (404) adds `code` and
-    `hint`."""
+    `hint`. A chat whose candidate providers all stayed at their concurrency
+    cap (503) adds `code` providers_busy, `retry_after` and Retry-After."""
 
     detail: Union[str, List[Any], Dict[str, Any]]
     retry_after: Optional[int] = None
     code: Optional[str] = Field(
         default=None,
         description="Stable reason for programs, when the route gives one: "
-        "model_not_found (chat, 404).",
+        "model_not_found (chat, 404), providers_busy (chat, 503).",
     )
     hint: Optional[str] = Field(
         default=None, description="What to do next, when the gateway knows."
@@ -536,7 +539,8 @@ _CHAT_ERRORS = {
     " model_not_found, hint says what to send; nothing was called.",
     "413": "Request body larger than MAX_BODY_BYTES (10 MB by default).",
     "502": "The provider failed or answered with an error.",
-    "503": "Provider timeout (retry_after) or too many concurrent requests.",
+    "503": "Provider timeout (retry_after), too many concurrent requests, or every"
+    " candidate provider at its concurrency cap (code providers_busy, Retry-After 5).",
 }
 _CHAT_HEADERS = {
     "X-Cache": "HIT, MISS or SEMANTIC-HIT-<layer>.",

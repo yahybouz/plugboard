@@ -116,6 +116,7 @@ from plugboard.cli_subprocess import CliSubprocessError
 from plugboard.router import (
     ProviderHTTPError,
     ProviderNetworkError,
+    ProvidersBusyError,
     ProviderQuotaError,
     discover_models,
     forward,
@@ -721,6 +722,55 @@ def _client_gone_response(model: str) -> Response:
         model,
     )
     return Response(status_code=_CLIENT_CLOSED_REQUEST)
+
+
+# ── One turn at a time per session (D-24, PLU-8) ────────────────────────────
+
+
+async def _session_turn_dep(request: Request):
+    """Give the session's turn back once the response is sent.
+
+    The handler takes the turn (``_take_session_turn``) only when the call
+    carries a session id; a yield dependency (scope "request") exits after
+    the last byte, streams included, and on any error the handler raises.
+    """
+    try:
+        yield
+    finally:
+        release = getattr(request.state, "session_turn_release", None)
+        if release is not None:
+            release()
+
+
+async def _take_session_turn(request: Request, client_id: str, session_id: str) -> None:
+    """Wait for the previous turn of this session to be answered and recorded.
+
+    The release is stored as soon as the turn is obtained, so a hang-up that
+    comes later (``_ClientGone``) cannot lose it.
+    """
+    from plugboard import session_turns
+
+    request.state.session_turn_release = await session_turns.acquire(
+        client_id, session_id
+    )
+
+
+def _record_session_turn(
+    client_id: Optional[str],
+    session_id: Optional[str],
+    messages: List[dict],
+    reply: str,
+) -> None:
+    """PERF-1: record the exchange so the next call with the same session_id
+    sees the updated transcript. Non-blocking: never bubbles errors."""
+    if not (session_id and client_id):
+        return
+    try:
+        from plugboard.session_store import record_exchange
+
+        record_exchange(client_id, session_id, messages, reply)
+    except Exception as exc:
+        log.warning("session record error (non-fatal): %s", exc)
 
 
 def _csp_for(nonce: str) -> str:
@@ -1450,7 +1500,8 @@ def _bill_streaming(
     """Record usage from accumulated SSE chunks and return the billing dict.
 
     Returns a dict with keys {prompt_tokens, completion_tokens, total_tokens,
-    cost_usd, model, upstream_usage_present}. The caller (streaming
+    cost_usd, model, upstream_usage_present, text}; ``text`` (the answer,
+    recorded in the session) is never sent to the client. The caller (streaming
     generator) uses this to append a final OpenAI-compatible usage chunk
     when the upstream didn't provide one — so the chat dashboard can
     display tokens + cost for every provider, not just subprocess.
@@ -1509,6 +1560,7 @@ def _bill_streaming(
         "cost_usd": round(cost, 6),
         "model": real_model,
         "upstream_usage_present": bool(upstream_usage),
+        "text": completion_text,
     }
 
 
@@ -1735,6 +1787,26 @@ def _quota_error_response(
     return JSONResponse(status_code=429, content=content, headers=headers)
 
 
+def _providers_busy_response(
+    exc: ProvidersBusyError, client_id: Optional[str]
+) -> JSONResponse:
+    """503 ``providers_busy`` when every candidate provider stayed at its
+    concurrency cap for the whole wait (D-23).
+
+    Nothing was called. Only the admin gets the ids of the busy providers.
+    """
+    log.warning("providers busy: %s", ", ".join(exc.provider_ids))
+    detail = (
+        "Every provider that serves this model is busy: "
+        f"retry in {exc.retry_after} seconds."
+    )
+    if client_id == "admin":
+        detail += f" Busy providers: {', '.join(exc.provider_ids)}."
+    content: Dict[str, Any] = {"detail": detail, "code": "providers_busy"}
+    headers = _retry_after_headers(content, exc.retry_after)
+    return JSONResponse(status_code=503, content=content, headers=headers)
+
+
 def _provider_http_error_response(
     exc: ProviderHTTPError | ProviderNetworkError, client_id: Optional[str]
 ) -> JSONResponse:
@@ -1850,12 +1922,19 @@ def _model_not_found_response(model: str) -> JSONResponse:
     )
 
 
-def _require_chat_messages(body: Dict[str, Any]) -> None:
+def _require_chat_messages(
+    body: Dict[str, Any], *, history_may_follow: bool = False
+) -> None:
     """400 for a messages field no provider can answer.
 
     Without it, an empty or malformed list reached the provider and came back
     as a 502 carrying the upstream parser error (or the CLI's "Empty prompt").
+    With ``history_may_follow`` (a session turn, before its history is merged)
+    an absent or empty list passes: the stored history may fill it, and the
+    full check runs again after the merge.
     """
+    if history_may_follow and body.get("messages", []) == []:
+        return
     messages = body.get("messages")
     if not isinstance(messages, list) or not messages:
         raise HTTPException(400, "messages must be a non-empty array")
@@ -1871,7 +1950,10 @@ def _require_chat_messages(body: Dict[str, Any]) -> None:
             )
 
 
-@app.post("/v1/chat/completions", dependencies=[Depends(_inflight_chat_dep)])
+@app.post(
+    "/v1/chat/completions",
+    dependencies=[Depends(_inflight_chat_dep), Depends(_session_turn_dep)],
+)
 async def chat_completions(
     request: Request,
     client_id: Optional[str] = Depends(_resolve_client),
@@ -1933,12 +2015,8 @@ async def chat_completions(
         or request.headers.get("x-llm-session-id")
         or body.pop("session_id", None)
     )
-    if session_id and client_id:
-        from plugboard.session_store import merge_history_into_body
-
-        body = merge_history_into_body(client_id, session_id, body)
-
-    _require_chat_messages(body)
+    in_session = bool(session_id and client_id)
+    _require_chat_messages(body, history_may_follow=in_session)
 
     # Issue #5: check spending limit before processing request
     if client_id and client_id != "admin":
@@ -1963,6 +2041,22 @@ async def chat_completions(
     # Per-client rate limit (rpm_limit on key record)
     if client_id and client_id != "admin":
         _check_client_rpm(client_id, key_record=key_record)
+
+    if in_session:
+        from plugboard.session_store import merge_history_into_body
+
+        # D-24: the previous turn of this session is answered and recorded
+        # first, so this one sees it; the turn comes back after the response.
+        # Taken after every refusal above: a request that is refused does not
+        # wait for the turn its session is running.
+        try:
+            await _unless_client_gone(
+                request, _take_session_turn(request, client_id, session_id)
+            )
+        except _ClientGone:
+            return _client_gone_response(body.get("model", "?"))
+        body = merge_history_into_body(client_id, session_id, body)
+        _require_chat_messages(body)
 
     # Response cache — disabled only when caller sets cache=false.
     # For streaming requests we still check the cache; on HIT we replay the
@@ -2124,6 +2218,8 @@ async def chat_completions(
             except HTTPException:
                 raise
             except Exception as exc:
+                if isinstance(exc, ProvidersBusyError):
+                    return _providers_busy_response(exc, client_id)
                 log.error("subprocess stream forward error: %s", exc)
                 err_str = str(exc)
                 # Before the timeout test: a CLI message quotes its stderr.
@@ -2247,6 +2343,9 @@ async def chat_completions(
             content = (result.get("choices") or [{}])[0].get("message", {}).get(
                 "content", ""
             ) or ""
+            _record_session_turn(
+                client_id, session_id, list(body.get("messages") or []), content
+            )
             usage = result.get("usage") or {}
             completion_id = result.get("id", "chatcmpl-subproc")
             created = result.get("created", int(time.time()))
@@ -2306,6 +2405,8 @@ async def chat_completions(
         except HTTPException:
             raise
         except Exception as exc:
+            if isinstance(exc, ProvidersBusyError):
+                return _providers_busy_response(exc, client_id)
             log.error("stream error: %s", exc)
             err_str = str(exc)
             if isinstance(exc, ProviderQuotaError):
@@ -2397,6 +2498,11 @@ async def chat_completions(
                     )
                 except Exception as exc:
                     log.warning("Stream billing error (non-fatal): %s", exc)
+            if bill is not None:
+                # Complete stream only: an interrupted one left above.
+                _record_session_turn(
+                    cid, session_id, list(req_body.get("messages") or []), bill["text"]
+                )
 
             usage_needed = bill is not None and not bill["upstream_usage_present"]
             if not usage_needed:
@@ -2443,6 +2549,8 @@ async def chat_completions(
     except HTTPException:
         raise
     except Exception as exc:
+        if isinstance(exc, ProvidersBusyError):
+            return _providers_busy_response(exc, client_id)
         log.error("forward error: %s", exc)
         err_str = str(exc)
         # Before the timeout test: a CLI message quotes its stderr.
@@ -2488,26 +2596,16 @@ async def chat_completions(
     if billing_info:
         result["billing"] = billing_info
 
-    # PERF-1: record the exchange so the next call with the same session_id
-    # sees the updated transcript. Non-blocking — never bubble errors.
     if session_id and client_id:
+        assistant_text = ""
         try:
-            from plugboard.session_store import record_exchange
-
-            assistant_text = ""
-            try:
-                choice = (result.get("choices") or [{}])[0]
-                assistant_text = (choice.get("message") or {}).get("content") or ""
-            except (IndexError, TypeError):
-                pass
-            record_exchange(
-                client_id,
-                session_id,
-                list(body.get("messages", []) or []),
-                assistant_text,
-            )
-        except Exception as exc:
-            log.warning("session record error (non-fatal): %s", exc)
+            choice = (result.get("choices") or [{}])[0]
+            assistant_text = (choice.get("message") or {}).get("content") or ""
+        except (AttributeError, IndexError, TypeError):
+            pass
+        _record_session_turn(
+            client_id, session_id, list(body.get("messages", []) or []), assistant_text
+        )
 
     # Cache the response
     if _use_cache and _cache_key:
@@ -2696,6 +2794,10 @@ async def preflight(
                 return _client_gone_response(model_str)
             except HTTPException:
                 error = "forbidden_model"
+            except ProvidersBusyError as exc:
+                # Full, not failed: nothing was called (D-23).
+                log.info("preflight busy | model=%s | %s", model_str, exc)
+                error = "providers_busy"
             except Exception as exc:
                 log.warning("preflight error | model=%s | %s", model_str, exc)
                 error = "upstream_error"
@@ -2752,7 +2854,10 @@ async def model_info(
 # clients to opt-in to future breaking changes.
 
 
-@app.post("/v2/chat/completions", dependencies=[Depends(_inflight_chat_dep)])
+@app.post(
+    "/v2/chat/completions",
+    dependencies=[Depends(_inflight_chat_dep), Depends(_session_turn_dep)],
+)
 async def chat_completions_v2(
     request: Request, client_id: Optional[str] = Depends(_resolve_client)
 ):
@@ -3024,6 +3129,16 @@ async def check_model_internet_access(
                 last_result.error or "no signal"
             )
 
+    except ProvidersBusyError as exc:
+        # Every provider of the model is full, not offline (D-23): nothing is
+        # learnt, so nothing is quarantined or persisted.
+        return {
+            "model_id": model_id,
+            "internet_access": False,
+            "internet_access_confidence": "low",
+            "status": "busy",
+            "error": str(exc),
+        }
     except Exception as exc:
         reason = str(exc)
         from plugboard.model_quarantine import (
@@ -3219,7 +3334,9 @@ async def check_all_models_internet_access(
 
         elapsed = _time.monotonic() - started_at
         online = sum(1 for r in results if r.get("internet_access"))
-        failed = sum(1 for r in results if r.get("status") in ("error", "timeout"))
+        failed = sum(
+            1 for r in results if r.get("status") in ("error", "timeout", "busy")
+        )
         offline = len(results) - online - failed
 
         # Invalidate models cache so the UI immediately sees the persisted flag.
@@ -3580,6 +3697,8 @@ class ProviderUpdate(BaseModel):
         List[Annotated[str, Field(min_length=1, max_length=200)]]
     ] = Field(default=None, max_length=500)
     egress_guard: Optional[bool] = None
+    # Requests the provider runs at once; 0 = no cap (D-22).
+    max_concurrency: Optional[int] = Field(default=None, ge=0, le=1000)
 
 
 def _mask(p: Dict[str, Any]) -> Dict[str, Any]:

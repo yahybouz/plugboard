@@ -1436,7 +1436,7 @@
       },
       "ErrorResponse": {
         "additionalProperties": true,
-        "description": "FastAPI's error body. Upstream timeouts (503) add `retry_after` and a\nRetry-After header, as does an exhausted provider quota (429) when the\nprovider gave a delay; a failing CLI provider (502) adds its exit details\nfor the admin only. A chat model no provider knows (404) adds `code` and\n`hint`.",
+        "description": "FastAPI's error body. Upstream timeouts (503) add `retry_after` and a\nRetry-After header, as does an exhausted provider quota (429) when the\nprovider gave a delay; a failing CLI provider (502) adds its exit details\nfor the admin only. A chat model no provider knows (404) adds `code` and\n`hint`. A chat whose candidate providers all stayed at their concurrency\ncap (503) adds `code` providers_busy, `retry_after` and Retry-After.",
         "properties": {
           "detail": {
             "anyOf": [
@@ -1476,7 +1476,7 @@
               }
             ],
             "default": null,
-            "description": "Stable reason for programs, when the route gives one: model_not_found (chat, 404).",
+            "description": "Stable reason for programs, when the route gives one: model_not_found (chat, 404), providers_busy (chat, 503).",
             "title": "Code"
           },
           "hint": {
@@ -2275,7 +2275,8 @@
                   "budget_exceeded",
                   "price_unavailable",
                   "rate_limited",
-                  "upstream_error"
+                  "upstream_error",
+                  "providers_busy"
                 ],
                 "type": "string"
               },
@@ -2284,7 +2285,7 @@
               }
             ],
             "default": null,
-            "description": "Why the pair failed (closed code, never the provider's text): the model does not resolve, is not allowed for the key, no provider knows it (the chat routes' 404 model_not_found; not pinged), the monthly budget is spent, the key has a budget and the model no known price, the key's rpm limit is reached, or the provider failed.",
+            "description": "Why the pair failed (closed code, never the provider's text): the model does not resolve, is not allowed for the key, no provider knows it (the chat routes' 404 model_not_found; not pinged), the monthly budget is spent, the key has a budget and the model no known price, the key's rpm limit is reached, the provider failed, or the provider stayed at its concurrency cap (nothing was called).",
             "title": "Error"
           }
         },
@@ -2691,7 +2692,7 @@
             }
           },
           "503": {
-            "description": "Provider timeout (retry_after) or too many concurrent requests.",
+            "description": "Provider timeout (retry_after), too many concurrent requests, or every candidate provider at its concurrency cap (code providers_busy, Retry-After 5).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3495,7 +3496,7 @@
             }
           },
           "503": {
-            "description": "Provider timeout (retry_after) or too many concurrent requests.",
+            "description": "Provider timeout (retry_after), too many concurrent requests, or every candidate provider at its concurrency cap (code providers_busy, Retry-After 5).",
             "content": {
               "application/json": {
                 "schema": {

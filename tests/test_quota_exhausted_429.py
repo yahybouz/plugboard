@@ -44,7 +44,6 @@ def a_first(monkeypatch):
             "other-provider": {"latency_avg": 2.0, "requests": 100, "errors": 0},
         },
     )
-    monkeypatch.setattr(router, "_IN_FLIGHT_BY_PROVIDER", {})
 
 
 @pytest.fixture
@@ -692,7 +691,6 @@ async def test_cli_in_quota_falls_back_to_an_http_provider(
             "test-provider": {"latency_avg": 2.0, "requests": 100, "errors": 0},
         },
     )
-    monkeypatch.setattr(router, "_IN_FLIGHT_BY_PROVIDER", {})
     cli_fails("codex", _CODEX_USAGE_LIMIT, stderr=_CODEX_STDERR)
 
     with aioresponses() as mock:
