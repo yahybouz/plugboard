@@ -70,7 +70,7 @@ The command reads every secret with the current key and re-encrypts it with the 
 
 | Variable | Default | Description |
 |---|---|---|
-| `PLUGBOARD_RETRY_DELAYS` | `2,5,15` | Seconds to wait before each retry on `429`/`5xx` from an HTTP provider. |
+| `PLUGBOARD_RETRY_DELAYS` | `2,5,15` | Seconds to wait before each retry on `429`/`5xx` from an HTTP provider. An error saying the context is too long is not retried. |
 | `PLUGBOARD_LB_ERROR_RATE_WEIGHT` | `5.0` | Weight of the error rate in the provider score used for fallback ordering. |
 | `PLUGBOARD_LB_INFLIGHT_WEIGHT` | `0.35` | Weight of in-flight requests in that score. |
 | `PLUGBOARD_HTTP_POOL_SIZE` | `100` | Shared HTTP connection pool size. |
