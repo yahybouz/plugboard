@@ -3,8 +3,9 @@ Provider admission — a cap on the requests a provider runs at once (PLU-9).
 
 Every request in flight holds a lease on its provider, whatever the path
 (HTTP, stream, CLI), given back in a ``finally``. A provider may cap how
-many leases it hands out (D-22): a local one (Ollama, ``sovereign``,
-loopback or private address) takes one request at a time by default
+many leases it hands out (D-22): a local one (``sovereign``, loopback or
+private address, or an Ollama over plain ``http://``, whatever its host)
+takes one request at a time by default
 (``PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT``); the others have no cap unless
 their record sets ``max_concurrency``. When every candidate is full, a
 request waits at most ``PLUGBOARD_PROVIDER_WAIT_S`` for the first freed

@@ -87,8 +87,10 @@ recopiés par `envcompat` comme pour tout réglage.
 
 - **Défaut local à 1** : un Ollama recevait des requêtes parallèles ; il les
   sérialise désormais. À écrire dans le CHANGELOG ; `PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT=0` revient à 4.8.0.
-- **Classement local** : Ollama Cloud (`https://ollama.com`) n'est pas local ;
-  une adresse Tailscale (CGNAT) non plus : régler `max_concurrency`.
+- **Classement local** : un Ollama joint en `http://` est local quelle que soit
+  son adresse (Tailscale, CGNAT ou nom d'hôte compris) ; Ollama Cloud
+  (`https://ollama.com`) ne l'est pas, ni un autre fournisseur sur une adresse
+  Tailscale (CGNAT) ou un nom d'hôte : régler `max_concurrency`.
 - **Créneau jamais rendu** : flux abandonné sans fermeture (rendu au ramasse-miettes),
   annulation pendant une attente, créneau accordé au moment d'une annulation.
   Bail idempotent, tests dédiés.

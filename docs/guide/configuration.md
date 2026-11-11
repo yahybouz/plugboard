@@ -78,7 +78,7 @@ A completed rotation also signs out every dashboard session and forgets the brow
 | `PLUGBOARD_RETRY_DELAYS` | `2,5,15` | Seconds to wait before each retry on `429`/`5xx` from an HTTP provider. An error saying the context is too long is not retried, nor is a `429` whose `Retry-After` exceeds the next delay. After a final `429` (or a CLI quota error), the route (provider and model) is paused for the `Retry-After` the provider gave, else for 30 s, then 1 min, then 5 min as its `429`s follow one another, and is tried after the other candidates until then; a success clears the pause. |
 | `PLUGBOARD_LB_ERROR_RATE_WEIGHT` | `5.0` | Weight of the error rate in the provider score used for fallback ordering. |
 | `PLUGBOARD_LB_INFLIGHT_WEIGHT` | `0.35` | Weight of in-flight requests in that score. Streamed requests and CLI calls count as in flight. |
-| `PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT` | `1` | Concurrent requests a local provider (Ollama, `sovereign`, loopback or private address) takes when its record sets no `max_concurrency`. `0` means no cap. |
+| `PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT` | `1` | Concurrent requests a local provider (`sovereign`, a loopback or private address, or an Ollama over plain `http://`, whatever its host; see [concurrent requests per provider](providers-and-subscriptions.md#concurrent-requests-per-provider)) takes when its record sets no `max_concurrency`. `0` means no cap. |
 | `PLUGBOARD_PROVIDER_WAIT_S` | `10` | How long a request waits when every candidate provider is at its cap, before `503 providers_busy`. `0` answers at once. |
 | `PLUGBOARD_HTTP_POOL_SIZE` | `100` | Shared HTTP connection pool size. |
 | `PLUGBOARD_HTTP_POOL_PER_HOST` | `20` | Connections per upstream host. |
