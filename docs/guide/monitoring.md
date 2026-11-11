@@ -53,7 +53,7 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 `GET /health` is public and cheap, suitable for load balancers and container health checks:
 
 ```json
-{"ok": true, "version": "4.8.0", "providers": 3, "active": ["anthropic-direct", "ollama", "claude-via-claude-cli"]}
+{"ok": true, "version": "4.9.0", "providers": 3, "active": ["anthropic-direct", "ollama", "claude-via-claude-cli"]}
 ```
 
 When `API_KEY` is empty it also returns `"auth_disabled": true` and `"dev_mode"`, so a deployment gate can refuse an instance whose client authentication is off.
