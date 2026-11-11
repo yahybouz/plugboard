@@ -94,6 +94,8 @@ import base64, os, pathlib, secrets, sys
 
 env = pathlib.Path(".env")
 example = pathlib.Path(".env.example")
+if env.is_symlink() and not env.exists():
+    sys.exit(".env is a symbolic link to a missing file: left untouched. Fix or remove the link.")
 if env.exists():
     print(".env already exists: left untouched.")
     sys.exit(0)

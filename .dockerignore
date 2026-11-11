@@ -4,11 +4,16 @@
 # small and makes sure local state and secrets never reach the daemon.
 # ============================================================
 
+# Patterns are anchored at the context root: `**/` makes one apply in every
+# directory, including those the Dockerfile copies whole (plugboard/,
+# scripts/, static/, manifests/).
+
 # Secrets and local configuration
-.env*
+**/.env*
 !.env.example
-*.pem
-*.key
+**/*.pem
+**/*.key
+# Root only: plugboard/secrets_rekey.py must ship.
 *secret*
 .mcp.json
 
@@ -32,9 +37,9 @@ ownership-map-out*/
 *.png
 
 # Python
-__pycache__/
-*.py[cod]
-*$py.class
+**/__pycache__/
+**/*.py[cod]
+**/*$py.class
 *.so
 build/
 dist/

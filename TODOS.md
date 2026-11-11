@@ -80,13 +80,15 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 
 ### Missing tests and checks from the stage 2 plan
 
-**What:** Tests for the registry path (override, default, legacy fallback), `make init` never overwriting `.env`, an env-coverage test that `docs/guide/configuration.md` lists every variable the code reads, a Docker image content check, `scripts/run_mcp.py` legacy names; a link checker in CI.
+**What:** Two checks are left: list the files of the built image in the CI `docker-build` step (no `.pyc`, `.env`, key, tests or docs inside), and check external documentation links (needs network, so not in the test suite).
+
+**Done:** the registry path, override, default and legacy fallback (`tests/test_registry_path.py`); `make init` never overwriting `.env` (`tests/test_make_init.py`); every variable the code reads listed in `docs/guide/configuration.md` (`tests/test_config_docs_coverage.py`, seven names added); the image content read from the `Dockerfile` and `.dockerignore` without Docker (`tests/test_docker_image_content.py`, which found bytecode and key files of copied directories reaching the image, now fixed); `scripts/run_mcp.py` legacy names (`tests/test_run_mcp_legacy_names.py`); relative links and heading anchors of the docs, checked by the test suite and so in CI (`tests/test_docs_links.py`).
 
 **Why:** These behaviours are documented but only checked by hand.
 
 **Context:** Deferred from plan: design-brief.md (Stage 2).
 
-**Effort:** M
+**Effort:** S
 **Priority:** P1
 **Depends on:** None
 
