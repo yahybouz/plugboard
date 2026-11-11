@@ -463,6 +463,94 @@ def resolve_provider_and_model(model_str: str) -> tuple[Dict[str, Any], str]:
     return _model_route(active[0], model_str).candidate()
 
 
+def _listed_models(provider: Dict[str, Any]) -> List[str]:
+    """Native model IDs the provider record lists (models, extra_model_ids)."""
+    listed = [
+        m["id"]
+        for m in provider.get("models") or []
+        if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"]
+    ]
+    return listed + [
+        m for m in provider.get("extra_model_ids") or [] if isinstance(m, str) and m
+    ]
+
+
+def _loose_model_name(name: str) -> str:
+    """The form Ollama resolves: any case, no surrounding spaces, ``:latest``
+    implied. Looser than any provider, so it never hides a model one serves."""
+    return name.strip().casefold().removesuffix(":latest")
+
+
+def _family_aliases(provider: Dict[str, Any]) -> List[str]:
+    """Family names ``/v1/models`` gives this provider's models as ``aliases``.
+
+    A family whose listed IDs are all dated snapshots is published under its
+    bare name too (``claude-sonnet-4-5`` for ``claude-sonnet-4-5-20250929``,
+    model_catalog.dedupe_family_snapshots rule 3). Computed from the provider
+    record with the catalogue's own functions, not from the alias cache,
+    which stays empty until ``/v1/models`` is called.
+    """
+    from plugboard.model_catalog import dedupe_family_snapshots, enrich
+
+    native = _listed_models(provider)
+    default = provider.get("default_model")
+    if not native and isinstance(default, str) and default:
+        native = [default]  # list_models publishes it only without a list
+    entries = [
+        {"id": f"{provider['id']}:{m}", "owned_by": provider["id"]} for m in native
+    ]
+    return [
+        alias
+        for entry in dedupe_family_snapshots(enrich(entries))
+        for alias in entry.get("aliases") or []
+        if isinstance(alias, str) and alias
+    ]
+
+
+def is_unknown_model(model_str: str) -> bool:
+    """True when no provider knows ``model_str``: answer 404, call nobody.
+
+    All of these must hold: no registered provider ID (active or not)
+    prefixes it and no display or legacy alias selects a provider; no
+    provider record lists it (models, extra_model_ids, default model or a
+    family alias the catalogue publishes, inactive providers included), in
+    the loose form Ollama accepts; the configured-model lookup of
+    resolve_provider_and_model finds nothing; and every active provider has
+    a model list, since one without a list may serve any name. Otherwise the
+    request is routed as before.
+    """
+    if not isinstance(model_str, str) or not model_str.strip():
+        return False
+    try:
+        active, selected = _select_request(model_str)
+    except ValueError:
+        return False  # the chat route answers these as before
+    if selected is not None:
+        return False
+    registry = [p for p in load_providers() if not is_removed_provider(p)]
+    if registered_model_owner(model_str, (p["id"] for p in registry)) is not None:
+        return False
+    if any(not _listed_models(p) for p in active):
+        return False
+    wanted = _loose_model_name(model_str)
+    for provider in registry:
+        names = (
+            _listed_models(provider)
+            + [provider.get("default_model") or ""]
+            + _family_aliases(provider)
+        )
+        if any(
+            isinstance(n, str) and n and _loose_model_name(n) == wanted for n in names
+        ):
+            return False
+    requested_clean = _clean_model_id(model_str)
+    return not any(
+        _clean_model_id(f"{p['id']}:{native}") == requested_clean
+        for p in active
+        for native in _listed_models(p) + _family_aliases(p)
+    )
+
+
 def _extra_headers(provider: Dict[str, Any]) -> Dict[str, str]:
     """Fixed headers a provider needs on every call.
 

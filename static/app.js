@@ -650,6 +650,15 @@ function _safeHref(s) {
   }
 }
 
+// A docs reference from the server: a link when PLUGBOARD_DOCS_BASE_URL made
+// it an absolute http(s) URL, else the repository path as text.
+function _docsHtml(docs) {
+  const text = String(docs == null ? "" : docs);
+  if (!/^https?:\/\//i.test(text)) return _escape(text);
+  return '<a href="' + _escape(_safeHref(text)) + '" target="_blank" rel="noopener noreferrer">' +
+    _escape(text) + '</a>';
+}
+
 let _dpTested = null;  // {key, ok} for the preset/key pair last tested
 
 function _presetGroup(p) {
@@ -785,7 +794,7 @@ async function _testDirectProvider() {
     let html = '<span class="' + tone + '">' +
       (ok ? "✓ " : "✗ ") + _escape(label) + '</span> <span class="muted">' + _escape(r.message || "") + '</span>';
     if (r.completion_status != null) html += ' <span class="muted">· test token: HTTP ' + _escape(r.completion_status) + '</span>';
-    if (r.docs) html += ' <span class="muted small">See ' + _escape(r.docs) + '</span>';
+    if (r.docs) html += ' <span class="muted small">See ' + _docsHtml(r.docs) + '</span>';
     if (!ok) html += ' <button type="button" class="btn btn-sm" id="dp-save-anyway">Save anyway</button>';
     statusEl.innerHTML = html;
     const anyway = document.getElementById("dp-save-anyway");

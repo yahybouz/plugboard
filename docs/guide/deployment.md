@@ -139,6 +139,7 @@ Keep the `Host` header as the examples do (Caddy keeps it by default). Over plai
 
 - Back up `data/` (and `ENCRYPTION_KEY` if it is set in the environment, or `data/.encryption_key` if it was generated). Without the encryption key, stored provider credentials cannot be decrypted.
 - To upgrade: back up `data/`, pull the new version, run `make setup` (or rebuild the image), restart, and check `/health`. To go back, follow the [rollback runbook](../runbooks/rollback-release.md).
+- To move the install to another machine, follow the [move runbook](../runbooks/move-install.md).
 
 ## MCP server
 
