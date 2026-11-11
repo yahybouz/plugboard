@@ -104,6 +104,7 @@ AT_IMPORT = {
         "PLUGBOARD_LOG_MAX_BYTES": ("_LOG_MAX_BYTES", 20 * 1024 * 1024),
         "PLUGBOARD_LOG_BACKUPS": ("_LOG_BACKUP_COUNT", 5),
     },
+    "plugboard.mcp_server": {"PLUGBOARD_MCP_TIMEOUT": ("_TIMEOUT", 900)},
 }
 
 # Good values, old names and the bounds each setting applies:
@@ -141,6 +142,9 @@ WELL_SET = {
     },
     "plugboard.logging_config": {
         "PLUGBOARD_LOG_BACKUPS": ("2", "_LOG_BACKUP_COUNT", 2)
+    },
+    "plugboard.mcp_server": {
+        "LLM_ENABLER_MCP_TIMEOUT": ("30", "_DECISION_TIMEOUT", 30)
     },
 }
 
