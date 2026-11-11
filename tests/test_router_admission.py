@@ -388,3 +388,43 @@ async def test_streamed_cli_chat_answers_503_providers_busy(
     assert resp.status_code == 503, resp.text
     assert resp.headers["Retry-After"] == "5"
     assert resp.json()["code"] == "providers_busy"
+
+
+async def test_preflight_reports_a_full_provider_as_busy(client, capped_a):
+    held = provider_admission.try_acquire(capped_a)
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION, repeat=True)
+        resp = await client.post(
+            "/v1/preflight",
+            headers=AUTH,
+            json={"items": [{"provider": "test-provider", "model": BARE}]},
+        )
+        assert _calls(mock, URL_A) == 0
+    held.release()
+    assert resp.status_code == 200, resp.text
+    [result] = resp.json()["results"]
+    assert (result["ok"], result["error"]) == (False, "providers_busy")
+
+
+async def test_internet_check_on_a_full_provider_records_nothing(
+    client, capped_a, _providers_file
+):
+    """A full provider is not offline: nothing is learnt, nothing persisted."""
+    from plugboard.config import get_provider
+
+    listed = {**capped_a, "models": [{"id": BARE, "name": "V1"}]}
+    _providers_file.write_text(json.dumps({"providers": [listed]}))
+    router.invalidate_models_cache()
+    held = provider_admission.try_acquire(listed)
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION, repeat=True)
+        resp = await client.post(
+            "/admin/models/check-internet",
+            headers=AUTH,
+            json={"model_id": ONLY_A, "persist": True},
+        )
+        assert _calls(mock, URL_A) == 0
+    held.release()
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "busy"
+    assert get_provider("test-provider")["models"] == [{"id": BARE, "name": "V1"}]

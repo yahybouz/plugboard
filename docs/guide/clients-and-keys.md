@@ -83,7 +83,7 @@ Then each provider takes a limited number of requests at once (**provider concur
 
 Requests made with the `ADMIN_KEY` (or from the dashboard Playground) are not subject to budgets, model restrictions, price checks or RPM limits.
 
-`POST /v1/preflight` runs the same checks for each pair before its ping, inside the same concurrency cap, and accepts at most 10 pairs (`422` beyond). Each ping counts towards the RPM limit and is billed like a chat call. A refused or failed pair answers `"ok": false` with a closed `error` code, never the provider's message: `unknown_model`, `forbidden_model`, `budget_exceeded`, `price_unavailable`, `rate_limited` or `upstream_error` (details stay in the server log).
+`POST /v1/preflight` runs the same checks for each pair before its ping, inside the same concurrency cap, and accepts at most 10 pairs (`422` beyond). Each ping counts towards the RPM limit and is billed like a chat call. A refused or failed pair answers `"ok": false` with a closed `error` code, never the provider's message: `unknown_model`, `forbidden_model`, `budget_exceeded`, `price_unavailable`, `rate_limited`, `upstream_error` (details stay in the server log) or `providers_busy` (the provider stayed at its concurrency cap; nothing was called).
 
 ### Which models have a known price
 

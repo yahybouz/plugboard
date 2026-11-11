@@ -2274,7 +2274,8 @@
                   "budget_exceeded",
                   "price_unavailable",
                   "rate_limited",
-                  "upstream_error"
+                  "upstream_error",
+                  "providers_busy"
                 ],
                 "type": "string"
               },
@@ -2283,7 +2284,7 @@
               }
             ],
             "default": null,
-            "description": "Why the pair failed (closed code, never the provider's text): the model does not resolve, is not allowed for the key, the monthly budget is spent, the key has a budget and the model no known price, the key's rpm limit is reached, or the provider failed.",
+            "description": "Why the pair failed (closed code, never the provider's text): the model does not resolve, is not allowed for the key, the monthly budget is spent, the key has a budget and the model no known price, the key's rpm limit is reached, the provider failed, or the provider stayed at its concurrency cap (nothing was called).",
             "title": "Error"
           }
         },

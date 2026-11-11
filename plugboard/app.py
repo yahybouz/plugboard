@@ -2771,6 +2771,10 @@ async def preflight(
                 return _client_gone_response(model_str)
             except HTTPException:
                 error = "forbidden_model"
+            except ProvidersBusyError as exc:
+                # Full, not failed: nothing was called (D-23).
+                log.info("preflight busy | model=%s | %s", model_str, exc)
+                error = "providers_busy"
             except Exception as exc:
                 log.warning("preflight error | model=%s | %s", model_str, exc)
                 error = "upstream_error"
@@ -3102,6 +3106,16 @@ async def check_model_internet_access(
                 last_result.error or "no signal"
             )
 
+    except ProvidersBusyError as exc:
+        # Every provider of the model is full, not offline (D-23): nothing is
+        # learnt, so nothing is quarantined or persisted.
+        return {
+            "model_id": model_id,
+            "internet_access": False,
+            "internet_access_confidence": "low",
+            "status": "busy",
+            "error": str(exc),
+        }
     except Exception as exc:
         reason = str(exc)
         from plugboard.model_quarantine import (
@@ -3297,7 +3311,9 @@ async def check_all_models_internet_access(
 
         elapsed = _time.monotonic() - started_at
         online = sum(1 for r in results if r.get("internet_access"))
-        failed = sum(1 for r in results if r.get("status") in ("error", "timeout"))
+        failed = sum(
+            1 for r in results if r.get("status") in ("error", "timeout", "busy")
+        )
         offline = len(results) - online - failed
 
         # Invalidate models cache so the UI immediately sees the persisted flag.

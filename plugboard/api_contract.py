@@ -358,6 +358,7 @@ class PreflightResult(BaseModel):
             "price_unavailable",
             "rate_limited",
             "upstream_error",
+            "providers_busy",
         ]
     ] = Field(
         default=None,
@@ -365,7 +366,8 @@ class PreflightResult(BaseModel):
             "Why the pair failed (closed code, never the provider's text): "
             "the model does not resolve, is not allowed for the key, the "
             "monthly budget is spent, the key has a budget and the model no "
-            "known price, the key's rpm limit is reached, or the provider failed."
+            "known price, the key's rpm limit is reached, the provider failed, "
+            "or the provider stayed at its concurrency cap (nothing was called)."
         ),
     )
 

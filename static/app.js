@@ -1755,6 +1755,8 @@ function _initPlaygroundEvents() {
       if (data.status === "quarantined") {
         toast("Model not found and has been quarantined. Reloading selector...", "error");
         await loadPlayground();
+      } else if (data.status === "busy") {
+        toast("The provider is busy: nothing was checked. Retry in a few seconds.", "warning");
       } else if (data.status === "online" || data.internet_access) {
         toast("Verified: Model has internet access! 🌐", "success");
         await loadPlayground();
