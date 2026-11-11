@@ -179,7 +179,7 @@ Each provider takes a limited number of requests at once:
 - A provider's `max_concurrency` wins over both: a whole number, `0` for no cap. Set it with `PUT /providers/{id}` (`{"max_concurrency": 2}`) or in `providers.json`.
 - CLI providers are also capped by `PLUGBOARD_SUBPROCESS_LIMIT` (concurrent processes per CLI).
 
-A full provider passes a request for a model without provider prefix to the next candidate; it counts neither against its circuit breaker nor as an error. When every candidate is full, the request waits up to `PLUGBOARD_PROVIDER_WAIT_S` seconds (default 10) for the first freed slot, oldest request first, then gets `503` with `"code": "providers_busy"` and `Retry-After: 5`. Each gateway worker counts its own requests.
+A full provider passes a non-streamed request for a model without provider prefix to the next candidate; a streamed request has a single route and waits for that provider only, even when another candidate is free. A full provider counts neither against its circuit breaker nor as an error. When every candidate is full, the request waits up to `PLUGBOARD_PROVIDER_WAIT_S` seconds (default 10) for the first freed slot, oldest request first, then gets `503` with `"code": "providers_busy"` and `Retry-After: 5`. Each gateway worker counts its own requests.
 
 ## Add providers from `.env` or scripts
 
