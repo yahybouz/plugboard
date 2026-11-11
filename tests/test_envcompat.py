@@ -214,6 +214,53 @@ def test_number_reader_accepts_legacy_names(monkeypatch):
     assert envcompat.get_int("PLUGBOARD_TEST_HOURS", "TEST_HOURS", default=6) == 4
 
 
+def test_number_list_reader_skips_empty_items(monkeypatch, caplog):
+    monkeypatch.setenv("PB_TEST_LIST", " 0.5, 2,,0 ")
+
+    with caplog.at_level("WARNING", logger="plugboard.envcompat"):
+        values = envcompat.get_floats("PB_TEST_LIST", default=[1.0], minimum=0.0)
+
+    assert values == [0.5, 2.0, 0.0]
+    assert caplog.text == ""
+
+    monkeypatch.setenv("PB_TEST_LIST", " , ")
+    assert envcompat.get_floats("PB_TEST_LIST", default=[1.0]) == [1.0]
+    monkeypatch.delenv("PB_TEST_LIST")
+    assert envcompat.get_floats("PB_TEST_LIST", default=[1.0]) == [1.0]
+
+
+@pytest.mark.parametrize(
+    ("raw", "problem"),
+    [
+        ("1,inf", "'inf' is not a finite number"),
+        ("1e999", "'1e999' is not a finite number"),
+        ("nan,1", "'nan' is not a number"),
+        ("1,x", "'x' is not a number"),
+        ("1,-0.5", "'-0.5' is below 0.0"),
+    ],
+)
+def test_one_bad_item_gives_the_whole_default_list(monkeypatch, caplog, raw, problem):
+    monkeypatch.setattr(envcompat, "_bad_numbers", set())
+    monkeypatch.setenv("PB_TEST_LIST", raw)
+
+    with caplog.at_level("WARNING", logger="plugboard.envcompat"):
+        first = envcompat.get_floats("PB_TEST_LIST", default=[1.0, 2.0], minimum=0.0)
+        envcompat.get_floats("PB_TEST_LIST", default=[1.0, 2.0], minimum=0.0)
+
+    assert first == [1.0, 2.0]
+    assert caplog.text.count("PB_TEST_LIST") == 1
+    assert problem in caplog.text
+
+
+def test_number_list_reader_accepts_legacy_names(monkeypatch):
+    monkeypatch.delenv("PLUGBOARD_TEST_LIST", raising=False)
+    monkeypatch.setenv("TEST_LIST", "3,4")
+
+    values = envcompat.get_floats("PLUGBOARD_TEST_LIST", "TEST_LIST", default=[1.0])
+
+    assert values == [3.0, 4.0]
+
+
 def test_nan_budget_does_not_lift_the_llm_pricing_cap(monkeypatch):
     # NaN passed the "cannot be negative" check and compares false with any
     # spend: the daily budget of the LLM pricing pass was then never reached.
@@ -280,13 +327,20 @@ def test_no_numeric_setting_is_read_inline():
     assert inline == []
 
 
-def test_no_private_copy_of_the_number_reader():
-    # A function that reads a variable, then converts it with int() / float()
-    # itself, is a copy of the reader: its own messages, bounds and NaN rules.
-    import ast
-    from pathlib import Path
+def _private_number_readers(source: str) -> list:
+    """Lines where a function converts, with int() / float(), a value it read
+    from the environment, directly or through other variables.
 
-    package = Path(envcompat.__file__).resolve().parent
+    A variable is derived from the environment when an assignment, a ``for``
+    loop or a comprehension gives it a value built from a read
+    (``os.environ``, ``os.getenv``, ``envcompat.get``) or from a variable
+    already derived: ``raw = os.environ.get(...)``, then
+    ``for chunk in raw.split(",")``, then ``token = chunk.strip()`` makes
+    ``float(token)`` a conversion of the setting. The scan follows names inside
+    one function only: a value returned by another function, or kept in an
+    attribute or a module global, is not followed.
+    """
+    import ast
 
     def reads_env(node):
         for sub in ast.walk(node):
@@ -301,28 +355,100 @@ def test_no_private_copy_of_the_number_reader():
                 return True
         return False
 
-    copies = []
-    for path in sorted(package.rglob("*.py")):
-        if path.name == "envcompat.py":
+    def names(node, ctx=ast.AST):
+        return {
+            sub.id
+            for sub in ast.walk(node)
+            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ctx)
+        }
+
+    def derived_from_env(func):
+        derived: set = set()
+        while True:
+            known = len(derived)
+            for node in ast.walk(func):
+                if isinstance(node, ast.Assign):
+                    value, targets = node.value, node.targets
+                elif isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.NamedExpr)):
+                    value, targets = node.value, [node.target]
+                elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+                    value, targets = node.iter, [node.target]
+                else:
+                    continue
+                if value is not None and (reads_env(value) or names(value) & derived):
+                    for target in targets:
+                        derived |= names(target, ast.Store)
+            if len(derived) == known:
+                return derived
+
+    lines = []
+    for func in ast.walk(ast.parse(source)):
+        if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        for func in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            from_env = {
-                target.id
-                for node in ast.walk(func)
-                if isinstance(node, ast.Assign) and reads_env(node.value)
-                for target in node.targets
-                if isinstance(target, ast.Name)
-            }
-            copies += [
-                f"{path.relative_to(package.parent)}:{node.lineno}"
-                for node in ast.walk(func)
-                if isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id in ("int", "float")
-                and node.args
-                and isinstance(node.args[0], ast.Name)
-                and node.args[0].id in from_env
-            ]
-    assert sorted(set(copies)) == []
+        derived = derived_from_env(func)
+        lines += [
+            node.lineno
+            for node in ast.walk(func)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in ("int", "float")
+            and node.args
+            and names(node.args[0]) & derived
+        ]
+    return sorted(set(lines))
+
+
+def test_the_private_reader_scan_follows_derived_variables():
+    # PLUGBOARD_RETRY_DELAYS escaped the scan: float() was applied to a token
+    # of the value, not to the variable that held the read.
+    split_then_convert = (
+        "import os\n"
+        "def delays():\n"
+        "    raw = os.environ.get('X', '').strip()\n"
+        "    out = []\n"
+        "    for chunk in raw.split(','):\n"
+        "        token = chunk.strip()\n"
+        "        out.append(float(token))\n"
+        "    return out\n"
+    )
+    comprehension = (
+        "import os\n"
+        "def delays():\n"
+        "    raw = os.getenv('X', '')\n"
+        "    return [float(t.strip()) for t in raw.split(',')]\n"
+    )
+    walrus = (
+        "from plugboard import envcompat\n"
+        "def limit():\n"
+        "    if (raw := envcompat.get('X')):\n"
+        "        text = raw.lower()\n"
+        "        return int(text)\n"
+    )
+    unrelated = (
+        "import os\n"
+        "def size(items, table):\n"
+        "    raw = os.environ.get('X', '')\n"
+        "    table[len(items)] = raw\n"
+        "    return float(len(items)) if raw else 0.0\n"
+    )
+
+    assert _private_number_readers(split_then_convert) == [7]
+    assert _private_number_readers(comprehension) == [4]
+    assert _private_number_readers(walrus) == [5]
+    assert _private_number_readers(unrelated) == []
+
+
+def test_no_private_copy_of_the_number_reader():
+    # A function that reads a variable, then converts it with int() / float()
+    # itself, is a copy of the reader: its own messages, bounds and NaN rules.
+    from pathlib import Path
+
+    package = Path(envcompat.__file__).resolve().parent
+
+    copies = [
+        f"{path.relative_to(package.parent)}:{line}"
+        for path in sorted(package.rglob("*.py"))
+        if path.name != "envcompat.py"
+        for line in _private_number_readers(path.read_text(encoding="utf-8"))
+    ]
+    assert copies == []

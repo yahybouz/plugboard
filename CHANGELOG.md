@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **`PLUGBOARD_RETRY_DELAYS=inf` held a retried request for good**: the retry delays had their own reader, which refused text and negative values but let `inf`, `nan` and a number too large for a float (`1e999`) through. The first retry of a `429`, a `5xx` or a timeout from an HTTP provider then waited forever (`asyncio.sleep` of infinity or NaN never returns). The list now goes through the shared reader (`envcompat.get_floats`): one item that is not a finite number of seconds, `0` or more, gives the default `2,5,15`, with one warning naming the variable and the item. The format (comma-separated seconds, empty items skipped) and the default are unchanged. The test that keeps numeric settings on the shared reader now also follows a value through the variables built from it (`raw`, then `token`), which is how this reader escaped it.
+
 ## [4.8.0] — 2026-11-11
 
 ### Added

@@ -261,36 +261,17 @@ def _adapt_payload(model: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _read_retry_delays() -> List[float]:
-    """Read retry backoff delays from env with robust fallback.
+    """Retry backoff delays, in seconds, from PLUGBOARD_RETRY_DELAYS.
 
-    PLUGBOARD_RETRY_DELAYS supports comma-separated seconds, e.g.:
+    Comma-separated seconds, e.g.:
       "2,5,15" (default)
       "0.05,0.1,0.2" (fast CI)
+    One item that is not a finite number of seconds, zero or more, gives the
+    default with one warning: asyncio.sleep(inf) or sleep(nan) never returns.
     """
-    raw = os.environ.get("PLUGBOARD_RETRY_DELAYS", "").strip()
-    if not raw:
-        return [2.0, 5.0, 15.0]
-    out: List[float] = []
-    for chunk in raw.split(","):
-        token = chunk.strip()
-        if not token:
-            continue
-        try:
-            value = float(token)
-        except ValueError:
-            log.warning(
-                "Invalid PLUGBOARD_RETRY_DELAYS token %r (float expected) — using default",
-                token,
-            )
-            return [2.0, 5.0, 15.0]
-        if value < 0:
-            log.warning(
-                "Invalid PLUGBOARD_RETRY_DELAYS token %r (must be >= 0) — using default",
-                token,
-            )
-            return [2.0, 5.0, 15.0]
-        out.append(value)
-    return out if out else [2.0, 5.0, 15.0]
+    return envcompat.get_floats(
+        "PLUGBOARD_RETRY_DELAYS", default=[2.0, 5.0, 15.0], minimum=0.0
+    )
 
 
 _ERROR_RATE_WEIGHT = envcompat.get_float(
