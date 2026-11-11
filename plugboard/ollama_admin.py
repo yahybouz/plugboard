@@ -31,6 +31,7 @@ from typing import Any, AsyncGenerator, AsyncIterator, Callable, Dict, Optional,
 
 import aiohttp
 
+from plugboard import envcompat
 from plugboard.storage import atomic_write_json, data_dir
 
 log = logging.getLogger(__name__)
@@ -170,11 +171,7 @@ def set_local_downloads(enabled: bool) -> None:
 
 
 def min_free_gb() -> float:
-    try:
-        value = float(os.environ.get(MIN_FREE_ENV, "") or DEFAULT_MIN_FREE_GB)
-    except ValueError:
-        return DEFAULT_MIN_FREE_GB
-    return value if value >= 0 else DEFAULT_MIN_FREE_GB
+    return envcompat.get_float(MIN_FREE_ENV, default=DEFAULT_MIN_FREE_GB, minimum=0)
 
 
 def min_free_bytes() -> int:

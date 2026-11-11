@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+from plugboard import envcompat
+
 ROOT = Path(__file__).resolve().parents[1]
 
 _PROBE = """
@@ -78,6 +80,7 @@ AT_IMPORT = {
         "WATCHDOG_DEEP_INTERVAL": ("_DEEP_CHECK_INTERVAL", 3),
     },
     "plugboard.alerts": {"ALERT_FAILURE_THRESHOLD": ("_ALERT_THRESHOLD", 3)},
+    "plugboard.ollama": {"OLLAMA_TIMEOUT": ("_OLLAMA_TIMEOUT", 30)},
 }
 
 # Good values, old names and the bounds each setting applies:
@@ -94,6 +97,7 @@ WELL_SET = {
     },
     "plugboard.provider_watchdog": {"WATCHDOG_INTERVAL": ("45", "_CHECK_INTERVAL", 45)},
     "plugboard.alerts": {"ALERT_FAILURE_THRESHOLD": ("5", "_ALERT_THRESHOLD", 5)},
+    "plugboard.ollama": {"OLLAMA_TIMEOUT": ("90", "_OLLAMA_TIMEOUT", 90)},
 }
 
 
@@ -149,3 +153,30 @@ def test_good_value_read_at_import_is_kept(good_start, module):
 
     assert found == {name: expected for name, (_, _, expected) in spec.items()}
     assert good_start["reported"] == []
+
+
+# -- settings read at each use ----------------------------------------------------
+
+
+@pytest.fixture
+def warnings_seen(monkeypatch, caplog):
+    """Each test sees its own warnings, whatever ran before it."""
+    monkeypatch.setattr(envcompat, "_bad_numbers", set())
+    caplog.set_level("WARNING", logger="plugboard.envcompat")
+    return caplog
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [("abc", 5.0), ("inf", 5.0), ("nan", 5.0), ("-1", 5.0), ("12.5", 12.5)],
+)
+def test_ollama_free_space_floor(monkeypatch, warnings_seen, raw, expected):
+    # inf made min_free_bytes() raise OverflowError on every model download.
+    from plugboard import ollama_admin
+
+    monkeypatch.setenv("PLUGBOARD_OLLAMA_MIN_FREE_GB", raw)
+
+    assert ollama_admin.min_free_gb() == expected
+    assert ollama_admin.min_free_bytes() == int(expected * ollama_admin.GB)
+    if expected == 5.0:
+        assert "PLUGBOARD_OLLAMA_MIN_FREE_GB" in warnings_seen.text
