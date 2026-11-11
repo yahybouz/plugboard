@@ -81,6 +81,17 @@ AT_IMPORT = {
     },
     "plugboard.alerts": {"ALERT_FAILURE_THRESHOLD": ("_ALERT_THRESHOLD", 3)},
     "plugboard.ollama": {"OLLAMA_TIMEOUT": ("_OLLAMA_TIMEOUT", 30)},
+    "plugboard.app": {
+        "PLUGBOARD_CACHE_RESPONSE_FLOOR_MS": ("_CACHE_RESPONSE_FLOOR_MS", 0),
+        "ADMIN_SESSION_MAX_AGE": ("_ADMIN_SESSION_MAX_AGE", 28800),
+        "MAX_BODY_BYTES": ("_MAX_BODY_BYTES", 10 * 1024 * 1024),
+        "PLUGBOARD_BULK_INTERNET_CONCURRENCY": ("_BULK_INTERNET_CONCURRENCY", 3),
+        "PLUGBOARD_BULK_INTERNET_PER_MODEL_TIMEOUT_S": (
+            "_BULK_INTERNET_PER_MODEL_TIMEOUT_S",
+            25.0,
+        ),
+        "PLUGBOARD_REFRESH_COOLDOWN_S": ("_MODEL_REFRESH_COOLDOWN_S", 60.0),
+    },
 }
 
 # Good values, old names and the bounds each setting applies:
@@ -98,6 +109,17 @@ WELL_SET = {
     "plugboard.provider_watchdog": {"WATCHDOG_INTERVAL": ("45", "_CHECK_INTERVAL", 45)},
     "plugboard.alerts": {"ALERT_FAILURE_THRESHOLD": ("5", "_ALERT_THRESHOLD", 5)},
     "plugboard.ollama": {"OLLAMA_TIMEOUT": ("90", "_OLLAMA_TIMEOUT", 90)},
+    "plugboard.app": {
+        "PLUGBOARD_CACHE_RESPONSE_FLOOR_MS": ("-5", "_CACHE_RESPONSE_FLOOR_MS", 0),
+        "MAX_BODY_BYTES": ("2048", "_MAX_BODY_BYTES", 2048),
+        "PLUGBOARD_BULK_INTERNET_CONCURRENCY": ("0", "_BULK_INTERNET_CONCURRENCY", 1),
+        "PLUGBOARD_BULK_INTERNET_PER_MODEL_TIMEOUT_S": (
+            "2",
+            "_BULK_INTERNET_PER_MODEL_TIMEOUT_S",
+            5.0,
+        ),
+        "LLM_ENABLER_REFRESH_COOLDOWN_S": ("30", "_MODEL_REFRESH_COOLDOWN_S", 30.0),
+    },
 }
 
 
@@ -180,3 +202,38 @@ def test_ollama_free_space_floor(monkeypatch, warnings_seen, raw, expected):
     assert ollama_admin.min_free_bytes() == int(expected * ollama_admin.GB)
     if expected == 5.0:
         assert "PLUGBOARD_OLLAMA_MIN_FREE_GB" in warnings_seen.text
+
+
+@pytest.fixture
+def app():
+    """The app, imported before the test runs: its first import sets up the
+    gateway's logging, which drops every root handler, caplog's included."""
+    from plugboard import app
+
+    return app
+
+
+@pytest.mark.parametrize(
+    "raw, expected", [("abc", 60), ("inf", 60), ("-5", 0), ("30", 30)]
+)
+def test_default_rpm_limit_of_a_new_key(app, monkeypatch, warnings_seen, raw, expected):
+    monkeypatch.setenv("PLUGBOARD_DEFAULT_RPM_LIMIT", raw)
+
+    assert app._default_rpm_limit() == expected
+    if raw in ("abc", "inf"):
+        assert "PLUGBOARD_DEFAULT_RPM_LIMIT" in warnings_seen.text
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [("abc", 10.0), ("inf", 10.0), ("nan", 10.0), ("-1", 0.0), ("2.5", 2.5)],
+)
+def test_default_monthly_limit_of_a_new_key(
+    app, monkeypatch, warnings_seen, raw, expected
+):
+    # inf gave new keys no monthly limit, and nan gave 0, which disables it.
+    monkeypatch.setenv("PLUGBOARD_DEFAULT_MONTHLY_LIMIT_USD", raw)
+
+    assert app._default_monthly_limit_usd() == expected
+    if raw in ("abc", "inf", "nan"):
+        assert "PLUGBOARD_DEFAULT_MONTHLY_LIMIT_USD" in warnings_seen.text

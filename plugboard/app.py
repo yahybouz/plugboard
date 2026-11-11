@@ -141,7 +141,7 @@ log = logging.getLogger("plugboard.app")
 # attacker timing the response. Default 0 = off (the leak requires a
 # co-located adversary which is out of scope for most deployments).
 _CACHE_RESPONSE_FLOOR_MS = max(
-    0, int(os.environ.get("PLUGBOARD_CACHE_RESPONSE_FLOOR_MS", "0") or "0")
+    0, envcompat.get_int("PLUGBOARD_CACHE_RESPONSE_FLOOR_MS", default=0)
 )
 
 
@@ -233,7 +233,7 @@ def _require_admin_key_outside_dev(admin_key: str, dev_mode: bool) -> None:
 
 
 _require_admin_key_outside_dev(_ADMIN_KEY, _DEV_MODE)
-_ADMIN_SESSION_MAX_AGE = int(os.environ.get("ADMIN_SESSION_MAX_AGE", "28800"))  # 8h
+_ADMIN_SESSION_MAX_AGE = envcompat.get_int("ADMIN_SESSION_MAX_AGE", default=28800)  # 8h
 _COOKIE_SECURE_MODE = os.environ.get("COOKIE_SECURE", "auto").strip().lower()
 
 if not _API_KEY:
@@ -555,8 +555,8 @@ async def _value_error_handler(request: Request, exc: ValueError):
     )
 
 
-_MAX_BODY_BYTES = int(
-    os.environ.get("MAX_BODY_BYTES", str(10 * 1024 * 1024))
+_MAX_BODY_BYTES = envcompat.get_int(
+    "MAX_BODY_BYTES", default=10 * 1024 * 1024
 )  # 10 MB default
 
 
@@ -2892,11 +2892,11 @@ async def check_model_internet_access(
 # via env. Cooldown is shared with /admin/models/refresh to prevent admins
 # from spamming both endpoints.
 _BULK_INTERNET_CONCURRENCY = max(
-    1, int(os.environ.get("PLUGBOARD_BULK_INTERNET_CONCURRENCY", "3") or "3")
+    1, envcompat.get_int("PLUGBOARD_BULK_INTERNET_CONCURRENCY", default=3)
 )
 _BULK_INTERNET_PER_MODEL_TIMEOUT_S = max(
     5.0,
-    float(os.environ.get("PLUGBOARD_BULK_INTERNET_PER_MODEL_TIMEOUT_S", "25") or "25"),
+    envcompat.get_float("PLUGBOARD_BULK_INTERNET_PER_MODEL_TIMEOUT_S", default=25.0),
 )
 _BULK_INTERNET_LOCK = _asyncio.Lock()
 
@@ -3166,8 +3166,8 @@ async def admin_watchdog_restart_stats(
 
 _MODEL_REFRESH_LOCK = _asyncio.Lock()
 _MODEL_REFRESH_TIMEOUT_S = 120
-_MODEL_REFRESH_COOLDOWN_S: float = float(
-    os.environ.get("PLUGBOARD_REFRESH_COOLDOWN_S", "60") or "60"
+_MODEL_REFRESH_COOLDOWN_S: float = envcompat.get_float(
+    "PLUGBOARD_REFRESH_COOLDOWN_S", default=60.0
 )
 _LAST_REFRESH_AT: float = 0.0  # time.monotonic() stamp of last successful refresh
 
@@ -4377,21 +4377,15 @@ class KeyCreate(BaseModel):
 def _default_rpm_limit() -> int:
     """Production-safe default applied when a key is created without an
     explicit rpm_limit. Operators can raise/lower via env without code change."""
-    try:
-        return max(0, int(os.environ.get("PLUGBOARD_DEFAULT_RPM_LIMIT", "60")))
-    except ValueError:
-        return 60
+    return max(0, envcompat.get_int("PLUGBOARD_DEFAULT_RPM_LIMIT", default=60))
 
 
 def _default_monthly_limit_usd() -> float:
     """Production-safe default applied when a key is created without an
     explicit monthly_limit_usd. 0 disables the default entirely."""
-    try:
-        return max(
-            0.0, float(os.environ.get("PLUGBOARD_DEFAULT_MONTHLY_LIMIT_USD", "10"))
-        )
-    except ValueError:
-        return 10.0
+    return max(
+        0.0, envcompat.get_float("PLUGBOARD_DEFAULT_MONTHLY_LIMIT_USD", default=10.0)
+    )
 
 
 @app.get("/admin/keys")
