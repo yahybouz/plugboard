@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **`provider_down` alert counts only the provider's failures**: the webhook alert (`ALERT_WEBHOOK_URL`) went out after any 3 failed calls in a row to a provider, including the ones the request caused, so one client key sending three over-long prompts reported as down a provider that was answering. It now counts by the circuit breaker's rule: HTTP `429` and `5xx`, timeouts, network errors, `401` and `403`, and for a CLI provider (streamed requests included) a quota, an unavailable model or a failed run. Any other HTTP status (`400`, `413`, `422`, `404`...) and every HTTP or CLI error saying the context or the message is too long neither counts nor resets the count; a success still resets it ([runbook](docs/runbooks/provider-down.md#symptom)).
+
 ### Fixed
 
 - **A context too long was sent four times to the same provider**: when an HTTP provider answered `500`, `502`, `503` or `529` saying the context or the message is too long (an older llama.cpp, a `500` with `context_length_exceeded`, Ollama's `/v1` `500`), a request that is not streamed was retried on that provider like a transient error: the long request went out four times and, with the default delays (`PLUGBOARD_RETRY_DELAYS`, 2, 5 and 15 s), the client waited about 22 s for the same answer. It is now sent once to each candidate provider: the next one gets it straight away, and when none answers the client gets the `400` given since 4.7.0 for a context too long. The circuit breaker's list of "too long" messages decides, as for the client's status. Any other `429` or `5xx` is still retried; a streamed request was never retried.
