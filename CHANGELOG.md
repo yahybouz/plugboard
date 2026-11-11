@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - **Circuit breaker counts only the provider's failures**: a route's circuit opened after any 3 failed calls in a row, including the ones the request caused, so one client key sending over-long prompts showed the route `open` in `/admin/circuits` and made the LLM pricing pass skip it for 60 s. It now counts HTTP `429` and `5xx`, timeouts, network errors, `401` and `403`, and for a CLI provider a quota, an unavailable model or a failed run. The other HTTP statuses (`400`, `413`, `422`, `404`...) and every HTTP or CLI error saying the context or the message is too long no longer count ([runbook](docs/runbooks/provider-down.md#quick-diagnosis)).
+- **`provider_down` alert counts only the provider's failures**: the webhook alert (`ALERT_WEBHOOK_URL`) went out after any 3 failed calls in a row to a provider, including the ones the request caused, so one client key sending three over-long prompts reported as down a provider that was answering. It now counts by the circuit breaker's rule: HTTP `429` and `5xx`, timeouts, network errors, `401` and `403`, and for a CLI provider (streamed requests included) a quota, an unavailable model or a failed run. Any other HTTP status (`400`, `413`, `422`, `404`...) and every HTTP or CLI error saying the context or the message is too long neither counts nor resets the count; a success still resets it ([runbook](docs/runbooks/provider-down.md#symptom)).
 
 ### Removed
 

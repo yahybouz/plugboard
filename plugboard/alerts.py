@@ -22,7 +22,13 @@ _ALERT_COOLDOWN = 300.0  # 5 minutes between alerts for same provider
 
 
 async def record_provider_failure(provider_id: str) -> None:
-    """Increment failure count and alert if threshold reached."""
+    """Increment failure count and alert if threshold reached.
+
+    Call it only for a failure of the provider itself, judged by the circuit
+    breaker's rule (circuit_breaker.is_provider_fault): an error the request
+    caused (HTTP 400, 413, 422, a prompt too long...) neither counts nor
+    resets the count.
+    """
     _provider_failures[provider_id] = _provider_failures.get(provider_id, 0) + 1
     count = _provider_failures[provider_id]
 

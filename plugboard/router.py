@@ -737,11 +737,12 @@ async def forward(
                             terminal_reason="model_unavailable",
                         )
                         invalidate_models_cache()
-                    # A quota, an unavailable model or a failed run counts;
-                    # a prompt the CLI found too long is the request's fault.
+                    # A quota, an unavailable model or a failed run counts,
+                    # for the circuit and the provider_down alert alike; a
+                    # prompt the CLI found too long is the request's fault.
                     if is_provider_fault(reason):
                         cb_failure(_circuit_key(provider, real_model))
-                    await record_provider_failure(provider["id"])
+                        await record_provider_failure(provider["id"])
                 except Exception:
                     pass
                 continue
@@ -879,10 +880,12 @@ async def forward(
             except Exception:
                 pass
 
-        try:
-            await record_provider_failure(provider["id"])
-        except Exception:
-            pass
+        # The provider_down alert counts by the circuit's rule (provider_fault).
+        if provider_fault:
+            try:
+                await record_provider_failure(provider["id"])
+            except Exception:
+                pass
 
         log.warning("Provider %s failed, trying next...", provider["id"])
 
