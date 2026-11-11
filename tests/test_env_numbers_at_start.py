@@ -96,6 +96,10 @@ AT_IMPORT = {
     "plugboard.cli_subprocess": {
         "PLUGBOARD_SUBPROCESS_LIMIT": ("_CONCURRENCY_LIMIT", 4),
     },
+    "plugboard.session_store": {
+        "PLUGBOARD_SESSION_TTL_S": ("_TTL_S", 24 * 3600),
+        "PLUGBOARD_SESSION_MAX_TURNS": ("_MAX_TURNS", 50),
+    },
 }
 
 # Good values, old names and the bounds each setting applies:
@@ -127,6 +131,9 @@ WELL_SET = {
     "plugboard.ratelimit": {"RATE_LIMIT": ("120", "_LIMIT", 120)},
     "plugboard.cli_subprocess": {
         "LLM_ENABLER_SUBPROCESS_LIMIT": ("0", "_CONCURRENCY_LIMIT", 1),
+    },
+    "plugboard.session_store": {
+        "LLM_ENABLER_SESSION_MAX_TURNS": ("7", "_MAX_TURNS", 7),
     },
 }
 
