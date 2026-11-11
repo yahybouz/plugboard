@@ -134,6 +134,16 @@ def _restore_process_state():
         decision_api._usage_down_since = None
 
 
+@pytest.fixture(autouse=True)
+def _reset_load_state():
+    """Provider leases start empty in every test (PLU-9)."""
+    from plugboard import provider_admission
+
+    provider_admission.reset()
+    yield
+    provider_admission.reset()
+
+
 def _setup_providers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, providers: list
 ) -> Path:
