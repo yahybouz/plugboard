@@ -13,10 +13,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
+
+from plugboard import envcompat
 
 log = logging.getLogger(__name__)
 
@@ -30,15 +31,7 @@ def _journal_path() -> Path:
 
 
 def max_per_run() -> int:
-    raw = os.environ.get("PLUGBOARD_WEBHOOK_MAX_PER_RUN", "").strip()
-    if not raw:
-        return 50
-    try:
-        value = int(raw)
-    except ValueError:
-        log.warning("PLUGBOARD_WEBHOOK_MAX_PER_RUN is not a number; using 50")
-        return 50
-    return max(0, value)
+    return max(0, envcompat.get_int("PLUGBOARD_WEBHOOK_MAX_PER_RUN", default=50))
 
 
 def _now() -> str:

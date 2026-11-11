@@ -278,3 +278,51 @@ def test_no_numeric_setting_is_read_inline():
         and reads_env(node.args[0])
     ]
     assert inline == []
+
+
+def test_no_private_copy_of_the_number_reader():
+    # A function that reads a variable, then converts it with int() / float()
+    # itself, is a copy of the reader: its own messages, bounds and NaN rules.
+    import ast
+    from pathlib import Path
+
+    package = Path(envcompat.__file__).resolve().parent
+
+    def reads_env(node):
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Attribute) and sub.attr in ("environ", "getenv"):
+                return True
+            if (
+                isinstance(sub, ast.Attribute)
+                and sub.attr == "get"
+                and isinstance(sub.value, ast.Name)
+                and sub.value.id == "envcompat"
+            ):
+                return True
+        return False
+
+    copies = []
+    for path in sorted(package.rglob("*.py")):
+        if path.name == "envcompat.py":
+            continue
+        for func in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            from_env = {
+                target.id
+                for node in ast.walk(func)
+                if isinstance(node, ast.Assign) and reads_env(node.value)
+                for target in node.targets
+                if isinstance(target, ast.Name)
+            }
+            copies += [
+                f"{path.relative_to(package.parent)}:{node.lineno}"
+                for node in ast.walk(func)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in ("int", "float")
+                and node.args
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id in from_env
+            ]
+    assert sorted(set(copies)) == []
