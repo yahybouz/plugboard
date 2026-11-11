@@ -12,7 +12,7 @@ the key itself is never printed. The current key is the one the server uses
 Provider tokens, OAuth credentials and the admin MFA secret are re-encrypted
 after a backup in data/backups/rekey-<time>/; nothing is written if one of
 them cannot be read. A completed rotation also signs out every dashboard
-session. Then:
+session and forgets the browsers remembered for local auto-login. Then:
 
 - ENCRYPTION_KEY set: put the content of the key file in ENCRYPTION_KEY
   (.env or secret manager) and start Plugboard;
@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cryptography.fernet import Fernet  # noqa: E402
 
-from plugboard import admin_sessions, config, secrets_rekey  # noqa: E402
+from plugboard import admin_sessions, config, local_login, secrets_rekey  # noqa: E402
 from plugboard.storage import atomic_write_text, data_dir  # noqa: E402
 
 
@@ -106,6 +106,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Done. Previous files saved in {report.backup_dir}")
     try:
+        # Browsers remembered for local auto-login would sign straight back in.
+        local_login.forget_devices()
         admin_sessions.revoke_all()
     except OSError as exc:
         # The secrets are already rewritten: the rotation still succeeded.

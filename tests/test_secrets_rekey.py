@@ -258,6 +258,18 @@ def _sessions(data: Path) -> dict:
     return json.loads((data / "admin_sessions.json").read_text())["sessions"]
 
 
+# A browser remembered for local auto-login (only digests are stored).
+_DEVICE = {"a" * 64: {"created_at": 1800000000.0}}
+
+
+def _seed_device(data: Path) -> None:
+    (data / "local_devices.json").write_text(json.dumps({"devices": dict(_DEVICE)}))
+
+
+def _devices(data: Path) -> dict:
+    return json.loads((data / "local_devices.json").read_text())["devices"]
+
+
 def test_cli_rotation_signs_out_every_session(tmp_path):
     data = tmp_path / "data"
     _seed(data)
@@ -271,6 +283,22 @@ def test_cli_rotation_signs_out_every_session(tmp_path):
     assert "Every dashboard session was signed out" in run.stdout
 
 
+def test_cli_rotation_forgets_remembered_browsers(tmp_path):
+    # Without this, a browser remembered for local auto-login would get a new
+    # session on its next visit to /login once Plugboard restarts.
+    data = tmp_path / "data"
+    _seed(data)
+    _seed_session(data)
+    _seed_device(data)
+    (data / ".encryption_key").write_text(OLD)
+
+    run = _run_cli(tmp_path, "--new-key-file", str(tmp_path / "new.key"), "--generate")
+
+    assert run.returncode == 0, run.stderr
+    assert _devices(data) == {}
+    assert _sessions(data) == {}
+
+
 def test_cli_dry_run_keeps_sessions(tmp_path):
     data = tmp_path / "data"
     _seed(data)
@@ -278,10 +306,12 @@ def test_cli_dry_run_keeps_sessions(tmp_path):
     (data / ".encryption_key").write_text(OLD)
     new_file = tmp_path / "new.key"
 
+    _seed_device(data)
     run = _run_cli(tmp_path, "--new-key-file", str(new_file), "--generate", "--dry-run")
 
     assert run.returncode == 0, run.stderr
     assert _sessions(data) == {"0" * 64: _SESSION}
+    assert _devices(data) == _DEVICE
     assert "signed out" not in run.stdout
 
 
@@ -292,10 +322,12 @@ def test_cli_refused_rotation_keeps_sessions(tmp_path):
     good = tmp_path / "good.key"
     good.write_text(NEW)
 
+    _seed_device(data)
     run = _run_cli(tmp_path, "--new-key-file", str(good), env_key=OLD)
 
     assert run.returncode == 1
     assert _sessions(data) == {"0" * 64: _SESSION}
+    assert _devices(data) == _DEVICE
     assert "signed out" not in run.stdout
 
 
