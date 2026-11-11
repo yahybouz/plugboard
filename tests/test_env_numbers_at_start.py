@@ -92,6 +92,10 @@ AT_IMPORT = {
         ),
         "PLUGBOARD_REFRESH_COOLDOWN_S": ("_MODEL_REFRESH_COOLDOWN_S", 60.0),
     },
+    "plugboard.ratelimit": {"RATE_LIMIT": ("_LIMIT", 60)},
+    "plugboard.cli_subprocess": {
+        "PLUGBOARD_SUBPROCESS_LIMIT": ("_CONCURRENCY_LIMIT", 4),
+    },
 }
 
 # Good values, old names and the bounds each setting applies:
@@ -119,6 +123,10 @@ WELL_SET = {
             5.0,
         ),
         "LLM_ENABLER_REFRESH_COOLDOWN_S": ("30", "_MODEL_REFRESH_COOLDOWN_S", 30.0),
+    },
+    "plugboard.ratelimit": {"RATE_LIMIT": ("120", "_LIMIT", 120)},
+    "plugboard.cli_subprocess": {
+        "LLM_ENABLER_SUBPROCESS_LIMIT": ("0", "_CONCURRENCY_LIMIT", 1),
     },
 }
 
@@ -237,3 +245,27 @@ def test_default_monthly_limit_of_a_new_key(
     assert app._default_monthly_limit_usd() == expected
     if raw in ("abc", "inf", "nan"):
         assert "PLUGBOARD_DEFAULT_MONTHLY_LIMIT_USD" in warnings_seen.text
+
+
+@pytest.mark.parametrize(
+    "reader, variable, raw, expected",
+    [
+        ("_concurrency", "PLUGBOARD_EMBEDDING_CONCURRENCY", "abc", 2),
+        ("_concurrency", "PLUGBOARD_EMBEDDING_CONCURRENCY", "inf", 2),
+        ("_concurrency", "PLUGBOARD_EMBEDDING_CONCURRENCY", "8", 8),
+        ("_timeout", "PLUGBOARD_EMBEDDING_TIMEOUT_S", "abc", 60.0),
+        ("_timeout", "PLUGBOARD_EMBEDDING_TIMEOUT_S", "nan", 60.0),
+        ("_timeout", "PLUGBOARD_EMBEDDING_TIMEOUT_S", "30", 30.0),
+    ],
+)
+def test_embedding_engine_limits(
+    monkeypatch, warnings_seen, reader, variable, raw, expected
+):
+    # Values out of range still give the default, as before (other tests).
+    from plugboard import embeddings_api
+
+    monkeypatch.setenv(variable, raw)
+
+    assert getattr(embeddings_api, reader)() == expected
+    if raw in ("abc", "inf", "nan"):
+        assert variable in warnings_seen.text  # it fell back in silence
