@@ -68,6 +68,16 @@ AT_IMPORT = {
         "PLUGBOARD_EMBED_SIMILARITY_THRESHOLD": ("_EMBED_THRESHOLD", 0.92),
         "PLUGBOARD_EMBED_TIMEOUT": ("_EMBED_TIMEOUT", 10.0),
     },
+    "plugboard.provider_watchdog": {
+        "WATCHDOG_INTERVAL": ("_CHECK_INTERVAL", 30),
+        "WATCHDOG_FAILURES": ("_FAILURE_THRESHOLD", 3),
+        "WATCHDOG_RESTART_COOLDOWN": ("_RESTART_COOLDOWN", 120),
+        "WATCHDOG_MAX_RESTARTS": ("_MAX_RESTARTS", 5),
+        "WATCHDOG_HEALTH_TIMEOUT": ("_HEALTH_TIMEOUT", 10),
+        "WATCHDOG_DEEP_TIMEOUT": ("_DEEP_CHECK_TIMEOUT", 60),
+        "WATCHDOG_DEEP_INTERVAL": ("_DEEP_CHECK_INTERVAL", 3),
+    },
+    "plugboard.alerts": {"ALERT_FAILURE_THRESHOLD": ("_ALERT_THRESHOLD", 3)},
 }
 
 # Good values, old names and the bounds each setting applies:
@@ -82,6 +92,8 @@ WELL_SET = {
         "SEMANTIC_CACHE_THRESHOLD": ("0.9", "_DEFAULT_THRESHOLD", 0.9),
         "EMBED_TIMEOUT": ("7.5", "_EMBED_TIMEOUT", 7.5),  # pre-rename name
     },
+    "plugboard.provider_watchdog": {"WATCHDOG_INTERVAL": ("45", "_CHECK_INTERVAL", 45)},
+    "plugboard.alerts": {"ALERT_FAILURE_THRESHOLD": ("5", "_ALERT_THRESHOLD", 5)},
 }
 
 
