@@ -52,6 +52,7 @@ import sqlite3
 import struct
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
+from plugboard import envcompat
 from plugboard.storage import data_dir
 
 log = logging.getLogger(__name__)
@@ -93,15 +94,16 @@ def _env_embed(canonical: str, legacy: str, default: str = "") -> str:
 
 _DATA_DIR = data_dir()
 _DB_PATH = _DATA_DIR / "semantic_cache.db"
-_DEFAULT_TTL = int(os.environ.get("SEMANTIC_CACHE_TTL", "3600"))
-_MAX_CACHE_SIZE = int(os.environ.get("SEMANTIC_CACHE_MAX_SIZE", "5000"))
-_DEFAULT_THRESHOLD = float(os.environ.get("SEMANTIC_CACHE_THRESHOLD", "0.85"))
-_EMBED_THRESHOLD = float(
-    _env_embed(
-        "PLUGBOARD_EMBED_SIMILARITY_THRESHOLD", "EMBED_SIMILARITY_THRESHOLD", "0.92"
-    )
+_DEFAULT_TTL = envcompat.get_int("SEMANTIC_CACHE_TTL", default=3600)
+_MAX_CACHE_SIZE = envcompat.get_int("SEMANTIC_CACHE_MAX_SIZE", default=5000)
+_DEFAULT_THRESHOLD = envcompat.get_float("SEMANTIC_CACHE_THRESHOLD", default=0.85)
+# Numbers: same order as _env_embed (new name, then the legacy one).
+_EMBED_THRESHOLD = envcompat.get_float(
+    "PLUGBOARD_EMBED_SIMILARITY_THRESHOLD", "EMBED_SIMILARITY_THRESHOLD", default=0.92
 )
-_EMBED_TIMEOUT = float(_env_embed("PLUGBOARD_EMBED_TIMEOUT", "EMBED_TIMEOUT", "10"))
+_EMBED_TIMEOUT = envcompat.get_float(
+    "PLUGBOARD_EMBED_TIMEOUT", "EMBED_TIMEOUT", default=10.0
+)
 _MIN_PROMPT_CHARS = 20  # skip short prompts (unreliable matching)
 
 # MinHash parameters

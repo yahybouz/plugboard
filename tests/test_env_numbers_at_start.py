@@ -19,14 +19,17 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 _PROBE = """
-import importlib, json, sys
+import importlib, json, sys, traceback
 from plugboard import envcompat
-values = {}
+values, errors = {}, {}
 for wanted in sys.argv[1:]:
     module, attr = wanted.split(":")
-    values[wanted] = getattr(importlib.import_module(module), attr)
+    try:
+        values[wanted] = getattr(importlib.import_module(module), attr)
+    except Exception:
+        errors[module] = traceback.format_exc(limit=-4)
 reported = sorted({name for name, _ in envcompat._bad_numbers})
-print("PROBE " + json.dumps({"values": values, "reported": reported}))
+print("PROBE " + json.dumps({"values": values, "errors": errors, "reported": reported}))
 """
 
 
@@ -42,8 +45,7 @@ def _start(tmp_path: Path, settings: dict, wanted: list) -> dict:
         text=True,
         timeout=120,
     )
-    if proc.returncode != 0:
-        return {"error": proc.stderr[-3000:]}
+    assert proc.returncode == 0, proc.stderr[-3000:]
     line = next(x for x in proc.stdout.splitlines() if x.startswith("PROBE "))
     return json.loads(line[len("PROBE ") :])
 
@@ -55,6 +57,17 @@ AT_IMPORT = {
         "PLUGBOARD_HTTP_POOL_PER_HOST": ("_CONN_PER_HOST", 20),
         "PLUGBOARD_HTTP_DNS_TTL": ("_DNS_TTL", 300),
     },
+    "plugboard.cache": {
+        "CACHE_TTL": ("_DEFAULT_TTL", 300),
+        "CACHE_MAX_SIZE": ("_MAX_CACHE_SIZE", 10000),
+    },
+    "plugboard.semantic_cache": {
+        "SEMANTIC_CACHE_TTL": ("_DEFAULT_TTL", 3600),
+        "SEMANTIC_CACHE_MAX_SIZE": ("_MAX_CACHE_SIZE", 5000),
+        "SEMANTIC_CACHE_THRESHOLD": ("_DEFAULT_THRESHOLD", 0.85),
+        "PLUGBOARD_EMBED_SIMILARITY_THRESHOLD": ("_EMBED_THRESHOLD", 0.92),
+        "PLUGBOARD_EMBED_TIMEOUT": ("_EMBED_TIMEOUT", 10.0),
+    },
 }
 
 # Good values, old names and the bounds each setting applies:
@@ -63,6 +76,11 @@ WELL_SET = {
     "plugboard.http_pool": {
         "LLM_ENABLER_HTTP_POOL_SIZE": ("50", "_CONN_LIMIT", 50),
         "PLUGBOARD_HTTP_POOL_PER_HOST": (" 8 ", "_CONN_PER_HOST", 8),
+    },
+    "plugboard.cache": {"CACHE_TTL": ("60", "_DEFAULT_TTL", 60)},
+    "plugboard.semantic_cache": {
+        "SEMANTIC_CACHE_THRESHOLD": ("0.9", "_DEFAULT_THRESHOLD", 0.9),
+        "EMBED_TIMEOUT": ("7.5", "_EMBED_TIMEOUT", 7.5),  # pre-rename name
     },
 }
 
@@ -99,7 +117,7 @@ def good_start(tmp_path_factory):
 
 @pytest.mark.parametrize("module", sorted(AT_IMPORT))
 def test_bad_value_read_at_import_gives_the_default(bad_start, module):
-    assert "error" not in bad_start, bad_start.get("error")
+    assert module not in bad_start["errors"], bad_start["errors"][module]
     spec = AT_IMPORT[module]
     found = {
         name: bad_start["values"][f"{module}:{a}"] for name, (a, _) in spec.items()
@@ -111,7 +129,7 @@ def test_bad_value_read_at_import_gives_the_default(bad_start, module):
 
 @pytest.mark.parametrize("module", sorted(WELL_SET))
 def test_good_value_read_at_import_is_kept(good_start, module):
-    assert "error" not in good_start, good_start.get("error")
+    assert module not in good_start["errors"], good_start["errors"][module]
     spec = WELL_SET[module]
     found = {
         name: good_start["values"][f"{module}:{a}"] for name, (_, a, _) in spec.items()

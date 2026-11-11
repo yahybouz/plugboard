@@ -17,20 +17,20 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import sqlite3
 import time
 
 
 from typing import Any, Dict, Optional
+from plugboard import envcompat
 from plugboard.storage import data_dir
 
 log = logging.getLogger(__name__)
 
 _DATA_DIR = data_dir()
 _DB_PATH = _DATA_DIR / "cache.db"
-_DEFAULT_TTL = int(os.environ.get("CACHE_TTL", "300"))  # 5 min default
-_MAX_CACHE_SIZE = int(os.environ.get("CACHE_MAX_SIZE", "10000"))
+_DEFAULT_TTL = envcompat.get_int("CACHE_TTL", default=300)  # 5 min default
+_MAX_CACHE_SIZE = envcompat.get_int("CACHE_MAX_SIZE", default=10000)
 
 
 # ARCH-DEBT-023 closed: SEC-001 strict-tenant gate factored to
