@@ -4,9 +4,10 @@ Every ``LLM_ENABLER_<NAME>`` variable is copied to ``PLUGBOARD_<NAME>`` when
 the new name is not set, so existing ``.env`` files, cron entries and
 deployments keep working. The code itself only reads ``PLUGBOARD_*`` names.
 
-``get_int`` and ``get_float`` are the one reader of numeric settings: a value
-that is not a finite number (``nan`` and ``inf`` included), or is outside the
-bounds the caller gives, falls back to the default with one warning.
+``get_int`` and ``get_float`` are the one reader of numeric settings, and
+``get_floats`` of comma-separated lists of numbers: a value that is not a
+finite number (``nan`` and ``inf`` included), or is outside the bounds the
+caller gives, falls back to the default with one warning.
 """
 
 from __future__ import annotations
@@ -116,21 +117,38 @@ def _number(
     except ValueError:
         problem = "is not a whole number" if cast is int else "is not a number"
     else:
-        # A whole number is always finite (and may be too large for a float).
-        if isinstance(value, float) and math.isnan(value):
-            problem = "is not a number"
-        elif isinstance(value, float) and math.isinf(value):
-            problem = "is not a finite number"
-        elif minimum is not None and value < minimum:
-            problem = f"is below {minimum}"
-        elif above is not None and value <= above:
-            problem = f"must be above {above}"
-        else:
+        problem = _why_unusable(value, minimum, above)
+        if problem is None:
             return value
+    _report(name, raw, problem, default)
+    return default
+
+
+def _why_unusable(
+    value: Union[int, float],
+    minimum: Optional[Union[int, float]],
+    above: Optional[Union[int, float]],
+    maximum: Optional[Union[int, float]] = None,
+) -> Optional[str]:
+    """Why ``value`` cannot be used, or None when it can."""
+    # A whole number is always finite (and may be too large for a float).
+    if isinstance(value, float) and math.isnan(value):
+        return "is not a number"
+    if isinstance(value, float) and math.isinf(value):
+        return "is not a finite number"
+    if minimum is not None and value < minimum:
+        return f"is below {minimum}"
+    if above is not None and value <= above:
+        return f"must be above {above}"
+    if maximum is not None and value > maximum:
+        return f"is above {maximum}"
+    return None
+
+
+def _report(name: str, raw: str, problem: str, default: object) -> None:
     if (name, raw) not in _bad_numbers:
         _bad_numbers.add((name, raw))
         log.warning("%s=%r %s; using %s", name, raw, problem, default)
-    return default
 
 
 def get_int(
@@ -161,3 +179,36 @@ def get_float(
     warning per value.
     """
     return _number(name, legacy, default, float, minimum, above)
+
+
+def get_floats(
+    name: str,
+    *legacy: str,
+    default: List[float],
+    minimum: Optional[float] = None,
+    maximum: Optional[float] = None,
+) -> List[float]:
+    """Comma-separated numbers from ``name`` (or a legacy name), else ``default``.
+
+    Empty items are skipped, and a value with no item gives the default. One
+    item that is not a finite number (NaN or infinity), is below ``minimum``
+    or is above ``maximum`` gives the whole default, with one warning per
+    value.
+    """
+    raw = get(name, *legacy)
+    values: List[float] = []
+    for chunk in raw.split(","):
+        item = chunk.strip()
+        if not item:
+            continue
+        try:
+            value = float(item)
+        except ValueError:
+            problem: Optional[str] = "is not a number"
+        else:
+            problem = _why_unusable(value, minimum, None, maximum)
+        if problem is not None:
+            _report(name, raw, f"item {item!r} {problem}", default)
+            return list(default)
+        values.append(value)
+    return values or list(default)
