@@ -131,6 +131,11 @@ PRICING_UPDATE_TIMEOUT_S=300
 
 Check that the new value shows up as `update_timeout_s` in the status output.
 
+A timeout never cuts the write of the grid half-way: when it falls during
+the write, the update waits for it to end, journals and announces its price
+changes, then logs the timeout. The grid on disk is then current, although
+the run counts as a failure for the circuit breaker.
+
 ### Price sources unreachable
 
 A refresh that cannot reach any source does not fail: the official table (no

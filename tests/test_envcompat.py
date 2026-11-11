@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from plugboard import envcompat
 
 
@@ -69,3 +71,110 @@ def test_version_file_matches_package_version():
 
     version_file = Path(__file__).resolve().parent.parent / "VERSION"
     assert version_file.read_text().strip() == plugboard.__version__
+
+
+# -- numbers: one reader for every numeric setting -------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _fresh_number_warnings(monkeypatch):
+    """Each test sees its own warnings, whatever ran before it."""
+    monkeypatch.setattr(envcompat, "_bad_numbers", set())
+
+
+def test_number_is_read_from_the_environment(monkeypatch):
+    monkeypatch.setenv("PB_TEST_INT", " 12 ")
+    monkeypatch.setenv("PB_TEST_FLOAT", "1.75")
+
+    assert envcompat.get_int("PB_TEST_INT", default=3) == 12
+    assert envcompat.get_float("PB_TEST_FLOAT", default=0.3) == 1.75
+
+
+def test_unset_or_blank_number_gives_the_default(monkeypatch):
+    monkeypatch.delenv("PB_TEST_INT", raising=False)
+    monkeypatch.setenv("PB_TEST_FLOAT", "   ")
+
+    assert envcompat.get_int("PB_TEST_INT", default=3) == 3
+    assert envcompat.get_float("PB_TEST_FLOAT", default=0.5) == 0.5
+
+
+@pytest.mark.parametrize(
+    "reader, raw, default",
+    [
+        ("get_int", "oops", 7),
+        ("get_int", "1.5", 7),  # not a whole number
+        ("get_float", "nope", 1.5),
+        ("get_float", "nan", 1.5),  # passes every comparison
+    ],
+)
+def test_invalid_number_gives_the_default_and_a_warning(
+    monkeypatch, caplog, reader, raw, default
+):
+    monkeypatch.setenv("PB_TEST_BAD", raw)
+
+    with caplog.at_level("WARNING", logger="plugboard.envcompat"):
+        assert getattr(envcompat, reader)("PB_TEST_BAD", default=default) == default
+
+    assert "PB_TEST_BAD" in caplog.text
+
+
+def test_invalid_number_is_reported_once(monkeypatch, caplog):
+    monkeypatch.setenv("PB_TEST_ONCE", "twice?")
+
+    with caplog.at_level("WARNING", logger="plugboard.envcompat"):
+        envcompat.get_int("PB_TEST_ONCE", default=1)
+        envcompat.get_int("PB_TEST_ONCE", default=1)
+
+    assert caplog.text.count("PB_TEST_ONCE") == 1
+
+
+def test_bounds_give_the_default_outside_them(monkeypatch):
+    monkeypatch.setenv("PB_TEST_FLOAT", "-2")
+    assert envcompat.get_float("PB_TEST_FLOAT", default=0.3, minimum=0.0) == 0.3
+    monkeypatch.setenv("PB_TEST_FLOAT", "0")
+    assert envcompat.get_float("PB_TEST_FLOAT", default=0.3, minimum=0.0) == 0.0
+    # ``above`` excludes the bound itself: a zero timeout is no timeout.
+    assert envcompat.get_float("PB_TEST_FLOAT", default=20.0, above=0) == 20.0
+
+    monkeypatch.setenv("PB_TEST_INT", "-1")
+    assert envcompat.get_int("PB_TEST_INT", default=5) == -1  # the caller clamps
+    assert envcompat.get_int("PB_TEST_INT", default=5, minimum=0) == 5
+
+
+def test_number_reader_accepts_legacy_names(monkeypatch):
+    monkeypatch.delenv("PLUGBOARD_TEST_HOURS", raising=False)
+    monkeypatch.setenv("TEST_HOURS", "4")
+
+    assert envcompat.get_int("PLUGBOARD_TEST_HOURS", "TEST_HOURS", default=6) == 4
+
+
+def test_nan_budget_does_not_lift_the_llm_pricing_cap(monkeypatch):
+    # NaN passed the "cannot be negative" check and compares false with any
+    # spend: the daily budget of the LLM pricing pass was then never reached.
+    from plugboard import llm_pricing
+
+    monkeypatch.setenv("PLUGBOARD_LLM_PRICING_MAX_USD", "nan")
+
+    assert llm_pricing.max_usd_per_day() == 0.50
+
+
+def test_numeric_settings_share_the_one_reader():
+    import plugboard.app as app_mod
+    from plugboard import llm_pricing, model_availability, models_dev
+    from plugboard import pricing_scheduler, router
+
+    copies = {
+        app_mod: ("_env_int", "_env_float"),
+        llm_pricing: ("_float_env",),
+        model_availability: ("_env_int", "_env_float"),
+        models_dev: ("_env_float",),
+        pricing_scheduler: ("_env_int",),
+        router: ("_read_env_float",),
+    }
+    left = [
+        f"{module.__name__}.{name}"
+        for module, names in copies.items()
+        for name in names
+        if hasattr(module, name)
+    ]
+    assert left == []

@@ -35,7 +35,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, Optional
 
-from plugboard import official_prices
+from plugboard import envcompat, official_prices
 from plugboard.storage import data_dir
 
 log = logging.getLogger(__name__)
@@ -56,13 +56,6 @@ def _parse_bool(value: str) -> bool:
     """Match the project-wide convention used by PLUGBOARD_STRICT_TENANT
     and PLUGBOARD_SEMANTIC_CACHE — accept the same truthy strings."""
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, str(default)) or str(default))
-    except (TypeError, ValueError):
-        return default
 
 
 # Type alias: a sleep function compatible with asyncio.sleep. Injectable
@@ -121,7 +114,9 @@ class PricingScheduler:
         # Tunables (read at construction so tests can override env vars
         # via monkeypatch.setenv before instantiation).
         self.disabled = _parse_bool(os.environ.get("PRICING_SCHEDULER_DISABLED", ""))
-        self.daily_hour_utc = max(0, min(23, _env_int("PRICING_DAILY_HOUR_UTC", 3)))
+        self.daily_hour_utc = max(
+            0, min(23, envcompat.get_int("PRICING_DAILY_HOUR_UTC", default=3))
+        )
         # C3 (2026-06-01): optional FREQUENT refresh. When > 0, the loop sleeps
         # this many hours between runs instead of waking once/day at daily_hour_utc.
         # Default 0 = legacy daily-at-hour behaviour. Clamped to 1..24 when enabled.
@@ -129,13 +124,17 @@ class PricingScheduler:
         from plugboard.intervals import pricing_refresh_interval_h
 
         self.refresh_interval_h = pricing_refresh_interval_h()
-        self.update_timeout_s = max(1, _env_int("PRICING_UPDATE_TIMEOUT_S", 120))
-        self.cb_cooldown_s = max(1, _env_int("PRICING_CB_COOLDOWN_S", 3600))
-        self.providers_ready_max_retries = _env_int(
-            "PRICING_PROVIDERS_READY_MAX_RETRIES", 3
+        self.update_timeout_s = max(
+            1, envcompat.get_int("PRICING_UPDATE_TIMEOUT_S", default=120)
+        )
+        self.cb_cooldown_s = max(
+            1, envcompat.get_int("PRICING_CB_COOLDOWN_S", default=3600)
+        )
+        self.providers_ready_max_retries = envcompat.get_int(
+            "PRICING_PROVIDERS_READY_MAX_RETRIES", default=3
         )
         self.providers_ready_backoff_s = max(
-            1, _env_int("PRICING_PROVIDERS_READY_BACKOFF_S", 2)
+            1, envcompat.get_int("PRICING_PROVIDERS_READY_BACKOFF_S", default=2)
         )
 
         # ARCH-DEBT-033 closed: CB state is persisted to data/cb_state.json

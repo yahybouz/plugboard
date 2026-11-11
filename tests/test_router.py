@@ -107,23 +107,28 @@ def test_resolve_leaves_unknown_model_unchanged_when_alias_cache_empty(
     assert model == "whatever-model"
 
 
+# The load-balancing weights are read with the shared reader, never negative.
 def test_read_env_float_valid_value(monkeypatch):
-    import plugboard.router as router
+    from plugboard import envcompat
 
     monkeypatch.setenv("LB_TEST_FLOAT", "1.75")
-    assert router._read_env_float("LB_TEST_FLOAT", 0.3) == pytest.approx(1.75)
+    assert envcompat.get_float(
+        "LB_TEST_FLOAT", default=0.3, minimum=0.0
+    ) == pytest.approx(1.75)
 
 
 def test_read_env_float_invalid_or_negative_falls_back(monkeypatch):
-    import plugboard.router as router
+    from plugboard import envcompat
 
     monkeypatch.setenv("LB_TEST_FLOAT", "not-a-number")
-    assert router._read_env_float("LB_TEST_FLOAT", 0.3) == pytest.approx(0.3)
+    assert envcompat.get_float(
+        "LB_TEST_FLOAT", default=0.3, minimum=0.0
+    ) == pytest.approx(0.3)
 
     monkeypatch.setenv("LB_TEST_FLOAT", "-2")
-    assert router._read_env_float("LB_TEST_FLOAT", 0.3, min_value=0.0) == pytest.approx(
-        0.3
-    )
+    assert envcompat.get_float(
+        "LB_TEST_FLOAT", default=0.3, minimum=0.0
+    ) == pytest.approx(0.3)
 
 
 def test_resolve_all_providers_prefers_lower_inflight_load(

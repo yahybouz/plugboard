@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
+from plugboard import envcompat
 from plugboard.config import is_cli_provider as _is_cli_provider
 from plugboard.storage import atomic_write_text, data_dir
 from plugboard.model_identity import observation_owner
@@ -140,20 +141,6 @@ def parse_family_and_version(model_id: str) -> tuple[str, tuple[int, ...]]:
 
 def _parse_bool(value: str) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, str(default)) or str(default))
-    except (TypeError, ValueError):
-        return default
-
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.environ.get(name, str(default)) or str(default))
-    except (TypeError, ValueError):
-        return default
 
 
 def _probe_kinds_from_env() -> Set[str]:
@@ -605,11 +592,13 @@ async def refresh_subprocess_provider_models(
     kind = auth_source.removeprefix("subprocess:")
     probe_kinds = probe_kinds if probe_kinds is not None else _probe_kinds_from_env()
     should_probe = "all" in probe_kinds or kind in probe_kinds
-    timeout_s = timeout_s or _env_float("PLUGBOARD_MODEL_REFRESH_TIMEOUT_S", 45.0)
+    timeout_s = timeout_s or envcompat.get_float(
+        "PLUGBOARD_MODEL_REFRESH_TIMEOUT_S", default=45.0
+    )
     max_probes = (
         max_probes
         if max_probes is not None
-        else max(0, _env_int("PLUGBOARD_MODEL_REFRESH_MAX_PROBES", 40))
+        else max(0, envcompat.get_int("PLUGBOARD_MODEL_REFRESH_MAX_PROBES", default=40))
     )
 
     from plugboard.model_quarantine import (
@@ -1179,20 +1168,26 @@ class ModelAvailabilityScheduler:
         self.disabled = _parse_bool(
             os.environ.get("MODEL_AVAILABILITY_SCHEDULER_DISABLED", "")
         )
-        pricing_hour = _env_int("PRICING_DAILY_HOUR_UTC", 3)
+        pricing_hour = envcompat.get_int("PRICING_DAILY_HOUR_UTC", default=3)
         self.daily_hour_utc = max(
             0,
-            min(23, _env_int("MODEL_AVAILABILITY_DAILY_HOUR_UTC", pricing_hour + 1)),
+            min(
+                23,
+                envcompat.get_int(
+                    "MODEL_AVAILABILITY_DAILY_HOUR_UTC", default=pricing_hour + 1
+                ),
+            ),
         )
         # Hours between refreshes (default 6); 0 = daily at daily_hour_utc.
         from plugboard.intervals import models_refresh_interval_h
 
         self.refresh_interval_h = models_refresh_interval_h()
         self.bootstrap_delay_s = max(
-            0.0, _env_float("MODEL_AVAILABILITY_BOOTSTRAP_DELAY_S", 8.0)
+            0.0,
+            envcompat.get_float("MODEL_AVAILABILITY_BOOTSTRAP_DELAY_S", default=8.0),
         )
         self.update_timeout_s = max(
-            1, _env_int("MODEL_AVAILABILITY_UPDATE_TIMEOUT_S", 900)
+            1, envcompat.get_int("MODEL_AVAILABILITY_UPDATE_TIMEOUT_S", default=900)
         )
         self.last_run_at: Optional[str] = None
         self.last_result: Optional[Dict[str, Any]] = None
