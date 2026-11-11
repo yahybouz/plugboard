@@ -17,6 +17,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **The load-balancing score counts every request in flight**: the in-flight part of the score that orders the candidates of a model without provider prefix (`PLUGBOARD_LB_INFLIGHT_WEIGHT`) only counted HTTP requests that were not streamed; it now counts streamed requests and CLI calls too, so the order of candidates for a model without prefix can change.
 - **A long `Retry-After` is no longer waited out on the spot**: a `429` whose `Retry-After` exceeds the next retry delay (`PLUGBOARD_RETRY_DELAYS`) is not retried on the same provider any more; the next candidate, or the client, gets it at once instead of after about 22 s of retries. A `429` without `Retry-After`, or with a shorter one, is retried as before.
 
+### Fixed
+
+- **Two turns of one session sent together could lose one or answer without the other**: with a `session_id` (or the `X-LLM-Session-ID` header), a turn sent while the previous one was still being answered ran at once, without seeing it, and on a full history (`PLUGBOARD_SESSION_MAX_TURNS`) one of the two exchanges was lost when both were recorded. The turns of one session now run one after the other, in arrival order: a turn waits until the previous one is answered and recorded, and a client that hangs up while it waits leaves the queue (`499`) without calling any provider. Requests without a session, other sessions and the same session id under another client never wait. The wait happens in one process, inside the chat request's concurrency slot (`PLUGBOARD_MAX_INFLIGHT_CHAT`).
+- **A streamed turn was never recorded in its session**: with `"stream": true`, the answer of an HTTP provider or a CLI was not added to the session, so the next turn did not see it. It is now recorded once the stream is complete; an interrupted stream is not.
+
 ## [4.8.0] — 2026-11-11
 
 ### Added

@@ -723,6 +723,55 @@ def _client_gone_response(model: str) -> Response:
     return Response(status_code=_CLIENT_CLOSED_REQUEST)
 
 
+# ── One turn at a time per session (D-24, PLU-8) ────────────────────────────
+
+
+async def _session_turn_dep(request: Request):
+    """Give the session's turn back once the response is sent.
+
+    The handler takes the turn (``_take_session_turn``) only when the call
+    carries a session id; a yield dependency (scope "request") exits after
+    the last byte, streams included, and on any error the handler raises.
+    """
+    try:
+        yield
+    finally:
+        release = getattr(request.state, "session_turn_release", None)
+        if release is not None:
+            release()
+
+
+async def _take_session_turn(request: Request, client_id: str, session_id: str) -> None:
+    """Wait for the previous turn of this session to be answered and recorded.
+
+    The release is stored as soon as the turn is obtained, so a hang-up that
+    comes later (``_ClientGone``) cannot lose it.
+    """
+    from plugboard import session_turns
+
+    request.state.session_turn_release = await session_turns.acquire(
+        client_id, session_id
+    )
+
+
+def _record_session_turn(
+    client_id: Optional[str],
+    session_id: Optional[str],
+    messages: List[dict],
+    reply: str,
+) -> None:
+    """PERF-1: record the exchange so the next call with the same session_id
+    sees the updated transcript. Non-blocking: never bubbles errors."""
+    if not (session_id and client_id):
+        return
+    try:
+        from plugboard.session_store import record_exchange
+
+        record_exchange(client_id, session_id, messages, reply)
+    except Exception as exc:
+        log.warning("session record error (non-fatal): %s", exc)
+
+
 def _csp_for(nonce: str) -> str:
     """Build the CSP header for this request.
 
@@ -1450,7 +1499,8 @@ def _bill_streaming(
     """Record usage from accumulated SSE chunks and return the billing dict.
 
     Returns a dict with keys {prompt_tokens, completion_tokens, total_tokens,
-    cost_usd, model, upstream_usage_present}. The caller (streaming
+    cost_usd, model, upstream_usage_present, text}; ``text`` (the answer,
+    recorded in the session) is never sent to the client. The caller (streaming
     generator) uses this to append a final OpenAI-compatible usage chunk
     when the upstream didn't provide one — so the chat dashboard can
     display tokens + cost for every provider, not just subprocess.
@@ -1509,6 +1559,7 @@ def _bill_streaming(
         "cost_usd": round(cost, 6),
         "model": real_model,
         "upstream_usage_present": bool(upstream_usage),
+        "text": completion_text,
     }
 
 
@@ -1891,7 +1942,10 @@ def _require_chat_messages(body: Dict[str, Any]) -> None:
             )
 
 
-@app.post("/v1/chat/completions", dependencies=[Depends(_inflight_chat_dep)])
+@app.post(
+    "/v1/chat/completions",
+    dependencies=[Depends(_inflight_chat_dep), Depends(_session_turn_dep)],
+)
 async def chat_completions(
     request: Request,
     client_id: Optional[str] = Depends(_resolve_client),
@@ -1956,6 +2010,14 @@ async def chat_completions(
     if session_id and client_id:
         from plugboard.session_store import merge_history_into_body
 
+        # D-24: the previous turn of this session is answered and recorded
+        # first, so this one sees it; the turn comes back after the response.
+        try:
+            await _unless_client_gone(
+                request, _take_session_turn(request, client_id, session_id)
+            )
+        except _ClientGone:
+            return _client_gone_response(body.get("model", "?"))
         body = merge_history_into_body(client_id, session_id, body)
 
     _require_chat_messages(body)
@@ -2269,6 +2331,9 @@ async def chat_completions(
             content = (result.get("choices") or [{}])[0].get("message", {}).get(
                 "content", ""
             ) or ""
+            _record_session_turn(
+                client_id, session_id, list(body.get("messages") or []), content
+            )
             usage = result.get("usage") or {}
             completion_id = result.get("id", "chatcmpl-subproc")
             created = result.get("created", int(time.time()))
@@ -2421,6 +2486,11 @@ async def chat_completions(
                     )
                 except Exception as exc:
                     log.warning("Stream billing error (non-fatal): %s", exc)
+            if bill is not None:
+                # Complete stream only: an interrupted one left above.
+                _record_session_turn(
+                    cid, session_id, list(req_body.get("messages") or []), bill["text"]
+                )
 
             usage_needed = bill is not None and not bill["upstream_usage_present"]
             if not usage_needed:
@@ -2514,26 +2584,16 @@ async def chat_completions(
     if billing_info:
         result["billing"] = billing_info
 
-    # PERF-1: record the exchange so the next call with the same session_id
-    # sees the updated transcript. Non-blocking — never bubble errors.
     if session_id and client_id:
+        assistant_text = ""
         try:
-            from plugboard.session_store import record_exchange
-
-            assistant_text = ""
-            try:
-                choice = (result.get("choices") or [{}])[0]
-                assistant_text = (choice.get("message") or {}).get("content") or ""
-            except (IndexError, TypeError):
-                pass
-            record_exchange(
-                client_id,
-                session_id,
-                list(body.get("messages", []) or []),
-                assistant_text,
-            )
-        except Exception as exc:
-            log.warning("session record error (non-fatal): %s", exc)
+            choice = (result.get("choices") or [{}])[0]
+            assistant_text = (choice.get("message") or {}).get("content") or ""
+        except (AttributeError, IndexError, TypeError):
+            pass
+        _record_session_turn(
+            client_id, session_id, list(body.get("messages", []) or []), assistant_text
+        )
 
     # Cache the response
     if _use_cache and _cache_key:
@@ -2756,7 +2816,10 @@ async def model_info(
 # clients to opt-in to future breaking changes.
 
 
-@app.post("/v2/chat/completions", dependencies=[Depends(_inflight_chat_dep)])
+@app.post(
+    "/v2/chat/completions",
+    dependencies=[Depends(_inflight_chat_dep), Depends(_session_turn_dep)],
+)
 async def chat_completions_v2(
     request: Request, client_id: Optional[str] = Depends(_resolve_client)
 ):

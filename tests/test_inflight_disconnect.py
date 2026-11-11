@@ -353,6 +353,9 @@ async def test_hang_up_during_cli_call_frees_slot_and_kills_cli(
     assert SLOW_CLI not in side_effects["cached"]
     assert side_effects["sessions"] == []
     assert inflight_cap._inflight_chat_active == 0
+    from plugboard import session_turns
+
+    assert session_turns._turns == {}, "the session's turn was not given back"
 
 
 async def test_hang_up_during_streamed_cli_call_frees_slot_and_kills_cli(
