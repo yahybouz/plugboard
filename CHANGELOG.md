@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - **`PLUGBOARD_DOCS_BASE_URL` makes the dashboard's docs references links**: a failed provider connection test names the guide section to read as a repository path (`docs/guide/providers-and-subscriptions.md#test-the-connection`), which a dashboard user cannot open. Set this optional variable to where the repository's files are published (its GitLab `-/blob/main` page, for example) and the answer carries `<base>/docs/guide/...`, which the dashboard shows as a link opened in a new tab. Only an `http(s)` URL with a host is used; anything else is logged and ignored. Plugboard serves no guide page itself.
+- **Runbook to move an install to another machine**: [`docs/runbooks/move-install.md`](docs/runbooks/move-install.md) moves a 4.x install, source or Docker Compose, with its data directory, `.env` and encryption key: what moves and what does not (CLI logins, local Ollama models), a dry run of the key rotation that proves the stored secrets still decrypt before the start, and the checks against `/health` and `/health/detailed` (version, key count, usage entries) on both machines.
 
 ### Changed
 

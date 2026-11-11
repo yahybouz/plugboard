@@ -15,6 +15,7 @@ TOTP code or use a session: see
 | [provider-down.md](provider-down.md) | A provider is red in the dashboard, clients get `502`/`503`, watchdog or circuit breaker alerts | P1 or P2 |
 | [pricing-scheduler.md](pricing-scheduler.md) | Pricing grid stale or incomplete, scheduler circuit breaker open, billing drift | P2 (P1 if no pricing at all) |
 | [rollback-release.md](rollback-release.md) | Errors or failed health checks right after an upgrade | P1 |
+| [move-install.md](move-install.md) | The install must move to another machine (planned, or the old one is failing) | P3 (P1 if the old machine is failing) |
 
 For general diagnostics, see the
 [troubleshooting guide](../guide/troubleshooting.md) and the
