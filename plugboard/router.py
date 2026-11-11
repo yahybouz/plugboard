@@ -616,6 +616,8 @@ async def forward(
     """
     Forward a /v1/chat/completions request to the resolved provider.
     Retries on transient errors per provider, then falls back to next provider.
+    An error saying the context is too long is not retried: the same request
+    would fail again, so it goes straight to the next provider.
     """
     from plugboard.circuit_breaker import (
         check_circuit,
@@ -777,6 +779,13 @@ async def forward(
                                 limit=200,
                             )
                             provider_fault = is_provider_fault(text, resp.status)
+                            if (
+                                isinstance(last_err, ProviderHTTPError)
+                                and last_err.request_rejected
+                            ):
+                                # A 5xx saying the context is too long fails
+                                # the same way again: next provider (PLU-5).
+                                break
                             continue
                         if resp.status != 200:
                             text = await resp.text()

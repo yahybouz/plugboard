@@ -42,7 +42,7 @@ A `POST /v1/chat/completions` goes through these steps:
 7. **Forwarding** (`router.forward` or `router.forward_stream`):
    - the model string is resolved to a list of `(provider, model)` candidates. An explicit `<provider-id>:` prefix selects one provider; otherwise all active providers are candidates, ordered by a score of latency × error rate × in-flight requests;
    - a circuit breaker per route (3 provider failures, 60 s cooldown) shows a failing route in `/admin/circuits` and makes the LLM pricing pass skip it; requests are still sent, to the model asked for;
-   - HTTP providers get `POST <base_url>/v1/chat/completions` with their credentials, retried on `429`, `500`, `502`, `503`, `529` after 2, 5 and 15 seconds by default;
+   - HTTP providers get `POST <base_url>/v1/chat/completions` with their credentials, retried on `429`, `500`, `502`, `503`, `529` after 2, 5 and 15 seconds by default, except an error saying the context is too long, which goes straight to the next candidate;
    - CLI providers run the vendor CLI in a neutral working directory, with a per-CLI concurrency limit, and the output is converted to a standard chat response.
 8. **Billing**: token counts from the provider (estimated with a tokenizer when absent), priced with the month's grid, appended to `data/usage.db` with the client and key. The response gets a `billing` object and `X-Cost-*` headers.
 9. **Cache write** and **session record**, then the response.

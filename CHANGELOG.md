@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A context too long was sent four times to the same provider**: when an HTTP provider answered `500`, `502`, `503` or `529` saying the context or the message is too long (an older llama.cpp, a `500` with `context_length_exceeded`, Ollama's `/v1` `500`), a request that is not streamed was retried on that provider like a transient error: the long request went out four times and, with the default delays (`PLUGBOARD_RETRY_DELAYS`, 2, 5 and 15 s), the client waited about 22 s for the same answer. It is now sent once to each candidate provider: the next one gets it straight away, and when none answers the client gets the `400` given since 4.7.0 for a context too long. The circuit breaker's list of "too long" messages decides, as for the client's status. Any other `429` or `5xx` is still retried; a streamed request was never retried.
+
 ## [4.7.0] — 2026-11-11
 
 ### Security
