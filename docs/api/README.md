@@ -165,7 +165,7 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 `POST /v1/chat/completions` and `/v2/chat/completions`, streamed or not, answer `404` without calling any provider when no provider knows the model:
 
 - no registered provider ID prefixes it (`<provider-id>:`, inactive providers included), and no display alias (`claude-code:`, `Codex:`, `Gemini:`) or older CLI prefix (`claude-cli:`, `codex-cli:`, `gemini-cli:`) picks an active provider;
-- no provider, active or not, lists it as a model, an extra model ID or its default model. The comparison ignores case, surrounding spaces and a `:latest` tag, as Ollama does, so `GPT-OSS:20B-Cloud` and `llama3` count as listed when `gpt-oss:20b-cloud` and `llama3:latest` are. A vendor spelling of a model a CLI provider lists counts too (`openai:gpt-6.1-sol` for the Codex CLI's `gpt-6.1-sol`);
+- no provider, active or not, lists it as a model, an extra model ID, its default model or a family alias: `/v1/models` gives a family whose listed IDs are all dated snapshots its bare name in `aliases`, so `claude-sonnet-4-5` counts as listed when a provider lists only `claude-sonnet-4-5-20250929`. The comparison ignores case, surrounding spaces and a `:latest` tag, as Ollama does, so `GPT-OSS:20B-Cloud` and `llama3` count as listed when `gpt-oss:20b-cloud` and `llama3:latest` are. A vendor spelling of a model a CLI provider lists counts too (`openai:gpt-6.1-sol` for the Codex CLI's `gpt-6.1-sol`);
 - every active provider has a model list. A provider without one (a custom endpoint never discovered) may serve any name: the request is then sent to the providers as before, and a model none of them serves still ends in `502`.
 
 ```json

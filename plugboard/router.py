@@ -498,16 +498,43 @@ def _loose_model_name(name: str) -> str:
     return name.strip().casefold().removesuffix(":latest")
 
 
+def _family_aliases(provider: Dict[str, Any]) -> List[str]:
+    """Family names ``/v1/models`` gives this provider's models as ``aliases``.
+
+    A family whose listed IDs are all dated snapshots is published under its
+    bare name too (``claude-sonnet-4-5`` for ``claude-sonnet-4-5-20250929``,
+    model_catalog.dedupe_family_snapshots rule 3). Computed from the provider
+    record with the catalogue's own functions, not from the alias cache,
+    which stays empty until ``/v1/models`` is called.
+    """
+    from plugboard.model_catalog import dedupe_family_snapshots, enrich
+
+    native = _listed_models(provider)
+    default = provider.get("default_model")
+    if not native and isinstance(default, str) and default:
+        native = [default]  # list_models publishes it only without a list
+    entries = [
+        {"id": f"{provider['id']}:{m}", "owned_by": provider["id"]} for m in native
+    ]
+    return [
+        alias
+        for entry in dedupe_family_snapshots(enrich(entries))
+        for alias in entry.get("aliases") or []
+        if isinstance(alias, str) and alias
+    ]
+
+
 def is_unknown_model(model_str: str) -> bool:
     """True when no provider knows ``model_str``: answer 404, call nobody.
 
     All of these must hold: no registered provider ID (active or not)
     prefixes it and no display or legacy alias selects a provider; no
-    provider record lists it (models, extra_model_ids or default model,
-    inactive providers included), in the loose form Ollama accepts; the
-    configured-model lookup of resolve_provider_and_model finds nothing; and
-    every active provider has a model list, since one without a list may
-    serve any name. Otherwise the request is routed as before.
+    provider record lists it (models, extra_model_ids, default model or a
+    family alias the catalogue publishes, inactive providers included), in
+    the loose form Ollama accepts; the configured-model lookup of
+    resolve_provider_and_model finds nothing; and every active provider has
+    a model list, since one without a list may serve any name. Otherwise the
+    request is routed as before.
     """
     if not isinstance(model_str, str) or not model_str.strip():
         return False
@@ -524,7 +551,11 @@ def is_unknown_model(model_str: str) -> bool:
         return False
     wanted = _loose_model_name(model_str)
     for provider in registry:
-        names = _listed_models(provider) + [provider.get("default_model") or ""]
+        names = (
+            _listed_models(provider)
+            + [provider.get("default_model") or ""]
+            + _family_aliases(provider)
+        )
         if any(
             isinstance(n, str) and n and _loose_model_name(n) == wanted for n in names
         ):
@@ -533,7 +564,7 @@ def is_unknown_model(model_str: str) -> bool:
     return not any(
         _clean_model_id(f"{p['id']}:{native}") == requested_clean
         for p in active
-        for native in _listed_models(p)
+        for native in _listed_models(p) + _family_aliases(p)
     )
 
 

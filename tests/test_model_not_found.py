@@ -5,8 +5,9 @@ to every active provider, which all failed: the client got a 502 naming one of
 them. When the ID is known nowhere (its prefix names no provider and no
 provider lists it), the gateway now answers 404 ``model_not_found`` with a
 hint, without calling any provider. Any ID a provider could still serve keeps
-today's routing: a bare Ollama tag a provider lists, a provider prefix, a model
-of a provider whose model list is unknown.
+today's routing: a bare Ollama tag a provider lists, a family alias /v1/models
+publishes for dated snapshots, a provider prefix, a model of a provider whose
+model list is unknown.
 """
 
 from __future__ import annotations
@@ -69,13 +70,57 @@ CODEX = {
     "is_active": True,
 }
 
+# Lists dated snapshots only, as a refreshed Anthropic catalogue does: /v1/models
+# publishes each family name (claude-sonnet-4-5) as an alias of its snapshot.
+DATED_ONLY = {
+    "id": "anthropic-direct",
+    "name": "Anthropic Direct",
+    "base_url": "http://anthropic.test/v1",
+    "bearer_token": "anthropic-token",
+    "default_model": "claude-sonnet-4-5-20250929",
+    "models": [
+        {"id": "claude-sonnet-4-5-20250929"},
+        {"id": "claude-haiku-4-5-20251001"},
+        {"id": "claude-opus-4-1-20250805"},
+    ],
+    "is_active": True,
+}
+
 LISTED = [OLLAMA, ACME, DORMANT]
+
+
+def _isolated_providers(tmp_path, monkeypatch, providers):
+    """_setup_providers, with the provider file and model caches restored after.
+
+    _setup_providers assigns config.PROVIDERS_FILE directly and /v1/models
+    fills the router's module caches; monkeypatch records them first.
+    """
+    import plugboard.config as cfg
+    from plugboard import router
+
+    for name in ("PROVIDERS_FILE", "PROVIDERS_LOCK"):
+        monkeypatch.setattr(cfg, name, getattr(cfg, name))
+    for name in (
+        "_models_cache",
+        "_models_cache_ts",
+        "_models_cache_namespace",
+        "_models_alias_cache",
+        "_model_status_mtime",
+    ):
+        monkeypatch.setattr(router, name, getattr(router, name))
+    return _setup_providers(tmp_path, monkeypatch, providers)
 
 
 @pytest.fixture
 def listed(tmp_path, monkeypatch):
     """Every active provider has a model list."""
-    return _setup_providers(tmp_path, monkeypatch, LISTED)
+    return _isolated_providers(tmp_path, monkeypatch, LISTED)
+
+
+@pytest.fixture
+def dated_only(tmp_path, monkeypatch):
+    """One active provider lists dated snapshots only."""
+    return _isolated_providers(tmp_path, monkeypatch, [*LISTED, DATED_ONLY])
 
 
 # ── Which IDs are known nowhere ─────────────────────────────────────────────
@@ -110,10 +155,27 @@ def test_an_id_a_provider_may_know_is_not_unknown(listed, model):
     assert is_unknown_model(model) is False
 
 
+@pytest.mark.parametrize(
+    "model", ["claude-sonnet-4-5", "claude-haiku-4-5", "claude-opus-4-1"]
+)
+def test_a_family_alias_of_dated_snapshots_is_not_unknown(dated_only, model):
+    """/v1/models publishes the family as an alias: known, even on a cold cache."""
+    from plugboard.router import is_unknown_model
+
+    assert is_unknown_model(model) is False
+
+
+@pytest.mark.parametrize("model", ["claude-sonnet-4-6", "claude-sonnet-4", "claude"])
+def test_a_name_no_family_alias_matches_stays_unknown(dated_only, model):
+    from plugboard.router import is_unknown_model
+
+    assert is_unknown_model(model) is True
+
+
 def test_a_provider_without_a_model_list_may_serve_any_id(tmp_path, monkeypatch):
     from plugboard.router import is_unknown_model
 
-    _setup_providers(tmp_path, monkeypatch, [*LISTED, OPEN])
+    _isolated_providers(tmp_path, monkeypatch, [*LISTED, OPEN])
     assert is_unknown_model("nope:model-x") is False
 
 
@@ -122,7 +184,7 @@ def test_an_inactive_provider_without_a_model_list_does_not_count(
 ):
     from plugboard.router import is_unknown_model
 
-    _setup_providers(tmp_path, monkeypatch, [*LISTED, {**OPEN, "is_active": False}])
+    _isolated_providers(tmp_path, monkeypatch, [*LISTED, {**OPEN, "is_active": False}])
     assert is_unknown_model("nope:model-x") is True
 
 
@@ -133,14 +195,14 @@ def test_cli_aliases_of_a_listed_model_are_not_unknown(tmp_path, monkeypatch, mo
     """Display alias, bare name and the vendor spelling resolve as before."""
     from plugboard.router import is_unknown_model
 
-    _setup_providers(tmp_path, monkeypatch, [*LISTED, CODEX])
+    _isolated_providers(tmp_path, monkeypatch, [*LISTED, CODEX])
     assert is_unknown_model(model) is False
 
 
 def test_no_active_provider_keeps_the_existing_answer(tmp_path, monkeypatch):
     from plugboard.router import is_unknown_model
 
-    _setup_providers(tmp_path, monkeypatch, [DORMANT])
+    _isolated_providers(tmp_path, monkeypatch, [DORMANT])
     assert is_unknown_model("nope:model-x") is False
 
 
@@ -284,10 +346,26 @@ async def test_a_known_id_is_routed_as_before(listed, http, model):
 
 
 @pytest.mark.asyncio
+async def test_a_family_alias_listed_by_v1_models_is_routed_as_before(dated_only, http):
+    client, auth, calls = http
+    catalogue = await client.get("/v1/models", headers=auth)
+    assert catalogue.status_code == 200, catalogue.text
+    aliases = {a for m in catalogue.json()["data"] for a in m.get("aliases") or []}
+    assert "claude-sonnet-4-5" in aliases
+
+    resp = await client.post(
+        "/v1/chat/completions", headers=auth, json=_chat("claude-sonnet-4-5")
+    )
+
+    assert resp.status_code == 502, resp.text
+    assert calls == ["claude-sonnet-4-5"]
+
+
+@pytest.mark.asyncio
 async def test_an_unknown_id_is_routed_when_a_provider_has_no_model_list(
     tmp_path, monkeypatch, http
 ):
-    _setup_providers(tmp_path, monkeypatch, [*LISTED, OPEN])
+    _isolated_providers(tmp_path, monkeypatch, [*LISTED, OPEN])
     client, auth, calls = http
     resp = await client.post(
         "/v1/chat/completions", headers=auth, json=_chat("nope:model-x")
