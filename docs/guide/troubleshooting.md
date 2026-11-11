@@ -71,6 +71,7 @@ With `PLUGBOARD_ADMIN_MFA_REQUIRED=1`, an `admin_mfa.json` that exists but canno
 - **`Too many failed attempts`**: after 5 failures within a minute, the client IP is locked out for 15 minutes.
 - **Signed out after a while**: sessions last `ADMIN_SESSION_MAX_AGE` (8 hours). Changing `ADMIN_KEY` invalidates every session.
 - **Cookie not kept over plain HTTP on a server**: with `COOKIE_SECURE=auto` the cookie is `Secure` for any host other than localhost, so the browser drops it over `http://`. Serve the dashboard over HTTPS (see [Deployment](deployment.md#behind-a-reverse-proxy)).
+- **`403 Cross-site request refused`**: a change was sent with the dashboard session from a page other than the dashboard (another port or host name). If the dashboard itself gets it, it is served over plain HTTP through a proxy that rewrites the `Host` header: keep `Host` at the proxy, or serve over HTTPS. Scripts send the admin key in `Authorization` instead of the cookie ([details](monitoring.md#changes-made-with-a-dashboard-session)).
 
 ## Client errors
 

@@ -128,6 +128,8 @@ When the proxy runs on the same machine as a loopback-bound Plugboard, also set 
 
 With HTTPS in place, the admin session cookie is marked `Secure` automatically (`COOKIE_SECURE=auto`).
 
+Keep the `Host` header as the examples do (Caddy keeps it by default). Over plain HTTP to a non-local address, browsers send no `Sec-Fetch-Site`, and Plugboard checks the dashboard's changes by comparing their `Origin` with `Host` ([details](monitoring.md#changes-made-with-a-dashboard-session)).
+
 ## Platform deployments
 
 `railway.toml` builds the Dockerfile on Railway and checks `/health`. On Railway or any similar platform: set the variables of the checklist as secrets, attach a persistent volume at `/app/data` (and at `/home/app` if you sign in to CLIs inside the container), and keep one replica. `scripts/setup_railway_providers.py` creates API-key providers on a remote instance without opening a shell (see [Providers](providers-and-subscriptions.md#add-providers-from-env-or-scripts)).
