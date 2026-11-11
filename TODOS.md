@@ -40,18 +40,6 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 **Priority:** P2
 **Depends on:** None
 
-### Same-site CSRF on admin POSTs
-
-**What:** Reject state-changing admin requests whose `Sec-Fetch-Site` is not `same-origin`.
-
-**Why:** A page served on another localhost port is same-site, so the `SameSite=Strict` cookie does not stop it.
-
-**Context:** Admin routes in `plugboard/app.py`.
-
-**Effort:** S
-**Priority:** P2
-**Depends on:** None
-
 ## Release hardening (deferred from the stage 2 plan)
 
 ### Private companion and identity checks before publication
