@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "1.3.0"
+CONTRACT_VERSION = "1.4.0"
 _JSON = "application/json"
 
 
@@ -448,14 +448,15 @@ class ErrorResponse(_Open):
     Retry-After header, as does an exhausted provider quota (429) when the
     provider gave a delay; a failing CLI provider (502) adds its exit details
     for the admin only. A chat model no provider knows (404) adds `code` and
-    `hint`."""
+    `hint`. A chat whose candidate providers all stayed at their concurrency
+    cap (503) adds `code` providers_busy, `retry_after` and Retry-After."""
 
     detail: Union[str, List[Any], Dict[str, Any]]
     retry_after: Optional[int] = None
     code: Optional[str] = Field(
         default=None,
         description="Stable reason for programs, when the route gives one: "
-        "model_not_found (chat, 404).",
+        "model_not_found (chat, 404), providers_busy (chat, 503).",
     )
     hint: Optional[str] = Field(
         default=None, description="What to do next, when the gateway knows."
@@ -533,7 +534,8 @@ _CHAT_ERRORS = {
     " model_not_found, hint says what to send; nothing was called.",
     "413": "Request body larger than MAX_BODY_BYTES (10 MB by default).",
     "502": "The provider failed or answered with an error.",
-    "503": "Provider timeout (retry_after) or too many concurrent requests.",
+    "503": "Provider timeout (retry_after), too many concurrent requests, or every"
+    " candidate provider at its concurrency cap (code providers_busy, Retry-After 5).",
 }
 _CHAT_HEADERS = {
     "X-Cache": "HIT, MISS or SEMANTIC-HIT-<layer>.",

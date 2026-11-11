@@ -78,6 +78,8 @@ Checks run in this order on each chat request:
 5. **Known price** (keys with a monthly budget only): a model without a known price returns `402 Model price unavailable for this key`, before any provider call, streamed or not. Such a call would be recorded at 0 and the budget could never stop it. Every provider the request may fall back to is checked. The refusal is logged (key, provider, model; never the prompt). Keys with `monthly_limit_usd` 0 are not affected.
 6. **RPM limit**: a sliding 60-second window per key; exceeding it returns `429 Client rate limit exceeded`.
 
+Then each provider takes a limited number of requests at once (**provider concurrency cap**): a local one (Ollama, `sovereign`, loopback or private address) takes one at a time by default, any provider takes at most its `max_concurrency` ([details](providers-and-subscriptions.md#concurrent-requests-per-provider)). A request for a model without provider prefix goes to the next candidate when one is full. When every candidate is full, the request waits up to `PLUGBOARD_PROVIDER_WAIT_S` seconds (default 10) for the first freed slot, oldest request first, then gets `503` with `"code": "providers_busy"` and `Retry-After: 5`; nothing was called. A client that hangs up while it waits leaves the queue at once.
+
 Requests made with the `ADMIN_KEY` (or from the dashboard Playground) are not subject to budgets, model restrictions, price checks or RPM limits.
 
 `POST /v1/preflight` runs the same checks for each pair before its ping, inside the same concurrency cap, and accepts at most 10 pairs (`422` beyond). Each ping counts towards the RPM limit and is billed like a chat call. A refused or failed pair answers `"ok": false` with a closed `error` code, never the provider's message: `unknown_model`, `forbidden_model`, `budget_exceeded`, `price_unavailable`, `rate_limited` or `upstream_error` (details stay in the server log).
@@ -155,7 +157,7 @@ Cache hits are not billed again. Streaming responses (`"stream": true`) are serv
 | `413` | Request body larger than `MAX_BODY_BYTES` (10 MB) |
 | `429` | IP rate limit, key RPM limit or monthly budget reached, or the quota of the last provider tried exhausted (`Retry-After` when it gives a delay) |
 | `502` | The provider returned an error or could not be reached, or every candidate provider failed. A client key never gets the provider's own message or address: the `error_ref` finds it in the gateway log |
-| `503` | Server at its concurrency cap, or a CLI provider timed out (`Retry-After` is set) |
+| `503` | Server at its concurrency cap, every provider of the model at its own cap (`"code": "providers_busy"`), or a CLI provider timed out (`Retry-After` is set) |
 
 ## Self-service for clients
 

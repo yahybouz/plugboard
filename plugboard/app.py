@@ -115,6 +115,7 @@ from plugboard.cli_subprocess import CliSubprocessError
 from plugboard.router import (
     ProviderHTTPError,
     ProviderNetworkError,
+    ProvidersBusyError,
     ProviderQuotaError,
     discover_models,
     forward,
@@ -1734,6 +1735,26 @@ def _quota_error_response(
     return JSONResponse(status_code=429, content=content, headers=headers)
 
 
+def _providers_busy_response(
+    exc: ProvidersBusyError, client_id: Optional[str]
+) -> JSONResponse:
+    """503 ``providers_busy`` when every candidate provider stayed at its
+    concurrency cap for the whole wait (D-23).
+
+    Nothing was called. Only the admin gets the ids of the busy providers.
+    """
+    log.warning("providers busy: %s", ", ".join(exc.provider_ids))
+    detail = (
+        "Every provider that serves this model is busy: "
+        f"retry in {exc.retry_after} seconds."
+    )
+    if client_id == "admin":
+        detail += f" Busy providers: {', '.join(exc.provider_ids)}."
+    content: Dict[str, Any] = {"detail": detail, "code": "providers_busy"}
+    headers = _retry_after_headers(content, exc.retry_after)
+    return JSONResponse(status_code=503, content=content, headers=headers)
+
+
 def _provider_http_error_response(
     exc: ProviderHTTPError | ProviderNetworkError, client_id: Optional[str]
 ) -> JSONResponse:
@@ -2123,6 +2144,8 @@ async def chat_completions(
             except HTTPException:
                 raise
             except Exception as exc:
+                if isinstance(exc, ProvidersBusyError):
+                    return _providers_busy_response(exc, client_id)
                 log.error("subprocess stream forward error: %s", exc)
                 err_str = str(exc)
                 # Before the timeout test: a CLI message quotes its stderr.
@@ -2305,6 +2328,8 @@ async def chat_completions(
         except HTTPException:
             raise
         except Exception as exc:
+            if isinstance(exc, ProvidersBusyError):
+                return _providers_busy_response(exc, client_id)
             log.error("stream error: %s", exc)
             err_str = str(exc)
             if isinstance(exc, ProviderQuotaError):
@@ -2442,6 +2467,8 @@ async def chat_completions(
     except HTTPException:
         raise
     except Exception as exc:
+        if isinstance(exc, ProvidersBusyError):
+            return _providers_busy_response(exc, client_id)
         log.error("forward error: %s", exc)
         err_str = str(exc)
         # Before the timeout test: a CLI message quotes its stderr.
@@ -3554,6 +3581,8 @@ class ProviderUpdate(BaseModel):
     pinned_models: Optional[
         List[Annotated[str, Field(min_length=1, max_length=200)]]
     ] = Field(default=None, max_length=500)
+    # Requests the provider runs at once; 0 = no cap (D-22).
+    max_concurrency: Optional[int] = Field(default=None, ge=0, le=1000)
 
 
 def _mask(p: Dict[str, Any]) -> Dict[str, Any]:

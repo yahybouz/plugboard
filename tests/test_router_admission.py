@@ -9,6 +9,7 @@ from yarl import URL
 from plugboard import circuit_breaker, cli_subprocess, provider_admission, router
 from tests.factories import FAKE_COMPLETION, FAKE_STREAM_BODY, PROVIDER_A, PROVIDER_B
 
+AUTH = {"Authorization": "Bearer testkey"}
 URL_A = "http://fake-llm.test/v1/chat/completions"
 URL_B = "http://other-llm.test/v1/chat/completions"
 BARE = "fake:model-v1"  # both providers are candidates
@@ -180,3 +181,191 @@ async def test_refused_route_is_checked_before_its_slot(capped_a):
         ).__anext__()
     held.release()
     assert provider_admission._active == {}
+
+
+async def test_request_waits_for_a_slot_then_is_served(capped_a, monkeypatch):
+    monkeypatch.setattr(provider_admission, "WAIT_S", 2.0)
+    held = provider_admission.try_acquire(capped_a)
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION, repeat=True)
+        task = asyncio.create_task(router.forward(_body(ONLY_A)))
+        await _until(lambda: provider_admission.waiting("test-provider") == 1)
+        assert _calls(mock, URL_A) == 0
+        held.release()
+        await asyncio.wait_for(task, 2)
+        assert _calls(mock, URL_A) == 1
+    assert provider_admission._active == {}
+
+
+async def test_wait_is_bounded_then_providers_busy(capped_a, monkeypatch):
+    monkeypatch.setattr(provider_admission, "WAIT_S", 0.1)
+    held = provider_admission.try_acquire(capped_a)
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    with pytest.raises(router.ProvidersBusyError):
+        await router.forward(_body(ONLY_A))
+    assert 0.1 <= loop.time() - started < 2
+    held.release()
+
+
+async def test_wait_covers_every_full_candidate(capped_a, _providers_file, monkeypatch):
+    b = {**PROVIDER_B, "max_concurrency": 1}
+    _providers_file.write_text(json.dumps({"providers": [capped_a, b]}))
+    router.invalidate_models_cache()
+    monkeypatch.setattr(provider_admission, "WAIT_S", 2.0)
+    held_a, held_b = (
+        provider_admission.try_acquire(capped_a),
+        provider_admission.try_acquire(b),
+    )
+
+    async def call():
+        await router.forward(_body(BARE))
+        return router.served_by()  # a ContextVar: read it in the task
+
+    with aioresponses() as mock:
+        mock.post(URL_B, payload=FAKE_COMPLETION, repeat=True)
+        task = asyncio.create_task(call())
+        await _until(lambda: provider_admission.waiting("other-provider") == 1)
+        assert provider_admission.waiting("test-provider") == 1  # one wait, both
+        held_b.release()
+        served = await asyncio.wait_for(task, 2)
+    assert served[0]["id"] == "other-provider"
+    held_a.release()
+    assert provider_admission._active == {}
+
+
+async def test_streamed_request_waits_for_its_slot(capped_a, monkeypatch):
+    monkeypatch.setattr(provider_admission, "WAIT_S", 2.0)
+    held = provider_admission.try_acquire(capped_a)
+    with aioresponses() as mock:
+        mock.post(URL_A, body=FAKE_STREAM_BODY, status=200)
+        gen = router.forward_stream(_body(ONLY_A, stream=True))
+        first = asyncio.ensure_future(gen.__anext__())
+        await _until(lambda: provider_admission.waiting("test-provider") == 1)
+        held.release()
+        assert await asyncio.wait_for(first, 2)
+        await gen.aclose()
+    assert provider_admission._active == {}
+
+
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v2/chat/completions"])
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+async def test_chat_answers_503_providers_busy(client, capped_a, path, stream):
+    held = provider_admission.try_acquire(capped_a)
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION, repeat=True)
+        resp = await client.post(
+            path, headers=AUTH, json=_body(ONLY_A, stream=stream, cache=False)
+        )
+        assert _calls(mock, URL_A) == 0
+    held.release()
+    assert resp.status_code == 503, resp.text
+    assert resp.headers["Retry-After"] == "5"
+    body = resp.json()
+    assert body["code"] == "providers_busy" and body["retry_after"] == 5
+    assert body["detail"].startswith("Every provider that serves this model is busy")
+
+
+async def test_client_leaving_while_waiting_frees_its_place(
+    client, capped_a, monkeypatch
+):
+    from tests.test_inflight_disconnect import _Abandoned
+
+    monkeypatch.setattr(provider_admission, "WAIT_S", 5.0)
+    held = provider_admission.try_acquire(capped_a)
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION, repeat=True)
+        gone = _Abandoned("/v1/chat/completions", _body(ONLY_A, cache=False))
+        await _until(lambda: provider_admission.waiting("test-provider") == 1)
+        await gone.hang_up()
+        assert gone.status() == 499
+        held.release()
+        assert provider_admission._active == {}  # not handed to the gone request
+        assert _calls(mock, URL_A) == 0
+    await gone.close()
+
+
+async def test_max_concurrency_is_a_provider_setting(client):
+    from plugboard.config import get_provider
+
+    resp = await client.put(
+        "/providers/test-provider", headers=AUTH, json={"max_concurrency": 2}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["max_concurrency"] == 2
+    assert provider_admission.max_inflight(get_provider("test-provider")) == 2
+    bad = await client.put(
+        "/providers/test-provider", headers=AUTH, json={"max_concurrency": -1}
+    )
+    assert bad.status_code == 422
+
+
+def _second_auth(monkeypatch, then):
+    """Auth resolves as usual, except its second run (once the slot waited
+    for has come), which runs ``then`` first."""
+    real = router._build_auth_header_async
+    calls = []
+
+    async def auth(provider):
+        calls.append(provider["id"])
+        if len(calls) == 2:
+            await then()
+        return await real(provider)
+
+    monkeypatch.setattr(router, "_build_auth_header_async", auth)
+
+
+async def test_slot_granted_but_unused_goes_back(capped_a, monkeypatch):
+    """The provider's auth fails once its slot has come: the slot goes back."""
+    monkeypatch.setattr(provider_admission, "WAIT_S", 2.0)
+
+    async def expired():
+        raise RuntimeError("token expired")
+
+    _second_auth(monkeypatch, expired)
+    held = provider_admission.try_acquire(capped_a)
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION, repeat=True)
+        task = asyncio.create_task(router.forward(_body(ONLY_A)))
+        await _until(lambda: provider_admission.waiting("test-provider") == 1)
+        held.release()
+        with pytest.raises(RuntimeError, match="token expired"):
+            await asyncio.wait_for(task, 2)
+        assert _calls(mock, URL_A) == 0
+    assert provider_admission._active == {}
+
+
+async def test_slot_granted_then_cancelled_goes_back(capped_a, monkeypatch):
+    """Cancelled (client gone) between its slot and its call: the slot goes back."""
+    monkeypatch.setattr(provider_admission, "WAIT_S", 2.0)
+    stuck = asyncio.Event()
+
+    async def hang():
+        stuck.set()
+        await asyncio.Event().wait()
+
+    _second_auth(monkeypatch, hang)
+    held = provider_admission.try_acquire(capped_a)
+    task = asyncio.create_task(router.forward(_body(ONLY_A)))
+    await _until(lambda: provider_admission.waiting("test-provider") == 1)
+    held.release()
+    await asyncio.wait_for(stuck.wait(), 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert provider_admission._active == {}
+
+
+async def test_streamed_cli_chat_answers_503_providers_busy(
+    client, capped_a, _providers_file
+):
+    cli = {**CLI, "max_concurrency": 1}
+    _providers_file.write_text(json.dumps({"providers": [capped_a, PROVIDER_B, cli]}))
+    router.invalidate_models_cache()
+    held = provider_admission.try_acquire(cli)
+    body = _body("pbtest-cli:model-x", stream=True, cache=False)
+    resp = await client.post("/v1/chat/completions", headers=AUTH, json=body)
+    held.release()
+    assert resp.status_code == 503, resp.text
+    assert resp.headers["Retry-After"] == "5"
+    assert resp.json()["code"] == "providers_busy"

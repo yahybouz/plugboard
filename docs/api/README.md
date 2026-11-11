@@ -158,7 +158,7 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 | `429` | IP rate limit, key RPM limit or monthly budget | Back off; `GET /v1/me` shows the budget left |
 | `429` | The last provider tried has exhausted its quota or rate limit (a streamed request to an HTTP provider is not offered to another one); `detail` names the provider | Retry after `Retry-After` / `retry_after` seconds when set (at most 7 days), else later or with another model |
 | `502` | The provider failed | Retry later or use another model |
-| `503` | Gateway at capacity, or provider timeout | Retry after `Retry-After` / `retry_after` seconds |
+| `503` | Gateway at capacity, provider timeout, or, with `code` `providers_busy`, every provider of the model busy at its concurrency cap after the wait; nothing was called | Retry after `Retry-After` / `retry_after` seconds (5 for `providers_busy`) |
 
 ### `404 model_not_found`
 
