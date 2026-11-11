@@ -5,8 +5,8 @@ the new name is not set, so existing ``.env`` files, cron entries and
 deployments keep working. The code itself only reads ``PLUGBOARD_*`` names.
 
 ``get_int`` and ``get_float`` are the one reader of numeric settings: a value
-that is not a number, or is outside the bounds the caller gives, falls back
-to the default with one warning.
+that is not a finite number (``nan`` and ``inf`` included), or is outside the
+bounds the caller gives, falls back to the default with one warning.
 """
 
 from __future__ import annotations
@@ -116,8 +116,11 @@ def _number(
     except ValueError:
         problem = "is not a whole number" if cast is int else "is not a number"
     else:
-        if math.isnan(value):
+        # A whole number is always finite (and may be too large for a float).
+        if isinstance(value, float) and math.isnan(value):
             problem = "is not a number"
+        elif isinstance(value, float) and math.isinf(value):
+            problem = "is not a finite number"
         elif minimum is not None and value < minimum:
             problem = f"is below {minimum}"
         elif above is not None and value <= above:
@@ -153,7 +156,8 @@ def get_float(
 ) -> float:
     """Number from ``name`` (or a legacy name), else ``default``.
 
-    A value that is not a number (NaN included), is below ``minimum``, or is
-    not greater than ``above`` gives the default, with one warning per value.
+    A value that is not a finite number (NaN or infinity), is below
+    ``minimum``, or is not greater than ``above`` gives the default, with one
+    warning per value.
     """
     return _number(name, legacy, default, float, minimum, above)
