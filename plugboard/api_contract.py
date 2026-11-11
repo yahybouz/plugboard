@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "1.3.0"
+CONTRACT_VERSION = "1.4.0"
 _JSON = "application/json"
 
 
@@ -354,6 +354,7 @@ class PreflightResult(BaseModel):
         Literal[
             "unknown_model",
             "forbidden_model",
+            "model_not_found",
             "budget_exceeded",
             "price_unavailable",
             "rate_limited",
@@ -363,9 +364,11 @@ class PreflightResult(BaseModel):
         default=None,
         description=(
             "Why the pair failed (closed code, never the provider's text): "
-            "the model does not resolve, is not allowed for the key, the "
-            "monthly budget is spent, the key has a budget and the model no "
-            "known price, the key's rpm limit is reached, or the provider failed."
+            "the model does not resolve, is not allowed for the key, no "
+            "provider knows it (the chat routes' 404 model_not_found; not "
+            "pinged), the monthly budget is spent, the key has a budget and "
+            "the model no known price, the key's rpm limit is reached, or the "
+            "provider failed."
         ),
     )
 
