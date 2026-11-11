@@ -26,7 +26,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import html
-import ipaddress
 import json
 import logging
 import math
@@ -43,6 +42,7 @@ import aiohttp
 from aiohttp.abc import AbstractResolver, ResolveResult
 
 from plugboard import envcompat
+from plugboard.netguard import ip_is_public
 from plugboard.pricing_merge import MAX_PRICE, MAX_RATIO, MIN_RATIO
 
 log = logging.getLogger(__name__)
@@ -54,8 +54,6 @@ MAX_OUTPUT_TOKENS = 1024
 CHARS_PER_TOKEN = 3.5
 DEFAULT_CONTEXT_TOKENS = 32_000
 CONTEXT_SHARE = 0.6
-_CGNAT = ipaddress.ip_network("100.64.0.0/10")
-_METADATA = ipaddress.ip_address("169.254.169.254")
 
 # Pricing pages for providers whose catalog `doc` link is not a price list.
 DEFAULT_PAGES = {
@@ -107,28 +105,6 @@ def configured_pages() -> Dict[str, str]:
 
 class UnsafeURL(ValueError):
     """The URL, a redirect or the resolved address is not allowed."""
-
-
-_NAT64 = ipaddress.ip_network("64:ff9b::/96")
-_NAT64_LOCAL = ipaddress.ip_network("64:ff9b:1::/48")
-
-
-def ip_is_public(address: str) -> bool:
-    ip = ipaddress.ip_address(address.split("%", 1)[0])
-    if isinstance(ip, ipaddress.IPv6Address):
-        # IPv6 forms that carry an IPv4 address are judged by that address.
-        if ip in _NAT64_LOCAL:
-            return False
-        embedded = (
-            ip.ipv4_mapped or ip.sixtofour or (ip.teredo[1] if ip.teredo else None)
-        )
-        if embedded is None and ip in _NAT64:
-            embedded = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
-        if embedded is not None:
-            ip = embedded
-    if ip == _METADATA or (ip.version == 4 and ip in _CGNAT):
-        return False
-    return bool(ip.is_global) and not ip.is_multicast and not ip.is_unspecified
 
 
 async def _resolve_public(host: str, port: int) -> List[ResolveResult]:
