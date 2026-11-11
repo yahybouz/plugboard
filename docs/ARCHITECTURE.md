@@ -47,7 +47,7 @@ A `POST /v1/chat/completions` goes through these steps:
    - HTTP providers get `POST <base_url>/v1/chat/completions` with their credentials, retried on `429`, `500`, `502`, `503`, `529` after 2, 5 and 15 seconds by default, except an error saying the context is too long, or a `429` whose `Retry-After` exceeds the next delay, which go straight to the next candidate;
    - CLI providers run the vendor CLI in a neutral working directory, with a per-CLI concurrency limit, and the output is converted to a standard chat response.
 8. **Billing**: token counts from the provider (estimated with a tokenizer when absent), priced with the month's grid, appended to `data/usage.db` with the client and key. The response gets a `billing` object and `X-Cost-*` headers.
-9. **Cache write** and **session record** (a streamed answer is recorded once complete), then the response; the session's turn is given back once the response is sent.
+9. **Cache write** and **session record** (a streamed HTTP answer once complete; a CLI answer before its replay as a stream, so a hang-up during the replay does not undo it), then the response; the session's turn is given back once the response is sent.
 
 Streaming requests to HTTP providers are proxied chunk by chunk and billed at the end of the stream. Streaming requests to CLI providers are completed first and replayed as server-sent events, which also lets them be cached.
 

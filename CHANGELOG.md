@@ -20,7 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **Two turns of one session sent together could lose one or answer without the other**: with a `session_id` (or the `X-LLM-Session-ID` header), a turn sent while the previous one was still being answered ran at once, without seeing it, and on a full history (`PLUGBOARD_SESSION_MAX_TURNS`) one of the two exchanges was lost when both were recorded. The turns of one session now run one after the other, in arrival order: a turn waits until the previous one is answered and recorded, and a client that hangs up while it waits leaves the queue (`499`) without calling any provider. Requests without a session, other sessions and the same session id under another client never wait, nor does a request refused by the checks (malformed `messages`, budget, allowed models, price, RPM limit): it is answered at once. The wait happens in one process, inside the chat request's concurrency slot (`PLUGBOARD_MAX_INFLIGHT_CHAT`).
-- **A streamed turn was never recorded in its session**: with `"stream": true`, the answer of an HTTP provider or a CLI was not added to the session, so the next turn did not see it. It is now recorded once the stream is complete; an interrupted stream is not.
+- **A streamed turn was never recorded in its session**: with `"stream": true`, the answer of an HTTP provider or a CLI was not added to the session, so the next turn did not see it. An HTTP provider's stream is now recorded once it is complete, and an interrupted one is not. A CLI answers in full before it is replayed as a stream: its turn is recorded before that replay, so it is kept even when the client hangs up during the replay.
 
 ## [4.8.0] — 2026-11-11
 
