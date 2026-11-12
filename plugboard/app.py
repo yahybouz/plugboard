@@ -100,6 +100,8 @@ from plugboard.config import (
     update_provider,
 )
 from plugboard import live_requests as _live
+from plugboard import provider_admission as _provider_admission
+from plugboard import request_wait as _request_wait
 from plugboard.logging_config import _request_id_var, setup_logging
 from plugboard.metrics import get_stats
 from plugboard.ratelimit import check_client_rate_limit, check_rate_limit
@@ -622,6 +624,17 @@ def _get_inflight_sem() -> Optional["_asyncio.Semaphore"]:
     return _inflight_chat_sem
 
 
+def _chat_overloaded() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail=(
+            "Server overloaded: the limit of concurrent chat requests is "
+            f"reached, retry in {_INFLIGHT_RETRY_AFTER_S} s"
+        ),
+        headers={"Retry-After": str(_INFLIGHT_RETRY_AFTER_S)},
+    )
+
+
 async def _inflight_chat_dep(request: Request):
     """FastAPI dependency enforcing the global inflight cap.
 
@@ -630,33 +643,34 @@ async def _inflight_chat_dep(request: Request):
     delivered (including streaming chunks). That means a StreamingResponse
     keeps its slot for the entire stream duration — critical for DoS
     protection, since streaming is where the real resource cost lives.
+
+    PLU-15: every route lists ``Depends(_resolve_client)`` before this one,
+    so a call without a valid key gets its 401 without taking or waiting for
+    a slot. The request's wait budget (``request_wait``) starts here: the
+    slot, the session's turn and the provider share one deadline.
     """
     # PLU-13: every chat call is listed in /v1/inflight, cap or not.
     rid = _request_id_var.get()
     _live.begin(rid, request.url.path, request.headers.get(_live.SURFACE_HEADER))
+    _request_wait.start(max(_INFLIGHT_WAIT_S, _provider_admission.WAIT_S))
     try:
         sem = _get_inflight_sem()
         if sem is None:
             yield
             return
-        wait_s = _INFLIGHT_WAIT_S
-        if wait_s > 0:
+        if sem.locked():
+            # Only a wait starts the request's clock: a free slot is taken
+            # at once below, without suspending.
+            wait_s = _request_wait.remaining(_INFLIGHT_WAIT_S)
+            if wait_s <= 0:
+                raise _chat_overloaded()
             _live.update(rid, phase="waiting_slot")
-        try:
-            # wait_for(timeout=0) races with the acquire; use a 1 ms floor so
-            # a free slot is consistently grabbed while a saturated sem rejects.
-            await _asyncio.wait_for(
-                sem.acquire(), timeout=wait_s if wait_s > 0 else 0.001
-            )
-        except _asyncio.TimeoutError:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "Server overloaded: the limit of concurrent chat requests is "
-                    f"reached, retry in {_INFLIGHT_RETRY_AFTER_S} s"
-                ),
-                headers={"Retry-After": str(_INFLIGHT_RETRY_AFTER_S)},
-            )
+            try:
+                await _asyncio.wait_for(sem.acquire(), timeout=wait_s)
+            except _asyncio.TimeoutError:
+                raise _chat_overloaded() from None
+        else:
+            await sem.acquire()
         _live.update(rid, phase="running")
         global _inflight_chat_active
         _inflight_chat_active += 1
@@ -765,13 +779,27 @@ async def _take_session_turn(request: Request, client_id: str, session_id: str) 
     """Wait for the previous turn of this session to be answered and recorded.
 
     The release is stored as soon as the turn is obtained, so a hang-up that
-    comes later (``_ClientGone``) cannot lose it.
+    comes later (``_ClientGone``) cannot lose it. The wait ends at the
+    request's deadline (PLU-15): then 503 with Retry-After, out of the queue.
     """
     from plugboard import session_turns
 
-    request.state.session_turn_release = await session_turns.acquire(
-        client_id, session_id
-    )
+    timeout = None
+    if session_turns.busy(client_id, session_id):
+        timeout = _request_wait.remaining()  # a wait: the clock starts
+    try:
+        request.state.session_turn_release = await session_turns.acquire(
+            client_id, session_id, timeout=timeout
+        )
+    except TimeoutError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The previous turn of this session is still being answered: "
+                f"retry in {_INFLIGHT_RETRY_AFTER_S} s"
+            ),
+            headers={"Retry-After": str(_INFLIGHT_RETRY_AFTER_S)},
+        ) from None
 
 
 def _record_session_turn(
@@ -2021,7 +2049,12 @@ def _live_note(
 
 @app.post(
     "/v1/chat/completions",
-    dependencies=[Depends(_inflight_chat_dep), Depends(_session_turn_dep)],
+    # The key first (PLU-15): see _inflight_chat_dep.
+    dependencies=[
+        Depends(_resolve_client),
+        Depends(_inflight_chat_dep),
+        Depends(_session_turn_dep),
+    ],
 )
 async def chat_completions(
     request: Request,
@@ -2838,7 +2871,11 @@ def _preflight_refusal(
     return None
 
 
-@app.post("/v1/preflight", dependencies=[Depends(_inflight_chat_dep)])
+@app.post(
+    "/v1/preflight",
+    # The key first (PLU-15): see _inflight_chat_dep.
+    dependencies=[Depends(_resolve_client), Depends(_inflight_chat_dep)],
+)
 async def preflight(
     request: Request,
     body: _PreflightRequest,
@@ -2952,7 +2989,12 @@ async def model_info(
 
 @app.post(
     "/v2/chat/completions",
-    dependencies=[Depends(_inflight_chat_dep), Depends(_session_turn_dep)],
+    # The key first (PLU-15): see _inflight_chat_dep.
+    dependencies=[
+        Depends(_resolve_client),
+        Depends(_inflight_chat_dep),
+        Depends(_session_turn_dep),
+    ],
 )
 async def chat_completions_v2(
     request: Request, client_id: Optional[str] = Depends(_resolve_client)

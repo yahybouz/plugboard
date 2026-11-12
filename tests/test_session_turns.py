@@ -59,6 +59,18 @@ async def test_cancelled_wait_leaves_the_queue():
     assert session_turns._turns == {}
 
 
+async def test_wait_with_a_timeout_leaves_the_queue():
+    """PLU-15: a turn waits at most until its request's deadline."""
+    release = await session_turns.acquire("c", "s")
+    assert session_turns.busy("c", "s") and not session_turns.busy("c", "t")
+    with pytest.raises(TimeoutError):
+        await session_turns.acquire("c", "s", timeout=0.05)
+    assert session_turns.waiting("c", "s") == 0
+    release()
+    assert session_turns._turns == {} and not session_turns.busy("c", "s")
+    (await session_turns.acquire("c", "s", timeout=0.05))()  # free: taken at once
+
+
 # ── chat route ──────────────────────────────────────────────────────────────
 
 
