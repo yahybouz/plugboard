@@ -76,6 +76,7 @@ To generate a typed client in another language, feed `openapi.json` to a generat
 | `POST /v1/preflight` | Check that provider/model pairs answer before a long run (10 pairs at most; each ping is checked, counted and billed like a chat call; `error` is a closed code) |
 | `GET /v1/me`, `GET /v1/me/keys`, `GET /usage/me` | Your key: limits, spend this month, usage entries |
 | `GET /health` | Liveness, no key needed |
+| `GET /health/ready` | Readiness, no key needed: `200` when the instance can serve, `503` with the same body when not (`ready`, `version`, generic `checks`) |
 | `/v2/...` | Same as `/v1`, with `api_version` / `X-API-Version: 2` |
 
 Schemas, status codes and headers of each route are in `openapi.json`.

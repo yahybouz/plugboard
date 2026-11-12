@@ -134,6 +134,7 @@ def _validate(path: str, body, method: str = "GET"):
     "path",
     [
         "/health",
+        "/health/ready",
         "/v1/models",
         "/v1/decisions/models",
         "/v2/models",

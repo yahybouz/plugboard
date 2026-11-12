@@ -6,6 +6,7 @@ Endpoints:
   POST /v1/embeddings          -- embeddings from a local engine (client key)
   GET  /v1/models              -- list all available models
   GET  /health                 -- liveness check
+  GET  /health/ready           -- readiness: 200 when able to serve, else 503
   GET  /usage/me               -- token usage for the calling client (current month)
   GET  /v1/me                  -- client info + usage + spending limit
 
@@ -3018,6 +3019,23 @@ async def health():
         payload["auth_disabled"] = True
         payload["dev_mode"] = _DEV_MODE
     return payload
+
+
+@app.get("/health/ready")
+async def health_ready(request: Request):
+    """Readiness (PLU-31): 200 when this instance can serve requests, 503
+    with the same body otherwise. Public: generic states only."""
+    from plugboard import readiness
+
+    result = await readiness.evaluate(
+        request.app.state, api_key=_API_KEY, dev_mode=_DEV_MODE
+    )
+    body = {
+        "ready": result["ready"],
+        "version": __version__,
+        "checks": result["checks"],
+    }
+    return JSONResponse(body, status_code=200 if result["ready"] else 503)
 
 
 @app.get("/health/detailed")

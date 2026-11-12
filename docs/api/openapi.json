@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "1.6.0",
+    "version": "1.7.0",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
@@ -2441,6 +2441,34 @@
         "title": "PreflightResult",
         "type": "object"
       },
+      "Ready": {
+        "description": "Readiness: `ready` is false when `usage_db` is not `ok`, `cli` is\n`fail` or `auth` is `fail`; `ollama` and `background` never block.",
+        "properties": {
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          },
+          "checks": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "usage_db: ok|fail; cli: ok|fail|none; auth: ok|dev|fail; ollama: ok|unreachable|unknown|not_configured; background: ok|degraded.",
+            "title": "Checks",
+            "type": "object"
+          }
+        },
+        "required": [
+          "ready",
+          "version",
+          "checks"
+        ],
+        "title": "Ready",
+        "type": "object"
+      },
       "ScoreQuestion": {
         "additionalProperties": false,
         "properties": {
@@ -2639,6 +2667,35 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "summary": "Readiness: whether this instance can serve requests",
+        "operationId": "get_health_ready",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ready"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready: same body, `ready` is false.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ready"
                 }
               }
             }

@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "1.6.0"
+CONTRACT_VERSION = "1.7.0"
 _JSON = "application/json"
 
 
@@ -488,6 +488,20 @@ class Health(BaseModel):
     dev_mode: Optional[bool] = None
 
 
+class Ready(BaseModel):
+    """Readiness: `ready` is false when `usage_db` is not `ok`, `cli` is
+    `fail` or `auth` is `fail`; `ollama` and `background` never block."""
+
+    ready: bool
+    version: str
+    checks: Dict[str, str] = Field(
+        description=(
+            "usage_db: ok|fail; cli: ok|fail|none; auth: ok|dev|fail; "
+            "ollama: ok|unreachable|unknown|not_configured; background: ok|degraded."
+        )
+    )
+
+
 class ErrorResponse(_Open):
     """FastAPI's error body. Upstream timeouts (503) add `retry_after` and a
     Retry-After header, as does an exhausted provider quota (429) when the
@@ -661,12 +675,19 @@ _ROUTES: List[_Route] = [
      None, ClientUsage, _AUTH_ERRORS, True),
     ("get", "/health", "Liveness and active providers",
      None, Health, {}, False),
+    ("get", "/health/ready", "Readiness: whether this instance can serve requests",
+     None, Ready, {"503": "Not ready: same body, `ready` is false."}, False),
     ("get", "/v1/openapi.json", "This contract (OpenAPI 3.1)",
      None, BaseModel, {}, False),
 ]  # fmt: skip
 
 # Routes whose 200 body is a JSON array of the response model.
 _ARRAY_RESPONSES = {"/v1/me/keys"}
+
+# Error answers whose body is not ErrorResponse: (path, status) -> model.
+_ERROR_MODELS: Dict[Tuple[str, str], Type[BaseModel]] = {
+    ("/health/ready", "503"): Ready,
+}
 
 #: (METHOD, path) of every route in the contract, as the contract writes them.
 PUBLIC_ROUTES = {(method.upper(), path) for method, path, *_ in _ROUTES}
@@ -769,9 +790,11 @@ def build_openapi() -> Dict[str, Any]:
         if errors:
             error_ref = _schema_ref(ErrorResponse, components)
             for code, text in errors.items():
+                model = _ERROR_MODELS.get((path, code))
+                ref = error_ref if model is None else _schema_ref(model, components)
                 responses[code] = {
                     "description": text,
-                    "content": {_JSON: {"schema": error_ref}},
+                    "content": {_JSON: {"schema": ref}},
                 }
         op["responses"] = responses
         op["security"] = [{"bearer": []}] if needs_key else []

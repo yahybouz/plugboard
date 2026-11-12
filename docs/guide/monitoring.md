@@ -59,6 +59,22 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 
 When `API_KEY` is empty it also returns `"auth_disabled": true` and `"dev_mode"`, so a deployment gate can refuse an instance whose client authentication is off.
 
+`GET /health/ready` is public too and says whether the instance can serve requests: `200` when it is ready, `503` with the same body when it is not. It never calls a provider or starts a CLI, and its result is kept for 5 seconds:
+
+```json
+{"ready": true, "version": "4.11.5", "checks": {"usage_db": "ok", "cli": "ok", "auth": "ok", "ollama": "unreachable", "background": "ok"}}
+```
+
+| Check | States | Blocks readiness |
+|---|---|---|
+| `usage_db` | `ok`: `data/usage.db` takes a write lock; `fail`: it cannot | yes, unless `ok` |
+| `cli` | `ok`: every active CLI provider finds its binary on PATH; `fail`: one does not; `none`: no active CLI provider | on `fail` |
+| `auth` | `ok`: `API_KEY` is set; `dev`: empty with `PLUGBOARD_DEV=1`; `fail`: empty outside dev mode | on `fail` |
+| `ollama` | `ok` or `unreachable` from the watchdog's last check of the active Ollama providers; `unknown` when the watchdog is stopped or its last check is older than three intervals; `not_configured` without an active Ollama provider | never |
+| `background` | `ok`: the watchdog, the availability snapshots and the retention pass run (or are turned off); `degraded` otherwise | never |
+
+The body names no provider and carries no error text: a check that raises gives its failure state (`fail`, `unknown` or `degraded`) and a warning in the server log. The dashboard and `GET /health/detailed` (admin) say which provider is affected. Container and deployment health checks stay on `/health`: use `/health/ready` to keep traffic away from an instance that cannot serve, not to restart it.
+
 `GET /health/detailed` (admin) calls `<base_url>/health` on every active HTTP provider and adds usage counters for the current month.
 
 ## Metrics
