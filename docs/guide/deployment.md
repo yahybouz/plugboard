@@ -47,6 +47,10 @@ About the image:
 - **CLI subscriptions in a container** (`full` image only): sign in from inside the container (`docker compose exec <service> claude`, `codex login`, `gemini`) and keep `/home/app` on a volume, otherwise the login is lost when the container is recreated.
 - **Ollama on the host**: `localhost` inside the container is the container itself. Set `OLLAMA_URL` to an address the container can reach, for example `http://host.docker.internal:11434` on Docker Desktop. Local models are free for budgeted keys only on a loopback or private IP literal: with a DNS name, use the host's private IP or set a `manual` 0 in the `ollama` price space ([pricing](pricing.md#how-a-model-finds-its-price)). When the host only lets the gateway in through a proxy that asks for a bearer token, set `PLUGBOARD_OLLAMA_TOKEN` too.
 
+### CLI versions
+
+The `full` image installs exact releases of the provider CLIs, never `latest`. The versions live in one place only, the `ARG` lines of the `full` stage in the `Dockerfile`: `GEMINI_CLI_VERSION`, `CLAUDE_CODE_VERSION` and `CODEX_VERSION` for the npm packages, and `AGY_URL` with its `AGY_SHA512` checksum for the Antigravity CLI (`agy`). To upgrade a CLI, edit its line in the `Dockerfile`, rebuild the `full` image and redeploy. Compose files and deployment scripts do not pass these versions again (`tests/test_cli_versions_single_source.py` refuses a second copy), so every deployment builds the same releases. A one-off local build may still override one with `docker build --target full --build-arg CODEX_VERSION=<version> .`. The private OVH host installs the same Codex, Claude Code and `agy` releases natively with `deploy/ovh/install-host-tools.sh`, which carries one checksum per release: when the host tools follow, bump that script in the same change; the same test keeps it aligned with the `Dockerfile`.
+
 ## Without Docker (systemd)
 
 ```bash

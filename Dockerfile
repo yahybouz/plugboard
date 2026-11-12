@@ -95,11 +95,15 @@ FROM ${NODE_IMAGE} AS node
 # ── full: gateway + provider CLIs ────────────────────────────
 FROM base AS full
 
-# Pin the CLI versions at build time if needed, e.g.
-#   docker build --target full --build-arg CLAUDE_CODE_VERSION=2.1.0 .
-ARG GEMINI_CLI_VERSION=latest
-ARG CLAUDE_CODE_VERSION=latest
-ARG CODEX_VERSION=latest
+# Provider CLI versions: single source, bump here. Every deployment builds
+# these exact releases; no Compose file or deployer passes them again
+# (tests/test_cli_versions_single_source.py). When the native host tools
+# follow, bump deploy/ovh/install-host-tools.sh in the same change (one
+# checksum per release). A one-off local build may still override a version
+# with --build-arg.
+ARG GEMINI_CLI_VERSION=0.65.0
+ARG CLAUDE_CODE_VERSION=2.1.306
+ARG CODEX_VERSION=0.163.0
 
 # - git: used by the CLIs and some npm post-install scripts
 # - curl, gnupg: fetch the GitHub CLI signing key (written to a file,

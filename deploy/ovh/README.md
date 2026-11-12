@@ -2,7 +2,7 @@
 
 ## Scope
 
-One small Ubuntu VPS, Docker `full`, private Tailscale Serve, no public application ports. The Compose file is a separate production configuration; it does not change the default developer deployment. CLI versions are pinned and their home directory persists separately from application data. No provider credentials or existing local data are automatically copied.
+One small Ubuntu VPS, Docker `full`, private Tailscale Serve, no public application ports. The Compose file is a separate production configuration; it does not change the default developer deployment. The CLI versions of the image are pinned in the repository `Dockerfile` (stage `full`), not in the Compose file, and their home directory persists separately from application data. No provider credentials or existing local data are automatically copied.
 
 ## Current verification
 
@@ -37,7 +37,7 @@ Provisioning disabled both background jobs. They are now enabled in `compose.yml
 
 ## Native SSH tools
 
-The Ubuntu host additionally has native Codex 0.163.0, Claude Code 2.1.306, Antigravity CLI (`agy`) 1.4.4 and Ollama 0.40.8. This is separate from the CLIs embedded in the gateway image. All four version commands work from an ordinary Ubuntu SSH shell; help commands for the three agents pass without inference.
+The Ubuntu host additionally has native Codex 0.163.0, Claude Code 2.1.306, Antigravity CLI (`agy`) 1.4.4 and Ollama 0.40.8. This is separate from the CLIs embedded in the gateway image, but the Codex, Claude Code and `agy` releases match the image's: a test keeps `install-host-tools.sh` aligned with the `Dockerfile`, so a CLI bump updates both files (with the new release checksum) in one change. All four version commands work from an ordinary Ubuntu SSH shell; help commands for the three agents pass without inference.
 
 `install-host-tools.sh` installs one selected tool at a time as `ubuntu`. Stage that script, `ollama-private.service`, and the reviewed official `https://claude.ai/install.sh` as `~/claude-native-install.sh` before invoking it. Codex and Ollama archives are SHA256-verified against their official GitHub release digests; AGY is SHA512-verified against the official installer's release manifest. Claude's native installer verifies its vendor manifest. User-local native binaries have global symlinks so already-open SSH shells can find them without PATH edits.
 
