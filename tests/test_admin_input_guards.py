@@ -44,6 +44,21 @@ async def test_key_for_client_containing_admin_is_created(admin_client, keys_sto
     )
     assert r.status_code == 201
     assert r.json()["client_id"] == "admin-team"
+    assert [k["client_id"] for k in keys_store.load_keys()] == ["admin-team"]
+
+
+async def test_existing_key_named_admin_is_left_as_is(admin_client, keys_store):
+    # The check is the route's, not create_key's: rotate_key revokes the old
+    # key before it calls create_key, and must not stop half-way.
+    old = keys_store.create_key("admin", "legacy")
+    r = await admin_client.post(
+        "/admin/keys", headers=ADMIN, json={"client_id": "admin"}
+    )
+    assert r.status_code == 422
+    assert [k["key_id"] for k in keys_store.load_keys()] == [old["key_id"]]
+    r = await admin_client.post(f"/admin/keys/{old['key_id']}/rotate", headers=ADMIN)
+    assert r.status_code == 201
+    assert keys_store.get_key_record(r.json()["key"])["client_id"] == "admin"
 
 
 # -- BUG-61: a provider name that gives an empty id ---------------------------
@@ -138,3 +153,18 @@ async def test_guarded_provider_with_invalid_address_is_refused_and_audited(
     assert _providers_file.read_text() == before
     [event] = audit_db.get_audit_log(action="provider.egress.rejected")
     assert json.loads(event["details"])["base_url"] == base_url
+
+
+def test_dashboard_reports_a_refused_key_creation():
+    # tests/e2e/test_keys.py drives it in a browser (opt-in suite).
+    import re
+    from pathlib import Path
+
+    js = (Path(__file__).resolve().parent.parent / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    assert re.search(
+        r'const res = await api\("POST", "/admin/keys", [^;]*\);\s*'
+        r'if \(!res\.ok\) \{ toast\("Failed to create key: " \+ await _errorDetail\(res\)',
+        js,
+    )
