@@ -1,8 +1,16 @@
 # Runbook: roll back a release
 
 Go back to the previous known-good version of Plugboard after a bad upgrade.
-Works for source installs (git tags) and Docker deployments (rebuild from a
-tag, or pin the previous image tag).
+The procedure depends on how the version was deployed:
+
+| Deployment | Goes back with | Section |
+|---|---|---|
+| UAT host, deployed by `ci deployer` | `ci deployer plugboard <previous sha>`, which reuses the previous image | [4a](#4a-uat-host-ci-deployer) |
+| Private host `deploy/ovh/` | the previous image, kept under its own tag before the upgrade | [4b](#4b-private-host-deployovh) |
+| Source install, other Docker deployments | the previous git tag, or the previous image tag | [4c](#4c-source-install-and-other-docker-deployments) |
+
+Every way ends with the same check: `scripts/smoke_consumers.py` green
+against the version you rolled back to ([step 6](#6-verify)).
 
 ## Symptom
 
@@ -10,6 +18,7 @@ tag, or pin the previous image tag).
 - The error rate on `POST /v1/chat/completions` jumps right after the
   deployment, or clients report new `4xx`/`5xx` responses that started at the
   deployment time.
+- The post-deployment smoke (`scripts/smoke_consumers.py`) fails.
 - A security issue is found in the version that was just deployed.
 
 ## Priority
@@ -40,6 +49,9 @@ docker compose logs --since 30m | grep -E '"level": "(ERROR|CRITICAL)"'
 curl -s -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/admin/monitoring | python3 -m json.tool
 ```
 
+On the private host, `.env` is `/etc/plugboard/runtime.env` and the logs come
+from `docker compose -f deploy/ovh/compose.yml logs --since 30m gateway`.
+
 Read the `CHANGELOG.md` entry of the new version for breaking changes or
 configuration changes that were missed during the upgrade. A missing
 environment variable is often fixed faster by setting it than by rolling back.
@@ -48,6 +60,8 @@ environment variable is often fixed faster by setting it than by rolling back.
 
 - A breaking change listed in `CHANGELOG.md` was not applied (new required
   variable, changed default, removed option).
+- A client key policy whose meaning changed between the versions (run
+  `scripts/precheck_data.py` on a copy of the data before the next attempt).
 - A dependency changed and `requirements.txt` was not reinstalled.
 - A regression in the new release.
 - Data written by the new version that the old version cannot read (only
@@ -55,15 +69,25 @@ environment variable is often fixed faster by setting it than by rolling back.
 
 ## Mitigation and rollback
 
+Older releases do not ship the smoke nor the data check. Before any
+`git checkout`, copy both out of the checkout of the release that has them,
+and run them from that copy in every step below:
+
+```bash
+install -d -m 0700 ~/plugboard-tools
+cp scripts/smoke_consumers.py scripts/precheck_data.py ~/plugboard-tools/
+```
+
 ### 1. Pick the target version
+
+Use the release that ran before the upgrade: the commit SHA on the UAT host,
+the image kept before the upgrade on the private host, the git tag or image
+tag elsewhere.
 
 ```bash
 git fetch --tags
 git tag --sort=-v:refname | head -5
 ```
-
-Use the release that ran before the upgrade. With Docker images, use the
-previous image tag.
 
 ### 2. Save what the bad version wrote (if it is still up)
 
@@ -76,32 +100,154 @@ curl -s -H "Authorization: Bearer $ADMIN_KEY" \
   > usage-$(date -u +%Y_%m)-before-rollback.csv
 ```
 
-### 3. Stop the service and back up the data directory
+### 3. Back up the data as it is now
 
-The data directory (`data/` by default, or `PLUGBOARD_DATA`) holds providers,
-client keys, usage, pricing grids and SQLite databases. Copy it while the
-service is stopped so the SQLite files are consistent.
+The data directory (`data/` by default, or `PLUGBOARD_DATA`; `/app/data` in
+the image) holds providers, client keys, usage, pricing grids and SQLite
+databases. On the private host, take a cold backup (it stops the gateway for
+a few seconds, archives data, CLI logins and runtime configuration, and
+restarts it):
 
 ```bash
-# Source install: stop the process (Ctrl+C in its terminal, your process
-# manager, or the command below)
+cd /opt/plugboard
+sudo bash deploy/ovh/backup.sh
+```
+
+Elsewhere, stop the service and copy the data directory, so the SQLite files
+are consistent. Source install, from the installation directory:
+
+```bash
+# Stop the process (Ctrl+C in its terminal, your process manager, or:)
 kill $(lsof -ti:8765)
-
-# Docker
-docker compose stop
-
 tar czf plugboard-data-$(date -u +%Y%m%dT%H%M%SZ).tar.gz data/
 ```
 
-With Docker, archive the host directory or volume mounted on the container's
-data directory (`/app/data` in the default image).
+Default Docker Compose deployment (`docker-compose.yml`, service `api`, data
+in a named volume): archive the volume through a throwaway container.
 
-Keep `.env` unchanged, in particular `ENCRYPTION_KEY`. Provider tokens are
-encrypted with it (or with `data/.encryption_key` when the variable is not
-set); with a different key they cannot be read. The backup contains secrets:
-store it accordingly.
+```bash
+docker compose stop
+docker run --rm --user 0:0 --network none \
+  --volumes-from "$(docker compose ps -aq api):ro" \
+  --entrypoint tar plugboard:api -C /app -czf - data \
+  > plugboard-data-$(date -u +%Y%m%dT%H%M%SZ).tar.gz
+```
 
-### 4. Deploy the previous version
+`plugboard:api` is the image named in `docker-compose.yml`; use yours if you
+changed it.
+
+Keep the environment unchanged, in particular `ENCRYPTION_KEY`. Provider
+tokens are encrypted with it (or with `data/.encryption_key` when the
+variable is not set); with a different key they cannot be read. The backup
+contains secrets: store it accordingly.
+
+### 4a. UAT host (`ci deployer`)
+
+`ci deployer` deploys a commit whose local CI is green, builds the image
+`plugboard:uat-<sha7>` only when it is missing, and never touches the volumes
+or the secrets. Rolling back is deploying the previous SHA again: its image
+is still there, so nothing is rebuilt.
+
+```bash
+# SHA in service, image, CI status of the SHA asked for
+ci deployer plugboard <previous-sha> --etat
+
+# Roll back
+ci deployer plugboard <previous-sha>
+echo "exit $?"
+```
+
+| Exit | Meaning | Next |
+|---|---|---|
+| `0` | the previous SHA is in service and healthy | [step 6](#6-verify) |
+| `1`, `2` | the deployer did not run (sudo refused, unknown application) | escalate |
+| `3` | refused: SHA unknown, or no green CI report for it (only the last 30 reports are kept) | `ci lancer plugboard <previous-sha>`, wait for green, run `ci deployer` again |
+| `4` | the source export or the image build failed, or the image variable is missing: nothing was switched | the output names the deployer's build log (`/srv/plugboard/build-<sha12>.log`, readable by the host owner); the bad version is still in service |
+| `5` | the previous SHA did not turn healthy; the deployer put back the version that was running | escalate |
+| `6` | the automatic rollback failed too | escalate at once: manual intervention on the host |
+| `75` | another deployment is running | wait for it, then retry |
+
+The previous SHA is the `sha_en_service` that `--etat` printed before the
+upgrade: write it down before every deployment. The deployer keeps no list
+of past deployments that the agent account can read.
+
+The UAT volumes belong to the host owner: if the previous version cannot read
+the data (step 5), escalate instead of restoring them yourself.
+
+### 4b. Private host (`deploy/ovh/`)
+
+`/etc/plugboard/runtime.env` is readable by root only, so every
+`docker compose` command runs with `sudo`, and the image is passed on each
+command line with `sudo env PLUGBOARD_IMAGE=...` (an `export` does not cross
+`sudo`). Without `PLUGBOARD_IMAGE`, compose falls back to the default of
+`deploy/ovh/compose.yml`.
+
+Before every upgrade, give the running image a tag of its own, then build the
+new release under a new tag, so the previous image stays on the host:
+
+```bash
+cd /opt/plugboard
+cid="$(sudo docker compose -f deploy/ovh/compose.yml ps -q gateway)"
+curl -s http://127.0.0.1:8765/health   # note the running "version"
+sudo docker image tag "$(sudo docker inspect --format '{{.Image}}' "$cid")" \
+  plugboard:rollback-<running-version>
+
+# The upgrade itself, after git checkout of the new release
+sudo env PLUGBOARD_IMAGE=plugboard:private-full-v<new-version> \
+  docker compose -f deploy/ovh/compose.yml up -d --build gateway
+```
+
+To roll back, start the kept image without building:
+
+```bash
+cd /opt/plugboard
+sudo docker image ls plugboard   # plugboard:rollback-<previous-version> must be listed
+sudo env PLUGBOARD_IMAGE=plugboard:rollback-<previous-version> \
+  docker compose -f deploy/ovh/compose.yml up -d --no-build gateway
+
+# Must print plugboard:rollback-<previous-version> healthy (allow about 2 minutes)
+sudo docker inspect --format '{{.Config.Image}} {{.State.Health.Status}}' \
+  "$(sudo docker compose -f deploy/ovh/compose.yml ps -q gateway)"
+```
+
+This runs the previous image with the current `compose.yml`. If the upgrade
+also changed `deploy/ovh/compose.yml` in a way the previous version cannot
+run with, use the previous release's compose file. A release older than the
+`PLUGBOARD_IMAGE` variable names its image in the file itself and ignores the
+variable: give the kept image that name first.
+
+```bash
+cd /opt/plugboard
+git checkout v<previous-version>
+grep -n 'image:' deploy/ovh/compose.yml
+# Only when that line is a fixed name such as plugboard:private-full-v4.4.0:
+sudo docker image tag plugboard:rollback-<previous-version> <that-fixed-name>
+sudo env PLUGBOARD_IMAGE=plugboard:rollback-<previous-version> \
+  docker compose -f deploy/ovh/compose.yml up -d --no-build gateway
+```
+
+No kept image on the host (it was removed, or not tagged before the
+upgrade): rebuild it from the previous release. This takes several minutes
+and downloads the CLIs again; the compose file of that release names the
+resulting image.
+
+```bash
+cd /opt/plugboard
+git checkout v<previous-version>
+sudo env PLUGBOARD_IMAGE=plugboard:rollback-<previous-version> \
+  docker compose -f deploy/ovh/compose.yml up -d --build gateway
+```
+
+In every case, [step 6](#6-verify) must report `<previous-version>`: the
+image name alone does not prove which version runs.
+
+Going forward again: if you checked out the previous release, run
+`git checkout v<new-version>` first (an older compose file ignores
+`PLUGBOARD_IMAGE`), then the same `up -d --no-build` command with
+`PLUGBOARD_IMAGE=plugboard:private-full-v<new-version>`, and the smoke with
+`--expect-version <new-version>`.
+
+### 4c. Source install and other Docker deployments
 
 Source install:
 
@@ -129,7 +275,59 @@ docker compose up -d
 ### 5. If the old version cannot read the current data
 
 If the previous version fails at startup or errors on data written by the new
-one, restore the backup taken before the upgrade (not the one from step 3):
+one, restore the backup taken before the upgrade (not the one from step 3).
+
+Private host: the archives of `deploy/ovh/backup.sh` are encrypted with
+`age` to the recipient in `/etc/plugboard/backup.recipient`; only the holder
+of the matching identity can decrypt them, on the machine that keeps it,
+where `deploy/ovh/sync-backups.sh` copies the archives. The decrypted archive
+holds every secret (runtime configuration, provider tokens, CLI logins):
+keep it owner-only and delete every plaintext copy at the end.
+
+On the machine that keeps the identity, from the backup directory:
+
+```bash
+umask 077
+archive=plugboard-<pre-upgrade-stamp>.tar.gz.age
+# The .sha256 file names the archive by its path on the host: check by name.
+echo "$(cut -d' ' -f1 "$archive.sha256")  $archive" | shasum -a 256 -c -
+age --decrypt -i <identity-file> "$archive" > plugboard-restore.tar.gz
+scp plugboard-restore.tar.gz <host>:plugboard-restore.tar.gz
+rm -f plugboard-restore.tar.gz
+```
+
+On the host, from `/opt/plugboard`: stop the gateway, empty the data and
+CLI-login volumes, extract `app/data` and `home/app` from the archive (its
+`backup-config/runtime.env` is not extracted), start the previous image, then
+delete the plaintext copy.
+
+```bash
+chmod 600 ~/plugboard-restore.tar.gz
+cd /opt/plugboard
+sudo docker compose -f deploy/ovh/compose.yml stop gateway
+cid="$(sudo docker compose -f deploy/ovh/compose.yml ps -aq gateway)"
+sudo docker run --rm -i --user 0:0 --network none --volumes-from "$cid" \
+  --entrypoint sh "$(sudo docker inspect --format '{{.Config.Image}}' "$cid")" -ec \
+  'find /app/data /home/app -mindepth 1 -delete; tar -C / -xzpf - app/data home/app' \
+  < ~/plugboard-restore.tar.gz
+sudo env PLUGBOARD_IMAGE=plugboard:rollback-<previous-version> \
+  docker compose -f deploy/ovh/compose.yml up -d --no-build gateway
+rm -f ~/plugboard-restore.tar.gz
+```
+
+Default Docker Compose deployment, with the archive of step 3 taken before
+the upgrade:
+
+```bash
+docker compose stop
+docker run --rm -i --user 0:0 --network none \
+  --volumes-from "$(docker compose ps -aq api)" \
+  --entrypoint sh plugboard:api -ec 'find /app/data -mindepth 1 -delete; tar -C /app -xzpf -' \
+  < plugboard-data-<pre-upgrade-timestamp>.tar.gz
+docker compose up -d
+```
+
+Source install:
 
 ```bash
 # service stopped
@@ -144,27 +342,30 @@ backup before an upgrade so this step stays possible.
 
 ### 6. Verify
 
+The smoke reads its key from `PLUGBOARD_SMOKE_KEY`: a dedicated client key
+whose `allowed_models` holds one local chat model and, where embeddings are
+served, the identity listed in `PLUGBOARD_EMBEDDING_MODELS`; never an admin
+key. It must pass within 60 seconds and report the version you rolled back
+to. Run it from the copy made at the start (older releases do not ship it):
+
 ```bash
-# Expected version and "ok": true
-curl -s http://localhost:8765/health | python3 -m json.tool
+read -rs PLUGBOARD_SMOKE_KEY && export PLUGBOARD_SMOKE_KEY
+python3 ~/plugboard-tools/smoke_consumers.py --url http://127.0.0.1:8765 \
+  --model <model-of-the-smoke-key> --expect-version <previous-version>
+echo "exit $?"   # 0: every check passed
+```
 
-# One real completion with a client key (pb_..., older lle_... keys also work)
-export CLIENT_KEY=pb_<your-client-key>
-curl -s http://localhost:8765/v1/chat/completions \
-  -H "Authorization: Bearer $CLIENT_KEY" -H "Content-Type: application/json" \
-  -d '{"model": "<model-id>", "messages": [{"role": "user", "content": "ping"}], "max_tokens": 5}' \
-  | python3 -m json.tool
+When the smoke key holds the embedding identity, add `--require-embeddings`
+so that a missing embedding route or model fails instead of being skipped.
 
+On the UAT host the gateway listens on `http://127.0.0.1:18765`. On the
+private host also run `bash deploy/ovh/verify.sh` (authentication answers,
+no model call).
+
+```bash
 # Providers and background jobs
 curl -s -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/admin/watchdog | python3 -m json.tool
 curl -s -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/admin/pricing/scheduler/status | python3 -m json.tool
-```
-
-Optionally probe a set of models without changing the quarantine store
-(`API_KEY` must hold a valid client key):
-
-```bash
-make smoke-models ARGS="--dry-run --only <substring>"
 ```
 
 ### 7. Communicate
@@ -176,14 +377,30 @@ new options) will see errors until the fix ships.
 
 ### 8. Roll forward later
 
-Once a fixed release exists, back up the data directory, then deploy it with
-the same procedure (step 4) using the new tag or image.
+Once a fixed release exists, back up the data, run the data check
+(`precheck_data.py`) on a copy of it, then deploy it with the same procedure
+(step 4) and run the smoke again.
+
+## Rehearse the rollback
+
+A rollback that was never run is not a rollback. Before a production
+upgrade, run it once on the UAT host, target version, then previous, then
+target again, with a green smoke at each step:
+
+```bash
+smoke() { python3 ~/plugboard-tools/smoke_consumers.py --url http://127.0.0.1:18765 --model <model> --expect-version "$1"; }
+ci deployer plugboard <target-sha>   && smoke <target-version>
+ci deployer plugboard <previous-sha> && smoke <previous-version>
+ci deployer plugboard <target-sha>   && smoke <target-version>
+```
 
 ## Escalation
 
 - The rollback fails or makes things worse: restore the pre-upgrade backup
   together with the pre-upgrade version (a known-good pair) and escalate to
   the deployment owner.
+- `ci deployer` exits `5` or `6`: hand over the exit code and the output of
+  `ci deployer plugboard <sha> --etat` to the UAT host owner.
 - Regression confirmed in a release: open an issue in the project repository
   with the version numbers, the failing request (keys redacted) and the error
   log lines.
@@ -192,4 +409,5 @@ After the incident, write a short post-mortem (timeline, root cause, impact,
 follow-up actions) and add a test that would have caught the regression
 before release.
 
-See also: [deployment guide](../guide/deployment.md).
+See also: [deployment guide](../guide/deployment.md),
+[production gate](prod-gate.md).

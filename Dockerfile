@@ -95,11 +95,14 @@ FROM ${NODE_IMAGE} AS node
 # ── full: gateway + provider CLIs ────────────────────────────
 FROM base AS full
 
-# Pin the CLI versions at build time if needed, e.g.
-#   docker build --target full --build-arg CLAUDE_CODE_VERSION=2.1.0 .
-ARG GEMINI_CLI_VERSION=latest
-ARG CLAUDE_CODE_VERSION=latest
-ARG CODEX_VERSION=latest
+# CLI versions are pinned: the CI, the UAT and deploy/ovh/compose.yml build
+# the same CLIs. Override one at build time if needed, e.g.
+#   docker build --target full --build-arg CLAUDE_CODE_VERSION=2.1.306 .
+# Keep these defaults equal to the build args of deploy/ovh/compose.yml and
+# of the UAT deployer (its apps.json passes them too, outside this repo).
+ARG GEMINI_CLI_VERSION=0.65.0
+ARG CLAUDE_CODE_VERSION=2.1.306
+ARG CODEX_VERSION=0.163.0
 
 # - git: used by the CLIs and some npm post-install scripts
 # - curl, gnupg: fetch the GitHub CLI signing key (written to a file,
@@ -129,11 +132,12 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 # the project owner on 2026-11-12; npm 11 needs Node ^20.17.0 || >=22.9.0.
 RUN npm install -g npm@11.21.2 && npm --version
 
-# Each CLI is installed in its own step so that one failing package (rate
-# limit, rename) does not prevent the others from landing.
-RUN npm install -g --omit=dev "@google/gemini-cli@${GEMINI_CLI_VERSION}" || echo "[WARN] gemini-cli install failed"
-RUN npm install -g --omit=dev "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" || echo "[WARN] claude-code install failed"
-RUN npm install -g --omit=dev "@openai/codex@${CODEX_VERSION}" || echo "[WARN] codex install failed"
+# One step per CLI (separate cache layers). A failed install fails the build
+# (BUG-50): an image without one of its CLIs must never be shipped, since
+# /health cannot tell that a subprocess provider has no binary.
+RUN npm install -g --omit=dev "@google/gemini-cli@${GEMINI_CLI_VERSION}"
+RUN npm install -g --omit=dev "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+RUN npm install -g --omit=dev "@openai/codex@${CODEX_VERSION}"
 
 # Antigravity CLI (agy): official linux-x64 release archive, pinned and
 # SHA512-verified against the vendor release manifest. Same artifact as
@@ -150,12 +154,11 @@ RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
      && rm -rf "$work"; \
     else echo "[WARN] agy: no official archive for $(dpkg --print-architecture)"; fi
 
-RUN echo "── Installed CLI binaries ──" \
- && (command -v gemini && gemini --version 2>/dev/null | head -1 || echo "gemini: not installed") \
- && (command -v claude && claude --version 2>/dev/null | head -1 || echo "claude: not installed") \
- && (command -v codex && codex --version 2>/dev/null | head -1 || echo "codex: not installed") \
- && (command -v agy && agy --version 2>/dev/null | head -1 || echo "agy: not installed") \
- && (command -v gh && gh --version | head -1 || echo "gh: not installed")
+# Every CLI must start; a missing or broken one fails the build (no pipes,
+# whose status would hide the failure). agy only ships for amd64.
+RUN set -e; echo "── Installed CLI binaries ──"; \
+    gemini --version; claude --version; codex --version; gh --version; \
+    if [ "$(dpkg --print-architecture)" = "amd64" ]; then agy --version; fi
 
 # CLI version probes can create private state as root during the build.
 # Keep the persisted runtime HOME writable by the unprivileged app user.

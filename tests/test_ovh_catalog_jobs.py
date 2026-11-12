@@ -81,7 +81,10 @@ def test_compose_keeps_default_cadence():
 def test_compose_protected_restrictions_unchanged():
     gateway = _gateway()
     env = gateway["environment"]
-    assert gateway["image"] == "plugboard:private-full-v4.4.0"
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    assert gateway["image"] == (
+        f"${{PLUGBOARD_IMAGE:-plugboard:private-full-v{version}}}"
+    )
     assert gateway["build"]["target"] == "full"
     assert gateway["build"]["args"] == {
         "GEMINI_CLI_VERSION": "0.65.0",
