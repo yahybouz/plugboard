@@ -4671,6 +4671,8 @@ async def test_direct_provider(
     body: DirectProviderTest, _: None = Depends(_require_admin)
 ):
     """Check a key against a preset or custom endpoint without creating anything."""
+    from urllib.parse import urlsplit
+
     from plugboard.config import check_provider_domain_allowed, ProviderDomainNotAllowed
     from plugboard.direct_providers import get_preset
 
@@ -4686,6 +4688,12 @@ async def test_direct_provider(
             pinned = await _require_public_host(base_url)
     if not base_url.startswith(("http://", "https://")):
         raise HTTPException(422, "Give a preset_key or an http(s) base_url")
+    try:
+        # Reading the port parses the whole address: an unclosed IPv6
+        # bracket, a bracketed name or a bad port raised a 500 (BUG-63).
+        urlsplit(base_url).port
+    except ValueError as exc:
+        raise HTTPException(422, f"base_url refused: not a valid address ({exc})")
     try:
         check_provider_domain_allowed(base_url)
     except ProviderDomainNotAllowed as exc:

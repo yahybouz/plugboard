@@ -204,10 +204,20 @@ def test_catalog_exclude(catalog_env, raw, monkeypatch):
         ("https://[::1]/v1", False),
         ("https://localhost/v1", False),
         ("https://${X}.example.com/v1", False),
+        ("https://api.example.com:99999/v1", False),  # port out of range
+        ("https://api.example.com:abc/v1", False),  # port not a number
     ],
 )
 def test_is_public_https(url, ok):
     assert models_dev.is_public_https(url) is ok
+
+
+def test_catalog_entry_with_invalid_port_is_skipped(catalog_env, raw):
+    # One unparsable entry from models.dev must not take the other presets down.
+    raw["acme"]["api"] = "https://api.acme.test:99999/v1"
+    _store(catalog_env, raw)
+    keys = {p["key"] for p in models_dev.generated_presets()}
+    assert "catalog-acme" not in keys and "catalog-openrouter" in keys
 
 
 def test_list_presets_hides_catalog_duplicate_of_builtin(catalog_env, raw):

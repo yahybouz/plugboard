@@ -1,4 +1,4 @@
-"""Admin routes refuse inputs the gateway would misread (BUG-60, 61, 62, 64)."""
+"""Admin routes refuse inputs the gateway would misread (BUG-60 to 64)."""
 
 from __future__ import annotations
 
@@ -228,3 +228,32 @@ def test_dashboard_reports_a_refused_key_creation():
         r'if \(!res\.ok\) \{ toast\("Failed to create key: " \+ await _errorDetail\(res\)',
         js,
     )
+
+
+# -- BUG-63: a custom endpoint address that does not parse --------------------
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://[x",  # unclosed IPv6 bracket
+        "https://[x]/v1",  # bracketed host that is not an IP address
+        "https://api.acme.test:99999/v1",  # port out of range
+        "https://api.acme.test:abc/v1",  # port that is not a number
+    ],
+)
+async def test_direct_provider_test_with_invalid_address_is_refused(
+    admin_client, base_url
+):
+    from aioresponses import aioresponses
+
+    with aioresponses() as mock:
+        r = await admin_client.post(
+            "/admin/direct-providers/test",
+            headers=ADMIN,
+            json={"base_url": base_url, "api_key": "k"},
+        )
+        assert not mock.requests  # refused before any connection
+    # The route's refusal of an unusable base_url: 422 and a detail, not a 500.
+    assert r.status_code == 422
+    assert r.json()["detail"].startswith("base_url refused: not a valid address")
