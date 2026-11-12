@@ -34,7 +34,7 @@ Plugboard is a single FastAPI process. It sits between client applications and L
 A `POST /v1/chat/completions` goes through these steps:
 
 1. **Middleware**: per-IP rate limit (`RATE_LIMIT`), body size limit, request ID, security headers.
-2. **Concurrency cap** (optional, `PLUGBOARD_MAX_INFLIGHT_CHAT`).
+2. **Concurrency cap** (`PLUGBOARD_MAX_INFLIGHT_CHAT`, 8 chats by default, a 10 s wait for a slot).
 3. **Client resolution** (`_resolve_client` in `app.py`): an admin session cookie, the `ADMIN_KEY`, or a client key looked up by its SHA-256 hash in `data/api_keys.json`. In strict tenant mode (the default) a chat request without a client is refused.
 4. **Checks**: the shape of `messages`, then for client keys the monthly budget against the month's recorded spend, allowed models, known price and RPM limit.
 5. **Session merge** (optional): when the request has a `session_id`, it takes the session's turn (`session_turns`: one turn at a time per client and session, waiting for the previous one), then stored history is prepended. The turn comes after every check, so a refused request never waits for it.

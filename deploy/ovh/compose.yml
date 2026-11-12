@@ -21,7 +21,11 @@ services:
       PLUGBOARD_LOCAL_AUTO_LOGIN: "0"
       COOKIE_SECURE: "true"
       CORS_ORIGINS: ""
-      PLUGBOARD_MAX_INFLIGHT_CHAT: "1"
+      # Eight chats at once, a second one waits up to 10 s for a slot (D-32).
+      # Ollama, at a private address, still takes one chat at a time
+      # (PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT, default 1) until it is measured.
+      PLUGBOARD_MAX_INFLIGHT_CHAT: "8"
+      PLUGBOARD_INFLIGHT_WAIT_S: "10"
       PLUGBOARD_SUBPROCESS_LIMIT: "1"
       PLUGBOARD_CODEX_SANDBOX: read-only
       # Model catalog and pricing jobs run on their default cadence (see

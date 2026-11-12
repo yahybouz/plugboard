@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Eight chats at once and a 10 s wait by default** (PLU-14, D-32): `PLUGBOARD_MAX_INFLIGHT_CHAT` now defaults to `8` (was `0`, no cap) and `PLUGBOARD_INFLIGHT_WAIT_S` to `10` (was `0`, `503` at once), in the code, in `.env.example` and in the OVH deployment (`deploy/ovh/compose.yml`, which allowed one chat with no wait). With one chat and no wait, the global cap came before the provider queue: while a provider capped at one request (Ollama) was busy, a second application got `503` at once instead of waiting for it. It now waits for the provider (up to `PLUGBOARD_PROVIDER_WAIT_S`) and is served when the first answer ends. Ollama at a private address still takes one chat at a time (`PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT`, default `1`). An existing `.env` keeps the values it sets ([configuration](docs/guide/configuration.md)).
+
 ## [4.11.5] — 2026-11-12
 
 ### Security

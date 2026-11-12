@@ -136,10 +136,10 @@ def _restore_process_state():
 
 @pytest.fixture(autouse=True)
 def _reset_load_state():
-    """Provider leases, route pauses, circuits and session turns start empty
-    in every test (PLU-9, PLU-8): a circuit left open by a test must not
-    reorder the next one's routes, a turn left held must not block its
-    session.
+    """Provider leases, route pauses, circuits, session turns and the global
+    chat slots start empty in every test (PLU-9, PLU-8, PLU-14): a circuit
+    left open by a test must not reorder the next one's routes, a turn or a
+    slot left held must not block the next test (the cap is on by default).
 
     Without ``monkeypatch``: autouse fixtures are set up in name order, so
     requesting it here would set it up before ``_restore_process_state``
@@ -158,10 +158,21 @@ def _reset_load_state():
     route_pauses.reset()
     circuit_breaker._circuits = {}
     session_turns._turns = {}
+    _reset_chat_slots()
     yield
     provider_admission.reset()
     route_pauses.reset()
     circuit_breaker._circuits, session_turns._turns = saved
+    _reset_chat_slots()
+
+
+def _reset_chat_slots() -> None:
+    """A new global semaphore for the next test, once the app is loaded: an
+    asyncio semaphore belongs to the event loop of its first wait."""
+    app = sys.modules.get("plugboard.app")
+    if app is not None:
+        app._inflight_chat_sem = None
+        app._inflight_chat_active = 0
 
 
 def _setup_providers(

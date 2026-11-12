@@ -592,16 +592,18 @@ _MAX_BODY_BYTES = envcompat.get_int(
 #
 # A burst of concurrent chat requests — each one possibly fanning out to a
 # subprocess CLI and eating RAM — can DoS the instance before any per-IP or
-# per-key limit kicks in. PLUGBOARD_MAX_INFLIGHT_CHAT (default 0 = off)
+# per-key limit kicks in. PLUGBOARD_MAX_INFLIGHT_CHAT (default 8, 0 = off)
 # enforces a hard global cap: once saturated, additional requests wait up
-# to PLUGBOARD_INFLIGHT_WAIT_S for a slot and then get 503 + Retry-After.
+# to PLUGBOARD_INFLIGHT_WAIT_S (default 10 s) for a slot and then get 503 +
+# Retry-After. With one chat and no wait, a second application got 503 at
+# once, before the provider queue could hold it (D-32, PLU-14).
 
 
 _INFLIGHT_CHAT_MAX = envcompat.get_int(
-    "PLUGBOARD_MAX_INFLIGHT_CHAT", default=0, minimum=0
+    "PLUGBOARD_MAX_INFLIGHT_CHAT", default=8, minimum=0
 )
 _INFLIGHT_WAIT_S = envcompat.get_float(
-    "PLUGBOARD_INFLIGHT_WAIT_S", default=0.0, minimum=0.0
+    "PLUGBOARD_INFLIGHT_WAIT_S", default=10.0, minimum=0.0
 )
 _INFLIGHT_RETRY_AFTER_S = 5
 _inflight_chat_sem: Optional["_asyncio.Semaphore"] = None

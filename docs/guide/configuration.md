@@ -54,8 +54,8 @@ A completed rotation also signs out every dashboard session and forgets the brow
 | `PLUGBOARD_SKIP_DOTENV` | empty | `1` stops the configuration module from loading `.env` (used by the test suite). |
 | `RATE_LIMIT` | `60` | Requests per minute per client IP address, all routes. `0` disables it. |
 | `MAX_BODY_BYTES` | `10485760` | Maximum request body size (10 MB). |
-| `PLUGBOARD_MAX_INFLIGHT_CHAT` | `0` | Maximum concurrent chat requests, streaming included. `0` means no cap. |
-| `PLUGBOARD_INFLIGHT_WAIT_S` | `0` | How long a request waits for a free slot before `503`. `0` fails immediately. |
+| `PLUGBOARD_MAX_INFLIGHT_CHAT` | `8` | Maximum concurrent chat requests, streaming included. `0` means no cap. |
+| `PLUGBOARD_INFLIGHT_WAIT_S` | `10` | How long a request waits for a free slot before `503`. `0` fails immediately. |
 | `PLUGBOARD_LOG_FILE` | empty | Also write logs to this file, with rotation. |
 | `PLUGBOARD_LOG_MAX_BYTES` | `20971520` | Size of one log file before rotation. |
 | `PLUGBOARD_LOG_BACKUPS` | `5` | Rotated log files to keep. |
