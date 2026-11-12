@@ -1,12 +1,17 @@
 """PLU-17: scripts/bench_concurrency.py, run against a fake gateway on
 127.0.0.1 (no inference, no real gateway). The fake serves one chat at a
-time: the others wait up to ``wait_s`` for the slot, then get the gateway's
-503 ``providers_busy``."""
+time and refuses the others with the gateway's 503 ``providers_busy``.
+
+Nothing here depends on real time, so a loaded machine changes no result:
+the script's clock is simulated (each reading advances ``FakeClock.step``),
+and the fake orders its answers with events, never with delays."""
 
 import importlib.util
 import json
+import re
 import threading
 import time
+import types
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -28,6 +33,27 @@ def _load():
 bench = _load()
 
 
+class FakeClock:
+    """``time.perf_counter`` of the script: each reading is ``step`` later."""
+
+    def __init__(self, step=0.1):
+        self.step = step
+        self.now = 0.0
+
+    def __call__(self):
+        self.now += self.step
+        return self.now
+
+
+@pytest.fixture(autouse=True)
+def clock(monkeypatch):
+    fake = FakeClock()
+    monkeypatch.setattr(
+        bench, "time", types.SimpleNamespace(perf_counter=fake, strftime=time.strftime)
+    )
+    return fake
+
+
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -36,31 +62,26 @@ class _Server(ThreadingHTTPServer):
 
 
 class FakeGateway:
-    """One slot; ``words`` streamed ``gap_s`` apart, longer than the wait,
-    so the others are refused. ``mode`` changes every answer:
+    """One slot: a chat that comes while another holds it is refused at once.
+    With ``hold``, the chat that takes the slot keeps it until every other
+    chat of its level (the "N clients" of its prompt) has been refused, so
+    exactly one is served per level, whatever the order of arrival.
+    ``mode`` changes every answer:
 
     - ``status``: answer ``status`` with a JSON body;
     - ``html``: a 200 login page; ``cut``: two words then the connection
       closes; ``error``: an error event, then ``[DONE]``;
-    - ``late``: the stream starts after ``delay_s``;
+    - ``hang``: no answer until the gateway stops;
     - ``redirect``: a 307 to another path;
     - ``echo``: a 429 that repeats the key in its code and Retry-After.
     """
 
-    def __init__(
-        self,
-        wait_s=0.1,
-        words=5,
-        gap_s=0.1,
-        mode=None,
-        status=500,
-        delay_s=0.0,
-        refuse_after=0.0,
-    ):
-        self.wait_s, self.words, self.gap_s = wait_s, words, gap_s
-        self.mode, self.status, self.delay_s = mode, status, delay_s
-        self.refuse_after = refuse_after
-        self.slot = threading.Semaphore(1)
+    def __init__(self, words=5, mode=None, status=500, hold=False):
+        self.words, self.mode, self.status, self.hold = words, mode, status, hold
+        self.cond = threading.Condition()
+        self.busy = False
+        self.refused = 0
+        self.stopped = threading.Event()
         self.seen = []
         gateway = self
 
@@ -100,12 +121,26 @@ class FakeGateway:
             h.end_headers()
             h.wfile.write(raw)
             return
-        if not self.slot.acquire(timeout=self.wait_s):
-            time.sleep(self.refuse_after)
+        if self.mode == "hang":
+            self.stopped.wait(30)
+            return
+        with self.cond:
+            served = not self.busy
+            if served:
+                self.busy, self.refused = True, 0
+            else:
+                self.refused += 1
+                self.cond.notify_all()
+        if not served:
             busy = {"detail": "busy", "code": "providers_busy", "retry_after": 5}
             return self._json(h, 503, busy, {"Retry-After": "5"})
         try:
-            time.sleep(self.delay_s)
+            if self.hold:
+                prompt = body["messages"][0]["content"]
+                level = re.search(r"(\d+) clients", prompt)
+                others = int(level.group(1)) - 1 if level else 0
+                with self.cond:  # the timeout only guards against a hang
+                    assert self.cond.wait_for(lambda: self.refused >= others, 30)
             h.send_response(200)
             h.send_header("Content-Type", "text/event-stream")
             h.end_headers()
@@ -118,7 +153,6 @@ class FakeGateway:
                 return
             words = 2 if self.mode == "cut" else self.words
             for i in range(words):
-                time.sleep(self.gap_s)
                 self._event(h, {"choices": [{"delta": {"content": f"w{i} "}}]})
             if self.mode == "cut":
                 return  # HTTP/1.0: the closed connection ends the body
@@ -131,7 +165,8 @@ class FakeGateway:
             )
             h.wfile.write(b"data: [DONE]\n\n")
         finally:
-            self.slot.release()
+            with self.cond:
+                self.busy = False
 
     @staticmethod
     def _event(h, evt):
@@ -154,6 +189,7 @@ class FakeGateway:
         return self
 
     def __exit__(self, *exc):
+        self.stopped.set()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join()
@@ -183,24 +219,22 @@ def _failures(path):
 
 def test_levels_report_codes_times_and_first_word(key, tmp_path, capsys):
     out = tmp_path / "bench.json"
-    with FakeGateway() as gw:
+    with FakeGateway(hold=True) as gw:
         rc = _run(gw, "--check", report=out)
     printed = capsys.readouterr().out
     assert rc == 0, printed
     levels = {lvl["clients"]: lvl for lvl in _report(out)["levels"]}
     assert sorted(levels) == [1, 2, 4, 8]
-    assert levels[1]["codes"] == {"200": 1}
-    # One slot, a generation longer than the wait: one served, the rest refused.
-    assert levels[8]["codes"] == {"200": 1, "503 providers_busy": 7}
+    for n, level in levels.items():  # one slot: one served, the rest refused
+        expected = {"200": 1, "503 providers_busy": n - 1} if n > 1 else {"200": 1}
+        assert level["codes"] == expected
     [served] = [r for r in levels[8]["requests"] if r["status"] == 200]
-    assert 0.05 < served["first_word_s"] < served["total_s"]
+    assert 0 < served["status_s"] < served["first_word_s"] < served["total_s"]
     assert served["completion_tokens"] == 5
-    assert 5 < served["tokens_per_second"] < 20  # 4 tokens over ~0.4 s
+    # 4 tokens after the first, over at least 4 readings of 0.1 s.
+    assert 0 < served["tokens_per_second"] <= 10.0 + 1e-9
     refused = [r for r in levels[8]["requests"] if r["status"] == 503]
-    assert all(r["retry_after"] == "5" for r in refused)
-    assert all(0.08 <= r["status_s"] < 2 for r in refused)
-    assert levels[8]["refusal_s"]["max"] < 2
-    assert levels[8]["status_200_s"]["max"] < 1
+    assert all(r["retry_after"] == "5" and r["status_s"] > 0 for r in refused)
     assert sorted({(r["client"], r["round"]) for r in levels[8]["requests"]}) == [
         (c, 1) for c in range(1, 9)
     ]
@@ -209,7 +243,7 @@ def test_levels_report_codes_times_and_first_word(key, tmp_path, capsys):
 
 
 def test_each_request_is_a_fresh_streamed_chat(key):
-    with FakeGateway(gap_s=0.01) as gw:
+    with FakeGateway() as gw:
         _run(gw, "--rounds", "2", "--max-tokens", "7", "--warmup", "1", clients="2")
     paths = {p for p, _, _ in gw.seen}
     assert paths == {"/v1/chat/completions"}
@@ -280,20 +314,23 @@ def test_check_fails_on_another_status(key, tmp_path):
     ]
 
 
-def test_check_fails_on_a_refusal_slower_than_the_bound(key, tmp_path):
+def test_check_fails_on_a_refusal_slower_than_the_bound(key, tmp_path, clock):
     out = tmp_path / "bench.json"
-    with FakeGateway(wait_s=0.05, refuse_after=0.4) as gw:
-        rc = _run(gw, "--check", "--max-wait-s", "0.2", clients="2", report=out)
+    clock.step = 1.0  # a refusal takes at least one reading: 1 s
+    with FakeGateway(hold=True) as gw:
+        rc = _run(gw, "--check", "--max-wait-s", "0.5", clients="2", report=out)
     assert rc == 1
+    # The 200 comes within 0.5 + 5 s: at most 4 readings after its start.
     [line] = _failures(out)
     assert line.startswith("2 clients: a 503 providers_busy came after")
-    assert line.endswith("(bound 0.2 s)")
+    assert line.endswith("(bound 0.5 s)")
 
 
-def test_check_fails_on_a_late_200(key, tmp_path):
+def test_check_fails_on_a_late_200(key, tmp_path, clock):
     """A gateway that queues without bound answers 200, but late."""
     out = tmp_path / "bench.json"
-    with FakeGateway(delay_s=0.4) as gw:
+    clock.step = 1.0  # the status comes one reading, 1 s, after the start
+    with FakeGateway() as gw:
         rc = _run(
             gw,
             "--check",
@@ -305,8 +342,7 @@ def test_check_fails_on_a_late_200(key, tmp_path):
             report=out,
         )
     assert rc == 1
-    [line] = _failures(out)
-    assert line.startswith("1 clients: a 200 came after") and "(bound 0.2 s)" in line
+    assert _failures(out) == ["1 clients: a 200 came after 1.00 s (bound 0.2 s)"]
 
 
 @pytest.mark.parametrize(
@@ -319,7 +355,7 @@ def test_check_fails_on_a_late_200(key, tmp_path):
 )
 def test_a_200_without_a_full_answer_is_a_stream_error(key, tmp_path, mode, error):
     out = tmp_path / "bench.json"
-    with FakeGateway(mode=mode, gap_s=0.01) as gw:
+    with FakeGateway(mode=mode) as gw:
         assert _run(gw, "--check", clients="1", report=out) == 1
     [level] = _report(out)["levels"]
     assert level["codes"] == {"200 stream error": 1}
@@ -336,7 +372,7 @@ def test_a_redirect_is_not_followed(key, tmp_path):
 
 def test_a_chat_over_its_timeout_is_no_answer(key, tmp_path):
     out = tmp_path / "bench.json"
-    with FakeGateway(delay_s=0.5) as gw:
+    with FakeGateway(mode="hang") as gw:  # never answers while the bench runs
         rc = _run(gw, "--check", "--timeout", "0.2", clients="1", report=out)
     assert rc == 1
     [req] = _report(out)["levels"][0]["requests"]
@@ -350,7 +386,7 @@ def test_without_check_a_failure_still_exits_zero(key):
 
 def test_d26_targets_need_every_chat_served(key, tmp_path):
     out = tmp_path / "bench.json"
-    with FakeGateway() as gw:  # one slot: 3 of 4 clients refused
+    with FakeGateway(hold=True) as gw:  # one slot: 3 of 4 clients refused
         rc = _run(
             gw, "--first-word-p95-max", "5", "--tps-min", "1", clients="4", report=out
         )
@@ -363,19 +399,18 @@ def test_d26_targets_need_every_chat_served(key, tmp_path):
 
 def test_d26_targets_check_each_client_rate(key, tmp_path, capsys):
     out = tmp_path / "bench.json"
-    with FakeGateway() as gw:  # ~10 tok/s
+    # Readings 0.1 s apart: start, status, 5 words, end. 4 tokens after the
+    # first word, over 0.4 s: 10 tokens per second.
+    with FakeGateway() as gw:
         rc = _run(gw, "--targets-at", "1", "--tps-min", "1000", clients="1", report=out)
     assert rc == 1
-    [line] = _failures(out)
-    assert line.startswith("1 clients: client 1 at ") and line.endswith(
-        "< 1000.0 tok/s"
-    )
+    assert _failures(out) == ["1 clients: client 1 at 10.0 tok/s < 1000.0 tok/s"]
     assert "check: FAILED" in capsys.readouterr().out
 
 
 def test_d26_targets_need_their_level(key, tmp_path):
     out = tmp_path / "bench.json"
-    with FakeGateway(gap_s=0.01) as gw:
+    with FakeGateway() as gw:
         assert _run(gw, "--tps-min", "1", clients="1", report=out) == 1
     assert _failures(out) == ["targets: no level at 4 clients"]
 
@@ -390,9 +425,10 @@ def test_unreachable_gateway_is_no_answer(key, tmp_path):
     assert req["status"] == 0 and req["error"].startswith("connection failed")
 
 
-def test_words_sent_at_once_give_no_rate(key, tmp_path):
+def test_words_in_a_burst_give_no_rate(key, tmp_path, clock):
     out = tmp_path / "bench.json"
-    with FakeGateway(gap_s=0.0) as gw:
+    clock.step = 0.001  # 5 words within 4 ms, under the 50 ms floor
+    with FakeGateway() as gw:
         assert _run(gw, clients="1", report=out) == 0
     [req] = _report(out)["levels"][0]["requests"]
     assert req["first_word_s"] is not None and req["tokens_per_second"] is None
