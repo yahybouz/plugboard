@@ -5219,7 +5219,7 @@ async def rotate_api_key(key_id: str, _: None = Depends(_require_admin)):
         raise HTTPException(
             422,
             "This key's client ID is empty or reserved and the key is refused "
-            "when used: revoke it and create a new key with a client ID",
+            "when used: revoke it and create a new key with a valid client ID",
         )
     result = rotate_key(key_id)
     if result is None:
