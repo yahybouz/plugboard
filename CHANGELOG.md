@@ -6,11 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-## [4.11.3] — 2026-11-12
+## [4.11.4] — 2026-11-12
 
 ### Fixed
 
 - **A client key issued under the client ID `admin` still acted as the administrator** (BUG-60, D-40): 4.11.1 stopped creating such keys, but one issued earlier was still served as the administrator (no `allowed_models`, budget, unknown-price `402` or `rpm_limit`, every call in `GET /v1/inflight`). A key whose `client_id` is `admin` in any case, with or without surrounding spaces, is now refused like a key with a blank client ID: the same `401` as an unknown key on every route that takes a client key, nothing called or billed, a warning `reason=reserved_client_id` with its `key_id` (never the key). `GET /admin/keys` still lists it; rotating it is refused with `422`. `ADMIN_KEY` and the dashboard session are not affected. This replaces 4.11.1's "existing keys are not changed". **Before upgrading**, look in `GET /admin/keys` for keys whose `client_id` is `admin` in any case or with surrounding spaces (`GET /admin/keys/client/admin` finds only the exact `admin`) and reissue them under another client ID: a key named `Admin` or ` admin ` was an ordinary client key that kept its limits and worked until now, and is refused too.
+
+## [4.11.3] — 2026-11-12
+
+### Fixed
+
 - **A client key issued with a blank `client_id` still escaped the key's limits** (BUG-64, D-40): 4.11.2 stopped creating such keys, but one issued earlier with the `client_id` `""` kept skipping its `allowed_models`, budget, `rpm_limit` and billing. Such a key, or one whose `client_id` is only spaces, is now treated as an invalid key on every route that takes a client key (chat v1 and v2, preflight, models, embeddings, decisions, `/v1/me`, `/v1/me/keys`, `/v1/inflight`, and `/usage/me`, which the client portal reads with `/v1/me`): the same `401` as an unknown or revoked key, and nothing is called or billed. A warning with its `key_id` (never the key) is logged on each refusal. `GET /admin/keys` still lists it; rotating it is refused with `422`: revoke it and create a new key with a client ID. This replaces 4.11.2's "existing keys are not changed". **Before upgrading**, look in `GET /admin/keys` for keys whose `client_id` is empty or only spaces and reissue them: a key whose `client_id` is only spaces kept its limits and worked until now, and is refused too.
 
 ## [4.11.2] — 2026-11-12
