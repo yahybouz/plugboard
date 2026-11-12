@@ -42,7 +42,7 @@ async def _exercise(page) -> None:
     assert await _column_of(page, tid) == "a_trier"
 
     await page.select_option(f'[data-testid="suivi-status-{tid}"]', "en_cours")
-    await _wait_message(page, "En cours")
+    await _wait_message(page, "In progress")
     assert await _column_of(page, tid) == "en_cours"
 
     await page.select_option(f'[data-testid="suivi-status-{tid}"]', "termine")
@@ -55,10 +55,10 @@ async def _exercise(page) -> None:
         f'[data-testid="suivi-proof-{tid}"]', "ci journal plugboard e2e : vert"
     )
     await card.locator(".suivi-proof-form button").click()
-    await _wait_message(page, "Preuve ajoutée")
+    await _wait_message(page, "Evidence added")
 
     await page.select_option(f'[data-testid="suivi-status-{tid}"]', "termine")
-    await _wait_message(page, "Terminé")
+    await _wait_message(page, "Done")
     assert await _column_of(page, tid) == "termine"
 
 
@@ -89,5 +89,5 @@ async def test_suivi_phone_width(browser, e2e_server):
 
 
 async def test_sidebar_links_to_suivi(dashboard):
-    link = dashboard.page.get_by_role("link", name="Suivi", exact=True)
+    link = dashboard.page.get_by_role("link", name="Tickets", exact=True)
     assert await link.get_attribute("href") == "/suivi"

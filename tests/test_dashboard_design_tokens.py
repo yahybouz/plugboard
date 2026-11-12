@@ -246,6 +246,8 @@ LABEL_FILES = [
     "portal.js",
     "auto_update.js",
     "live_requests.js",
+    "suivi.html",
+    "suivi.js",
 ]
 # Labels the wording rule replaced: US English, sentence case, "Log out",
 # no space before a colon.
@@ -300,3 +302,13 @@ def test_labels_follow_the_copy_rules(name):
     assert [label for label in FORBIDDEN_LABELS if label in text] == []
     assert ELLIPSIS.findall(text) == []
     assert FRENCH.findall(text) == []
+
+
+def test_suivi_is_in_english():
+    assert '<html lang="en">' in _read("suivi.html")
+    words = re.compile(
+        r"\b(?:Suivi|Importer|Nouveau|Titre|Créer|Aucun|Statut|Motif|Preuves?"
+        r"|Dette|Fonction|Chemin|Lien|Commande)\b"
+    )
+    for name in ("suivi.html", "suivi.js", "index.html"):
+        assert words.findall(_read(name)) == [], name

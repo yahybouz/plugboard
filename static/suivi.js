@@ -6,11 +6,11 @@
   "use strict";
 
   const LABELS = {
-    a_trier: "À trier", pret: "Prêt", en_cours: "En cours", en_revue: "En revue",
-    termine: "Terminé", bloque: "Bloqué", abandonne: "Abandonné",
+    a_trier: "Triage", pret: "Ready", en_cours: "In progress", en_revue: "In review",
+    termine: "Done", bloque: "Blocked", abandonne: "Abandoned",
   };
-  const TYPE_LABELS = { fonction: "Fonction", bug: "Bug", dette: "Dette", securite: "Sécurité" };
-  const PROOF_LABELS = { commande: "Commande", commit: "Commit", ci: "CI", chemin: "Chemin", lien: "Lien" };
+  const TYPE_LABELS = { fonction: "Feature", bug: "Bug", dette: "Debt", securite: "Security" };
+  const PROOF_LABELS = { commande: "Command", commit: "Commit", ci: "CI", chemin: "Path", lien: "Link" };
   const NEEDS_REASON = ["bloque", "abandonne"];
   const WIDE = window.matchMedia("(min-width: 768px)");
 
@@ -33,14 +33,14 @@
     const res = await fetch(path, opts);
     if (res.status === 401) {
       location.href = "/login?next=/suivi";
-      throw new Error("Session expirée");
+      throw new Error("Session expired");
     }
     let data = null;
     try { data = await res.json(); } catch (e) { data = null; }
     if (!res.ok) {
       let detail = data && data.detail;
       if (Array.isArray(detail)) detail = detail.map(function (d) { return d.msg; }).join(" ; ");
-      throw new Error(detail || ("Erreur " + res.status));
+      throw new Error(detail || ("Error " + res.status));
     }
     return data;
   }
@@ -61,7 +61,7 @@
 
   function statusSelect(ticket) {
     const label = el("label", "suivi-field");
-    label.appendChild(el("span", "suivi-field-name", "Statut"));
+    label.appendChild(el("span", "suivi-field-name", "Status"));
     const select = el("select", "suivi-status");
     select.setAttribute("data-testid", "suivi-status-" + ticket.id);
     statuts.forEach(function (s) { select.appendChild(option(s, LABELS[s] || s, s === ticket.statut)); });
@@ -72,7 +72,7 @@
 
   function proofs(ticket) {
     const box = el("details", "suivi-proofs");
-    box.appendChild(el("summary", "", "Preuves (" + ticket.preuves.length + ")"));
+    box.appendChild(el("summary", "", "Evidence (" + ticket.preuves.length + ")"));
     const list = el("ul", "suivi-proof-list");
     ticket.preuves.forEach(function (p) {
       list.appendChild(el("li", "", (PROOF_LABELS[p.type] || p.type) + " : " + p.valeur));
@@ -80,16 +80,16 @@
     box.appendChild(list);
     const form = el("form", "suivi-proof-form");
     const type = el("select");
-    type.setAttribute("aria-label", "Type de preuve");
+    type.setAttribute("aria-label", "Evidence type");
     typesPreuve.forEach(function (t) { type.appendChild(option(t, PROOF_LABELS[t] || t, t === "ci")); });
     const value = el("input");
     value.type = "text";
     value.required = true;
     value.maxLength = 500;
-    value.placeholder = "Ex. : ci journal plugboard <sha> : vert";
-    value.setAttribute("aria-label", "Preuve");
+    value.placeholder = "e.g. ci journal plugboard <sha>: green";
+    value.setAttribute("aria-label", "Evidence");
     value.setAttribute("data-testid", "suivi-proof-" + ticket.id);
-    const add = el("button", "suivi-btn suivi-btn-small", "Ajouter");
+    const add = el("button", "suivi-btn suivi-btn-small", "Add");
     add.type = "submit";
     form.append(type, value, add);
     form.addEventListener("submit", async function (ev) {
@@ -97,7 +97,7 @@
       try {
         await api("POST", "/admin/suivi/tickets/" + ticket.id + "/preuves", { type: type.value, valeur: value.value });
         await load();
-        say("Preuve ajoutée au ticket #" + ticket.id + ".");
+        say("Evidence added to ticket #" + ticket.id + ".");
       } catch (e) { say(e.message, true); }
     });
     box.appendChild(form);
@@ -118,7 +118,7 @@
     );
     li.appendChild(meta);
     if (ticket.description) li.appendChild(el("p", "suivi-card-desc", ticket.description));
-    if (ticket.motif) li.appendChild(el("p", "suivi-card-motif", "Motif : " + ticket.motif));
+    if (ticket.motif) li.appendChild(el("p", "suivi-card-motif", "Reason: " + ticket.motif));
     li.appendChild(statusSelect(ticket));
     li.appendChild(proofs(ticket));
     return li;
@@ -136,7 +136,7 @@
       col.appendChild(summary);
       const list = el("ul", "suivi-col-list");
       items.forEach(function (t) { list.appendChild(card(t)); });
-      if (!items.length) list.appendChild(el("li", "suivi-empty", "Aucun ticket"));
+      if (!items.length) list.appendChild(el("li", "suivi-empty", "No tickets"));
       col.appendChild(list);
       board.appendChild(col);
     });
@@ -154,10 +154,10 @@
     const target = select.value;
     const body = { statut: target };
     if (NEEDS_REASON.indexOf(target) !== -1) {
-      const reason = window.prompt("Motif (obligatoire) pour « " + (LABELS[target] || target) + " » :", "");
+      const reason = window.prompt("Reason (required) for “" + (LABELS[target] || target) + "”:", "");
       if (!reason || !reason.trim()) {
         select.value = ticket.statut;
-        say("Changement annulé : un motif est obligatoire.", true);
+        say("Change canceled: a reason is required.", true);
         return;
       }
       body.motif = reason.trim();
@@ -183,7 +183,7 @@
       });
       titre.value = "";
       await load();
-      say("Ticket #" + t.id + " créé.");
+      say("Ticket #" + t.id + " created.");
     } catch (e) { say(e.message, true); }
   });
 
@@ -193,7 +193,7 @@
     try {
       const c = await api("POST", "/admin/suivi/import");
       await load();
-      say("Import : " + c.crees + " créé(s), " + c.mis_a_jour + " passé(s) en revue, " + c.inchanges + " inchangé(s).");
+      say("Import: " + c.crees + " created, " + c.mis_a_jour + " moved to review, " + c.inchanges + " unchanged.");
     } catch (e) { say(e.message, true); }
     finally { button.disabled = false; }
   });
