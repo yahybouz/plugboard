@@ -10,7 +10,9 @@ services:
         GEMINI_CLI_VERSION: "0.65.0"
         CLAUDE_CODE_VERSION: "2.1.306"
         CODEX_VERSION: "0.163.0"
-    image: plugboard:private-full-v4.4.0
+    # PLUGBOARD_IMAGE picks another tag: a new one for an upgrade, the kept
+    # previous one for a rollback (docs/runbooks/rollback-release.md).
+    image: ${PLUGBOARD_IMAGE:-plugboard:private-full-v4.4.0}
     restart: unless-stopped
     env_file:
       - ${PLUGBOARD_ENV_FILE:-/etc/plugboard/runtime.env}
