@@ -596,33 +596,35 @@ def disabled_route(model_str: str) -> Optional[tuple[Dict[str, Any], str]]:
     """(provider, native model) when only a disabled provider serves ``model_str``.
 
     Such a request must call nobody (PLU-12): before, it was sent to every
-    other active provider in turn (BUG-44). Matched, in order: a registered
-    provider ID prefixes it (the longest wins) and that provider is
-    inactive; or no registered ID prefixes it, no alias selects an active
-    provider, every active provider has a model list and none knows the
+    other active provider in turn (BUG-44). Never when an active provider is
+    selected: by its registered prefix, or by a display or legacy alias (an
+    inactive provider named ``Codex`` leaves ``Codex:`` to the Codex CLI).
+    Otherwise matched, in order: a registered provider ID prefixes it (the
+    longest wins) and that provider is inactive; or no registered ID
+    prefixes it, every active provider has a model list and none knows the
     name, and an inactive provider knows it (its own name is returned).
     None otherwise: the request is routed, or answered 404, as before.
     """
     if not isinstance(model_str, str) or not model_str.strip():
         return None
     registry = [p for p in load_providers() if not is_removed_provider(p)]
+    active = [p for p in registry if p.get("is_active", True)]
+    if active:
+        try:
+            if _select_request(model_str)[1] is not None:
+                return None  # an active owner or alias serves it
+        except ValueError:
+            return None  # the chat route answers these as before
     owner = registered_model_owner(model_str, (p["id"] for p in registry))
     if owner is not None:
         provider = next(p for p in registry if p["id"] == owner)
         if provider.get("is_active", True):
             return None
         return provider, model_str[len(owner) + 1 :]
-    active = [p for p in registry if p.get("is_active", True)]
     if any(not _listed_models(p) for p in active):
         return None  # a provider without a list may serve any name
     if any(_known_native(p, model_str) is not None for p in active):
         return None
-    if active:
-        try:
-            if _select_request(model_str)[1] is not None:
-                return None  # a display or legacy alias selects an active one
-        except ValueError:
-            return None  # the chat route answers these as before
     for provider in registry:
         if provider.get("is_active", True):
             continue

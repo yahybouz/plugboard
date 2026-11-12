@@ -119,6 +119,7 @@ from plugboard.router import (
     ProviderNetworkError,
     ProvidersBusyError,
     ProviderQuotaError,
+    disabled_route,
     discover_models,
     forward,
     forward_stream,
@@ -1649,7 +1650,17 @@ def _check_model_access(
     """Raise 403 unless the resolved effective identity is allowed."""
     guard = _model_route_guard(client_id, key_record)
     if guard is not None:
-        guard(*resolve_provider_and_model(model_str))
+        guard(*_route_for_guard(model_str))
+
+
+def _route_for_guard(model_str: str) -> tuple:
+    """(provider, native model) a key's allowed_models is checked against.
+
+    A model of a disabled provider is checked as its real owner's (PLU-12):
+    resolve_provider_and_model would name another provider, the one the
+    request used to leak to (BUG-44).
+    """
+    return disabled_route(model_str) or resolve_provider_and_model(model_str)
 
 
 def _model_route_guard(client_id, key_record=None):
@@ -1824,6 +1835,24 @@ def _providers_busy_response(
     return JSONResponse(status_code=503, content=content, headers=headers)
 
 
+def _provider_disabled_response(provider_id: str) -> JSONResponse:
+    """503 ``provider_disabled``: the model belongs to a provider the admin
+    turned off (PLU-12). Nothing was called, no other provider stands in,
+    and no ``Retry-After``: nobody knows when it comes back.
+    """
+    log.info("provider disabled: %s", provider_id)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": f"Provider '{provider_id}' is turned off by the "
+            "administrator; nothing was called.",
+            "code": "provider_disabled",
+            "hint": "Pick another model from GET /v1/models, or ask the "
+            "administrator to turn the provider back on.",
+        },
+    )
+
+
 def _provider_http_error_response(
     exc: ProviderHTTPError | ProviderNetworkError, client_id: Optional[str]
 ) -> JSONResponse:
@@ -1971,7 +2000,7 @@ def _live_note(model: str, client_id: Optional[str]) -> None:
     """Tell /v1/inflight which model, provider and caller this request is."""
     provider_id = None
     try:
-        provider_id = resolve_provider_and_model(model)[0].get("id")
+        provider_id = _route_for_guard(model)[0].get("id")
     except Exception:  # unknown model: the admission checks answer it
         pass
     _live.update(client_id=client_id, model=model[:120] or None, provider=provider_id)
@@ -2050,12 +2079,19 @@ async def chat_completions(
     if client_id and client_id != "admin":
         spending_total = _check_spending_limit(client_id, key_record=key_record)
 
-    # Check model access (per-key allowed_models)
+    # Check model access (per-key allowed_models). A model of a disabled
+    # provider is checked as its owner's, then refused (PLU-12).
+    disabled = disabled_route(body.get("model", ""))
     route_guard = _model_route_guard(client_id, key_record)
     route_options = {}
     if route_guard is not None:
-        route_guard(*resolve_provider_and_model(body.get("model", "")))
+        route_guard(*(disabled or resolve_provider_and_model(body.get("model", ""))))
         route_options["route_guard"] = route_guard
+
+    # After the key's 403, before the 404 and the 402; before the cache too,
+    # so no stored answer comes out while the provider is off.
+    if disabled is not None:
+        return _provider_disabled_response(disabled[0]["id"])
 
     # After the key's 403, so a limited key cannot probe which IDs exist;
     # before the 402, which would blame a price for a model that is not there.

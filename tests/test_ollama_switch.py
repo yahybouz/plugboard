@@ -8,10 +8,22 @@ used to be sent to every other active provider. It now gets 503
 
 from __future__ import annotations
 
-import pytest
+import json
 
-from plugboard import router
+import pytest
+from httpx import ASGITransport, AsyncClient
+
+from plugboard import api_contract, router
 from tests.test_model_not_found import ACME, CODEX, OPEN, _isolated_providers
+
+DISABLED_BODY = {
+    "detail": "Provider 'ollama' is turned off by the administrator; "
+    "nothing was called.",
+    "code": "provider_disabled",
+    "hint": "Pick another model from GET /v1/models, or ask the administrator "
+    "to turn the provider back on.",
+}
+ADMIN_KEY = "admin-key-for-tests"
 
 OLLAMA = {
     "id": "ollama",
@@ -127,6 +139,19 @@ def test_a_display_alias_of_an_active_cli_is_not_disabled(tmp_path, monkeypatch,
     assert router.disabled_route(model) is None
 
 
+def test_an_inactive_owner_does_not_hide_an_active_alias(tmp_path, monkeypatch):
+    """An inactive provider named 'Codex' leaves 'Codex:' to the Codex CLI."""
+    named_codex = {
+        **ACME,
+        "id": "Codex",
+        "name": "Codex",
+        "models": [{"id": "gpt-6.1-sol"}],
+        "is_active": False,
+    }
+    _isolated_providers(tmp_path, monkeypatch, [OLLAMA, CODEX, named_codex, ACME])
+    assert router.disabled_route("Codex:gpt-6.1-sol") is None
+
+
 def test_unknown_model_rule_is_unchanged(off):
     assert router.is_unknown_model("ollama:qwen3:8b") is False
     assert router.is_unknown_model("nope:model-x") is True
@@ -136,3 +161,148 @@ def test_provider_disabled_error_names_the_provider():
     exc = router.ProviderDisabledError("ollama")
     assert exc.provider_id == "ollama"
     assert "Provider 'ollama' is turned off" in str(exc)
+
+
+# ── What the chat routes answer ─────────────────────────────────────────────
+
+
+@pytest.fixture
+async def http(tmp_path, monkeypatch):
+    """App client with a real client key; forward() replaced by a recorder."""
+    import plugboard.app as app_module
+    import plugboard.ratelimit as rl
+    from plugboard import apikeys
+
+    monkeypatch.setattr(app_module, "_API_KEY", "instance-key")
+    monkeypatch.setattr(app_module, "_ADMIN_KEY", ADMIN_KEY)
+    monkeypatch.setattr(rl, "_LIMIT", 0)
+    monkeypatch.setattr(apikeys, "KEYS_FILE", tmp_path / "keys.json")
+    monkeypatch.setattr(apikeys, "KEYS_LOCK", tmp_path / "keys.lock")
+    key = apikeys.create_key("acme", "switch")["key"]
+
+    calls: list = []
+
+    async def _forward(body, **_kwargs):
+        calls.append(body.get("model"))
+        raise RuntimeError("upstream refused the call")
+
+    async def _forward_stream(body, **_kwargs):
+        calls.append(body.get("model"))
+        raise RuntimeError("upstream refused the call")
+        yield b""  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(app_module, "forward", _forward)
+    monkeypatch.setattr(app_module, "forward_stream", _forward_stream)
+    async with AsyncClient(
+        transport=ASGITransport(app=app_module.app), base_url="http://test"
+    ) as client:
+        yield client, {"Authorization": f"Bearer {key}"}, calls
+
+
+def _chat(model: str, **extra) -> dict:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": "Hi"}],
+        "cache": False,
+        **extra,
+    }
+
+
+def _key(**fields) -> dict:
+    from plugboard import apikeys
+
+    key = apikeys.create_key("acme", "limited", **fields)["key"]
+    return {"Authorization": f"Bearer {key}"}
+
+
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v2/chat/completions"])
+@pytest.mark.parametrize("model", ["ollama:qwen3:8b", "qwen3:8b"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_chat_gets_503_and_calls_nobody(off, http, path, model, stream):
+    client, auth, calls = http
+    resp = await client.post(path, headers=auth, json=_chat(model, stream=stream))
+
+    assert resp.status_code == 503, resp.text
+    assert resp.json() == DISABLED_BODY
+    api_contract.ErrorResponse.model_validate(resp.json())
+    assert "retry-after" not in resp.headers
+    assert calls == [], "a disabled provider is never replaced by another one"
+
+
+async def test_playground_gets_the_same_503(off, http):
+    client, _auth, calls = http
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {ADMIN_KEY}",
+            "X-Plugboard-Surface": "playground",
+        },
+        json=_chat("ollama:qwen3:8b"),
+    )
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["code"] == "provider_disabled"
+    assert calls == []
+
+
+async def test_limited_key_gets_403_first(off, http):
+    """A key that may not use the model learns nothing about the switch."""
+    client, _auth, calls = http
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=_key(allowed_models=["acme-direct:acme-large"]),
+        json=_chat("ollama:qwen3:8b"),
+    )
+    assert resp.status_code == 403, resp.text
+    assert "'ollama:qwen3:8b'" in resp.json()["detail"]
+    assert calls == []
+
+
+@pytest.mark.parametrize("model", ["ollama:qwen3:8b", "qwen3:8b"])
+async def test_allowed_key_gets_503_not_403(off, http, model):
+    client, _auth, calls = http
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=_key(allowed_models=["ollama:qwen3:8b"]),
+        json=_chat(model),
+    )
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["code"] == "provider_disabled"
+    assert calls == []
+
+
+async def test_budgeted_key_gets_503_not_402(off, http):
+    client, _auth, calls = http
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=_key(monthly_limit_usd=5.0),
+        json=_chat("ollama:qwen3:8b"),
+    )
+    assert resp.status_code == 503, resp.text
+    assert calls == []
+
+
+async def test_cache_is_not_read_when_disabled(off, http, monkeypatch):
+    from plugboard import cache
+
+    client, auth, calls = http
+    reads: list = []
+    monkeypatch.setattr(cache, "get_cached", lambda *a, **k: reads.append(a))
+    body = {**_chat("ollama:qwen3:8b"), "cache": True}
+    resp = await client.post("/v1/chat/completions", headers=auth, json=body)
+
+    assert resp.status_code == 503, resp.text
+    assert reads == [] and calls == []
+
+
+async def test_chat_is_routed_again_once_turned_on(off, http):
+    client, auth, calls = http
+    data = json.loads(off.read_text())
+    data["providers"][0]["is_active"] = True
+    off.write_text(json.dumps(data))
+    router.invalidate_models_cache()
+
+    resp = await client.post(
+        "/v1/chat/completions", headers=auth, json=_chat("ollama:qwen3:8b")
+    )
+    assert resp.status_code == 502, resp.text  # the recorder refuses the call
+    assert calls == ["ollama:qwen3:8b"]
