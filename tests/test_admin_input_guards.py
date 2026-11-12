@@ -126,7 +126,7 @@ def audit_db(monkeypatch, tmp_path):
     [
         "https://" + "a" * 64 + ".test/v1",  # IDNA: label too long
         "https://a..test/v1",  # IDNA: empty label
-        "https://ex ample.test/v1",  # IDNA: forbidden character
+        "https://ex\u2028ample.test/v1",  # IDNA: U+2028 is forbidden
         "https://api.acme.test:99999/v1",  # port out of range
         "https://[api.acme.test/v1",  # unclosed IPv6 bracket
     ],
@@ -153,6 +153,40 @@ async def test_guarded_provider_with_invalid_address_is_refused_and_audited(
     assert _providers_file.read_text() == before
     [event] = audit_db.get_audit_log(action="provider.egress.rejected")
     assert json.loads(event["details"])["base_url"] == base_url
+
+
+
+async def test_guarded_provider_edit_to_invalid_address_is_refused_and_audited(
+    client, _providers_file, idna_resolver, audit_db
+):
+    import json
+
+    from plugboard import config
+
+    providers = json.loads(_providers_file.read_text())["providers"]
+    providers[0]["egress_guard"] = True
+    _providers_file.write_text(json.dumps({"providers": providers}))
+    r = await client.put(
+        "/providers/test-provider",
+        headers={"Authorization": "Bearer testkey"},
+        json={"base_url": "https://a..test/v1"},
+    )
+    assert r.status_code == 422
+    assert r.json()["detail"].startswith("Provider base_url refused:")
+    assert config.get_provider("test-provider")["base_url"] == "http://fake-llm.test"
+    assert audit_db.get_audit_log(action="provider.egress.rejected")
+
+
+async def test_catalog_preset_with_invalid_address_is_refused(idna_resolver):
+    # The check catalog presets get before a connection test or a creation.
+    from fastapi import HTTPException
+
+    from plugboard import app as app_mod
+
+    with pytest.raises(HTTPException) as exc:
+        await app_mod._require_public_host("https://a..test/v1")
+    assert exc.value.status_code == 422
+    assert exc.value.detail.startswith("Catalog preset refused:")
 
 
 def test_dashboard_reports_a_refused_key_creation():
