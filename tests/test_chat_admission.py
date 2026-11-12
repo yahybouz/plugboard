@@ -25,12 +25,10 @@ ONLY_A = f"{PROVIDER_A['id']}:fake:model-v1"
 
 
 @pytest.fixture
-def app_mod(monkeypatch):
-    """The app with a fresh global semaphore, given back after the test."""
+def app_mod():
+    """The app; conftest gives each test a fresh global semaphore."""
     import plugboard.app as app_mod
 
-    monkeypatch.setattr(app_mod, "_inflight_chat_sem", None)
-    monkeypatch.setattr(app_mod, "_inflight_chat_active", 0)
     return app_mod
 
 
@@ -109,19 +107,26 @@ def ovh_settings(app_mod, monkeypatch):
 async def test_second_chat_waits_for_a_provider_at_one_instead_of_503(
     client, one_at_a_time, ovh_settings, path
 ):
-    """PLU-14 criterion, with the OVH settings: the second request queues
-    behind the first one and is served when it ends, no 503 at once."""
+    """PLU-14 criterion, with the OVH settings: the second request passes the
+    global cap, queues behind the first one at the provider and is served
+    when it ends, no 503 at once."""
+    from plugboard import provider_admission
+
     upstream = _Upstream()
     with aioresponses() as mock:
         mock.post(URL_A, callback=upstream.reply, repeat=True)
         first = asyncio.create_task(client.post(path, headers=AUTH, json=_chat()))
         await _until(lambda: upstream.calls == 1)
         second = asyncio.create_task(client.post(path, headers=AUTH, json=_chat()))
+        await _until(lambda: provider_admission.waiting(PROVIDER_A["id"]) == 1)
+        sem = ovh_settings._get_inflight_sem()
+        both_hold_a_slot = sem._value == ovh_settings._INFLIGHT_CHAT_MAX - 2
         await asyncio.sleep(0.3)
         waited = not second.done()
         upstream.gate.set()
         r1, r2 = await asyncio.gather(first, second)
     assert waited, f"answered at once: {r2.status_code} {r2.text}"
+    assert both_hold_a_slot
     assert r1.status_code == r2.status_code == 200, r2.text
     assert upstream.calls == 2
     assert ovh_settings._get_inflight_sem()._value == ovh_settings._INFLIGHT_CHAT_MAX

@@ -834,6 +834,7 @@ async def test_inflight_cap_zero_turns_it_off(client, monkeypatch):
             },
         )
     assert resp.status_code == 200
+    assert app_mod._inflight_chat_sem is None  # no slot was ever counted
 
 
 @pytest.mark.asyncio
