@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.12, FastAPI, pytest (`asyncio_mode = auto`, fixtures `admin_client` de `tests/conftest.py`), JS sans framework (helpers `h`, `api`, `emptyState`, `skeleton` de `static/app.js`), MCP playwright pour le contrôle visuel.
 
-**Spec:** `docs/superpowers/specs/2026-11-12-catalog-history-design.md` — **à valider par YB** ; ce plan suit les réponses recommandées (option 1 de Q1 à Q5). Si YB choisit autrement, reprendre les tâches touchées avant de construire.
+**Spec:** `docs/superpowers/specs/2026-11-12-catalog-history-design.md` — **à valider par YB** ; ce plan suit les réponses recommandées (option 1 de Q1 à Q6). Si YB choisit autrement, reprendre les tâches touchées avant de construire.
 
 ## Global Constraints
 
@@ -20,7 +20,7 @@
 - Seul l'événement `models.changed` entre dans l'historique ; une entrée exposée n'a que `at`, `provider`, `added`, `removed`.
 - Interface et doc en anglais. Libellés exacts : onglet et titre `Catalog history` ; filtres `Provider` (`All providers` + liste), `Period` (`All time`, `Last 7 days`, `Last 30 days`, `Last 90 days`, `Last year`), `Model` (placeholder `Search a model name`) ; lien Monitoring `Full history` ; bouton `Load more` ; vides `No model change recorded yet.` / `No model change matches these filters.` ; erreur `Catalog history unavailable: <message>`.
 - Données venues des fournisseurs écrites en texte seulement (`h()`, `textContent`), jamais `innerHTML` avec une donnée.
-- CSS : seulement les variables existantes de `static/style.css`, classes préfixées `ch-`, bloc ajouté en fin de fichier (PB-DASH-02 réécrit la charte en parallèle).
+- Coordination (décision de l'orchestrateur) : PB-PROV-02 est assemblé avant PB-DASH-02. Une seule entrée dans la barre latérale de `index.html` et dans `TAB_LOADERS` ; CSS sur les variables existantes de `static/style.css` seulement, le moins de classes possible, préfixées `ch-`, groupées en fin de fichier sous `/* ── Catalog history (PB-PROV-02) ── */`.
 - Ne touche ni `VERSION` ni `plugboard/__init__.py`. CHANGELOG sous `## [Unreleased]` › `### Added`.
 - Conventional Commits en anglais, un commit par tâche, terminé par les lignes d'attribution de la session en cours. Ni `git push`, ni `glab`, ni `ci`, ni `docker`, ni commande `board`.
 - Aucune vraie clé, aucun nom de client, aucune donnée personnelle dans le code, les tests, la doc, les données de démonstration et les commits.
@@ -29,7 +29,7 @@
 
 - Installation neuve sans journal : `200`, liste vide, `providers: []`, `oldest: null` → `test_history_without_journal` (Task 2).
 - Ligne illisible, d'un autre type, sans fournisseur ou avec `added` qui n'est pas une liste : ignorée ou normalisée, jamais un `500` → `test_history_skips_bad_lines` (Task 2).
-- Un changement à `23:59:59` le jour `until` est inclus, celui de minuit le lendemain exclu → `test_history_until_is_inclusive` (Task 2).
+- Nom cherché au 35e rang d'une entrée de 40 noms : placé en tête, donc visible avant « +30 more », et surligné ; comptes inchangés → `test_history_puts_matching_names_first` (Task 2) et contrôle navigateur (Task 5).
 - Nom de modèle hostile (`<img src=x onerror=alert(1)>`) affiché tel quel, sans balise créée → `test_catalog_history_js_writes_text_only` (Task 4) et contrôle navigateur (Task 5).
 - Entrée de 40 noms et nom de 120 caractères sur iPhone : repliée après 10, aucun défilement horizontal à 390 px → contrôle navigateur (Task 5).
 
@@ -100,7 +100,8 @@ def test_retention_defaults_to_365_days_and_10000_lines(monkeypatch, value):
 - Produces: `query_model_history(*, provider: Optional[str] = None, since: Optional[date] = None, until: Optional[date] = None, model: Optional[str] = None, limit: int = 50, offset: int = 0) -> Dict[str, Any]` → `{"entries": List[{"at": str, "provider": str, "added": List[str], "removed": List[str]}], "total": int, "providers": List[str], "oldest": Optional[str]}`.
   - Lit tout le fichier ; garde les lignes JSON objet avec `event == "models.changed"` et `provider` chaîne non vide ; `added`/`removed` non listes → `[]`, éléments convertis en `str`.
   - `providers` (triés, uniques) et `oldest` (plus petite `at` lisible) portent sur toutes ces lignes, **sans** les filtres.
-  - Filtres : `provider` égalité exacte ; `since` → `at >= since 00:00:00Z` ; `until` → `at < (until + 1 jour) 00:00:00Z` ; une `at` illisible est exclue dès qu'un filtre de date est donné ; `model` → sous-chaîne sans casse dans `added + removed`, l'entrée sort entière.
+  - Filtres : `provider` égalité exacte ; `since` → `at >= since 00:00:00Z` ; `until` → `at < (until + 1 jour) 00:00:00Z` ; une `at` illisible est exclue dès qu'un filtre de date est donné ; `model` → sous-chaîne sans casse dans `added + removed`. L'entrée sort entière (Q6) : `added` et `removed` gardent tous leurs noms, ceux qui correspondent placés en tête (ordre d'origine conservé de part et d'autre). Sans `model`, ordre d'origine.
+  - Pas de filtre d'âge à la lecture : la purge reste à l'écriture (Task 1).
   - Ordre : plus récent d'abord = ordre inverse du fichier. `total` = nombre après filtres ; `entries` = tranche `[offset : offset + limit]`.
 
 - [ ] **Step 1: Write the failing tests** — fixture `journal(monkeypatch, tmp_path)` qui écrit, dans cet ordre, ces lignes (plus une ligne `not json` et `{"event": "models.changed"}`) dans `tmp_path / "catalog" / "changes.jsonl"` :
@@ -110,7 +111,7 @@ LINES = [
     {"at": "2026-01-05T10:00:00Z", "event": "models.changed", "provider": "provider-a", "added": ["alpha-1"], "removed": []},
     {"at": "2026-03-01T00:00:00Z", "event": "pricing.changed", "provider": "provider-a", "model": "alpha-1"},
     {"at": "2026-06-30T23:59:59Z", "event": "models.changed", "provider": "provider-b", "added": "oops", "removed": ["Beta-Large"], "extra": "hidden"},
-    {"at": "2026-07-01T00:00:00Z", "event": "models.changed", "provider": "old-provider", "added": ["gamma"], "removed": ["alpha-1"]},
+    {"at": "2026-07-01T00:00:00Z", "event": "models.changed", "provider": "old-provider", "added": ["gamma"], "removed": ["zeta", "alpha-1"]},
 ]
 
 def test_history_lists_model_changes_newest_first(journal):
@@ -139,6 +140,11 @@ def test_history_since(journal):
 def test_history_filters_by_model_without_case(journal):
     assert [e["provider"] for e in change_events.query_model_history(model="beta")["entries"]] == ["provider-b"]
     assert [e["provider"] for e in change_events.query_model_history(model="ALPHA")["entries"]] == ["old-provider", "provider-a"]
+
+def test_history_puts_matching_names_first(journal):
+    assert change_events.query_model_history()["entries"][0]["removed"] == ["zeta", "alpha-1"]
+    first = change_events.query_model_history(model="alpha")["entries"][0]
+    assert first["removed"] == ["alpha-1", "zeta"] and first["added"] == ["gamma"]
 
 def test_history_paginates(journal):
     out = change_events.query_model_history(limit=1, offset=1)
@@ -228,6 +234,7 @@ Comportement (décisions du plan, libellés dans Global Constraints) :
 - Période N → `since` = date UTC de `maintenant − N jours` (`toISOString().slice(0, 10)`). Changer un filtre repart de `offset=0` ; `#ch-model` attend 400 ms après la dernière frappe ; une requête à la fois (la réponse d'une requête périmée est ignorée).
 - `#ch-provider` est reconstruit à chaque réponse depuis `providers`, en gardant le choix courant.
 - Carte `div.ch-entry` : `YYYY-MM-DD HH:MM UTC` et `<code>` du fournisseur ; puis, s'il y en a, badge vert `+N added` et badge rouge `−N removed` (classes `badge-green` / `badge-red`), chacun suivi des 10 premiers noms en `<code>`, le reste dans `<details><summary>+M more</summary>`.
+- Filtre Model posé : chaque nom qui contient le texte (sans casse) reçoit la classe `ch-match` (fond `var(--accent-bg)`, texte `var(--accent)`) ; la route les a déjà mis en tête.
 - `Load more (K left)` visible tant que `offset + affichés < total` ; il ajoute 50 entrées sous les autres.
 - `total == 0` : `No model change matches these filters.` si un filtre est posé, sinon `No model change recorded yet.` (via `emptyState`). Réponse en erreur : `div.alert.alert-error` avec `Catalog history unavailable: <message>`.
 - Pied : `Kept for 365 days, at most 10,000 changes · oldest: 2026-01-05` ; `days == 0` → `Kept until the 10,000-change cap`.
@@ -268,11 +275,11 @@ def test_catalog_history_js_writes_text_only():
 - Modify si défaut : fichiers de Task 4 (test rouge d'abord quand le défaut se teste en pytest)
 - Modify: `TODOS.md` (fiche « Catalog changelog view » déplacée sous `## Completed` avec une ligne **Done:**)
 
-- [ ] **Step 1: Seed** — `seed_history.py` écrit `$SCR/data/catalog/changes.jsonl` : 120 lignes `models.changed` fictives sur 400 jours (`provider-a`, `provider-b`, `old-provider`), dont une à 40 noms, une avec un nom de 120 caractères, une avec `<img src=x onerror=alert(1)>`, et 10 lignes `pricing.changed` intercalées.
+- [ ] **Step 1: Seed** — `seed_history.py` écrit `$SCR/data/catalog/changes.jsonl` : 120 lignes `models.changed` fictives sur 400 jours (`provider-a`, `provider-b`, `old-provider`), dont une à 40 noms retirés (le 35e : `needle-model-9`), une avec un nom de 120 caractères, une avec `<img src=x onerror=alert(1)>`, et 10 lignes `pricing.changed` intercalées.
 - [ ] **Step 2: Start** (arrière-plan, sans `make dev` qui recharge et ouvre un navigateur) :
   `cd <atelier> && HOST=127.0.0.1 PORT=18801 PLUGBOARD_DATA=$SCR/data PLUGBOARD_SKIP_DOTENV=1 ADMIN_KEY=$(openssl rand -hex 24) API_KEY=$(openssl rand -hex 24) PRICING_SCHEDULER_DISABLED=1 MODEL_AVAILABILITY_SCHEDULER_DISABLED=1 PLUGBOARD_CATALOG=off OLLAMA_ENABLED=false RELOAD=false /srv/dev/plugboard/.venv/bin/python run.py`
   Garder la clé admin dans une variable du shell, jamais dans un fichier ni un rapport. Attendu : `curl -s http://127.0.0.1:18801/health` → `"ok": true`.
-- [ ] **Step 3: Check at 390 × 844** (MCP playwright) : ouvrir `http://127.0.0.1:18801/` (connexion automatique locale : `HOST=127.0.0.1` + `run.py`, sans saisir la clé ; voir `docs/guide/troubleshooting.md:48`), puis `#catalog-history`. Attendu : 50 cartes, `Load more (70 left)` ; `document.documentElement.scrollWidth <= innerWidth` ; aucune balise `img` dans `#page-catalog-history` et le nom hostile visible en texte ; carte à 40 noms repliée `+30 more` ; filtres Provider, `Last 30 days`, Model `alpha` donnent les bons comptes ; `Full history` depuis Monitoring ouvre l'onglet ; capture.
+- [ ] **Step 3: Check at 390 × 844** (MCP playwright) : ouvrir `http://127.0.0.1:18801/` (connexion automatique locale : `HOST=127.0.0.1` + `run.py`, sans saisir la clé ; voir `docs/guide/troubleshooting.md:48`), puis `#catalog-history`. Attendu : 50 cartes, `Load more (70 left)` ; `document.documentElement.scrollWidth <= innerWidth` ; aucune balise `img` dans `#page-catalog-history` et le nom hostile visible en texte ; carte à 40 noms repliée `+30 more` ; Model `needle` : `needle-model-9` premier nom visible, surligné (`ch-match`), badge toujours `−40 removed` ; filtres Provider, `Last 30 days`, Model `alpha` donnent les bons comptes ; `Full history` depuis Monitoring ouvre l'onglet ; capture.
 - [ ] **Step 4: Check at 1280 × 800** : filtres sur une ligne, capture ; console sans erreur (`browser_console_messages`).
 - [ ] **Step 5: Stop** l'instance (kill du PID), vérifier que le port 18801 est libre.
 - [ ] **Step 6: TODOS.md** — fiche déplacée sous `## Completed`, ligne **Done:** (route, onglet, 365 jours).

@@ -22,6 +22,11 @@ sans filtre ni suite.
   `pricing.changed` (`pricing_scraper.py:1062-1093`, `provider` seulement pour un prix
   de fournisseur) ; `price.estimated` (`billing.py:816-821`, `space` au lieu de `provider`).
 - **Non journalisés** : le premier remplissage d'un fournisseur ; l'origine (auto ou bouton).
+- **Date d'un retrait** : celle où Plugboard le confirme, après `PLUGBOARD_MODEL_REMOVAL_PASSES`
+  (2) passes sans le modèle (`model_diff.py:182-188`), pas celle du premier oubli du
+  fournisseur. Un retrait par le bouton Discover est daté tout de suite (`:178-181`).
+- Le webhook `catalog.changed` cité par la fiche (`TODOS.md:155`) n'existe pas : c'est
+  `models.changed`.
 - **Lecture** : `read_journal(limit)` (`change_events.py:60-70`) →
   `GET /admin/auto-update/status?journal=20` (`app.py:5355-5372`, 200 au plus) → carte
   « Recent automatic changes » (`static/auto_update.js:155-188`, `static/index.html:479-480`).
@@ -43,7 +48,9 @@ sans filtre ni suite.
 
 1. **Conservation** : 365 jours (`PLUGBOARD_CHANGE_JOURNAL_DAYS`, `0` = sans limite d'âge)
    et 10 000 lignes au plus, en filet. Une ligne sans date lisible n'est retirée que par
-   le plafond. Monitoring et webhooks ne changent pas.
+   le plafond. La purge a lieu à l'écriture d'un changement (mon choix : sans nouveau
+   changement, une ligne plus vieille reste visible jusqu'au suivant). Monitoring et
+   webhooks ne changent pas.
 2. **Route** `GET /admin/catalog/history`, admin seulement (`Depends(_require_admin)`),
    gestionnaire synchrone (pool de threads, comme `suivi_api.py`).
    - Paramètres : `provider` (id exact), `since`, `until` (dates `AAAA-MM-JJ` UTC, bornes
@@ -52,16 +59,24 @@ sans filtre ni suite.
    - Réponse : `{"entries": [{"at", "provider", "added", "removed"}], "total", "limit",
      "offset", "providers": [...], "retention": {"days", "max_lines", "oldest"}}`, plus
      récent d'abord. Seuls ces champs sortent du journal.
-   - `providers` : ceux présents dans le journal, y compris supprimés depuis. Un
+   - `providers` : ceux des lignes `models.changed`, y compris supprimés depuis. Un
      fournisseur inconnu donne une liste vide (`200`), pas `404`.
+   - Avec `model` (Q6) : listes complètes et comptes intacts, noms correspondants placés
+     en tête de `added` et `removed`. Une ligne sans date lisible est écartée dès que
+     `since` ou `until` est donné.
 3. **Page** : onglet **Catalog history** (section Operations, `#catalog-history`) et lien
    **Full history** sous « Recent automatic changes » de Monitoring. Code dans
-   `static/catalog_history.js` (comme `live_requests.js`) ; quelques classes en fin de
-   `style.css` sur les variables existantes (PB-DASH-02 refait la charte en parallèle).
+   `static/catalog_history.js` (comme `live_requests.js`).
+   - Coordination (décision de l'orchestrateur) : assemblé **avant** PB-DASH-02. Une
+     seule entrée dans la barre latérale (`index.html`) et dans `TAB_LOADERS`
+     (`app.js`) ; le moins de classes possible, sur les variables existantes, groupées
+     en fin de `style.css` sous un commentaire « catalog history ». PB-DASH-02 les
+     reprend à l'assemblage.
    - Filtres : Provider (All + `providers`), Period (7, 30, 90 jours, 1 an, All ; défaut
      All), Model (texte).
    - Une carte par changement : date UTC et fournisseur ; « +3 added » en vert,
      « −1 removed » en rouge ; 10 noms puis « +N more » dépliable ; noms longs coupés.
+     Avec un filtre Model, les noms correspondants sont en tête et surlignés.
    - **Load more** (50 de plus) plutôt que des numéros de page. Liste vide : message
      clair. Pied : durée de conservation et date de la plus ancienne ligne.
    - **iPhone (390 px)** : filtres empilés pleine largeur, aucun défilement horizontal,
@@ -104,3 +119,8 @@ sans filtre ni suite.
 5. **Origine** (rafraîchissement auto ou bouton Discover) — 1) **non pour l'instant**
    (reco : le journal ne la note pas, l'ajouter change le webhook `models.changed`, et le
    journal d'audit garde déjà `provider.discover`) ; 2) oui, à partir de maintenant.
+6. **Le filtre Model raccourcit-il les listes ?** — 1) **non : listes complètes, noms
+   correspondants en tête et surlignés, comptes gardés** (reco : « −40 removed » reste
+   vrai, et le nom cherché ne se cache plus derrière « +30 more ») ; 2) oui : seulement
+   les noms correspondants (toujours visibles, mais les comptes ne décrivent plus tout le
+   changement).
