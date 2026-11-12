@@ -45,6 +45,7 @@ Anyone who reaches the port acts with the server's client key, so SSE and HTTP a
 - The server refuses to start without `PLUGBOARD_MCP_TOKEN` (32 characters or more, for example `openssl rand -hex 32`). Clients send `Authorization: Bearer <token>`; any other request gets 401. The comparison is constant-time.
 - It listens on `127.0.0.1` unless `MCP_HOST` says otherwise, and refuses a `Host` (421) or `Origin` (403) outside `PLUGBOARD_MCP_ALLOWED_HOSTS` / `PLUGBOARD_MCP_ALLOWED_ORIGINS` (loopback by default) against DNS rebinding. Behind a proxy, list the public name there, for example `mcp.example.com:*` and `https://mcp.example.com`.
 - `PLUGBOARD_ADMIN_KEY` is never loaded: `provider_status` (and `monitoring://status`) answer that they are available over stdio only.
+- Every caller holding the token acts as the client of `PLUGBOARD_API_KEY`: run one MCP server, with its own key and token, per client.
 - The process keeps only the variables it needs, whether they come from the environment or `.env`: `PLUGBOARD_URL`, `PLUGBOARD_API_KEY`, `PLUGBOARD_MCP_*`, `MCP_HOST`, `MCP_PORT`, `PLUGBOARD_DATA`, `PLUGBOARD_REGISTRY_PATH`, and system variables (`PATH`, `HOME`, locale, `TMPDIR`, `PYTHON*`, `SSL_CERT_*`). `ADMIN_KEY`, `ENCRYPTION_KEY`, provider keys and `PLUGBOARD_JEV_API_KEY` are dropped before the server starts.
 
 stdio is unchanged and needs no token: only the process that spawned the server can reach it.
@@ -78,12 +79,12 @@ Example client configuration (stdio):
 | `list_decision_models` | none | Permitted decision engines, availability, capabilities and confidence semantics |
 | `decide` | `model`, `state`, `questions` | Named typed questions through `/v1/decisions`; no chat fallback |
 | `check_usage` | none | Usage, spend and limits of the key (`/v1/me`) |
-| `inflight_requests` | none | Chat calls of the key running now (model, time, phase, "slow" flag) and their last results: tells a slow call from a broken one (`/v1/inflight`) |
+| `inflight_requests` | none | Chat calls of the key's client running now (model, time, phase, "slow" flag) and their last results: tells a slow call from a broken one (`/v1/inflight`); refused with the admin key |
 | `provider_status` | none | Watchdog state and provider health (admin key required) |
-| `check_updates` | `client_id` | Pending updates for a client project |
-| `get_update_prompt` | `prompt_id` | Full instructions of one update |
-| `mark_applied` | `client_id`, `prompt_id`, `notes` | Record that a client applied an update |
-| `list_applied` | `client_id` | Updates already applied by a client |
+| `check_updates` | `client_id` (optional) | Pending updates for the key's client |
+| `get_update_prompt` | `prompt_id` | Full instructions of one update for the key's client |
+| `mark_applied` | `prompt_id`, `notes`, `client_id` (optional) | Record that the key's client applied an update |
+| `list_applied` | `client_id` (optional) | Updates already applied by the key's client |
 
 Resources: `models://list`, `usage://current`, `monitoring://status`, `updates://pending`.
 
@@ -110,7 +111,7 @@ Prompts: `quick_chat`, `deep_analysis`, `code_review`. Their default model IDs c
 
 ## Update registry
 
-The update registry lets the gateway operator push integration changes to the projects that use it. An AI coding agent working in a client project calls `check_updates` at the start of a session, reads each pending item with `get_update_prompt`, applies it, and calls `mark_applied`.
+The update registry lets the gateway operator push integration changes to the projects that use it. An AI coding agent working in a client project calls `check_updates` (no argument) at the start of a session, reads each pending item with `get_update_prompt`, applies it, and calls `mark_applied` with its ID.
 
 The registry is operator data kept outside the repository: `data/registry.json`, or the file named by `PLUGBOARD_REGISTRY_PATH`. Without it the registry is empty. `plugboard/registry.example.json` shows the format:
 
@@ -143,8 +144,8 @@ The registry is operator data kept outside the repository: `data/registry.json`,
 ```
 
 - `impact` is one of `CRITIQUE` (apply immediately), `IMPORTANT` or `EVOLUTION` (apply when convenient); `check_updates` groups pending items by these values.
-- `clients` lists the client IDs the update targets; it should match the client IDs of your keys.
+- `clients` lists the client IDs the update targets; it must hold the client IDs of your keys.
 - Each change has `file`, `action` and `description`, and optionally `detail` (free text shown as a code block) or `old` and `new` (lists of lines). An optional `mcp_server` object is rendered as an MCP client configuration snippet.
 - Applied updates are recorded in `data/client_updates.db`.
 
-The registry tools are not tied to the caller's key: anyone who can run this MCP server can read the registry and mark updates as applied for any client ID. Keep the registry free of secrets.
+The registry tools act for the client of `PLUGBOARD_API_KEY`, which the server asks the gateway for (`GET /v1/me`) at each call: a caller only sees, reads and marks its own client's updates, and `updates://pending` lists only those. `client_id` is optional; a value that names another client is refused, and another client's update answers *not found*. Without a client key (no key, the admin key, or a key the gateway refuses) the registry tools answer an error. Keep the registry free of secrets.
