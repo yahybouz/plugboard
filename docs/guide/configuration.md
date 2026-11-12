@@ -230,6 +230,7 @@ The catalog is downloaded with each price update. A download that fails, is inva
 | `WEBHOOK_EVENTS` | empty (all) | Comma-separated list of events to send. |
 | `WEBHOOK_SECRET` | empty | Secret used to sign event payloads with HMAC-SHA256. |
 | `PLUGBOARD_WEBHOOK_MAX_PER_RUN` | `50` | Maximum `models.changed` / `pricing.changed` events sent by one automatic update; the rest is summarised as `{"truncated": N}`. |
+| `PLUGBOARD_CHANGE_JOURNAL_DAYS` | `365` | Days the change journal (`data/catalog/changes.jsonl`) keeps a change; `0` keeps changes until the 10 000-line cap. Lowering it deletes the older changes for good at the next write. |
 
 ## Decision engines
 

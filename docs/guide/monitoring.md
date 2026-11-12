@@ -34,6 +34,7 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 |---|---|
 | Overview | Totals and a table of requests, errors and average latency per provider since the last restart |
 | Monitoring | Health of each active provider (status, latency, error rate, uptime over 24 hours and 7 days) and the check history of the last 24 hours |
+| Catalog history | Models each provider gained or lost, newest first, filtered by provider, period and model name ([details](#catalog-history)) |
 | Usage & Billing | Requests, tokens and cost per client for a month |
 | Jobs | The price refresh, the model catalog refresh and the provider watchdog: state, last and next run, **Run now** |
 | Playground | Per-model connectivity and internet-access indicators |
@@ -116,7 +117,25 @@ curl -s -X POST http://localhost:8765/admin/auto-update/run -H "Authorization: B
 
 The status groups the price scheduler, the model-list scheduler, the models.dev catalog (`ok`, `stale`, `unavailable` or `off`), the number of price suggestions waiting for review and the latest changes. `run` starts a price update and a model-list refresh in the background (`202`); it answers `409` with `running_since` while one is already running.
 
-Every change found by an automatic update (model added or removed, price change above `PLUGBOARD_PRICE_DRIFT_PCT`) is appended to `data/catalog/changes.jsonl`, which keeps the last 1 000 lines.
+Every change found by an automatic update (model added or removed, price change above `PLUGBOARD_PRICE_DRIFT_PCT`) is appended to `data/catalog/changes.jsonl`, which keeps changes for `PLUGBOARD_CHANGE_JOURNAL_DAYS` days (365) and at most 10 000 lines: older changes are no longer shown in the [catalog history](#catalog-history) and are dropped from the file when a new change is written (the Monitoring card shows the last changes whatever their age).
+
+## Catalog history
+
+Which models a provider gained or lost, and when, from the same journal. The dashboard shows it on the **Catalog history** page (also linked as **Full history** under Monitoring › Recent automatic changes); the API answers the same:
+
+```bash
+curl -s "http://localhost:8765/admin/catalog/history?provider=<provider-id>&since=2026-11-01&limit=50" \
+  -H "Authorization: Bearer $ADMIN_KEY"
+```
+
+| Parameter | Meaning |
+|---|---|
+| `provider` | One provider ID (exact). A deleted provider keeps its history. |
+| `since`, `until` | UTC days as `YYYY-MM-DD`, both included. `since` after `until` answers `422`. |
+| `model` | Part of a model name, any case. A matching change keeps all its names, the matching ones first. |
+| `limit`, `offset` | Page size (1 to 200, default 50) and position. |
+
+The answer lists `entries` newest first, each with `at` (UTC), `provider`, `added` and `removed`, then `total` (matches for these filters), the `limit` and `offset` used, `providers` (every provider in the history, for a filter list) and `retention` (`days`, `max_lines`, and `oldest`, the `at` of the oldest model-list change kept). Dates are UTC, written `YYYY-MM-DDTHH:MM:SSZ`. Only model-list changes are listed: prices stay in Pricing › Review and in the Monitoring card. The first model list of a new provider is not a change and is not listed. A model removed by an automatic refresh is dated when the removal is confirmed, after `PLUGBOARD_MODEL_REMOVAL_PASSES` refreshes without it (2); a removal from the **Discover** button is dated at once.
 
 ## Admin audit log
 

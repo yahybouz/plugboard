@@ -148,7 +148,7 @@ if (mobileBtn) {
 
 // ── Tab / Sidebar routing ───────────────────────────────────────────────────
 
-const TAB_LOADERS = { overview: loadOverview, keys: loadKeys, usage: loadUsage, providers: loadProviders, pricing: loadPricing, monitoring: loadMonitoring, jobs: loadJobs, ollama: loadOllama, playground: loadPlayground };
+const TAB_LOADERS = { overview: loadOverview, keys: loadKeys, usage: loadUsage, providers: loadProviders, pricing: loadPricing, monitoring: loadMonitoring, "catalog-history": loadCatalogHistory, jobs: loadJobs, ollama: loadOllama, playground: loadPlayground };
 const navLinks = document.querySelectorAll(".nav-link");
 const pages = document.querySelectorAll(".page");
 
@@ -1243,6 +1243,11 @@ async function disconnectOAuth(source) {
 
 function loadPricing() {
   if (typeof window.loadPricingPage === "function") return window.loadPricingPage();
+}
+
+// The Catalog history page lives in catalog_history.js (PB-PROV-02).
+function loadCatalogHistory() {
+  if (typeof window.loadCatalogHistoryPage === "function") return window.loadCatalogHistoryPage();
 }
 
 // ── Monitoring ──────────────────────────────────────────────────────────────

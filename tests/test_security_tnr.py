@@ -243,6 +243,7 @@ async def test_admin_endpoints_require_auth(admin_client):
         ("POST", "/admin/pricing/llm/run"),
         ("GET", "/admin/auto-update/status"),
         ("POST", "/admin/auto-update/run"),
+        ("GET", "/admin/catalog/history"),
         ("POST", "/admin/direct-providers/test"),
         ("POST", "/providers/test-provider/discover"),
     ]

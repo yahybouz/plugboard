@@ -134,18 +134,6 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 **Priority:** P3
 **Depends on:** Price assistant
 
-### Catalog changelog view
-
-**What:** Dashboard history of models added or removed per provider over time.
-
-**Why:** Operators can see what changed and when.
-
-**Context:** The `catalog.changed` webhook and monitoring card cover day-1 visibility.
-
-**Effort:** M
-**Priority:** P3
-**Depends on:** Automatic catalog
-
 ### Zero-key demo provider
 
 **What:** An echo/demo provider so the first call works without any vendor key.
@@ -185,6 +173,12 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 **Depends on:** None
 
 ## Completed
+
+### Catalog changelog view
+
+**Done:** `GET /admin/catalog/history` (provider, period and model filters, pages of up to 200) and a **Catalog history** dashboard page, linked from Monitoring. The change journal keeps changes for `PLUGBOARD_CHANGE_JOURNAL_DAYS` days (365) and at most 10 000 lines ([guide](docs/guide/monitoring.md#catalog-history)).
+
+**Context:** PB-PROV-02. The change journal and the `models.changed` webhook covered day-1 visibility (the `catalog.changed` name in the first version of this item never existed).
 
 ### Remaining public-surface and robustness items
 
