@@ -267,7 +267,7 @@ async def test_catalog_preset_named_without_letter_or_digit_is_created(
     _store(catalog_env, raw)
     resp = await admin_client.post(
         "/admin/direct-providers/catalog-acme",
-        json={"api_key": "test-key-123456"},
+        json={"api_key": "k"},
         headers={"Authorization": "Bearer adminkey"},
     )
     assert resp.status_code == 201, resp.text
