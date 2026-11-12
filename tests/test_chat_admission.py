@@ -520,12 +520,13 @@ async def test_second_request_to_a_cli_waits_then_is_served(client, two_clis):
     assert runs["claude"] == 2
 
 
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
 async def test_second_request_to_a_busy_cli_gets_503_after_the_budget(
-    client, app_mod, two_clis, monkeypatch
+    client, app_mod, two_clis, monkeypatch, stream
 ):
     runs, gates = two_clis
     _waits(app_mod, monkeypatch, slot_s=0.4, provider_s=0.4)
-    body = _chat("pbtest-claude:model-x")
+    body = _chat("pbtest-claude:model-x", stream=stream)
     first = asyncio.create_task(
         client.post("/v1/chat/completions", headers=AUTH, json=body)
     )

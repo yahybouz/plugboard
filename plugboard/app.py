@@ -64,6 +64,7 @@ from fastapi.responses import (
 )
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from contextlib import asynccontextmanager
+from contextlib import nullcontext as _nullcontext
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from plugboard import __version__
@@ -3464,10 +3465,24 @@ async def check_all_models_internet_access(
 
         semaphore = _asyncio.Semaphore(_BULK_INTERNET_CONCURRENCY)
         results: List[Dict[str, Any]] = []
+        # D-43: a provider with a concurrency cap (a CLI, a local one) has its
+        # models checked within that cap, so the bulk check never fills its
+        # queue with its own probes, which would answer each other "busy".
+        records = {p.get("id"): p for p in load_providers()}
+        provider_slots: Dict[str, _asyncio.Semaphore] = {}
+        for m in items:
+            pid = m.get("provider") or m.get("owned_by")
+            cap = (
+                _provider_admission.max_inflight(records[pid]) if pid in records else 0
+            )
+            if cap and pid not in provider_slots:
+                provider_slots[pid] = _asyncio.Semaphore(cap)
 
         async def _probe_one(m: Dict[str, Any]) -> Dict[str, Any]:
             mid = m.get("id", "")
-            async with semaphore:
+            slot = provider_slots.get(m.get("provider") or m.get("owned_by"))
+            # The provider's turn first: waiting for it holds no bulk slot.
+            async with slot or _nullcontext(), semaphore:
                 try:
                     coro = check_model_internet_access(
                         {"model_id": mid, "persist": persist},
