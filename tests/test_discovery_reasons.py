@@ -103,6 +103,8 @@ async def test_discover_says_when_there_was_nothing_to_test(
         return {"models": [], "candidate_count": 0, "verified_count": 0, "dropped": []}
 
     monkeypatch.setattr(ma, "refresh_subprocess_provider_models", report)
+    # Probes on for claude: the reason is the empty list, not the probes.
+    monkeypatch.setenv("PLUGBOARD_MODEL_REFRESH_PROBE_KINDS", "claude")
     resp = await client.post("/providers/claude-cli/discover", headers=AUTH)
     assert resp.status_code == 502
     assert "no candidate model" in resp.json()["detail"]

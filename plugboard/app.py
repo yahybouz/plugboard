@@ -440,9 +440,10 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
     # Boot-time internet probe — auto-refresh internet_access flags so the
     # playground dropdown displays correct 🌐/💻 icons without admin click.
     # Runs in background after schedulers are up so boot isn't blocked.
-    # Opt-out via PLUGBOARD_INTERNET_CHECK_ON_BOOT=0.
+    # It sends a chat request to every model: off by default (BUG-45),
+    # opt-in via PLUGBOARD_INTERNET_CHECK_ON_BOOT=1.
     _internet_boot_enabled = os.environ.get(
-        "PLUGBOARD_INTERNET_CHECK_ON_BOOT", "1"
+        "PLUGBOARD_INTERNET_CHECK_ON_BOOT", "0"
     ).strip() not in ("0", "false", "no", "")
 
     async def _internet_boot_probe():
@@ -478,7 +479,7 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
         _spawn_boot_task(_internet_boot_probe(), "internet-boot-probe")
     else:
         log.info(
-            "internet_check_on_boot: disabled via PLUGBOARD_INTERNET_CHECK_ON_BOOT=0"
+            "internet_check_on_boot: off (PLUGBOARD_INTERNET_CHECK_ON_BOOT=1 turns it on)"
         )
 
     yield

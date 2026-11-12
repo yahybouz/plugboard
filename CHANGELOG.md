@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **With the code's defaults, a start calls no model** (BUG-45, audit K3-02 and B-03): an install without probe settings used to send, in its first seconds, a completion to every CLI model (subscription quota), a generation to every installed Ollama model (each one loaded in turn on the shared host) and the internet-access question to every model (paid credits). `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS` is now empty by default (no inference probe, at startup or during the refresh) and `PLUGBOARD_INTERNET_CHECK_ON_BOOT` is off by default; the model lists that need no inference are still synced at startup (Ollama `/api/tags`, `agy models`, the Anthropic and Gemini list APIs). The Ollama late-start watcher now probes only when `ollama` is in `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS`. To get the former behaviour back, set `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS=codex,claude,gemini,agy,ollama` and `PLUGBOARD_INTERNET_CHECK_ON_BOOT=1`. Without `codex`, `claude` or `gemini` in that list, the dashboard's *Discover* keeps that CLI's saved model list, as on an install already configured this way. `.env.example` (used by `make init`) no longer turns the probes on.
+
 ## [4.11.5] — 2026-11-12
 
 ### Security

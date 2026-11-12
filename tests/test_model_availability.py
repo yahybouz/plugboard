@@ -19,12 +19,12 @@ def _codex_provider():
     }
 
 
-def test_default_probe_kinds_cover_cli_subscriptions(monkeypatch):
+def test_default_probe_kinds_are_empty(monkeypatch):
     from plugboard import model_availability as ma
 
     monkeypatch.delenv("PLUGBOARD_MODEL_REFRESH_PROBE_KINDS", raising=False)
-    # Default now includes ollama so the Ollama provider is probed at boot.
-    assert ma._probe_kinds_from_env() == {"codex", "claude", "gemini", "agy", "ollama"}
+    # A probe runs the model (CLI quota, Ollama loads): opt-in only (BUG-45).
+    assert ma._probe_kinds_from_env() == set()
 
 
 def test_env_helpers_and_probe_kind_parsing(monkeypatch):
@@ -401,9 +401,10 @@ async def test_refresh_skips_after_max_probes_but_keeps_existing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_refresh_probes_claude_by_default(monkeypatch):
+async def test_refresh_probes_claude_when_its_kind_is_on(monkeypatch):
     from plugboard import model_availability as ma
 
+    monkeypatch.setenv("PLUGBOARD_MODEL_REFRESH_PROBE_KINDS", "claude")
     provider = {
         "id": "claude-via-claude-cli",
         "auth_source": "subprocess:claude",
@@ -431,6 +432,32 @@ async def test_refresh_probes_claude_by_default(monkeypatch):
         "claude-sonnet-4-6",
     ]
     assert report["verified_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_refresh_runs_no_claude_model_by_default(monkeypatch):
+    # BUG-45: no probe kind by default, so no completion spends the quota;
+    # the saved list is kept as it is.
+    from plugboard import model_availability as ma
+
+    monkeypatch.delenv("PLUGBOARD_MODEL_REFRESH_PROBE_KINDS", raising=False)
+    provider = {
+        "id": "claude-via-claude-cli",
+        "auth_source": "subprocess:claude",
+        "default_model": "claude-sonnet-4-6",
+        "models": [{"id": "claude-sonnet-4-6", "name": "claude-sonnet-4-6"}],
+    }
+
+    async def no_call(*_args, **_kwargs):
+        raise AssertionError("no model or CLI call expected")
+
+    monkeypatch.setattr("plugboard.router.discover_models", no_call)
+    monkeypatch.setattr(ma, "probe_subprocess_model", no_call)
+
+    report = await ma.refresh_subprocess_provider_models(provider)
+
+    assert [m["id"] for m in report["models"]] == ["claude-sonnet-4-6"]
+    assert report["verified_count"] == 0
 
 
 @pytest.mark.asyncio
@@ -1091,6 +1118,8 @@ async def test_ollama_recheck_after_late_start(monkeypatch, tmp_path: Path):
     The watcher must detect the offline entry and transition it to connected=True.
     """
     from plugboard import model_availability as ma
+
+    monkeypatch.setenv("PLUGBOARD_MODEL_REFRESH_PROBE_KINDS", "ollama")
 
     # Initial state: Ollama model is offline
     initial_status = {
