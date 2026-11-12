@@ -324,6 +324,15 @@ async def bootstrap_ollama() -> Optional[Dict[str, Any]]:
         log.debug("Ollama bootstrap disabled (OLLAMA_ENABLED=false)")
         return None
 
+    from plugboard.config import get_provider
+
+    registered = get_provider(_PROVIDER_ID)
+    if registered is not None and not registered.get("is_active", True):
+        # PLU-12: switched off, nothing calls the daemon. The token still
+        # follows PLUGBOARD_OLLAMA_TOKEN, for when the switch is turned on.
+        log.info("Ollama is turned off: boot check and model sync skipped")
+        return _with_current_token(registered)
+
     available = await check_available()
 
     if not available:
@@ -339,10 +348,7 @@ async def bootstrap_ollama() -> Optional[Dict[str, Any]]:
     for p in load_providers():
         if p.get("id") == _PROVIDER_ID:
             log.info("Ollama provider already registered (id=%s)", _PROVIDER_ID)
-            if _OLLAMA_TOKEN and p.get("bearer_token", "") != _OLLAMA_TOKEN:
-                from plugboard.config import update_provider
-
-                p = update_provider(_PROVIDER_ID, {"bearer_token": _OLLAMA_TOKEN}) or p
+            p = _with_current_token(p)
             # Sync models
             await _sync_models(p)
             return p
@@ -362,6 +368,17 @@ async def bootstrap_ollama() -> Optional[Dict[str, Any]]:
     await _sync_models(record)
 
     return record
+
+
+def _with_current_token(provider: Dict[str, Any]) -> Dict[str, Any]:
+    """The provider record, its bearer token updated to PLUGBOARD_OLLAMA_TOKEN."""
+    if _OLLAMA_TOKEN and provider.get("bearer_token", "") != _OLLAMA_TOKEN:
+        from plugboard.config import update_provider
+
+        return (
+            update_provider(_PROVIDER_ID, {"bearer_token": _OLLAMA_TOKEN}) or provider
+        )
+    return provider
 
 
 async def _sync_models(provider: Dict[str, Any]) -> None:
