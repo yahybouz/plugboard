@@ -70,6 +70,53 @@ def test_cutoff_is_now_minus_retention(monkeypatch):
     monkeypatch.setenv("PLUGBOARD_CHANGE_JOURNAL_DAYS", "10")
     monkeypatch.setattr(change_events, "_utcnow", lambda: NOW)
     assert change_events.cutoff() == datetime(2026, 11, 2, tzinfo=timezone.utc)
+    naive = datetime(2026, 11, 12)  # a naive "now" is read as UTC
+    assert change_events.cutoff(naive) == datetime(2026, 11, 2, tzinfo=timezone.utc)
+
+
+def test_huge_retention_means_no_age_limit(monkeypatch, tmp_path):
+    """A value past the calendar ("keep for ever") must not break every write."""
+    monkeypatch.setenv("PLUGBOARD_DATA", str(tmp_path))
+    monkeypatch.setenv("PLUGBOARD_CHANGE_JOURNAL_DAYS", "1000000")
+    assert change_events.cutoff() is None
+    change_events.append_journal([{"at": "2020-01-01T00:00:00Z", "n": 1}])
+    assert len(change_events.read_journal(10)) == 1
+    assert change_events.query_model_history()["total"] == 0
+
+
+def test_a_later_write_purges_lines_already_written(monkeypatch, tmp_path):
+    monkeypatch.setenv("PLUGBOARD_DATA", str(tmp_path))
+    path = tmp_path / "catalog" / "changes.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps({"at": "2026-09-01T00:00:00+02:00", "n": 1}),
+                "not json",
+                json.dumps({"at": "0001-01-01T00:00:00+01:00", "n": 2}),
+                json.dumps({"at": "2026-10-13T01:00:00+02:00", "n": 3}),
+                json.dumps({"at": "2026-10-20T00:00:00Z", "n": 4}),
+            ]
+        )
+        + "\n"
+    )
+    monkeypatch.setenv("PLUGBOARD_CHANGE_JOURNAL_DAYS", "30")  # limit: 2026-10-13
+    change_events.append_journal([{"at": "2026-11-12T00:00:00Z", "n": 5}], now=NOW)
+    kept = path.read_text().splitlines()
+    # Lines without a readable date (not JSON, a date past the calendar) only
+    # go with the line cap; 2026-10-13T01:00+02:00 is 23:00 UTC the day before.
+    assert kept[0] == "not json"
+    assert [json.loads(x)["n"] for x in kept[1:]] == [2, 4, 5]
+
+
+def test_line_cap_applies_after_the_age_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("PLUGBOARD_DATA", str(tmp_path))
+    monkeypatch.setenv("PLUGBOARD_CHANGE_JOURNAL_DAYS", "30")
+    monkeypatch.setattr(change_events, "JOURNAL_MAX_LINES", 3)
+    old = [{"at": "2026-01-01T00:00:00Z", "n": i} for i in range(5)]
+    new = [{"at": "2026-11-01T00:00:00Z", "n": 10 + i} for i in range(5)]
+    change_events.append_journal(old + new, now=NOW)
+    assert [e["n"] for e in change_events.read_journal(10)] == [12, 13, 14]
 
 
 # -- query -------------------------------------------------------------------------
@@ -114,6 +161,7 @@ def journal(monkeypatch, tmp_path):
     path = tmp_path / "catalog" / "changes.jsonl"
     path.parent.mkdir(parents=True)
     rows = [json.dumps(LINES[0]), "not json", json.dumps({"event": "models.changed"})]
+    rows += ["[1, 2]", "null", '{"event": "models.changed", "provider": 5}']
     rows += [json.dumps(line) for line in LINES[1:]]
     path.write_text("\n".join(rows) + "\n")
     return path
@@ -144,13 +192,55 @@ def test_history_skips_bad_lines(journal):
 
 def test_history_filters_by_provider(journal):
     out = change_events.query_model_history(provider="provider-b")
-    assert out["total"] == 1
+    assert _providers(out) == ["provider-b"] and out["total"] == 1
     assert out["providers"] == ["old-provider", "provider-a", "provider-b"]
 
 
 def test_history_until_is_inclusive(journal):
     out = change_events.query_model_history(until=date(2026, 6, 30))
     assert _providers(out) == ["provider-b", "provider-a"]
+
+
+def test_history_accepts_the_last_day_of_the_calendar(journal):
+    out = change_events.query_model_history(until=date.max, since=date.max)
+    assert out["total"] == 0
+    assert change_events.query_model_history(until=date.max)["total"] == 3
+
+
+def test_history_survives_corrupted_lines(journal):
+    with journal.open("ab") as fh:
+        fh.write(
+            b'{"event": "models.changed", "provider": "provider-c", "added": ["\xff"]}\n'
+        )
+        fh.write(("[" * 100000 + "\n").encode())
+        fh.write(
+            b'{"at": "0001-01-01T00:00:00+01:00", "event": "models.changed", "provider": "provider-d"}\n'
+        )
+    out = change_events.query_model_history()
+    assert "provider-c" in _providers(out)
+    assert out["total"] == 5
+
+
+def test_history_dates_are_utc(journal):
+    with journal.open("a") as fh:
+        fh.write(
+            json.dumps(
+                {
+                    "at": "2026-08-01T02:00:00+02:00",
+                    "event": "models.changed",
+                    "provider": "provider-e",
+                    "added": ["x"],
+                }
+            )
+            + "\n"
+        )
+    first = change_events.query_model_history()["entries"][0]
+    assert first == {
+        "at": "2026-08-01T00:00:00Z",
+        "provider": "provider-e",
+        "added": ["x"],
+        "removed": [],
+    }
 
 
 def test_history_since(journal):
@@ -221,6 +311,7 @@ async def test_history_route_requires_admin(admin_client, journal):
     assert (await admin_client.get(URL)).status_code == 401
     client_key = {"Authorization": "Bearer testkey"}
     assert (await admin_client.get(URL, headers=client_key)).status_code == 401
+    assert (await admin_client.get(URL + "?limit=0")).status_code == 401
 
 
 async def test_history_route_returns_a_page(admin_client, journal):
@@ -253,6 +344,7 @@ async def test_history_route_returns_a_page(admin_client, journal):
         ("model=beta", ["provider-b"]),
         ("provider=&model=", ["old-provider", "provider-b", "provider-a"]),
         ("offset=2", ["provider-a"]),
+        ("until=9999-12-31", ["old-provider", "provider-b", "provider-a"]),
     ],
 )
 async def test_history_route_passes_filters(admin_client, journal, query, providers):
@@ -269,6 +361,8 @@ async def test_history_route_passes_filters(admin_client, journal, query, provid
         "since=2026-13-01",
         "until=yesterday",
         "since=2026-07-02&until=2026-07-01",
+        "provider=" + "p" * 201,
+        "model=" + "m" * 201,
     ],
 )
 async def test_history_route_rejects_bad_parameters(admin_client, journal, query):

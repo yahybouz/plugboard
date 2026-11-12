@@ -9,8 +9,10 @@ reported: callers only add real changes.
 
 The journal keeps a change for ``PLUGBOARD_CHANGE_JOURNAL_DAYS`` days (365;
 ``0`` = no age limit) and at most ``JOURNAL_MAX_LINES`` lines (10 000). Older
-lines are dropped when a change is written and skipped when the history is
-read (``query_model_history``), so a quiet journal never shows them.
+lines are dropped when a change is written, and the catalog history
+(``query_model_history``) skips them even before that, so a quiet journal never
+shows them there. The Monitoring card (``read_journal``) shows the last lines
+whatever their age.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ log = logging.getLogger(__name__)
 
 JOURNAL_MAX_LINES = 10000
 DEFAULT_RETENTION_DAYS = 365
+_STAMP = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def _journal_path() -> Path:
@@ -46,7 +49,7 @@ def _utcnow() -> datetime:
 
 
 def _now() -> str:
-    return _utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    return _utcnow().strftime(_STAMP)
 
 
 def retention_days() -> int:
@@ -57,11 +60,21 @@ def retention_days() -> int:
 
 
 def cutoff(now: Optional[datetime] = None) -> Optional[datetime]:
-    """Oldest date still kept, or None when there is no age limit."""
+    """Oldest date still kept, or None when there is no age limit.
+
+    A naive ``now`` is read as UTC. A retention reaching before year 1
+    ("keep for ever" written as a huge number) means no age limit.
+    """
     days = retention_days()
     if days == 0:
         return None
-    return (now or _utcnow()) - timedelta(days=days)
+    now = now or _utcnow()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    try:
+        return now - timedelta(days=days)
+    except OverflowError:
+        return None
 
 
 def _parse_at(value: Any) -> Optional[datetime]:
@@ -70,23 +83,38 @@ def _parse_at(value: Any) -> Optional[datetime]:
         return None
     try:
         parsed = datetime.fromisoformat(value)
-    except ValueError:
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError):  # 0001-01-01T00:00:00+01:00 overflows
         return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
-def _too_old(line: str, limit: datetime) -> bool:
-    """True for a line whose readable ``at`` is before ``limit``."""
+def _entry(line: str) -> Optional[Dict[str, Any]]:
+    """One journal line as a dict; None for anything else, never an error."""
     try:
         entry = json.loads(line)
-    except ValueError:
-        return False
-    if not isinstance(entry, dict):
-        return False
-    at = _parse_at(entry.get("at"))
-    return at is not None and at < limit
+    except (ValueError, RecursionError):
+        return None
+    return entry if isinstance(entry, dict) else None
+
+
+def _drop_old(lines: List[str], limit: datetime) -> List[str]:
+    """Drop the lines dated before ``limit``; undated lines stay.
+
+    The journal is written in time order, so the first line dated at or after
+    the limit ends the scan: the lines after it are kept without parsing.
+    """
+    kept: List[str] = []
+    for index, line in enumerate(lines):
+        entry = _entry(line)
+        at = _parse_at(entry.get("at")) if entry else None
+        if at is None:
+            kept.append(line)
+        elif at >= limit:
+            kept.extend(lines[index:])
+            break
+    return kept
 
 
 def append_journal(
@@ -113,7 +141,7 @@ def append_journal(
         lines.extend(json.dumps(e, ensure_ascii=False, sort_keys=True) for e in entries)
         limit = cutoff(now)
         if limit is not None:
-            lines = [line for line in lines if not _too_old(line, limit)]
+            lines = _drop_old(lines, limit)
         atomic_write_text(path, "\n".join(lines[-JOURNAL_MAX_LINES:]) + "\n")
 
 
@@ -158,24 +186,21 @@ def query_model_history(
     as ``since`` or ``until`` is given.
     """
     path = _journal_path()
-    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    lines = (
+        path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if path.exists()
+        else []
+    )
     limit_at = cutoff()
     start = datetime.combine(since, time.min, tzinfo=timezone.utc) if since else None
-    end = (
-        datetime.combine(until + timedelta(days=1), time.min, tzinfo=timezone.utc)
-        if until
-        else None
-    )
+    end = datetime.combine(until, time.max, tzinfo=timezone.utc) if until else None
     needle = (model or "").lower()
     providers = set()
-    oldest: Optional[Tuple[datetime, str]] = None
+    oldest: Optional[datetime] = None
     matches: List[Dict[str, Any]] = []
     for line in lines:
-        try:
-            raw = json.loads(line)
-        except ValueError:
-            continue
-        if not isinstance(raw, dict) or raw.get("event") != "models.changed":
+        raw = _entry(line)
+        if raw is None or raw.get("event") != "models.changed":
             continue
         pid = raw.get("provider")
         if not isinstance(pid, str) or not pid:
@@ -184,12 +209,12 @@ def query_model_history(
         if at is not None and limit_at is not None and at < limit_at:
             continue
         providers.add(pid)
-        if at is not None and (oldest is None or at < oldest[0]):
-            oldest = (at, raw["at"])
+        if at is not None and (oldest is None or at < oldest):
+            oldest = at
         if provider and pid != provider:
             continue
         if start or end:
-            if at is None or (start and at < start) or (end and at >= end):
+            if at is None or (start and at < start) or (end and at > end):
                 continue
         added, removed = _names(raw.get("added")), _names(raw.get("removed"))
         if needle:
@@ -197,10 +222,9 @@ def query_model_history(
                 continue
             added = _matching_first(added, needle)
             removed = _matching_first(removed, needle)
-        at_text = raw.get("at")
         matches.append(
             {
-                "at": at_text if isinstance(at_text, str) else "",
+                "at": at.strftime(_STAMP) if at else "",
                 "provider": pid,
                 "added": added,
                 "removed": removed,
@@ -211,7 +235,7 @@ def query_model_history(
         "entries": matches[offset : offset + limit],
         "total": len(matches),
         "providers": sorted(providers),
-        "oldest": oldest[1] if oldest else None,
+        "oldest": oldest.strftime(_STAMP) if oldest else None,
     }
 
 
