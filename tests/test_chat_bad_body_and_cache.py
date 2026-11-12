@@ -63,10 +63,21 @@ async def test_body_that_is_not_json_is_a_400(client, cache_db, path, raw):
 # ── BUG-49: a cache that cannot be read ─────────────────────────────────────
 
 
-async def _chat_served_once(client) -> tuple:
+def _read_warnings(caplog) -> list:
+    """The warnings of the cache lookup itself (not of the cache write)."""
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == "plugboard.cache" and r.levelno == logging.WARNING
+    ]
+
+
+async def _chat_served_once(client, body=None) -> tuple:
     with aioresponses() as mock:
         mock.post(_PROVIDER_URL, payload=FAKE_COMPLETION)
-        resp = await client.post("/v1/chat/completions", headers=AUTH, json=_CHAT)
+        resp = await client.post(
+            "/v1/chat/completions", headers=AUTH, json=body or _CHAT
+        )
         calls = sum(len(v) for v in mock.requests.values())
     return resp, calls
 
@@ -75,24 +86,20 @@ async def _chat_served_once(client) -> tuple:
 async def test_locked_cache_serves_the_chat_and_warns(
     client, cache_db, monkeypatch, caplog
 ):
-    real_connect = sqlite3.connect
+    def locked():
+        raise sqlite3.OperationalError("database is locked")
 
-    def locked(database, *args, **kwargs):
-        if str(database) == str(cache_db):
-            raise sqlite3.OperationalError("database is locked")
-        return real_connect(database, *args, **kwargs)
-
-    monkeypatch.setattr(cache.sqlite3, "connect", locked)
+    monkeypatch.setattr(cache, "_get_conn", locked)
     with caplog.at_level(logging.WARNING, logger="plugboard.cache"):
         resp, calls = await _chat_served_once(client)
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["choices"][0]["message"]["content"] == "Hello!"
     assert calls == 1
-    assert any(
-        "database is locked" in r.getMessage() and r.levelno == logging.WARNING
-        for r in caplog.records
-    ), [r.getMessage() for r in caplog.records]
+    assert _read_warnings(caplog) == [
+        "Response cache unreadable (OperationalError), served without it: "
+        "database is locked"
+    ]
 
 
 @pytest.mark.asyncio
@@ -105,29 +112,86 @@ async def test_cache_file_that_is_not_a_database_serves_the_chat(
 
     assert resp.status_code == 200, resp.text
     assert calls == 1
-    assert any(r.levelno == logging.WARNING for r in caplog.records)
+    assert _read_warnings(caplog) == [
+        "Response cache unreadable (DatabaseError), served without it: "
+        "file is not a database"
+    ]
 
 
 @pytest.mark.asyncio
-async def test_unreadable_stored_answer_is_a_miss(client, cache_db):
-    # The row is there but its answer is not JSON: served as a miss, the
-    # provider answers.
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "response = '{not json'",
+        "response = '[1]'",
+        "response = '\"text\"'",
+        "ttl = 'soon'",
+    ],
+    ids=["not-json", "array", "string", "text-ttl"],
+)
+async def test_damaged_cache_row_is_a_miss(client, cache_db, caplog, damage):
+    # The row is there but cannot be used: served as a miss, the provider
+    # answers, and the lookup warns.
     resp, calls = await _chat_served_once(client)
     assert resp.status_code == 200 and calls == 1
     conn = sqlite3.connect(cache_db)
-    conn.execute("UPDATE response_cache SET response = '{not json'")
+    conn.execute(f"UPDATE response_cache SET {damage}")
     conn.commit()
     conn.close()
 
-    resp, calls = await _chat_served_once(client)
+    with caplog.at_level(logging.WARNING, logger="plugboard.cache"):
+        resp, calls = await _chat_served_once(client)
 
     assert resp.status_code == 200, resp.text
     assert resp.headers.get("x-cache") == "MISS"
     assert calls == 1
+    assert len(_read_warnings(caplog)) == 1
 
 
-def test_get_cached_still_refuses_a_missing_client_id_in_strict_mode(cache_db):
+@pytest.mark.asyncio
+async def test_client_id_in_the_body_does_not_break_the_cache_key(client, cache_db):
+    # A body field named client_id collided with compute_cache_key's own
+    # argument (TypeError, 500).
+    resp, calls = await _chat_served_once(client, {**_CHAT, "client_id": "x"})
+
+    assert resp.status_code == 200, resp.text
+    assert calls == 1
+
+
+def test_client_id_in_the_body_never_selects_another_tenant():
+    # The body's client_id is a request parameter, never the tenant.
+    messages = [{"role": "user", "content": "Hi"}]
+    as_a = cache.compute_cache_key(
+        "m", messages, client_id="tenant-a", **cache.key_params({"client_id": "b"})
+    )
+    as_b = cache.compute_cache_key("m", messages, client_id="tenant-b")
+    plain_a = cache.compute_cache_key("m", messages, client_id="tenant-a")
+    assert as_a not in (as_b, plain_a)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("session_id", [["a"], {"a": 1}])
+async def test_session_id_that_is_a_list_or_object_is_a_400(
+    client, cache_db, session_id
+):
+    with aioresponses() as mock:
+        resp = await client.post(
+            "/v1/chat/completions",
+            headers=AUTH,
+            json={**_CHAT, "session_id": session_id},
+        )
+        assert not mock.requests, "nothing may be called"
+
+    assert resp.status_code == 400, resp.text
+    assert "session_id" in resp.json()["detail"]
+
+
+def test_get_cached_still_refuses_a_missing_client_id_in_strict_mode(
+    cache_db, monkeypatch
+):
     # SEC-001 (ADR-032) is a caller bug, not an unreadable cache: it still
     # raises, and the chat answers 401 for it before reading the cache.
+    monkeypatch.delenv("PLUGBOARD_ALLOW_PERMISSIVE", raising=False)
+    monkeypatch.delenv("PLUGBOARD_STRICT_TENANT", raising=False)
     with pytest.raises(ValueError, match="SEC-001|client_id"):
         cache.get_cached("any-key", client_id="")

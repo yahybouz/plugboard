@@ -115,9 +115,18 @@ def _get_conn() -> sqlite3.Connection:
 _KEY_IGNORED = frozenset({"model", "messages", "stream", "stream_options", "cache"})
 
 
+# Body fields named like compute_cache_key's own arguments: renamed, so a
+# body's ``client_id`` stays a request parameter and never sets the tenant.
+_KEY_RESERVED = frozenset({"client_id"})
+
+
 def key_params(body: Dict[str, Any]) -> Dict[str, Any]:
     """The request fields that ``compute_cache_key`` must include."""
-    return {k: v for k, v in body.items() if k not in _KEY_IGNORED and v is not None}
+    return {
+        (f"body:{k}" if k in _KEY_RESERVED else k): v
+        for k, v in body.items()
+        if k not in _KEY_IGNORED and v is not None
+    }
 
 
 def compute_cache_key(model: str, messages: list, client_id: str = "", **params) -> str:
@@ -151,15 +160,20 @@ def get_cached(cache_key: str, client_id: str = "") -> Optional[Dict[str, Any]]:
     bug cannot leak across tenants.
 
     A cache that cannot be read (database locked or damaged, file not
-    readable, stored answer that is not a JSON object) is a miss with a
-    warning: the request is served without it (BUG-49). A missing
-    ``client_id`` in strict mode still raises (SEC-001).
+    readable, damaged row, stored answer that is not a JSON object) is a
+    miss with a warning: the request is served without it (BUG-49). A
+    missing ``client_id`` in strict mode still raises (SEC-001).
     """
     cid = _check_client_id(client_id)
     try:
         return _read_cached(cache_key, cid)
-    except (sqlite3.Error, OSError, ValueError) as exc:
-        log.warning("Response cache unreadable, served without it: %s", exc)
+    except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
+        # TypeError: a row whose numbers were stored as text.
+        log.warning(
+            "Response cache unreadable (%s), served without it: %s",
+            type(exc).__name__,
+            exc,
+        )
         return None
 
 

@@ -574,8 +574,9 @@ _AUTH_ERRORS = {
 _CHAT_ERRORS = {
     "400": "Invalid request; nothing was billed: a body that is not valid JSON or not"
     " a JSON object, a model that is not a string or is removed, missing or invalid"
-    " messages, a decision model (use /v1/decisions), or a request the provider"
-    " rejected (context too long, parameters; error_ref).",
+    " messages, a session_id that is a list or an object, a decision model (use"
+    " /v1/decisions), or a request the provider rejected (context too long,"
+    " parameters; error_ref).",
     **_AUTH_ERRORS,
     "429": "Rate limit or monthly spending limit exceeded, or the quota of the last"
     " provider tried is exhausted (retry_after and Retry-After when it gives a delay).",

@@ -2765,7 +2765,7 @@
             }
           },
           "400": {
-            "description": "Invalid request; nothing was billed: a body that is not valid JSON or not a JSON object, a model that is not a string or is removed, missing or invalid messages, a decision model (use /v1/decisions), or a request the provider rejected (context too long, parameters; error_ref).",
+            "description": "Invalid request; nothing was billed: a body that is not valid JSON or not a JSON object, a model that is not a string or is removed, missing or invalid messages, a session_id that is a list or an object, a decision model (use /v1/decisions), or a request the provider rejected (context too long, parameters; error_ref).",
             "content": {
               "application/json": {
                 "schema": {
@@ -3622,7 +3622,7 @@
             }
           },
           "400": {
-            "description": "Invalid request; nothing was billed: a body that is not valid JSON or not a JSON object, a model that is not a string or is removed, missing or invalid messages, a decision model (use /v1/decisions), or a request the provider rejected (context too long, parameters; error_ref).",
+            "description": "Invalid request; nothing was billed: a body that is not valid JSON or not a JSON object, a model that is not a string or is removed, missing or invalid messages, a session_id that is a list or an object, a decision model (use /v1/decisions), or a request the provider rejected (context too long, parameters; error_ref).",
             "content": {
               "application/json": {
                 "schema": {

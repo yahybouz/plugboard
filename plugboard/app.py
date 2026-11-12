@@ -2093,6 +2093,9 @@ async def chat_completions(
         or request.headers.get("x-llm-session-id")
         or body.pop("session_id", None)
     )
+    if isinstance(session_id, (list, dict)):
+        # BUG-48: an unhashable session id made the session turn fail (500).
+        raise HTTPException(400, "session_id must be a string")
     in_session = bool(session_id and client_id)
     _require_chat_messages(body, history_may_follow=in_session)
 
