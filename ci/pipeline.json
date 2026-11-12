@@ -26,7 +26,7 @@
      "argv": ["{scratch}/venv/bin/python", "-m", "pytest", "tests/", "-q", "-p", "no:cacheprovider", "--cov=plugboard",
       "--cov-report=term", "--cov-report=xml:{artifacts}/coverage.xml", "--cov-fail-under=80", "--junitxml={artifacts}/report.xml"],
      "timeout_seconds": 2400},
-    {"id": "sdk-tests", "description": "Tests du SDK Python (sdk/python), hors couverture, avec sa propre config : pytest tests/ ne peut pas importer plugboard_sdk. pythonpath et asyncio_mode imposés tant que sdk/python/pyproject.toml ne les porte pas.",
+    {"id": "pytest-sdk", "description": "Tests du SDK Python (sdk/python), hors couverture, avec sa propre config : pytest tests/ ne peut pas importer plugboard_sdk. pythonpath et asyncio_mode imposés tant que sdk/python/pyproject.toml ne les porte pas.",
      "argv": ["{scratch}/venv/bin/python", "-m", "pytest", "-c", "sdk/python/pyproject.toml", "-o", "pythonpath=.", "-o", "asyncio_mode=auto",
       "sdk/python/tests", "-q", "-p", "no:cacheprovider", "--junitxml={artifacts}/report-sdk.xml"], "timeout_seconds": 300},
     {"id": "env-mcp", "argv": ["uv", "venv", "--quiet", "--python", "3.12", "{scratch}/venv-mcp"], "timeout_seconds": 300},

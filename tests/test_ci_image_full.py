@@ -353,11 +353,11 @@ def _step(step_id: str) -> dict:
 def test_ci_runs_the_sdk_tests_in_their_own_step():
     pipeline = json.loads((ROOT / "ci/pipeline.json").read_text(encoding="utf-8"))
     ids = [s["id"] for s in pipeline["steps"]]
-    argv = _step("sdk-tests")["argv"]
+    argv = _step("pytest-sdk")["argv"]
 
     # After the main suite, in the dev environment, with the SDK's own config
     # (`pytest tests/` from the root cannot import plugboard_sdk).
-    assert ids.index("sdk-tests") == ids.index("pytest") + 1
+    assert ids.index("pytest-sdk") == ids.index("pytest") + 1
     assert argv[:3] == ["{scratch}/venv/bin/python", "-m", "pytest"]
     assert _option_values(argv, "-c") == ["sdk/python/pyproject.toml"]
     assert "sdk/python/tests" in argv
