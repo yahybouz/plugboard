@@ -144,10 +144,19 @@ def _parse_bool(value: str) -> bool:
 
 
 def _probe_kinds_from_env() -> Set[str]:
-    raw = os.environ.get(
-        "PLUGBOARD_MODEL_REFRESH_PROBE_KINDS", "codex,claude,gemini,agy,ollama"
-    )
+    """Kinds whose models get an inference probe (none by default, BUG-45).
+
+    A probe runs a model: it spends a CLI subscription's quota, and on Ollama
+    loads every installed model in turn. ``PLUGBOARD_MODEL_REFRESH_PROBE_KINDS``
+    turns them on, for example ``codex,claude,gemini,agy,ollama`` or ``all``.
+    """
+    raw = os.environ.get("PLUGBOARD_MODEL_REFRESH_PROBE_KINDS", "")
     return {part.strip().lower() for part in raw.split(",") if part.strip()}
+
+
+def _probes_kind(kind: str) -> bool:
+    kinds = _probe_kinds_from_env()
+    return "all" in kinds or kind in kinds
 
 
 # ── Model status persistence ──────────────────────────────────────────────────
@@ -410,7 +419,9 @@ async def _probe_ollama_provider(
 ) -> Dict[str, Any]:
     """Probe one Ollama provider; returns partial {compound_key: entry} dict."""
     results: Dict[str, Any] = {}
-    if "ollama" not in kinds or not _is_ollama_provider_dict(provider):
+    if not ("all" in kinds or "ollama" in kinds) or not _is_ollama_provider_dict(
+        provider
+    ):
         return results
 
     provider_id: str = provider.get("id", "")
@@ -1297,8 +1308,9 @@ class ModelAvailabilityScheduler:
         if self.bootstrap_delay_s:
             await self._sleep(self.bootstrap_delay_s)
 
-        # PLUGBOARD_PROBE_ON_BOOT=true (default): always probe at bootstrap,
-        # ignoring the 24h marker.  Ensures every redeploy gets fresh status.
+        # PLUGBOARD_PROBE_ON_BOOT=true (default): always run the bootstrap
+        # refresh, ignoring the 24h marker. It probes only the kinds of
+        # PLUGBOARD_MODEL_REFRESH_PROBE_KINDS (none by default, BUG-45).
         # Set to false to restore the previous skip-if-recent behaviour.
         should_run_bootstrap = True
         if not _PROBE_ON_BOOT:
@@ -1443,6 +1455,11 @@ class ModelAvailabilityScheduler:
         """
         while True:
             await self._sleep(_OLLAMA_RECHECK_INTERVAL_S)
+
+            # Re-probing runs each installed model: only when Ollama probes
+            # are on (PLUGBOARD_MODEL_REFRESH_PROBE_KINDS), as at startup.
+            if not _probes_kind("ollama"):
+                continue
 
             status_before = load_model_status()
             models_before: Dict[str, Any] = status_before.get("models", {})

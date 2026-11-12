@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "1.6.0"
+CONTRACT_VERSION = "1.7.0"
 _JSON = "application/json"
 
 
@@ -572,6 +572,11 @@ _AUTH_ERRORS = {
     "429": "Rate limit or monthly spending limit exceeded.",
 }
 _CHAT_ERRORS = {
+    "400": "Invalid request; nothing was billed: a body that is not valid JSON or not"
+    " a JSON object, a model that is not a string or is removed, missing or invalid"
+    " messages, a session_id that is a list or an object, a decision model (use"
+    " /v1/decisions), or a request the provider rejected (context too long,"
+    " parameters; error_ref).",
     **_AUTH_ERRORS,
     "429": "Rate limit or monthly spending limit exceeded, or the quota of the last"
     " provider tried is exhausted (retry_after and Retry-After when it gives a delay).",

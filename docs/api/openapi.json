@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "1.6.0",
+    "version": "1.7.0",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
@@ -2764,6 +2764,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid request; nothing was billed: a body that is not valid JSON or not a JSON object, a model that is not a string or is removed, missing or invalid messages, a session_id that is a list or an object, a decision model (use /v1/decisions), or a request the provider rejected (context too long, parameters; error_ref).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "Missing or invalid API key.",
             "content": {
@@ -3607,6 +3617,16 @@
                 "description": "Correlation id, also written to the gateway logs.",
                 "schema": {
                   "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request; nothing was billed: a body that is not valid JSON or not a JSON object, a model that is not a string or is removed, missing or invalid messages, a session_id that is a list or an object, a decision model (use /v1/decisions), or a request the provider rejected (context too long, parameters; error_ref).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

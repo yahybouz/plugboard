@@ -150,6 +150,7 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 
 | Status | Meaning | What to do |
 |---|---|---|
+| `400` | Chat: the body is not valid JSON or not a JSON object, the model is not a string or was removed, `messages` is missing or invalid, `session_id` is a list or an object, a decision model was sent, or the provider rejected the request (context too long, parameters; `error_ref`); nothing was billed | Fix the request; `detail` says what is wrong |
 | `401` | Missing, unknown or revoked key | Check the key |
 | `402` | The key has a monthly budget and the model has no known price; nothing was called | Ask the operator to price the model, or use a priced one |
 | `403` | The key may not use this model | Pick a model where `account_compatible` is true |

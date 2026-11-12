@@ -75,7 +75,7 @@ A completed rotation also signs out every dashboard session and forgets the brow
 
 | Variable | Default | Description |
 |---|---|---|
-| `PLUGBOARD_RETRY_DELAYS` | `2,5,15` | Comma-separated seconds to wait before each retry on `429`/`5xx` or a timeout from an HTTP provider. Each item must be a finite number from `0` to `604800` (7 days): `inf`, `nan`, a negative item or a longer delay gives the default, with a warning (see **Numbers** at the top of this page). An error saying the context is too long is not retried, nor is a `429` whose `Retry-After` exceeds the next delay. After a final `429` (or a CLI quota error), the route (provider and model) is paused for the `Retry-After` the provider gave, else for 30 s, then 1 min, then 5 min as its `429`s follow one another, and is tried after the other candidates until then; a success clears the pause. |
+| `PLUGBOARD_RETRY_DELAYS` | `2,5,15` | Comma-separated seconds to wait before each retry on `429`, `500`, `502`, `503` or `529` from an HTTP provider. Each item must be a finite number from `0` to `604800` (7 days): `inf`, `nan`, a negative item or a longer delay gives the default, with a warning (see **Numbers** at the top of this page). An error saying the context is too long is not retried, nor is a `429` whose `Retry-After` exceeds the next delay, nor a timeout: the request already waited its whole timeout (900 s for a chat request), so the next provider is tried at once. After a final `429` (or a CLI quota error), the route (provider and model) is paused for the `Retry-After` the provider gave, else for 30 s, then 1 min, then 5 min as its `429`s follow one another, and is tried after the other candidates until then; a success clears the pause. |
 | `PLUGBOARD_LB_ERROR_RATE_WEIGHT` | `5.0` | Weight of the error rate in the provider score used for fallback ordering. |
 | `PLUGBOARD_LB_INFLIGHT_WEIGHT` | `0.35` | Weight of in-flight requests in that score. Streamed requests and CLI calls count as in flight. |
 | `PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT` | `1` | Concurrent requests a local provider (`sovereign`, a loopback or private address, or an Ollama over plain `http://`, whatever its host; see [concurrent requests per provider](providers-and-subscriptions.md#concurrent-requests-per-provider)) takes when its record sets no `max_concurrency`. `0` means no cap. |
@@ -194,18 +194,18 @@ The catalog is downloaded with each price update. A download that fails, is inva
 | `PLUGBOARD_MODEL_REMOVAL_PASSES` | `2` | Refreshes in a row without a model before it is removed from a provider's list (minimum 1). |
 | `MODEL_AVAILABILITY_BOOTSTRAP_DELAY_S` | `8` | Delay after startup before the first refresh. |
 | `MODEL_AVAILABILITY_UPDATE_TIMEOUT_S` | `900` | Timeout of one refresh. |
-| `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS` | `codex,claude,gemini,agy,ollama` | Which CLIs and Ollama to probe (`all` for every kind). The agy account list (`agy models`) is synced without a probe even when `agy` is absent; empty disables every probe. |
+| `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS` | empty | Which CLIs and Ollama to probe with a completion, at startup and during the refresh: `codex,claude,gemini,agy,ollama`, or `all` for every kind. Empty (the default) runs no probe: the CLIs keep their saved lists, the agy account list (`agy models`) and Ollama's installed list (`/api/tags`) are still synced, without running a model. A probe spends the CLI subscription's quota, and on Ollama loads each installed model in turn. Without `codex`, `claude` or `gemini` here, the dashboard's *Discover* keeps that CLI's saved list. |
 | `PLUGBOARD_MODEL_EXPOSE` | `latest` | `latest`: per model family, only the newest versions are listed by `/v1/models` and kept by the model refresh. `all`: every model the provider reports, with no other listing filter (curated list, per-provider cap). Default models and models already used are always kept. |
 | `PLUGBOARD_MODEL_EXPOSE_VERSIONS` | `2` | How many versions per family `latest` keeps (1 to 10). |
 | `PLUGBOARD_MODEL_REFRESH_MAX_PROBES` | `40` | Maximum model probes per CLI per run. |
 | `PLUGBOARD_MODEL_REFRESH_TIMEOUT_S` | `45` | Timeout of one CLI model probe. |
-| `PLUGBOARD_PROBE_ON_BOOT` | `true` | Probe model connectivity at every startup. `false` reuses the last status if it is less than 24 hours old. |
+| `PLUGBOARD_PROBE_ON_BOOT` | `true` | Run the startup model refresh at every start (it probes only the kinds in `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS`). `false` skips it when the last one is less than 24 hours old. |
 | `PLUGBOARD_PROBE_TOTAL_TIMEOUT_S` | `60` | Overall timeout of the startup probe (minimum 10). |
-| `PLUGBOARD_OLLAMA_RECHECK_INTERVAL_S` | `300` | Interval for re-probing offline Ollama models (minimum 30). |
+| `PLUGBOARD_OLLAMA_RECHECK_INTERVAL_S` | `300` | Interval for re-probing offline Ollama models (minimum 30), when `ollama` is in `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS`. |
 | `PLUGBOARD_IGNORE_MODEL_STATUS` | `false` | `true` ignores `model_status.json` when listing models. |
 | `MODEL_STATUS_PATH` | `data/model_status.json` | Location of the model status file. |
 | `PLUGBOARD_REFRESH_COOLDOWN_S` | `60` | Minimum interval between two `POST /admin/models/refresh`. |
-| `PLUGBOARD_INTERNET_CHECK_ON_BOOT` | `1` | `0` skips the startup internet-access check, which sends one request to every model. |
+| `PLUGBOARD_INTERNET_CHECK_ON_BOOT` | `0` | `1` (or `true`, `yes`, `on`) runs the internet-access check at startup, which sends one chat request to every model except local Ollama ones. Off by default, like the probes: the startup calls no model (the watchdog's deep check, below, comes about 60 seconds later). |
 | `PLUGBOARD_BULK_INTERNET_CONCURRENCY` | `3` | Concurrency of the internet-access check over all models. |
 | `PLUGBOARD_BULK_INTERNET_PER_MODEL_TIMEOUT_S` | `25` | Timeout per model in that check. |
 

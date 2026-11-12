@@ -121,7 +121,11 @@ async def test_create_subprocess_provider_end_to_end(admin_client, _mock_gemini_
     assert any(p["id"] == pid for p in listing.json())
 
 
-async def test_discover_returns_known_models(admin_client, _mock_gemini_cli):
+async def test_discover_returns_known_models(
+    admin_client, _mock_gemini_cli, monkeypatch
+):
+    # Discovery probes each gemini model: on only with gemini among the kinds.
+    monkeypatch.setenv("PLUGBOARD_MODEL_REFRESH_PROBE_KINDS", "gemini")
     # Ensure a provider exists (idempotent — if already exists, still discover)
     await admin_client.post(
         "/admin/direct-providers/gemini-cli-subprocess",

@@ -443,10 +443,13 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
     # Boot-time internet probe — auto-refresh internet_access flags so the
     # playground dropdown displays correct 🌐/💻 icons without admin click.
     # Runs in background after schedulers are up so boot isn't blocked.
-    # Opt-out via PLUGBOARD_INTERNET_CHECK_ON_BOOT=0.
+    # It sends a chat request to every model: off by default (BUG-45),
+    # opt-in via PLUGBOARD_INTERNET_CHECK_ON_BOOT=1.
+    # An accept-list: now that the check is opt-in, "off" or "False" must
+    # not turn it on.
     _internet_boot_enabled = os.environ.get(
-        "PLUGBOARD_INTERNET_CHECK_ON_BOOT", "1"
-    ).strip() not in ("0", "false", "no", "")
+        "PLUGBOARD_INTERNET_CHECK_ON_BOOT", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
 
     async def _internet_boot_probe():
         # Small delay so warm-up + ollama sync settle first, and so a quick
@@ -481,7 +484,7 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
         _spawn_boot_task(_internet_boot_probe(), "internet-boot-probe")
     else:
         log.info(
-            "internet_check_on_boot: disabled via PLUGBOARD_INTERNET_CHECK_ON_BOOT=0"
+            "internet_check_on_boot: off (PLUGBOARD_INTERNET_CHECK_ON_BOOT=1 turns it on)"
         )
 
     yield
@@ -2089,7 +2092,12 @@ async def chat_completions(
     # leak requires LAN-level adversary; opt-in for high-sensitivity
     # deployments via PLUGBOARD_CACHE_RESPONSE_FLOOR_MS.
     _request_t0 = time.perf_counter()
-    body = await request.json()
+    try:
+        body = await request.json()
+    except (ValueError, RecursionError):
+        # BUG-48: a body that is not JSON (or not UTF-8, or nested past the
+        # parser's depth) is the client's error, not a 500.
+        raise HTTPException(400, "Request body must be valid JSON") from None
     if not isinstance(body, dict):
         raise HTTPException(400, "Request body must be a JSON object")
     if not isinstance(body.get("model", ""), str):
@@ -2133,6 +2141,9 @@ async def chat_completions(
         or request.headers.get("x-llm-session-id")
         or body.pop("session_id", None)
     )
+    if isinstance(session_id, (list, dict)):
+        # BUG-48: an unhashable session id made the session turn fail (500).
+        raise HTTPException(400, "session_id must be a string")
     in_session = bool(session_id and client_id)
     _require_chat_messages(body, history_may_follow=in_session)
 
