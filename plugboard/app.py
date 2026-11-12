@@ -83,9 +83,9 @@ from plugboard.apikeys import (
     get_keys_by_client,
     get_keys_by_org,
     get_orgs,
-    has_blank_client_id,
     load_keys,
     mask_key,
+    refused_client_reason,
     revoke_key,
     rotate_key,
 )
@@ -5213,12 +5213,13 @@ async def delete_api_key(key_id: str, _: None = Depends(_require_admin)):
 async def rotate_api_key(key_id: str, _: None = Depends(_require_admin)):
     """Rotate a key: revoke the old one, create a new one with same settings."""
     old = next((k for k in load_keys() if k.get("key_id") == key_id), None)
-    if old is not None and has_blank_client_id(old):
-        # The new key would carry the same blank client_id (BUG-64, D-40).
+    if old is not None and refused_client_reason(old):
+        # The new key would carry the same blank or "admin" client_id
+        # (BUG-64, BUG-60, D-40).
         raise HTTPException(
             422,
-            "This key has no client ID and is refused when used: "
-            "revoke it and create a new key with a client ID",
+            "This key's client ID is empty or reserved and the key is refused "
+            "when used: revoke it and create a new key with a client ID",
         )
     result = rotate_key(key_id)
     if result is None:
