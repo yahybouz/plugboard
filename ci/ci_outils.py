@@ -9,7 +9,8 @@ Sous-commandes :
                  aléatoire>, exporte les variables demandées, lance la commande puis
                  détruit les conteneurs (finally + SIGTERM).
   gitleaks       secrets : `gitleaks git` sur base..HEAD si dépôt Git, sinon `gitleaks dir`.
-  image-docker   docker build d'une cible + contrôles (utilisateur, healthcheck), image retirée.
+  image-docker   docker build d'une cible + contrôles (utilisateur, healthcheck, commandes
+                 lancées dans l'image sans réseau, ex. `claude --version`), image retirée.
 
 Docker : DOCKER_HOST de l'appelant (env_passthrough) ; sur l'UAT, le Docker rootless d'agent.
 """
@@ -19,6 +20,7 @@ import argparse
 import os
 import re
 import secrets as _secrets
+import shlex
 import shutil
 import signal
 import socket
@@ -237,9 +239,40 @@ def cmd_image_docker(args) -> int:
             print(f"healthcheck : {h}")
             if args.healthcheck not in h:
                 rc = 1
+        commandes = list(args.verifier or [])
+        if args.verifier_amd64:
+            arch = _run([DOCKER, "image", "inspect", tag, "--format", "{{.Architecture}}"],
+                        capture_output=True, text=True).stdout.strip()
+            if arch == "amd64":
+                commandes += args.verifier_amd64
+            else:
+                for cmd in args.verifier_amd64:
+                    print(f"non vérifié sur {arch or 'architecture inconnue'} (amd64 seulement) : {cmd}")
+        for cmd in commandes:
+            if _verifier(tag, cmd, args.delai_verifier):
+                rc = 1
         return rc
     finally:
         _run([DOCKER, "image", "rm", tag], capture_output=True)
+
+
+def _verifier(tag: str, cmd: str, delai: float) -> int:
+    """Lance `cmd` dans l'image (utilisateur de l'image, sans réseau) ; 0 si succès."""
+    nom = f"ci-verif-{os.getpid()}-{_secrets.token_hex(3)}"
+    argv = [DOCKER, "run", "--rm", "--name", nom, "--network", "none", tag, *shlex.split(cmd)]
+    try:
+        r = _run(argv, capture_output=True, text=True, timeout=delai)
+    except subprocess.TimeoutExpired:
+        _run([DOCKER, "rm", "-f", nom], capture_output=True)
+        print(f"ÉCHEC {cmd} : pas de réponse en {delai:.0f} s", file=sys.stderr)
+        return 1
+    sortie = (r.stdout or "").strip().splitlines()
+    if r.returncode:
+        detail = (r.stderr or r.stdout or "").strip()[-400:]
+        print(f"ÉCHEC {cmd} (code {r.returncode}) : {detail}", file=sys.stderr)
+        return 1
+    print(f"OK {cmd} : {sortie[0] if sortie else '(sans sortie)'}")
+    return 0
 
 
 def main() -> int:
@@ -267,6 +300,12 @@ def main() -> int:
     i.add_argument("--target")
     i.add_argument("--user")
     i.add_argument("--healthcheck")
+    i.add_argument("--verifier", action="append",
+                   help="commande lancée dans l'image sans réseau, doit sortir en 0 (répétable)")
+    i.add_argument("--verifier-amd64", action="append",
+                   help="comme --verifier, seulement si l'image est amd64 (répétable)")
+    i.add_argument("--delai-verifier", type=float, default=120.0,
+                   help="secondes accordées à chaque commande (défaut 120)")
     a = p.parse_args()
     return {"git-depot": cmd_git_depot, "services": cmd_services, "gitleaks": cmd_gitleaks,
             "image-docker": cmd_image_docker}[a.cmd](a)

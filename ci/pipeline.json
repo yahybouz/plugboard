@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "name": "plugboard",
-  "description": "CI locale Plugboard (qd-ci, arbre exact du commit) : traduction locale des jobs .gitlab-ci.yml / .github/workflows/ci.yml — environnements figés par requirements-*.lock (--require-hashes) dans {scratch}, ruff, ruff format, JSON du registre, pytest + couverture >= 80 %, contrat MCP dans son environnement propre, gitleaks (commits propres à la branche vs main, sinon arbre), bandit, pip-audit, docker build de la cible api (utilisateur app + healthcheck). Hors CI : sonarqube, smoke-models (planifiés, secrets). Lancer : make ci (ou ci lancer plugboard <ref> sur l'UAT). Linux et macOS : uv et python3.12 cherchés dans le PATH ; caches via UV_CACHE_DIR/DOCKER_HOST transmis.",
+  "description": "CI locale Plugboard (qd-ci, arbre exact du commit) : traduction locale des jobs .gitlab-ci.yml / .github/workflows/ci.yml — environnements figés par requirements-*.lock (--require-hashes) dans {scratch}, ruff, ruff format, JSON du registre, pytest + couverture >= 80 %, contrat MCP dans son environnement propre, gitleaks (commits propres à la branche vs main, sinon arbre), bandit, pip-audit, docker build de la cible full déployée (utilisateur app + healthcheck + CLI lancées). Hors CI : sonarqube, smoke-models (planifiés, secrets). Lancer : make ci (ou ci lancer plugboard <ref> sur l'UAT). Linux et macOS : uv et python3.12 cherchés dans le PATH ; caches via UV_CACHE_DIR/DOCKER_HOST transmis.",
   "path": ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"],
   "env": {
     "LANG": "C.UTF-8",
@@ -36,8 +36,10 @@
     {"id": "bandit", "argv": ["{scratch}/venv/bin/bandit", "-q", "-r", "plugboard/", "-x", "tests/", "-ll"], "timeout_seconds": 600},
     {"id": "pip-audit", "argv": ["{scratch}/venv/bin/pip-audit", "--strict", "--progress-spinner", "off", "--disable-pip",
       "--require-hashes", "-r", "requirements-dev.lock"], "timeout_seconds": 600},
-    {"id": "docker-build", "description": "Image api non poussée : utilisateur app + HEALTHCHECK /health, puis retirée.",
-     "argv": ["{python}", "-B", "ci/ci_outils.py", "image-docker", "--nom", "plugboard", "--target", "api", "--user", "app",
-      "--healthcheck", "health"], "timeout_seconds": 1800}
+    {"id": "docker-build", "description": "Image full non poussée, celle que déploient l'UAT et l'OVH (PLU-20) : utilisateur app + HEALTHCHECK /health, chaque CLI lancée dans l'image sans réseau (agy sur amd64), puis retirée.",
+     "argv": ["{python}", "-B", "ci/ci_outils.py", "image-docker", "--nom", "plugboard", "--target", "full", "--user", "app",
+      "--healthcheck", "health", "--verifier", "gemini --version", "--verifier", "claude --version",
+      "--verifier", "codex --version", "--verifier", "gh --version", "--verifier-amd64", "agy --version"],
+     "timeout_seconds": 2400}
   ]
 }

@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **The CI builds the image that is deployed** (PLU-20): the image step of the local CI (`ci/pipeline.json`, `docker-build`) and of `.gitlab-ci.yml` built the slim `api` target, while the UAT and `deploy/ovh/compose.yml` deploy `full`. It now builds `full`, then starts `gemini`, `claude`, `codex` and `gh --version` in the image as the user `app`, without network (`agy --version` too on amd64), before removing it. `ci/ci_outils.py image-docker` gains `--verifier` and `--verifier-amd64` for these checks. The build takes longer: about 150 s for a commit that changes the code (the CLI layers come after it) instead of about 10 s for `api`, measured on the UAT.
+- **The CLI versions of the `full` image are pinned in the `Dockerfile`** (PLU-20): `GEMINI_CLI_VERSION` 0.65.0, `CLAUDE_CODE_VERSION` 2.1.306 and `CODEX_VERSION` 0.163.0, the values `deploy/ovh/compose.yml` and the UAT already pass, instead of `latest`. A plain `docker build --target full .` now gives the deployed CLIs; `--build-arg` still overrides them.
+
+### Fixed
+
+- **A CLI that failed to install still produced a `full` image** (BUG-50): each `npm install -g` of a CLI ended with `|| echo "[WARN] …"`, and the version check printed `not installed`, so an image without `gemini`, `claude` or `codex` was built and shipped, and `/health` could not tell. A failed install, or a CLI that does not start (`gh`, and `agy` on amd64, included), now fails the build.
+
 ## [4.11.5] — 2026-11-12
 
 ### Security

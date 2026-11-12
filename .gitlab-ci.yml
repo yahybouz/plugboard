@@ -6,7 +6,7 @@
 #             the MCP contract (docs/api/mcp.json) in the MCP environment
 #   analysis  SonarQube scan (only when SONAR_HOST_URL and SONAR_TOKEN are set)
 #   security  gitleaks over the pushed commits, bandit, pip-audit
-#   build     docker build of the slim `api` target (not pushed)
+#   build     docker build of the deployed `full` target (not pushed)
 #   smoke     nightly model smoke test (scheduled pipelines only)
 
 workflow:
@@ -196,12 +196,22 @@ docker-build:
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
   script:
-    - docker build --target api -t "plugboard:ci-$CI_COMMIT_SHORT_SHA" .
+    # The deployed target (UAT and deploy/ovh): a CLI that fails to install
+    # fails the build.
+    - docker build --target full -t "plugboard:ci-$CI_COMMIT_SHORT_SHA" .
     # The image must run as the non-root user and declare a health check.
     - |
       user="$(docker image inspect "plugboard:ci-$CI_COMMIT_SHORT_SHA" --format '{{.Config.User}}')"
       test "$user" = "app"
       docker image inspect "plugboard:ci-$CI_COMMIT_SHORT_SHA" --format '{{json .Config.Healthcheck.Test}}' | grep health
+    # Every CLI starts as the image user, without network (agy: amd64 only).
+    - |
+      for cli in gemini claude codex gh; do
+        docker run --rm --network none "plugboard:ci-$CI_COMMIT_SHORT_SHA" "$cli" --version
+      done
+      if [ "$(docker image inspect "plugboard:ci-$CI_COMMIT_SHORT_SHA" --format '{{.Architecture}}')" = amd64 ]; then
+        docker run --rm --network none "plugboard:ci-$CI_COMMIT_SHORT_SHA" agy --version
+      fi
 
 # ── smoke (scheduled) ─────────────────────────────────────────
 # Pings every model of a deployed instance once and fails when more than
