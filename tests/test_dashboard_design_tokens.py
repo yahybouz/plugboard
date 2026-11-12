@@ -7,6 +7,8 @@ and the offending declaration or label, so a failure says what to fix.
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
 CSS_FILES = ("style.css", "suivi.css")
@@ -102,3 +104,46 @@ def test_design_md_documents_every_token():
     design = (ROOT / "DESIGN.md").read_text(encoding="utf-8")
     assert sorted(t for t in _root_tokens() if f"`{t}`" not in design) == []
     assert sorted(NEW_TOKENS - _root_tokens()) == []
+
+
+SPACING_PROPS = re.compile(
+    r"^(?:padding|margin)(?:-(?:top|right|bottom|left))?$|^(?:row-|column-)?gap$"
+)
+SPACING_PART = re.compile(
+    r"^(?:0|auto|var\(--(?:space|pad)-[\w-]+\)|var\(--sidebar-w\))$"
+)
+RADIUS_PART = re.compile(r"^(?:0|2px|3px|50%|inherit|var\(--radius(?:-[\w-]+)?\))$")
+
+
+def _violates(prop: str, value: str) -> bool:
+    """True when a declaration uses a raw value where a token is required."""
+    value = value.replace("!important", "").strip()
+    if prop == "font-size":
+        return not re.fullmatch(r"var\(--fs-[\w-]+\)|inherit", value)
+    if prop == "font-weight":
+        return not re.fullmatch(r"var\(--fw-[\w-]+\)|inherit", value)
+    if SPACING_PROPS.match(prop):
+        return not all(SPACING_PART.match(part) for part in value.split())
+    if prop == "border-radius":
+        return not all(RADIUS_PART.match(part) for part in value.split())
+    return False
+
+
+@pytest.mark.parametrize("name", CSS_FILES)
+def test_stylesheet_uses_tokens(name):
+    bad = [f"{p}: {v}" for p, v in _declarations(_checked_css(name)) if _violates(p, v)]
+    assert bad == []
+
+
+@pytest.mark.parametrize("name", CSS_FILES)
+def test_stylesheet_has_no_raw_colour(name):
+    assert [v for _, v in _declarations(_checked_css(name)) if COLOUR.search(v)] == []
+
+
+def test_touch_rule_still_covers_controls():
+    rule = re.search(
+        r"@media \(pointer: coarse\)\s*\{(.*?)\n\}", _read("style.css"), re.S
+    )
+    assert rule, "the touch-screen rule is gone"
+    for selector in (".btn", "input", "select", ".nav-link"):
+        assert selector in rule.group(1)
