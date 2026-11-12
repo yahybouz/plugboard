@@ -104,7 +104,7 @@ from plugboard import live_requests as _live
 from plugboard import provider_admission as _provider_admission
 from plugboard import request_wait as _request_wait
 from plugboard.logging_config import _request_id_var, setup_logging
-from plugboard.metrics import get_stats
+from plugboard.metrics import get_stats, record_busy_refusal
 from plugboard.ratelimit import check_client_rate_limit, check_rate_limit
 from plugboard.decision_api import router as decision_router
 from plugboard.embeddings_api import router as embeddings_router
@@ -1860,6 +1860,7 @@ def _providers_busy_response(
     Nothing was called. Only the admin gets the ids of the busy providers.
     """
     log.warning("providers busy: %s", ", ".join(exc.provider_ids))
+    record_busy_refusal((exc.provider_ids or [""])[0], exc.model)  # PLU-16
     detail = (
         "Every provider that serves this model is busy: "
         f"retry in {exc.retry_after} seconds."
@@ -3206,7 +3207,7 @@ async def client_keys(client_id: Optional[str] = Depends(_resolve_client)):
 
 @app.get("/metrics")
 async def get_metrics(_: None = Depends(_require_admin)):
-    return get_stats()
+    return get_stats(per_model=True)
 
 
 @app.get("/admin/circuits")

@@ -65,14 +65,45 @@ When `API_KEY` is empty it also returns `"auth_disabled": true` and `"dev_mode"`
 
 | Endpoint | Format |
 |---|---|
-| `GET /metrics` | JSON: per provider, request count, error count, average latency |
-| `GET /metrics/prometheus` | Prometheus text format: request totals, error totals and average latency per provider, and an `up` gauge |
+| `GET /metrics` | JSON: per provider, request count, error count, average latency, and under `models` the per-model measures below |
+| `GET /metrics/prometheus` | Prometheus text format: request totals, error totals and average latency per provider, an `up` gauge, and the per-model histograms and counter below |
 | `GET /admin/monitoring` | Full health check of all providers with 24-hour and 7-day uptime |
 | `GET /admin/monitoring/history?provider_id=&limit=` | Stored health snapshots (`data/monitoring.db`) |
 | `GET /admin/circuits` | Per-model circuit breaker state |
 | `GET /admin/cache/stats` | Response cache statistics |
 
 Request metrics live in memory and restart from zero with the server. Prometheus must send the admin key as a bearer token.
+
+### Per-model measures
+
+Each provider entry of `GET /metrics` gains a `models` object once one of its models has a measure (a provider seen only there gets zeroed request counters). For each model, the time to first token (`ttft`), tokens per second (`tokens_per_second`) and admission wait (`admission_wait`) give `_count`, `_sum`, `_avg`, `_min`, `_max` and `_p95` (estimated from the histogram buckets); all but `_count` and `_sum` are `null` until the first value. `busy_refusals` counts the `503 providers_busy` answers.
+
+| Measure | Prometheus | What it counts |
+|---|---|---|
+| Time to first token | `plugboard_ttft_seconds` (histogram) | Seconds from the slot granted on the provider to the first generated chunk of the streamed answer: text, reasoning or a tool call. The admission wait is not included: the first word a user sees comes after both |
+| Tokens per second | `plugboard_tokens_per_second` (histogram) | Completion tokens after the first one, divided by the time from the first generated chunk to the last. Uses the provider's `usage`, else a tiktoken estimate. Only when the words came over 50 ms at least: a burst says nothing of the rate. A provider that counts hidden reasoning in `usage` reads higher than what the reader sees |
+| Admission wait | `plugboard_admission_wait_seconds` (histogram) | Seconds a request waited for each slot it took on a provider (`PLUGBOARD_PROVIDER_WAIT_S`); `0` when the slot was free. A request that falls back to another provider records one value per provider; internal calls through the router (preflight, internet check) count too |
+| Busy refusals | `plugboard_providers_busy_total` (counter) | Chats answered `503 providers_busy`, one per answer, under the first full candidate route |
+
+The time to first token and tokens per second are measured on streamed answers from HTTP providers: a non-streamed answer has no first token to time, and a CLI provider's stream is replayed from its complete answer. Labels are `provider` and `model` only, never a client or a key; a model the provider does not list (nor has as its default model) is labelled `(unlisted)`, so a name a client typed never becomes a label. At most 256 (provider, model) series are kept; past that, each provider's new models are counted under one `(other)` series of that provider.
+
+### Load bench
+
+`scripts/bench_concurrency.py` measures what a gateway holds, outside the CI. It sends streamed chats from 1, 2, 4 then 8 clients at once (`--clients`), `--rounds` chats each, after `--warmup` unmeasured chats, and prints per level the status codes, the time to the status of the served chats and of the refusals, the time to the first word (the first generated chunk, reasoning included, as in the per-model measures) and to the end, and the tokens per second after the first word. A chat is served when it gets a `200` event stream with at least one word that ends with `[DONE]` or a `finish_reason`; any other `200` counts as `200 stream error`. Each chat carries a distinct prompt and `"cache": false`. The client key is read from the variable named by `--key-env` (default `PLUGBOARD_BENCH_KEY`) and is never printed or written; it needs only the model under test in its `allowed_models`, and it is never sent over plain `http` to another machine unless `--allow-http` is given.
+
+```bash
+PLUGBOARD_BENCH_KEY=... .venv/bin/python scripts/bench_concurrency.py \
+  --url https://gateway.example --model ollama:qwen2.5:7b \
+  --clients 1,2,4,8 --rounds 3 --warmup 1 --check \
+  --first-word-p95-max 5 --tps-min 5 --json bench.json
+```
+
+| Option | Checks (exit `1` when one fails) |
+|---|---|
+| `--check` | Every answer is a `200` or a `503 providers_busy`; every `503` comes within `--max-wait-s` (default 10.5 s: the gateway's 10 s admission wait plus a margin; follow `PLUGBOARD_PROVIDER_WAIT_S` if it changes); every `200` within `--max-wait-s` plus `--max-first-chunk-s` (default 5 s), since the gateway sends a `200` with the provider's first chunk, after the wait |
+| `--first-word-p95-max`, `--tps-min` | The D-26 targets, at the levels of `--targets-at` (default 4 clients): every chat served, the 95th percentile of the first word (nearest rank: the slowest chat up to 20 chats), and for each client the median of its rounds' tokens per second |
+
+The gateway admits as many chats at once as the provider's `max_concurrency` (one for a local provider by default): to measure what the provider holds at a level, set it at least to that level, or the bench measures the cap. Each chat is a real inference on the provider: run it on purpose, not on a production gateway in use. Exit codes: `0` done, `1` a check failed, `2` bad usage, `3` the bench itself failed.
 
 ## Provider watchdog
 

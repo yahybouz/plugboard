@@ -146,6 +146,8 @@ async def test_metrics_endpoint(client):
             json={
                 "model": "test-provider:fake:model-v1",
                 "messages": [{"role": "user", "content": "Hi"}],
+                # A cached answer calls no provider and records nothing.
+                "cache": False,
             },
         )
 

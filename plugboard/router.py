@@ -142,9 +142,11 @@ class ProvidersBusyError(RuntimeError):
 
     retry_after = 5
 
-    def __init__(self, provider_ids: List[str]):
+    def __init__(self, provider_ids: List[str], model: str = metrics.UNLISTED_MODEL):
         super().__init__("All candidate providers are busy: " + ", ".join(provider_ids))
         self.provider_ids = list(provider_ids)
+        # Metrics label of the first full route's model (PLU-16).
+        self.model = model
 
 
 class ProviderDisabledError(RuntimeError):
@@ -498,6 +500,21 @@ def _listed_models(provider: Dict[str, Any]) -> List[str]:
     return listed + [
         m for m in provider.get("extra_model_ids") or [] if isinstance(m, str) and m
     ]
+
+
+def _metric_model(provider: Dict[str, Any], model: str) -> str:
+    """The label of ``model`` in the metrics (PLU-16): a model ``provider``
+    lists or its default model, else ``metrics.UNLISTED_MODEL``, so a
+    client's free text never becomes a label. Never raises: a slot may
+    already be held when it is read."""
+    try:
+        if model and (
+            model == provider.get("default_model") or model in _listed_models(provider)
+        ):
+            return model
+    except Exception:
+        pass
+    return metrics.UNLISTED_MODEL
 
 
 def _loose_model_name(name: str) -> str:
@@ -937,19 +954,28 @@ async def forward(
     loop = asyncio.get_running_loop()
     deadline: Optional[float] = None
     granted: Optional[provider_admission.Lease] = None
+    pending_wait = 0.0  # seconds waited for a slot since the last one taken
     # PLU-12: a provider turned off while this request waited for it, or
     # tried another candidate, is never called; the first candidate was
     # checked by _refuse_if_disabled, with no wait since.
     disabled_seen: Optional[str] = None
     recheck = False
 
-    def _take(provider: Dict[str, Any]) -> Optional[provider_admission.Lease]:
-        """The slot the wait granted, when it is this provider's; else a new one."""
-        nonlocal granted
+    def _take(
+        provider: Dict[str, Any], model: str
+    ) -> Optional[provider_admission.Lease]:
+        """The slot the wait granted, when it is this provider's; else a new one.
+        A slot taken records the time waited since the last one (PLU-16)."""
+        nonlocal granted, pending_wait
         if granted is not None and granted.provider_id == provider["id"]:
             lease, granted = granted, None
-            return lease
-        return provider_admission.try_acquire(provider)
+        else:
+            lease = provider_admission.try_acquire(provider)
+        if lease is not None:
+            label = _metric_model(provider, model)
+            metrics.record_admission_wait(provider["id"], label, pending_wait)
+            pending_wait = 0.0
+        return lease
 
     try:
         while queue or busy:
@@ -964,10 +990,12 @@ async def forward(
                 if deadline is None:
                     deadline = loop.time() + provider_admission.WAIT_S
                 _live.update(phase="waiting_provider")
+                wait_t0 = loop.time()
                 with request_wait.waiting(deadline - loop.time()) as wait_s:
                     granted = await provider_admission.wait_acquire(
                         [p for p, _ in busy], wait_s
                     )
+                pending_wait += loop.time() - wait_t0
                 _live.update(phase="running")
                 if granted is None:
                     break
@@ -987,7 +1015,7 @@ async def forward(
             # Direct CLI providers short-circuit HTTP.
             auth_source = provider.get("auth_source", "")
             if auth_source.startswith("subprocess:"):
-                lease = _take(provider)
+                lease = _take(provider, real_model)
                 if lease is None:
                     busy.append((provider, real_model))
                     continue
@@ -1103,7 +1131,7 @@ async def forward(
             # Whether the last failure counts against the route's circuit: a
             # timeout or a network error does, an HTTP answer per its status.
             provider_fault = True
-            lease = _take(provider)
+            lease = _take(provider, real_model)
             if lease is None:
                 busy.append((provider, real_model))
                 continue
@@ -1271,7 +1299,9 @@ async def forward(
             if len(still_on) < len(busy):
                 disabled_seen = next(c[0]["id"] for c in busy if c not in still_on)
             if still_on:
-                raise ProvidersBusyError([p["id"] for p, _ in still_on])
+                raise ProvidersBusyError(
+                    [p["id"] for p, _ in still_on], _metric_model(*still_on[0])
+                )
         if disabled_seen is not None and refused is None and last_err is None:
             raise ProviderDisabledError(disabled_seen)
         raise refused or last_err or RuntimeError("All providers failed")
@@ -1300,8 +1330,10 @@ async def forward_stream(
     provider, real_model = resolve_provider_and_model(model_str)
     if route_guard is not None:
         route_guard(provider, real_model)
+    label = _metric_model(provider, real_model)  # PLU-16
     lease = provider_admission.try_acquire(provider)
     waited = lease is None
+    wait_t0 = _time.perf_counter()
     if waited:
         _live.update(phase="waiting_provider")
         with request_wait.waiting(provider_admission.WAIT_S) as wait_s:
@@ -1310,11 +1342,13 @@ async def forward_stream(
     if lease is None:
         if _turned_off(provider["id"]):
             raise ProviderDisabledError(provider["id"])  # off, not full
-        raise ProvidersBusyError([provider["id"]])
+        raise ProvidersBusyError([provider["id"]], label)
     try:
         # Inside the try: the slot goes back whatever the registry read does.
         if waited and _turned_off(provider["id"]):
             raise ProviderDisabledError(provider["id"])  # off while it waited
+        wait_s = _time.perf_counter() - wait_t0 if waited else 0.0
+        metrics.record_admission_wait(provider["id"], label, wait_s)
         async with contextlib.aclosing(
             _stream_route(body, provider, real_model, timeout)
         ) as chunks:
@@ -1482,6 +1516,8 @@ async def _stream_route(
         yield b"data: [DONE]\n\n"
         return
 
+    # PLU-16: the time to first token counts from here, the slot granted.
+    meter = metrics.StreamMeter(provider["id"], _metric_model(provider, real_model))
     url = openai_url(provider["base_url"], "chat/completions")
     auth_header = await _build_auth_header_async(provider)
     headers = {
@@ -1521,7 +1557,9 @@ async def _stream_route(
             route_pauses.clear(circuit_key)
             streaming = True
             async for chunk in resp.content.iter_any():
+                meter.feed(chunk)
                 yield chunk
+            meter.finish()
     except asyncio.TimeoutError as exc:
         # No answer: a timeout or a network error counts, as in forward().
         # Once the stream has begun, its success is already recorded.
