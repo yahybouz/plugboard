@@ -1,0 +1,64 @@
+# UAT Plugboard — déployé par /usr/local/sbin/uat-deployer (image dans compose.env).
+# docker compose -p uat-plugboard --env-file /srv/plugboard/compose.env -f /srv/plugboard/compose.yml up -d
+name: uat-plugboard
+services:
+  gateway:
+    image: ${PLUGBOARD_IMAGE:?PLUGBOARD_IMAGE (compose.env)}
+    pull_policy: never
+    restart: unless-stopped
+    env_file:
+      - ./secrets/runtime.env
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8765"
+      # Caddy (host) reaches the app through the bridge gateway: trust its
+      # X-Forwarded-For so rate limit / login lockout are per client.
+      FORWARDED_ALLOW_IPS: "172.18.0.1"
+      PLUGBOARD_DATA: /app/data
+      PLUGBOARD_LOCAL_AUTO_LOGIN: "0"
+      COOKIE_SECURE: "true"
+      CORS_ORIGINS: ""
+      PLUGBOARD_MAX_INFLIGHT_CHAT: "1"
+      PLUGBOARD_SUBPROCESS_LIMIT: "1"
+      MODEL_AVAILABILITY_SCHEDULER_DISABLED: "1"
+      PRICING_SCHEDULER_DISABLED: "1"
+      # Claude: the catalogue is only known by probing the account (one tiny
+      # call per model on a manual Discover / the refresh job).
+      PLUGBOARD_MODEL_REFRESH_PROBE_KINDS: "claude"
+      PLUGBOARD_INTERNET_CHECK_ON_BOOT: "0"
+      PLUGBOARD_LLM_PRICING: "0"
+      # Ollama UAT = relay with token (ollama-proxy, rootless docker of agent);
+      # PLUGBOARD_OLLAMA_TOKEN is in secrets/runtime.env.
+      OLLAMA_ENABLED: "true"
+      OLLAMA_URL: http://172.17.0.1:11435
+      # Embeddings via the Ollama relay (recette BUG-25): exact model names.
+      PLUGBOARD_EMBEDDING_MODELS: "ollama:qwen3-embedding:0.6b-q8_0"
+      PLUGBOARD_OLLAMA_CLOUD_AUTOSYNC: "0"
+      PLUGBOARD_LOCAL_MODEL_DOWNLOADS: "0"
+    ports:
+      - "127.0.0.1:18765:8765"
+    volumes:
+      - data:/app/data
+      # CLI logins (.claude, .codex, .gemini, agy) live only in this volume
+      - cli-home:/home/app
+      - logs:/app/logs
+    security_opt:
+      - no-new-privileges:true
+      # BUG-43 : sandbox bwrap de codex (userns + mount) ; seccomp = defaut Docker + userns/mount,
+      # AppArmor = docker-default + mount (/etc/apparmor.d/plugboard-userns). cap_drop ALL conserve.
+      - seccomp=/srv/plugboard/seccomp/plugboard-userns.json
+      - apparmor=plugboard-userns
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 1.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  data:
+  cli-home:
+  logs:

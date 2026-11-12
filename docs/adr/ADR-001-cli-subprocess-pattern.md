@@ -40,7 +40,7 @@ Negative:
 
 - High latency: about 7 to 16 seconds per call (process start, Node.js runtime, OAuth, the vendor's HTTP call, parsing). Warm-up and caching reduce it.
 - The CLIs must be installed and logged in on the host that runs Plugboard. The Docker image now ships them, but they still have to be signed in inside the container.
-- Spawning external binaries widens the attack surface. The code limits it: no shell, stdin closed for CLIs that take the prompt as an argument, binary paths resolved once and cached (against PATH hijacking), a dedicated working directory, a concurrency cap per CLI (`PLUGBOARD_SUBPROCESS_LIMIT`, default 4), Codex run in a read-only sandbox by default (`PLUGBOARD_CODEX_SANDBOX`), and Claude run with no tools, no MCP servers and no user settings.
+- Spawning external binaries widens the attack surface. The code limits it: no shell, the prompt written to the CLI's stdin and never passed as an argument (where the process list would show it), binary paths resolved once and cached (against PATH hijacking), a dedicated working directory, a concurrency cap per CLI (`PLUGBOARD_SUBPROCESS_LIMIT`, default 4), Codex run in a read-only sandbox by default (`PLUGBOARD_CODEX_SANDBOX`), and Claude run with no tools, no MCP servers and no user settings.
 - Calls are stateless: the whole conversation is sent to the CLI on every turn. CLI session resume is not used.
 
 ## Alternatives considered

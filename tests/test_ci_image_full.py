@@ -94,17 +94,19 @@ def test_gitlab_pipeline_builds_the_same_target():
     assert re.search(r"--network none \S+ agy --version", script)
 
 
-def test_cli_versions_are_pinned_to_the_ovh_build_args():
+def test_cli_versions_are_pinned_in_the_dockerfile_only():
+    # One source (PLU-29): the OVH build passes no CLI version, so the image
+    # always gets the Dockerfile's pinned releases.
     compose = yaml.safe_load(
         (ROOT / "deploy/ovh/compose.yml").read_text(encoding="utf-8")
     )
-    build_args = compose["services"]["gateway"]["build"]["args"]
+    build_args = compose["services"]["gateway"]["build"].get("args") or {}
     stage = _full_stage()
 
     for name in CLI_ARGS:
         default = re.search(rf"^ARG {name}=(\S+)$", stage, re.M).group(1)
         assert default != "latest", name
-        assert default == build_args[name], name
+        assert name not in build_args, name
 
 
 def test_the_ovh_default_image_names_this_release():

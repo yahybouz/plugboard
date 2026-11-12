@@ -250,16 +250,20 @@ async def test_cli_request_too_long_does_not_count(cli, breaker, kind, stdout):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("process", "counted"),
+    ("process", "status", "counted"),
     [
-        pytest.param({"stderr": b"Error: quota exceeded"}, 1, id="quota-counts"),
+        pytest.param({"stderr": b"Error: quota exceeded"}, 429, 1, id="quota-counts"),
+        # A prompt too long is the request's fault: 400 (test_cli_prompt_too_long).
         pytest.param(
-            {"stdout": _claude_error("Prompt is too long")}, 0, id="too-long-does-not"
+            {"stdout": _claude_error("Prompt is too long")},
+            400,
+            0,
+            id="too-long-does-not",
         ),
     ],
 )
 async def test_streamed_cli_request_is_judged_the_same(
-    client, cli, breaker, monkeypatch, process, counted
+    client, cli, breaker, monkeypatch, process, status, counted
 ):
     """The API answers a streamed CLI request through forward()."""
     from plugboard import app as app_mod
@@ -273,7 +277,7 @@ async def test_streamed_cli_request_is_judged_the_same(
         json={"model": _CLI_MODEL, "messages": _MESSAGES, "stream": True},
     )
 
-    assert resp.status_code in (429, 502), resp.text
+    assert resp.status_code == status, resp.text
     assert _failures(_CLI_KEY) == counted
 
 

@@ -26,7 +26,7 @@ import os
 import re
 import time as _time
 import uuid as _uuid
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Set
+from typing import Any, AsyncIterator, Callable, Dict, List, Mapping, Optional, Set
 
 import aiohttp
 
@@ -40,6 +40,7 @@ from plugboard import (
 )
 from plugboard.alerts import record_provider_failure, record_provider_success
 from plugboard.circuit_breaker import is_request_too_long
+from plugboard.cli_limits import unsupported_on_cli
 from plugboard.cli_subprocess import MAX_RETRY_AFTER_S, CliSubprocessError
 from plugboard.config import load_providers
 from plugboard import live_requests as _live
@@ -159,6 +160,47 @@ class ProviderDisabledError(RuntimeError):
     def __init__(self, provider_id: str):
         super().__init__(f"Provider '{provider_id}' is turned off")
         self.provider_id = provider_id
+
+
+class UnsupportedOnCliError(RuntimeError):
+    """Only CLI subscription routes serve the model, and they cannot serve
+    the request (see ``plugboard.cli_limits``).
+
+    Nothing was called and no provider slot was taken. ``provider_id`` names
+    the first candidate; ``unsupported`` lists the refused fields, such as
+    ``tools`` or ``content:image_url``.
+    """
+
+    def __init__(self, provider_id: str, unsupported: List[str]):
+        super().__init__(
+            f"Provider '{provider_id}' is a CLI subscription route and cannot "
+            "serve: " + ", ".join(unsupported)
+        )
+        self.provider_id = provider_id
+        self.unsupported = list(unsupported)
+
+
+def is_cli_provider(provider: Mapping[str, Any]) -> bool:
+    """Whether ``provider`` is a CLI subscription route (``subprocess:<cli>``)."""
+    auth_source = provider.get("auth_source")
+    return isinstance(auth_source, str) and auth_source.startswith("subprocess:")
+
+
+def _drop_cli_routes(
+    body: Mapping[str, Any], candidates: List[tuple[Dict[str, Any], str]]
+) -> List[tuple[Dict[str, Any], str]]:
+    """``candidates`` without the CLI routes when ``body`` asks what they cannot serve.
+
+    Raise ``UnsupportedOnCliError`` (naming the first candidate) when only
+    CLI routes were candidates. A text-only body keeps every candidate.
+    """
+    unsupported = unsupported_on_cli(body)
+    if not unsupported or not candidates:
+        return candidates
+    kept = [route for route in candidates if not is_cli_provider(route[0])]
+    if not kept:
+        raise UnsupportedOnCliError(candidates[0][0]["id"], unsupported)
+    return kept
 
 
 # OpenAI-style error type that blames the request (unsupported parameter...);
@@ -795,15 +837,52 @@ _CLEAN_ALIAS_TO_PROVIDER = {
 
 
 def _resolve_all_providers(model_str: str) -> List[tuple[Dict[str, Any], str]]:
-    """Use the same selection/admission contract, retaining unqualified fallback."""
+    """Use the same selection/admission contract, retaining unqualified fallback.
+
+    The unqualified fallback leaves out a CLI route that lists models without
+    this one: the CLI would be sent a name it does not serve, and its refusal
+    would quarantine the bare name another provider serves.
+    """
     active, selected = _select_request(model_str)
     if selected is not None:
         return [selected.candidate()]
-    results = [_model_route(provider, model_str).candidate() for provider in active]
+    results = [
+        _model_route(provider, model_str).candidate()
+        for provider in active
+        if not is_cli_provider(provider)
+        or not _listed_models(provider)
+        or _known_native(provider, model_str) is not None
+    ]
     if len(results) > 1:
         stats = metrics.get_stats()
         results.sort(key=lambda item: _provider_lb_score(item[0]["id"], stats))
     return results
+
+
+def cli_refusal(body: Dict[str, Any]) -> Optional[UnsupportedOnCliError]:
+    """The ``UnsupportedOnCliError`` forward() would raise for ``body``, or None.
+
+    None when the body asks for nothing a CLI route cannot serve; when only a
+    disabled provider serves the model (forward() raises
+    ``ProviderDisabledError`` first); when routing raises ``ValueError`` (the
+    chat route answers it as before); or when a candidate that is not a CLI
+    route is left. Any other exception from reading the provider registry or
+    routing propagates, as it would from forward().
+    """
+    if not unsupported_on_cli(body):
+        return None
+    model_str = body.get("model", "")
+    if disabled_route(model_str) is not None:
+        return None
+    try:
+        candidates = _resolve_all_providers(model_str)
+    except ValueError:
+        return None
+    try:
+        _drop_cli_routes(body, candidates)
+    except UnsupportedOnCliError as exc:
+        return exc
+    return None
 
 
 # (provider, real_model) that actually answered the current request, after
@@ -892,8 +971,13 @@ async def forward(
     Forward a /v1/chat/completions request to the resolved provider.
     Retries on transient errors per provider, then falls back to next provider.
     An error saying the context is too long is not retried: the same request
-    would fail again, so it goes straight to the next provider. Neither is a
+    would fail again. From an HTTP provider it goes straight to the next
+    provider; from a CLI subscription route (``request_too_long``) it is
+    raised at once, and no other provider is tried. Neither is a
     timeout: the request already waited its whole timeout (BUG-47).
+    A request with a field a CLI route cannot serve (``unsupported_on_cli``)
+    leaves the CLI routes out; when only they serve the model,
+    ``UnsupportedOnCliError`` is raised before any call.
     A provider at its concurrency cap is skipped; when every candidate left
     is, the request waits up to ``PLUGBOARD_PROVIDER_WAIT_S`` for the first
     freed slot, then raises ``ProvidersBusyError``.
@@ -910,6 +994,10 @@ async def forward(
     model_str = body.get("model", "")
     _refuse_if_disabled(model_str)
     candidates = _resolve_all_providers(model_str)
+    # A CLI route would drop tools, a structured format or an image: it is
+    # left out, before any circuit read, guard or slot, and the request is
+    # refused when nothing else is left.
+    candidates = _drop_cli_routes(body, candidates)
 
     # Read each route's circuit under the key its outcomes are recorded under:
     # an open circuit past its cooldown goes half-open, so a success closes
@@ -1073,6 +1161,11 @@ async def forward(
                     log.warning(
                         "Subprocess provider %s failed: %s", provider["id"], exc
                     )
+                    # The CLI found the prompt too long: the same messages fail
+                    # the same way anywhere. No quarantine, no circuit count,
+                    # no other candidate; the chat route answers 400.
+                    if isinstance(exc, CliSubprocessError) and exc.request_too_long:
+                        raise
                     try:
                         from plugboard.model_quarantine import (
                             is_account_unsupported_error,
@@ -1330,6 +1423,7 @@ async def forward_stream(
     provider, real_model = resolve_provider_and_model(model_str)
     if route_guard is not None:
         route_guard(provider, real_model)
+    _drop_cli_routes(body, [(provider, real_model)])  # raises on a CLI route
     label = _metric_model(provider, real_model)  # PLU-16
     lease = provider_admission.try_acquire(provider)
     waited = lease is None

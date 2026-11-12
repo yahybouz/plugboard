@@ -119,6 +119,7 @@ from plugboard.legacy_connectors import (
 )
 from plugboard.decisions import is_decision_model
 from plugboard.cli_auth import AuthError
+from plugboard.cli_limits import UNSUPPORTED_ON_CLI
 from plugboard.cli_subprocess import CliSubprocessError
 from plugboard.router import (
     ProviderDisabledError,
@@ -126,6 +127,8 @@ from plugboard.router import (
     ProviderNetworkError,
     ProvidersBusyError,
     ProviderQuotaError,
+    UnsupportedOnCliError,
+    cli_refusal,
     disabled_route,
     discover_models,
     forward,
@@ -1910,6 +1913,87 @@ def _provider_disabled_response(provider_id: str) -> JSONResponse:
     )
 
 
+def _unsupported_on_cli_response(exc: UnsupportedOnCliError) -> JSONResponse:
+    """400 ``unsupported_on_cli``: every route of the model is a CLI
+    subscription, and a CLI cannot serve the fields ``exc.unsupported``
+    names (tools, a structured response format, an image...). Nothing was
+    called. The body holds no secret: a client key and the admin get it alike.
+    """
+    log.info(
+        "unsupported on cli: provider=%s fields=%s",
+        exc.provider_id,
+        ",".join(exc.unsupported),
+    )
+    return JSONResponse(
+        status_code=400,
+        content={
+            "detail": f"Model route '{exc.provider_id}' is a CLI subscription: "
+            f"it cannot serve {', '.join(exc.unsupported)}. Nothing was called.",
+            "code": UNSUPPORTED_ON_CLI,
+            "unsupported": list(exc.unsupported),
+            "hint": "Send plain text messages, or pick a model served by an API "
+            "or Ollama provider from GET /v1/models.",
+        },
+    )
+
+
+async def _replay_completion_as_sse(
+    completion: Dict[str, Any], *, completion_id: str, created: int, model: str
+):
+    """Replay a complete chat completion as OpenAI SSE chunks.
+
+    Used when a streamed request is answered from a complete answer: a CLI
+    route (or the provider that served the request in its place) and the
+    response cache. The text goes out word by word, then the tool calls in
+    one delta (``index`` = position), then a final chunk with the answer's
+    own ``finish_reason`` and its ``usage``, then ``[DONE]``. An empty or
+    missing ``content`` sends no content delta.
+    """
+    choice = (completion.get("choices") or [{}])[0]
+    message = choice.get("message") or {}
+    content = message.get("content") or ""
+    tool_calls = message.get("tool_calls") or []
+    finish_reason = choice.get("finish_reason") or "stop"
+    usage = completion.get("usage") or {}
+
+    def _chunk(delta: Dict[str, Any], finish: Optional[str]) -> Dict[str, Any]:
+        return {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+        }
+
+    if content:
+        tokens = content.split(" ")
+        for i, tok in enumerate(tokens):
+            delta = tok + (" " if i < len(tokens) - 1 else "")
+            evt = _chunk({"content": delta}, None)
+            yield f"data: {json.dumps(evt)}\n\n".encode("utf-8")
+    if tool_calls:
+        calls = []
+        for i, tc in enumerate(tool_calls):
+            fn = tc.get("function") or {}
+            calls.append(
+                {
+                    "index": i,
+                    "id": tc.get("id"),
+                    "type": tc.get("type") or "function",
+                    "function": {
+                        "name": fn.get("name"),
+                        "arguments": fn.get("arguments") or "",
+                    },
+                }
+            )
+        evt = _chunk({"tool_calls": calls}, None)
+        yield f"data: {json.dumps(evt)}\n\n".encode("utf-8")
+    final_evt = _chunk({}, finish_reason)
+    final_evt["usage"] = usage
+    yield f"data: {json.dumps(final_evt)}\n\n".encode("utf-8")
+    yield b"data: [DONE]\n\n"
+
+
 def _provider_http_error_response(
     exc: ProviderHTTPError | ProviderNetworkError, client_id: Optional[str]
 ) -> JSONResponse:
@@ -1955,15 +2039,17 @@ def _provider_http_error_response(
 def _cli_error_response(
     exc: CliSubprocessError, client_id: Optional[str]
 ) -> JSONResponse:
-    """502 for a failed CLI provider, 429 when it failed on its quota.
+    """502 for a failed CLI provider, 429 when it failed on its quota, 400
+    (``context_length_exceeded``) when it found the prompt too long.
 
-    ``exc.quota`` was decided by the CLI wrapper from the CLI's own error and
-    stderr, never from the model's output. The CLI's message, stderr, pid and
-    exit code can carry local paths, account names or tokens: only the admin
-    (dashboard Playground, admin key) gets them. A client key gets a
-    reference to the server log entry.
+    ``exc.quota`` and ``exc.request_too_long`` were decided by the CLI wrapper
+    from the CLI's own error and stderr, never from the model's output. The
+    CLI's message, stderr, pid and exit code can carry local paths, account
+    names or tokens: only the admin (dashboard Playground, admin key) gets
+    them. A client key gets a reference to the server log entry.
     """
     quota = exc.quota
+    too_long = exc.request_too_long and not quota
     ref = secrets.token_hex(4)
     log.warning(
         "cli provider error ref=%s provider=%s model=%s exit=%s pid=%s: %s | stderr=%s",
@@ -1987,14 +2073,24 @@ def _cli_error_response(
         }
     else:
         name = exc.provider_name or "CLI"
+        if quota:
+            detail = _quota_detail(name, exc.retry_after)
+        elif too_long:
+            detail = (
+                f"The {name} provider rejected the request: the messages are too "
+                f"long for the model's context (reference {ref} in the gateway log)."
+            )
+        else:
+            detail = f"The {name} provider failed (reference {ref} in the gateway log)."
         content = {
-            "detail": _quota_detail(name, exc.retry_after)
-            if quota
-            else f"The {name} provider failed (reference {ref} in the gateway log).",
+            "detail": detail,
             "error_ref": ref,
             "provider_name": exc.provider_name,
             "model_id": exc.model_id,
         }
+    if too_long:
+        content["code"] = "context_length_exceeded"
+        return JSONResponse(status_code=400, content=content)
     if not quota:
         return JSONResponse(status_code=502, content=content)
     headers = _retry_after_headers(content, exc.retry_after)
@@ -2190,6 +2286,13 @@ async def chat_completions(
     if is_unknown_model(body.get("model", "")):
         return _model_not_found_response(body["model"])
 
+    # After the 404, before the 402 and the rpm count, the session turn and
+    # the cache: a request only CLI routes serve, asking for what a CLI cannot
+    # (tools, structured output, images), is refused with nothing counted.
+    refusal = cli_refusal(body)
+    if refusal is not None:
+        return _unsupported_on_cli_response(refusal)
+
     # A budget cannot hold a call whose price is unknown (402, nothing called)
     if client_id and client_id != "admin":
         _check_price_known(client_id, body.get("model", ""), key_record=key_record)
@@ -2301,47 +2404,13 @@ async def chat_completions(
                 pass  # fall into the replay block
         if cached and _cache_key is not None and _is_streaming:
             # (subprocess-only replay path)
-            import json as _json_mod
-
-            content = (
-                (cached.get("choices") or [{}])[0].get("message", {}).get("content", "")
-            )
-            usage = cached.get("usage") or {}
-            completion_id = cached.get("id", "chatcmpl-cache")
-            created = cached.get("created", int(time.time()))
-            model_name = cached.get("model", body.get("model", ""))
-
-            async def _replay_cached_as_stream():
-                tokens = content.split(" ")
-                for i, tok in enumerate(tokens):
-                    delta = tok + (" " if i < len(tokens) - 1 else "")
-                    evt = {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": model_name,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"content": delta},
-                                "finish_reason": None,
-                            }
-                        ],
-                    }
-                    yield f"data: {_json_mod.dumps(evt)}\n\n".encode("utf-8")
-                final_evt = {
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model_name,
-                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-                    "usage": usage,
-                }
-                yield f"data: {_json_mod.dumps(final_evt)}\n\n".encode("utf-8")
-                yield b"data: [DONE]\n\n"
-
             return StreamingResponse(
-                _replay_cached_as_stream(),
+                _replay_completion_as_sse(
+                    cached,
+                    completion_id=cached.get("id", "chatcmpl-cache"),
+                    created=cached.get("created", int(time.time())),
+                    model=cached.get("model", body.get("model", "")),
+                ),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -2378,6 +2447,8 @@ async def chat_completions(
                     return _providers_busy_response(exc, client_id)
                 if isinstance(exc, ProviderDisabledError):
                     return _provider_disabled_response(exc.provider_id)
+                if isinstance(exc, UnsupportedOnCliError):
+                    return _unsupported_on_cli_response(exc)
                 log.error("subprocess stream forward error: %s", exc)
                 err_str = str(exc)
                 # Before the timeout test: a CLI message quotes its stderr.
@@ -2495,51 +2566,21 @@ async def chat_completions(
                 except Exception as exc:
                     log.warning("Cache write error (non-fatal): %s", exc)
 
-            # Replay as SSE
-            import json as _json_mod
-
+            # Replay as SSE: the answer may come from the provider that served
+            # the request in the CLI's place, tool calls included.
             content = (result.get("choices") or [{}])[0].get("message", {}).get(
                 "content", ""
             ) or ""
             _record_session_turn(
                 client_id, session_id, list(body.get("messages") or []), content
             )
-            usage = result.get("usage") or {}
-            completion_id = result.get("id", "chatcmpl-subproc")
-            created = result.get("created", int(time.time()))
-            model_name = result.get("model", body.get("model", ""))
-
-            async def _subproc_stream():
-                tokens = content.split(" ")
-                for i, tok in enumerate(tokens):
-                    delta = tok + (" " if i < len(tokens) - 1 else "")
-                    evt = {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": model_name,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"content": delta},
-                                "finish_reason": None,
-                            }
-                        ],
-                    }
-                    yield f"data: {_json_mod.dumps(evt)}\n\n".encode("utf-8")
-                final_evt = {
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model_name,
-                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-                    "usage": usage,
-                }
-                yield f"data: {_json_mod.dumps(final_evt)}\n\n".encode("utf-8")
-                yield b"data: [DONE]\n\n"
-
             return StreamingResponse(
-                _subproc_stream(),
+                _replay_completion_as_sse(
+                    result,
+                    completion_id=result.get("id", "chatcmpl-subproc"),
+                    created=result.get("created", int(time.time())),
+                    model=result.get("model", body.get("model", "")),
+                ),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -2567,6 +2608,8 @@ async def chat_completions(
                 return _providers_busy_response(exc, client_id)
             if isinstance(exc, ProviderDisabledError):
                 return _provider_disabled_response(exc.provider_id)
+            if isinstance(exc, UnsupportedOnCliError):
+                return _unsupported_on_cli_response(exc)
             log.error("stream error: %s", exc)
             err_str = str(exc)
             if isinstance(exc, ProviderQuotaError):
@@ -2713,6 +2756,8 @@ async def chat_completions(
             return _providers_busy_response(exc, client_id)
         if isinstance(exc, ProviderDisabledError):
             return _provider_disabled_response(exc.provider_id)
+        if isinstance(exc, UnsupportedOnCliError):
+            return _unsupported_on_cli_response(exc)
         log.error("forward error: %s", exc)
         err_str = str(exc)
         # Before the timeout test: a CLI message quotes its stderr.

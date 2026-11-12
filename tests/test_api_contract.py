@@ -284,3 +284,27 @@ async def test_instance_serves_the_contract_without_a_key(client):
     assert resp.status_code == 200
     committed = (ROOT / "docs" / "api" / "openapi.json").read_text(encoding="utf-8")
     assert resp.json() == json.loads(committed)
+
+
+def test_contract_states_what_a_cli_subscription_route_refuses():
+    """The committed document names both 400 codes of the chat routes, and the
+    request fields a CLI subscription route refuses carry that reserve."""
+    doc = json.loads((ROOT / "docs" / "api" / "openapi.json").read_text("utf-8"))
+    assert doc["info"]["version"] == "1.7.0"
+    for path in ("/v1/chat/completions", "/v2/chat/completions"):
+        bad_request = doc["paths"][path]["post"]["responses"]["400"]["description"]
+        assert "unsupported_on_cli" in bad_request, path
+        assert "unsupported" in bad_request.replace("unsupported_on_cli", ""), path
+        assert "context_length_exceeded" in bad_request, path
+    schemas = doc["components"]["schemas"]
+    fields = schemas["ChatCompletionRequest"]["properties"]
+    for name in ("tools", "tool_choice", "response_format"):
+        description = fields[name].get("description", "")
+        assert "unsupported_on_cli" in description, name
+        assert "CLI subscription route" in description, name
+    content = schemas["ChatMessage"]["properties"]["content"]["description"]
+    assert "unsupported_on_cli" in content
+    assert "CLI subscription route" in content
+    error_doc = schemas["ErrorResponse"]
+    assert "unsupported_on_cli" in error_doc["properties"]["code"]["description"]
+    assert "context_length_exceeded" in error_doc["properties"]["code"]["description"]

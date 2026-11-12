@@ -342,17 +342,18 @@ async def test_cli_quota_error_keeps_details_for_the_admin(client, cli_route):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "message",
-    ["model overloaded", "Input exceeds the context length limit"],
+    ("message", "status"),
+    # A prompt too long is the request's fault: 400 (test_cli_prompt_too_long).
+    [("model overloaded", 502), ("Input exceeds the context length limit", 400)],
 )
-async def test_cli_error_other_than_quota_stays_502(
-    client, client_key, cli_route, message
+async def test_cli_error_other_than_quota_is_not_429(
+    client, client_key, cli_route, message, status
 ):
     event = '{"type":"error","message":"%s"}\n' % message
     cli_route("claude", event.encode())
     resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
 
-    assert resp.status_code == 502, resp.text
+    assert resp.status_code == status, resp.text
 
 
 # The model's own words are not a quota error, nor is a full disk.

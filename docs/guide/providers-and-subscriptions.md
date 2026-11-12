@@ -182,6 +182,40 @@ What to expect:
 - Cost is the token counts priced at the model's price in the [pricing grid](pricing.md): an estimate, not the vendor's invoice. The remaining subscription quota is not exposed. Usage rows and cached responses recorded before 4.3.2 keep their estimated counts.
 - Streaming requests are answered in full and then replayed as server-sent events.
 - A daily job checks which models the signed-in account can really use and quarantines the others (see [Monitoring](monitoring.md#model-catalog-and-connectivity)).
+- The CLI gets the conversation as plain text: tools, structured output and images are refused, and sampling parameters are ignored (next section).
+
+#### What a CLI subscription route does not do
+
+A CLI subscription route is a provider whose `auth_source` starts with `subprocess:` (the presets above that run a CLI). Plugboard hands it the conversation as text, on the CLI's standard input, so part of the OpenAI request has no way through.
+
+**Refused.** A chat request that asks for any of the following is not sent to a CLI route:
+
+| Field | Refused when |
+|---|---|
+| `tools` | the list is not empty |
+| `tool_choice` | it is anything other than `none` or `auto` |
+| `functions`, `function_call` (older OpenAI form) | `functions` is not empty, `function_call` is anything other than `none` or `auto` |
+| `response_format` | its `type` is anything other than `text` (`json_object`, `json_schema`) |
+| a content part of a message | its `type` is anything other than `text` (`image_url`, `input_audio`, ...) |
+
+When another provider that is not a CLI also serves the model name sent without a provider prefix (an API provider or Ollama), the request reaches that provider with every field intact. A streamed request (`stream: true`) whose first route is a CLI is answered as a replay of that provider's complete answer, tool calls and `finish_reason` included, not as live tokens. When only CLI routes serve the model, or the model names a CLI provider (`<provider-id>:<model>`), the answer is `400` and nothing is called, counted or cached, also for `stream: true` (the `400` is JSON, not a stream):
+
+```json
+{
+  "detail": "Model route 'claude-via-claude-cli' is a CLI subscription: it cannot serve tools, content:image_url. Nothing was called.",
+  "code": "unsupported_on_cli",
+  "unsupported": ["tools", "content:image_url"],
+  "hint": "Send plain text messages, or pick a model served by an API or Ollama provider from GET /v1/models."
+}
+```
+
+`unsupported` names each refused field, a content part as `content:<type>` (`content:unknown` for a part without a type). An empty `tools` list, `tool_choice` `none` or `auto` and `response_format` `text` still go to the CLI. The check comes after the key's `403` (`allowed_models`) and the `404` for an unknown model, and before the `402` for a missing price and the key's `rpm_limit` count.
+
+**Prompt too long.** When the CLI says the messages do not fit the model's context, the answer is `400` with `"code": "context_length_exceeded"`, `error_ref`, `provider_name` and `model_id`, also for `stream: true`. No other provider is tried, since the same prompt would not fit there either; shorten the conversation or pick a model with a larger context. A client key gets a sentence naming the provider and a log reference (`ref=<error_ref>` in the gateway log); the admin also gets the CLI's message and error output.
+
+**Ignored.** `temperature`, `top_p`, `max_tokens`, `max_completion_tokens` and `stop` are accepted and not passed to the CLI: the CLI uses its own settings, and the answer can be longer than `max_tokens` or go past a stop sequence.
+
+**Streaming is replayed.** A `stream: true` request is answered as server-sent events, but the CLI's answer is complete before the first chunk is sent: the chunks replay it, and the first token comes as late as the whole answer.
 
 ### Subscriptions through CLI credentials
 

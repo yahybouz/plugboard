@@ -353,7 +353,7 @@ def cli_env(monkeypatch, tmp_path):
 
 def _body(kind, text="hello"):
     return {
-        "model": f"{kind}-cli:x-model",
+        "model": "x-model",
         "messages": [{"role": "user", "content": text}],
     }
 

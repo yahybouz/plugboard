@@ -95,11 +95,12 @@ FROM ${NODE_IMAGE} AS node
 # ── full: gateway + provider CLIs ────────────────────────────
 FROM base AS full
 
-# CLI versions are pinned: the CI, the UAT and deploy/ovh/compose.yml build
-# the same CLIs. Override one at build time if needed, e.g.
-#   docker build --target full --build-arg CLAUDE_CODE_VERSION=2.1.306 .
-# Keep these defaults equal to the build args of deploy/ovh/compose.yml and
-# of the UAT deployer (its apps.json passes them too, outside this repo).
+# Provider CLI versions: single source, bump here. Every deployment builds
+# these exact releases; no Compose file or deployer passes them again
+# (tests/test_cli_versions_single_source.py). When the native host tools
+# follow, bump deploy/ovh/install-host-tools.sh in the same change (one
+# checksum per release). A one-off local build may still override a version
+# with --build-arg.
 ARG GEMINI_CLI_VERSION=0.65.0
 ARG CLAUDE_CODE_VERSION=2.1.306
 ARG CODEX_VERSION=0.163.0

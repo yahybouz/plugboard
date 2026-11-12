@@ -86,11 +86,9 @@ def test_compose_protected_restrictions_unchanged():
         f"${{PLUGBOARD_IMAGE:-plugboard:private-full-v{version}}}"
     )
     assert gateway["build"]["target"] == "full"
-    assert gateway["build"]["args"] == {
-        "GEMINI_CLI_VERSION": "0.65.0",
-        "CLAUDE_CODE_VERSION": "2.1.306",
-        "CODEX_VERSION": "0.163.0",
-    }
+    assert gateway["build"]["context"] == "../.."
+    # The CLI versions are pinned in the Dockerfile only.
+    assert "args" not in gateway["build"]
     assert env["PLUGBOARD_LOCAL_AUTO_LOGIN"] == "0"
     assert env["COOKIE_SECURE"] == "true"
     assert env["CORS_ORIGINS"] == ""

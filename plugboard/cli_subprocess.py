@@ -10,10 +10,14 @@ We do the same here. A provider with `auth_source=subprocess:<kind>`
 is served by invoking the local CLI rather than forwarding HTTP.
 
 Supported kinds (match OpenClaw's config):
-- subprocess:gemini  → `gemini --output-format json --prompt "<prompt>"`
-- subprocess:codex   → `codex exec --json ... "<prompt>"`
-- subprocess:claude  → `claude -p --output-format stream-json ...` (stdin prompt)
-- subprocess:agy     → `agy -p "<prompt>" --output-format json ...` (Antigravity CLI)
+- subprocess:gemini  → `gemini --output-format json ...`
+- subprocess:codex   → `codex exec --json ... -`
+- subprocess:claude  → `claude -p --output-format stream-json ...`
+- subprocess:agy     → `agy --output-format json ...` (Antigravity CLI)
+
+Every CLI reads the prompt on stdin, never from its argv: an argument is
+readable by any local user in the process list, and one over ~128 KiB fails
+with "Argument list too long".
 
 The CLI's OAuth state is managed by the CLI itself (e.g. `gemini auth
 login` writes ~/.gemini/oauth_creds.json). Plugboard's "Connect"
@@ -42,6 +46,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from plugboard import envcompat
+from plugboard.circuit_breaker import is_request_too_long
 from plugboard import live_requests as _live
 
 log = logging.getLogger(__name__)
@@ -60,6 +65,9 @@ class CliSubprocessError(RuntimeError):
             limit is exhausted (decided when raised, never from the model's
             output).
         retry_after: seconds until the CLI said its quota reopens, or None.
+        request_too_long: the CLI's own error or its stderr says the messages
+            do not fit the model's context (decided like ``quota``, and never
+            set with it): the request caused it, no other provider is tried.
     """
 
     def __init__(
@@ -73,6 +81,7 @@ class CliSubprocessError(RuntimeError):
         model_id: str = "",
         quota: bool = False,
         retry_after: Optional[int] = None,
+        request_too_long: bool = False,
     ):
         super().__init__(message)
         self.exit_code = exit_code
@@ -82,6 +91,7 @@ class CliSubprocessError(RuntimeError):
         self.model_id = model_id
         self.quota = quota
         self.retry_after = retry_after
+        self.request_too_long = request_too_long
 
 
 _SPAWN_CWD_CACHE: Optional[str] = None
@@ -315,17 +325,14 @@ class CliBackend:
     kind: str  # "gemini" | "codex" | "claude" | "agy"
     command: str  # binary name (must be on PATH)
     args: List[str] = field(default_factory=list)  # args prefix
-    input_mode: str = "arg"  # "arg" (positional) | "stdin"
+    # The prompt always goes to stdin. ``stdin_arg`` is appended last to the
+    # argv when the CLI needs an operand to read it (codex: ``-``).
+    input_mode: str = "stdin"
+    stdin_arg: Optional[str] = None
     output_mode: str = "json"  # "json" (single object) | "jsonl" (line-per-event)
     model_arg: Optional[str] = None  # e.g. "--model" to pass the model name
     default_model: str = ""
     timeout_s: float = 300.0  # wall-clock ceiling per request
-
-    def resolve_prompt_args(self, prompt: str) -> List[str]:
-        """Return argv after substituting the prompt placeholder (if any)."""
-        args = list(self.args)
-        # Placeholder-style args ("--prompt", "{prompt}")
-        return [prompt if tok == "{prompt}" else tok for tok in args]
 
 
 CLI_BACKENDS: Dict[str, CliBackend] = {
@@ -352,12 +359,12 @@ CLI_BACKENDS: Dict[str, CliBackend] = {
             "__plugboard_no_mcp__",
             "--approval-mode",
             "default",
+            # No --prompt: a non-TTY stdin is the prompt. Never add --sandbox:
+            # gemini's sandbox re-launches it with stdin copied into its argv.
             "--output-format",
             "json",
-            "--prompt",
-            "{prompt}",
         ],
-        input_mode="arg",
+        input_mode="stdin",
         output_mode="json",
         model_arg="--model",
         default_model="gemini-2.5-flash",
@@ -381,7 +388,8 @@ CLI_BACKENDS: Dict[str, CliBackend] = {
             "--ephemeral",
             "--skip-git-repo-check",
         ],
-        input_mode="arg",  # positional (last arg = prompt)
+        input_mode="stdin",
+        stdin_arg="-",  # `codex exec ... -` reads the instructions from stdin
         output_mode="jsonl",
         model_arg="--model",
         default_model="gpt-5.5",
@@ -427,10 +435,9 @@ CLI_BACKENDS: Dict[str, CliBackend] = {
         # unless the operator's agy settings.json pre-allows it (SEC-2026-10).
         # --sandbox restricts the terminal on top of that, --mode plan keeps
         # the agent from editing, and slash commands / skills are not expanded.
-        # Never add --dangerously-skip-permissions here.
+        # Never add --dangerously-skip-permissions here. No -p: agy reads a
+        # piped prompt when -p is omitted.
         args=[
-            "-p",
-            "{prompt}",
             "--output-format",
             "json",
             "--disable-slash-commands",
@@ -438,7 +445,7 @@ CLI_BACKENDS: Dict[str, CliBackend] = {
             "--mode",
             "plan",
         ],
-        input_mode="arg",
+        input_mode="stdin",
         output_mode="json",
         model_arg="--model",
         default_model="gemini-3.8-flash-medium",
@@ -1191,16 +1198,20 @@ def quota_retry_after(message: str) -> Optional[int]:
 def _quota_fields(
     cli_error: str, stderr_text: str, *, rate_limited: bool = False
 ) -> Dict[str, Any]:
-    """quota/retry_after of a CliSubprocessError, never from the model's stdout.
+    """quota/retry_after/request_too_long of a CliSubprocessError, never from
+    the model's stdout.
 
     The CLI's own error decides; stderr is read only when the CLI gave none
     (a retry log there must not override "model not found"). ``rate_limited``
-    is claude's structured rate-limit sign (``_claude_rate_limited``).
+    is claude's structured rate-limit sign (``_claude_rate_limited``). A quota
+    is never also a prompt too long.
     """
-    quota = rate_limited or is_quota_error(cli_error if cli_error else stderr_text)
+    reason = cli_error if cli_error else stderr_text
+    quota = rate_limited or is_quota_error(reason)
     return {
         "quota": quota,
         "retry_after": quota_retry_after(cli_error) if quota else None,
+        "request_too_long": not quota and is_request_too_long(reason),
     }
 
 
@@ -1639,11 +1650,9 @@ async def complete(
         RuntimeError: if the CLI fails or returns unparseable output.
     """
     backend = get_backend(kind)
+    # The router passes the provider's own model name: kept whole, since a
+    # native name may hold a colon (``qwen3:8b``).
     model = body.get("model") or backend.default_model
-    # Strip the "provider_id:" prefix if present (routing leaves real model only,
-    # but be defensive if the caller passed through).
-    if ":" in model:
-        model = model.split(":", 1)[1]
     prompt = messages_to_prompt(body.get("messages", []) or [])
     if not prompt:
         raise RuntimeError("Empty prompt — no user/assistant/system messages")
@@ -1669,16 +1678,14 @@ async def complete(
     # tenant prompts.
     spawn_cwd = os.environ.get("PLUGBOARD_SUBPROCESS_CWD") or _clean_spawn_cwd()
 
-    argv = [binary_path] + backend.resolve_prompt_args(prompt)
+    argv = [binary_path, *backend.args]
     if kind == "codex":
         argv.extend(codex_isolation_args(spawn_cwd))
     if backend.model_arg and model:
         argv.extend([backend.model_arg, model])
-    if backend.input_mode == "arg" and "{prompt}" not in backend.args:
-        # Codex-style: prompt is a trailing positional arg
-        argv.append(prompt)
 
-    # Never argv: for arg-mode backends it carries the tenant prompt.
+    # Never argv: it holds the isolation options and the operator's paths.
+    # The prompt itself is never in argv; it goes to the CLI's stdin.
     log.info(
         "spawn CLI: %s (model=%s, prompt_chars=%d)", backend.kind, model, len(prompt)
     )
@@ -1695,6 +1702,9 @@ async def complete(
             gemini_home = cleanup.enter_context(gemini_private_home())
             argv.extend(gemini_isolation_args(gemini_home))
             env.update(gemini_isolation_env(gemini_home))
+        if backend.stdin_arg:
+            # Last, after every option: the operand telling the CLI to read stdin.
+            argv.append(backend.stdin_arg)
         t0 = time.perf_counter()
         # Per-backend semaphore: cap concurrent spawns to PLUGBOARD_SUBPROCESS_LIMIT
         # so a burst of requests can't fork-bomb the host (TM-001 mitigation).
@@ -1703,14 +1713,10 @@ async def complete(
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *argv,
-                    # For arg-mode we must close stdin explicitly: codex CLI prints
-                    # "Reading additional input from stdin..." and blocks if stdin is
-                    # inherited from a detached parent.
-                    stdin=(
-                        asyncio.subprocess.PIPE
-                        if backend.input_mode == "stdin"
-                        else asyncio.subprocess.DEVNULL
-                    ),
+                    # The prompt is written to this pipe, which is then closed:
+                    # never an argument (process list, ~128 KiB argv limit),
+                    # and never an inherited stdin the CLI could block on.
+                    stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     env=env,
@@ -1731,13 +1737,13 @@ async def complete(
                 ) from exc
 
             _live.update(phase="cli_running", pid=proc.pid)
-            stdin_bytes = (
-                prompt.encode("utf-8") if backend.input_mode == "stdin" else None
-            )
             finished = False
             try:
+                # A CLI that exits without reading its stdin is not an error
+                # here: communicate() ignores the broken pipe and the exit
+                # code is reported below.
                 stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(stdin_bytes),
+                    proc.communicate(prompt.encode("utf-8")),
                     timeout=deadline,
                 )
                 finished = True

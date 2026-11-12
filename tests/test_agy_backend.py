@@ -14,7 +14,8 @@ def test_agy_backend_never_skips_permissions():
     assert "--dangerously-skip-permissions" not in backend.args
     assert "--sandbox" in backend.args
     assert backend.args[backend.args.index("--mode") + 1] == "plan"
-    assert backend.resolve_prompt_args("hello")[1] == "hello"
+    # The prompt goes to stdin: no `-p <prompt>` in the argv.
+    assert "-p" not in backend.args and backend.input_mode == "stdin"
 
 
 def test_agy_child_env_drops_server_secrets(monkeypatch):

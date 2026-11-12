@@ -335,7 +335,7 @@ async def test_complete_spawns_from_neutral_cwd(monkeypatch, tmp_path):
     await cli_subprocess.complete(
         "gemini",
         {
-            "model": "gemini-cli:gemini-2.5-flash",
+            "model": "gemini-2.5-flash",
             "messages": [{"role": "user", "content": "hi"}],
         },
     )
@@ -356,7 +356,7 @@ async def test_complete_spawns_from_neutral_cwd(monkeypatch, tmp_path):
     await cli_subprocess.complete(
         "gemini",
         {
-            "model": "gemini-cli:gemini-2.5-flash",
+            "model": "gemini-2.5-flash",
             "messages": [{"role": "user", "content": "hi"}],
         },
     )
@@ -374,7 +374,7 @@ async def test_complete_gemini_sets_trust_workspace_env(monkeypatch):
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     body = {
-        "model": "gemini-cli:gemini-2.5-flash",
+        "model": "gemini-2.5-flash",
         "messages": [{"role": "user", "content": "hi"}],
     }
     await cli_subprocess.complete("gemini", body)
@@ -391,7 +391,7 @@ async def test_complete_gemini_parses_response_key(monkeypatch):
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     body = {
-        "model": "gemini-cli:gemini-2.5-flash",
+        "model": "gemini-2.5-flash",
         "messages": [{"role": "user", "content": "hi"}],
     }
     result = await cli_subprocess.complete("gemini", body)
@@ -760,7 +760,7 @@ async def _stop_by_timeout(caller: str) -> None:
     """Call `caller` on a CLI that hangs past a 2 s delay."""
     if caller == "complete":
         body = {
-            "model": "codex-cli:x-model",
+            "model": "x-model",
             "messages": [{"role": "user", "content": "hi"}],
         }
         with pytest.raises(cli_subprocess.CliSubprocessError, match="timed out"):
@@ -886,8 +886,8 @@ async def test_complete_raises_on_empty_prompt(monkeypatch):
         await cli_subprocess.complete("gemini", body)
 
 
-async def test_complete_strips_model_prefix(monkeypatch):
-    """Ensure `provider_id:real_model` prefix is stripped before passing to CLI."""
+async def test_complete_passes_the_native_model_name(monkeypatch):
+    """The router hands complete() the native model name; the CLI gets it as is."""
     captured_argv = []
 
     async def fake_exec(*argv, **kwargs):
@@ -896,11 +896,11 @@ async def test_complete_strips_model_prefix(monkeypatch):
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     body = {
-        "model": "gemini-cli-subprocess:gemini-2.5-pro",
+        "model": "gemini-2.5-pro",
         "messages": [{"role": "user", "content": "hi"}],
     }
     await cli_subprocess.complete("gemini", body)
-    # `--model gemini-2.5-pro` should be in the argv, not `gemini-cli-subprocess:gemini-2.5-pro`
+    # `--model gemini-2.5-pro` is in the argv, never a provider-prefixed ID.
     assert "gemini-2.5-pro" in captured_argv
     assert "gemini-cli-subprocess:gemini-2.5-pro" not in captured_argv
 
