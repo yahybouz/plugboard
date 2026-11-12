@@ -34,11 +34,9 @@ def test_ollama_page_has_the_switch():
 def test_ollama_page_has_the_off_banner():
     html = _html()
     # Hidden by style: the hidden attribute loses to .alert's display rule.
-    assert re.search(
-        r'<div class="alert alert-warning" id="ollama-off-banner" '
-        r'style="[^"]*display:none;[^"]*"',
-        html,
-    )
+    tag = re.search(r'<div [^>]*id="ollama-off-banner"[^>]*>', html).group(0)
+    assert 'class="alert alert-warning"' in tag
+    assert re.search(r'style="[^"]*display:none;', tag)
     assert (
         "Ollama is off: the API, the MCP server and the Playground do not use it."
         in html
@@ -64,3 +62,29 @@ def test_app_js_is_valid():
     if node is None:
         pytest.skip("node is not installed")
     subprocess.run([node, "--check", str(ROOT / "static" / "app.js")], check=True)
+
+
+def _save_switch_body(js: str) -> str:
+    start = js.index("async function saveOllamaSwitch(enabled)")
+    return js[start : js.index("\n}\n", start)]
+
+
+def test_switch_is_locked_while_its_put_runs():
+    """Turning Ollama on waits for the model sync: no second PUT meanwhile."""
+    body = _save_switch_body(_js())
+    assert body.index("box.disabled = true;") < body.index('api("PUT"')
+    # The toast says what the gateway answered, not what was asked.
+    assert "d.enabled ? " in body
+    # A failed PUT puts the box back before the state is read again.
+    assert body.index("box.checked = !enabled;") < body.index(
+        "await loadOllamaSwitch();"
+    )
+
+
+def test_switch_markup_is_accessible_and_starts_locked():
+    html = _html()
+    tag = re.search(r'<input type="checkbox" id="ollama-enabled"[^>]*>', html).group(0)
+    assert "disabled" in tag, "locked until GET /admin/ollama/switch answers"
+    assert 'aria-describedby="ollama-enabled-hint"' in tag
+    banner = re.search(r'<div [^>]*id="ollama-off-banner"[^>]*>', html).group(0)
+    assert 'role="status"' in banner

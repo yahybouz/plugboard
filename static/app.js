@@ -1502,13 +1502,19 @@ async function loadOllamaSwitch() {
 }
 
 async function saveOllamaSwitch(enabled) {
+  const box = document.getElementById("ollama-enabled");
+  // Locked until the gateway answers: turning on waits for the model sync.
+  box.disabled = true;
   try {
     const res = await api("PUT", "/admin/ollama/switch", { enabled: enabled });
     if (!res.ok) throw new Error(await _errorDetail(res));
-    _renderOllamaSwitch(await res.json());
-    toast("Ollama " + (enabled ? "on" : "off") + " for the API, MCP and Playground", "success");
+    const d = await res.json();
+    _renderOllamaSwitch(d);
+    toast("Ollama " + (d.enabled ? "on" : "off") + " for the API, MCP and Playground", "success");
   } catch (err) {
     toast("Switching Ollama failed: " + err.message, "error");
+    box.checked = !enabled;
+    box.disabled = false;
     await loadOllamaSwitch();
   }
 }

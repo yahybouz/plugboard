@@ -386,12 +386,12 @@
         <div class="card" id="ollama-switch" style="margin-bottom:1rem;">
           <div style="padding:1rem;">
             <label class="check" for="ollama-enabled">
-              <input type="checkbox" id="ollama-enabled" data-testid="ollama-enabled"> <span style="font-weight:600; color:var(--text);">Available to the API, MCP and Playground</span>
+              <input type="checkbox" id="ollama-enabled" data-testid="ollama-enabled" aria-describedby="ollama-enabled-hint" disabled> <span style="font-weight:600; color:var(--text);">Available to the API, MCP and Playground</span>
             </label>
             <div class="muted" id="ollama-enabled-hint" style="font-size:0.8rem; margin-top:0.25rem;">Off: requests for an Ollama model get 503 provider_disabled and nothing is called. Calls already running finish.</div>
           </div>
         </div>
-        <div class="alert alert-warning" id="ollama-off-banner" style="margin-bottom:1rem; display:none;">Ollama is off: the API, the MCP server and the Playground do not use it.</div>
+        <div class="alert alert-warning" id="ollama-off-banner" role="status" style="margin-bottom:1rem; display:none;">Ollama is off: the API, the MCP server and the Playground do not use it.</div>
         <div class="stats-grid" id="ollama-status"></div>
         <div class="card" id="ollama-settings" style="margin-bottom:1rem;">
           <div style="padding:1rem;">
