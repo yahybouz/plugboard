@@ -155,7 +155,6 @@ async def test_guarded_provider_with_invalid_address_is_refused_and_audited(
     assert json.loads(event["details"])["base_url"] == base_url
 
 
-
 async def test_guarded_provider_edit_to_invalid_address_is_refused_and_audited(
     client, _providers_file, idna_resolver, audit_db
 ):
