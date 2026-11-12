@@ -2780,11 +2780,16 @@ def _preflight_refusal(
     """Closed error code of the first chat admission check the item fails.
 
     The chat route's checks, in its order. The key's own checks apply to a
-    client key only; ``model_not_found`` (router.is_unknown_model) applies to
-    every caller, after the key's 403 so a limited key cannot probe which IDs
-    exist, and before the 402 and the rpm count.
+    client key only; ``provider_disabled`` (router.disabled_route, PLU-12) and
+    ``model_not_found`` (router.is_unknown_model) apply to every caller, after
+    the key's 403 so a limited key cannot probe which IDs exist, and before
+    the 402 and the rpm count.
     """
     keyed = bool(client_id) and client_id != "admin"
+
+    def _enabled() -> None:
+        if disabled_route(model_str) is not None:
+            raise HTTPException(503, "provider_disabled")
 
     def _known() -> None:
         if is_unknown_model(model_str):
@@ -2801,6 +2806,7 @@ def _preflight_refusal(
             keyed,
             lambda: _check_model_access(client_id, model_str, key_record=key_record),
         ),
+        ("provider_disabled", True, _enabled),
         ("model_not_found", True, _known),
         (
             "price_unavailable",
@@ -2846,7 +2852,10 @@ async def preflight(
         try:
             resolve_provider_and_model(model_str)
         except Exception:
-            error = "unknown_model"
+            # With no provider on, a model of a disabled one does not
+            # resolve: _preflight_refusal names it provider_disabled.
+            if disabled_route(model_str) is None:
+                error = "unknown_model"
         if error is None:
             error = _preflight_refusal(client_id, model_str, key_record)
         if error is None:
@@ -2869,6 +2878,9 @@ async def preflight(
                 # Full, not failed: nothing was called (D-23).
                 log.info("preflight busy | model=%s | %s", model_str, exc)
                 error = "providers_busy"
+            except ProviderDisabledError:
+                # Turned off between the checks and the ping: nothing called.
+                error = "provider_disabled"
             except Exception as exc:
                 log.warning("preflight error | model=%s | %s", model_str, exc)
                 error = "upstream_error"

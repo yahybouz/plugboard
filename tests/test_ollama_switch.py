@@ -306,3 +306,99 @@ async def test_chat_is_routed_again_once_turned_on(off, http):
     )
     assert resp.status_code == 502, resp.text  # the recorder refuses the call
     assert calls == ["ollama:qwen3:8b"]
+
+
+# ── What the preflight answers ──────────────────────────────────────────────
+
+
+@pytest.fixture
+def pinged(http, tmp_path, monkeypatch):
+    """http, with every ping answered and billed to a usage store of its own."""
+    import copy
+
+    import plugboard.app as app_module
+    from plugboard import usage
+    from tests.factories import FAKE_COMPLETION
+
+    client, auth, calls = http
+
+    async def _forward(body, **_kwargs):
+        calls.append(body.get("model"))
+        return copy.deepcopy(FAKE_COMPLETION)
+
+    monkeypatch.setattr(app_module, "forward", _forward)
+    monkeypatch.setattr(usage, "_DB_PATH", tmp_path / "usage.db")
+    monkeypatch.setattr(usage, "_schema_ready", {})
+    return client, auth, calls
+
+
+async def _preflight(client, auth, provider: str, model: str) -> dict:
+    resp = await client.post(
+        "/v1/preflight",
+        headers=auth,
+        json={"items": [{"provider": provider, "model": model}]},
+    )
+    assert resp.status_code == 200, resp.text
+    api_contract.PreflightResponse.model_validate(resp.json())
+    (result,) = resp.json()["results"]
+    return result
+
+
+@pytest.mark.parametrize("caller", ["client key", "admin key"])
+async def test_preflight_answers_provider_disabled_without_a_ping(off, pinged, caller):
+    from plugboard import billing, usage
+
+    client, auth, calls = pinged
+    if caller == "admin key":
+        auth = {"Authorization": f"Bearer {ADMIN_KEY}"}
+
+    result = await _preflight(client, auth, "ollama", "qwen3:8b")
+
+    assert (result["ok"], result["error"]) == (False, "provider_disabled")
+    assert calls == [], "no ping goes to a disabled provider, nor to another"
+    assert usage.get_usage(billing.current_pricing_month()) == []
+
+
+async def test_preflight_with_no_provider_on(tmp_path, monkeypatch, pinged):
+    """Ollama alone and off: provider_disabled, not unknown_model."""
+    _isolated_providers(tmp_path, monkeypatch, [OLLAMA])
+    client, auth, calls = pinged
+    result = await _preflight(client, auth, "ollama", "qwen3:8b")
+    assert result["error"] == "provider_disabled"
+    assert calls == []
+
+
+async def test_preflight_gives_a_limited_key_forbidden_model_first(off, pinged):
+    client, _auth, calls = pinged
+    auth = _key(allowed_models=["acme-direct:acme-large"])
+    result = await _preflight(client, auth, "ollama", "qwen3:8b")
+    assert result["error"] == "forbidden_model"
+    assert calls == []
+
+
+async def test_preflight_maps_a_late_refusal(off, pinged, monkeypatch):
+    """Turned off between the checks and the ping: provider_disabled too."""
+    import plugboard.app as app_module
+
+    client, auth, _calls = pinged
+
+    async def _forward(body, **_kwargs):
+        raise router.ProviderDisabledError("acme-direct")
+
+    monkeypatch.setattr(app_module, "forward", _forward)
+    result = await _preflight(client, auth, "acme-direct", "acme-large")
+    assert result["error"] == "provider_disabled"
+
+
+def test_contract_documents_provider_disabled():
+    import typing
+
+    assert api_contract.CONTRACT_VERSION == "1.6.0"
+    annotation = api_contract.PreflightResult.model_fields["error"].annotation
+    literal = next(a for a in typing.get_args(annotation) if a is not type(None))
+    assert "provider_disabled" in typing.get_args(literal)
+    assert "provider_disabled" in (
+        api_contract.ErrorResponse.model_fields["code"].description or ""
+    )
+    assert "provider_disabled" in (api_contract.ErrorResponse.__doc__ or "")
+    assert "provider_disabled" in api_contract._CHAT_ERRORS["503"]

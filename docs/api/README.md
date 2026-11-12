@@ -159,6 +159,7 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 | `429` | The last provider tried has exhausted its quota or rate limit (a streamed request to an HTTP provider is not offered to another one); `detail` names the provider | Retry after `Retry-After` / `retry_after` seconds when set (at most 7 days), else later or with another model |
 | `502` | The provider failed | Retry later or use another model |
 | `503` | Gateway at capacity, provider timeout, or, with `code` `providers_busy`, every provider of the model busy at its concurrency cap after the wait; nothing was called | Retry after `Retry-After` / `retry_after` seconds (5 for `providers_busy`) |
+| `503` | Chat only, `code` is `provider_disabled`: the model belongs to a provider the operator turned off; nothing was called and no other provider stands in (below) | Pick another model from `GET /v1/models`, or ask the operator to turn the provider back on |
 
 ### `404 model_not_found`
 
@@ -179,6 +180,20 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 `code` is stable, test it rather than the text. `detail` echoes the model you sent, cut after 100 characters. A key limited by `allowed_models` gets `403` for a model outside its list, whether a provider knows it or not, so the `404` only tells it about models it may use. A budgeted key gets this `404` rather than a `402` for a missing price. A model with a known provider prefix (`anthropic-direct:no-such-model`) is still sent to that provider, which answers for it (`502` when it refuses).
 
 `POST /v1/preflight` applies the same rule to each pair, read as `<provider>:<model>`: such a pair answers `"ok": false` with `"error": "model_not_found"`, and is neither pinged nor billed. As on chat, a limited key gets `forbidden_model` first, and a budgeted key gets `model_not_found` rather than `price_unavailable`.
+
+### `503 provider_disabled`
+
+When the operator turns a provider off (the **Ollama** page switch, or **Active** unticked on the **Providers** page), its models leave `GET /v1/models` at once, without a restart. A chat request for one of them, `/v1` or `/v2`, streamed or not, answers `503` and calls nobody: neither that provider nor another one in its place. The model is one of the provider's when its ID prefixes it (`ollama:qwen3:8b`), or when no prefix matches, every active provider has a model list, none knows the name and the disabled provider does (`qwen3:8b`, `llama3`).
+
+```json
+{
+  "detail": "Provider 'ollama' is turned off by the administrator; nothing was called.",
+  "code": "provider_disabled",
+  "hint": "Pick another model from GET /v1/models, or ask the administrator to turn the provider back on."
+}
+```
+
+There is no `Retry-After`: nobody knows when the provider comes back. A key limited by `allowed_models` gets `403` first for a model outside its list. No cached answer is served for such a model. A request already running when the provider is turned off goes to its end; one still waiting for a slot on it gets this `503` when its turn comes. `POST /v1/preflight` answers such a pair `"ok": false` with `"error": "provider_disabled"`, without a ping. Embeddings keep their own answer: `503` *Embedding provider unavailable*.
 
 ## MCP
 
