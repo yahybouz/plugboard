@@ -252,6 +252,30 @@ def test_create_from_catalog_preset_freezes_base_url(
     assert get_provider(record["id"])["base_url"] == "https://api.acme.test/v1"
 
 
+@pytest.mark.parametrize("name", ["日本語", "!!!"])
+async def test_catalog_preset_named_without_letter_or_digit_is_created(
+    admin_client, catalog_env, raw, monkeypatch, name
+):
+    # BUG-65: the id is made from the name, and a name without a-z/0-9 is
+    # refused (BUG-61); a catalog preset's name cannot be edited, so the
+    # preset key gives the id instead.
+    from plugboard.config import get_provider
+
+    discovered = []
+    monkeypatch.setattr("plugboard.app._schedule_initial_discovery", discovered.append)
+    raw["acme"]["name"] = name
+    _store(catalog_env, raw)
+    resp = await admin_client.post(
+        "/admin/direct-providers/catalog-acme",
+        json={"api_key": "test-key-123456"},
+        headers={"Authorization": "Bearer adminkey"},
+    )
+    assert resp.status_code == 201, resp.text
+    assert (resp.json()["id"], resp.json()["name"]) == ("catalog-acme", name)
+    assert get_provider("catalog-acme")["preset_key"] == "catalog-acme"
+    assert discovered == ["catalog-acme"]
+
+
 @pytest.mark.parametrize(
     "base, url",
     [

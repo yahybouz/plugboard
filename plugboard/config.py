@@ -326,8 +326,10 @@ def create_provider(
     auth_header_prefix: str = "Bearer",
     auth_source: str = "",
     egress_guard: bool = False,
+    fallback_id: str = "",
 ) -> Dict[str, Any]:
-    provider_id = _slugify(name)
+    # fallback_id: a preset's key, for a name the admin cannot edit (BUG-65).
+    provider_id = _slugify(name) or _slugify(fallback_id)
     if not provider_id:
         # "!!!" or a name in another script leaves no a-z/0-9 (BUG-61).
         raise ValueError(
