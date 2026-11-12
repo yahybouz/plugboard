@@ -5,11 +5,13 @@ Provides:
 - Provider health status (ping /health endpoint)
 - Model availability (quick completion test)
 - Latency + error rate from metrics
-- Historical snapshots in SQLite (data/monitoring.db)
+- Availability snapshots in SQLite (data/monitoring.db), written by
+  record_snapshot on a schedule; the admin page reads them and never writes
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 import sqlite3
@@ -21,6 +23,7 @@ import aiohttp  # noqa: F401 — still used by check_model_availability below
 
 from plugboard.config import get_provider, load_providers
 from plugboard.legacy_connectors import (
+    is_removed_provider,
     require_supported_model,
     require_supported_provider,
 )
@@ -48,6 +51,9 @@ CREATE TABLE IF NOT EXISTS monitoring_snapshots (
 
 _CREATE_INDEX = "CREATE INDEX IF NOT EXISTS idx_mon_ts ON monitoring_snapshots(ts);"
 _CREATE_INDEX2 = "CREATE INDEX IF NOT EXISTS idx_mon_provider ON monitoring_snapshots(provider_id, ts);"
+
+# A probe that has not answered after this many seconds counts as down.
+PROBE_TIMEOUT_S = 30.0
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -142,17 +148,17 @@ async def check_model_availability(
 
 async def full_health_check() -> Dict[str, Any]:
     """
-    Complete monitoring snapshot:
+    Complete monitoring report, computed live:
     1. Check each provider's /health
     2. Get metrics (latency, errors, requests)
-    3. Save snapshot to SQLite
 
-    Returns full monitoring report.
+    Returns full monitoring report. Nothing is stored: availability history
+    comes from record_snapshot alone, so opening the admin page does not
+    change the uptime it shows.
     """
     providers = load_providers()
     metrics = get_stats()
-    now = datetime.now(timezone.utc)
-    ts = now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    ts = _utc_ts()
 
     report: Dict[str, Any] = {
         "ts": ts,
@@ -164,81 +170,130 @@ async def full_health_check() -> Dict[str, Any]:
         },
     }
 
+    for p in providers:
+        pid = p["id"]
+        is_active = p.get("is_active", True)
+
+        if not is_active:
+            report["providers"].append(
+                {
+                    "id": pid,
+                    "name": p.get("name", pid),
+                    "active": False,
+                    "health": {"ok": False, "error": "inactive"},
+                    "metrics": {},
+                }
+            )
+            report["summary"]["unhealthy"] += 1
+            continue
+
+        # Health check
+        health = await check_provider_health(pid)
+
+        # Metrics
+        m = metrics.get(pid, {})
+        error_rate = 0.0
+        if m.get("requests", 0) > 0:
+            error_rate = round(m["errors"] / m["requests"] * 100, 1)
+
+        provider_report = {
+            "id": pid,
+            "name": p.get("name", pid),
+            "active": True,
+            "base_url": p.get("base_url", ""),
+            "health": health,
+            "metrics": {
+                "requests": m.get("requests", 0),
+                "errors": m.get("errors", 0),
+                "error_rate_pct": error_rate,
+                "latency_avg_ms": round(m.get("latency_avg", 0) * 1000, 1),
+            },
+            "models_count": len(p.get("models", [])),
+        }
+
+        if health.get("ok"):
+            report["summary"]["healthy"] += 1
+        else:
+            report["summary"]["unhealthy"] += 1
+
+        report["providers"].append(provider_report)
+
+    return report
+
+
+def _utc_ts() -> str:
+    """Current UTC time as stored in ``ts``: milliseconds, then ``Z``.
+
+    Retention compares this text, so the format must not change.
+    """
+    now = datetime.now(timezone.utc)
+    return now.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+async def _probe_with_timeout(provider_id: str) -> Dict[str, Any]:
+    """Health of one provider; a hang or an exception counts as down."""
+    try:
+        return await asyncio.wait_for(
+            check_provider_health(provider_id), PROBE_TIMEOUT_S
+        )
+    except TimeoutError:
+        return {"provider_id": provider_id, "ok": False, "error": "probe timed out"}
+    except Exception as exc:
+        return {"provider_id": provider_id, "ok": False, "error": str(exc)[:200]}
+
+
+def _insert_snapshots(rows: List[tuple]) -> None:
     conn = _get_conn()
     try:
-        for p in providers:
-            pid = p["id"]
-            is_active = p.get("is_active", True)
-
-            if not is_active:
-                report["providers"].append(
-                    {
-                        "id": pid,
-                        "name": p.get("name", pid),
-                        "active": False,
-                        "health": {"ok": False, "error": "inactive"},
-                        "metrics": {},
-                    }
-                )
-                report["summary"]["unhealthy"] += 1
-                continue
-
-            # Health check
-            health = await check_provider_health(pid)
-
-            # Metrics
-            m = metrics.get(pid, {})
-            error_rate = 0.0
-            if m.get("requests", 0) > 0:
-                error_rate = round(m["errors"] / m["requests"] * 100, 1)
-
-            provider_report = {
-                "id": pid,
-                "name": p.get("name", pid),
-                "active": True,
-                "base_url": p.get("base_url", ""),
-                "health": health,
-                "metrics": {
-                    "requests": m.get("requests", 0),
-                    "errors": m.get("errors", 0),
-                    "error_rate_pct": error_rate,
-                    "latency_avg_ms": round(m.get("latency_avg", 0) * 1000, 1),
-                },
-                "models_count": len(p.get("models", [])),
-            }
-
-            if health.get("ok"):
-                report["summary"]["healthy"] += 1
-            else:
-                report["summary"]["unhealthy"] += 1
-
-            report["providers"].append(provider_report)
-
-            # Save snapshot
-            conn.execute(
-                """INSERT INTO monitoring_snapshots
-                   (id, ts, provider_id, is_healthy, latency_ms, error, models_up, models_down)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    secrets.token_hex(8),
-                    ts,
-                    pid,
-                    1 if health.get("ok") else 0,
-                    health.get("latency_ms", 0),
-                    # `health["error"]` is None when healthy (see
-                    # health_probe._probe_subprocess) — coerce to ""
-                    # because the schema column is NOT NULL.
-                    health.get("error") or "",
-                    len(p.get("models", [])),
-                    0,
-                ),
-            )
-
+        conn.executemany(
+            """INSERT INTO monitoring_snapshots
+               (id, ts, provider_id, is_healthy, latency_ms, error, models_up, models_down)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
         conn.commit()
     finally:
         conn.close()
 
-    return report
+
+async def record_snapshot() -> Dict[str, Any]:
+    """Probe every active provider once and store one row per provider.
+
+    Removed legacy connectors are skipped. Probes run in parallel, each
+    bounded by PROBE_TIMEOUT_S. With no active provider nothing is written.
+    Returns ``{"ts", "providers", "healthy"}``.
+    """
+    providers = [
+        p
+        for p in load_providers()
+        if p.get("is_active", True) and not is_removed_provider(p)
+    ]
+    ts = _utc_ts()
+    if not providers:
+        return {"ts": ts, "providers": 0, "healthy": 0}
+
+    results = await asyncio.gather(*(_probe_with_timeout(p["id"]) for p in providers))
+    rows = [
+        (
+            secrets.token_hex(8),
+            ts,
+            p["id"],
+            1 if health.get("ok") else 0,
+            health.get("latency_ms") or 0,
+            # `health["error"]` is None when healthy (see
+            # health_probe._probe_subprocess); the column is NOT NULL.
+            health.get("error") or "",
+            len(p.get("models", [])),
+            0,
+        )
+        for p, health in zip(providers, results)
+    ]
+    await asyncio.to_thread(_insert_snapshots, rows)
+    return {
+        "ts": ts,
+        "providers": len(rows),
+        "healthy": sum(row[3] for row in rows),
+    }
 
 
 def get_monitoring_history(
@@ -264,7 +319,10 @@ def get_monitoring_history(
 
 
 def get_uptime_stats(provider_id: str, hours: int = 24) -> Dict[str, Any]:
-    """Calculate uptime percentage for a provider over the last N hours."""
+    """Calculate uptime percentage for a provider over the last N hours.
+
+    ``uptime_pct`` is None (unknown) when no snapshot falls in the period.
+    """
     conn = _get_conn()
     try:
         cutoff = datetime.now(timezone.utc)
@@ -282,7 +340,7 @@ def get_uptime_stats(provider_id: str, hours: int = 24) -> Dict[str, Any]:
 
         total = rows["total"] or 0
         healthy = rows["healthy"] or 0
-        uptime = round((healthy / total) * 100, 2) if total > 0 else 100.0
+        uptime = round((healthy / total) * 100, 2) if total > 0 else None
 
         return {
             "provider_id": provider_id,
