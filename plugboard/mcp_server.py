@@ -31,6 +31,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -384,12 +385,15 @@ _CREATE_LIMIT = 5
 _CREATE_WINDOW_S = 3600.0
 _REFRESH_COOLDOWN_S = 60.0
 _NAMES_SHOWN = 20
+_NAME_MAX = 120
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _CLI_AUTH_PREFIXES = ("subprocess:", "cli:")
 _DETAIL_LIMIT = 300
 _MFA_DETAIL = "Admin MFA required"
 _MAYBE_CREATED = (
     ": the provider may have been created, check the dashboard before retrying"
 )
+_MAYBE_REFRESHED = ": the catalog may have been refreshed, check the dashboard"
 
 _clock = time.monotonic
 # Times of the add_provider calls of the last hour (refusals included).
@@ -1122,11 +1126,20 @@ async def add_provider(
     )
 
 
+def _name(item: Any) -> str:
+    """One model ID as shown to the agent: one line, 120 characters at most.
+
+    IDs come from the provider's own API, which may be hostile.
+    """
+    name = _CONTROL_CHARS.sub(" ", str(item))
+    return name if len(name) <= _NAME_MAX else name[:_NAME_MAX] + "…"
+
+
 def _names(items: Any) -> str:
     """Model IDs for a tool answer: the first 20, then a count."""
     if not isinstance(items, list) or not items:
         return "none"
-    names = [str(item) for item in items]
+    names = [_name(item) for item in items]
     shown = ", ".join(names[:_NAMES_SHOWN])
     if len(names) > _NAMES_SHOWN:
         shown += f" (+{len(names) - _NAMES_SHOWN} more)"
@@ -1139,10 +1152,11 @@ async def refresh_catalog(provider_id: str, dry_run: bool = False) -> str:
 
     Same as the dashboard's Discover button: the gateway lists the
     provider's models and writes them; models it no longer lists are
-    removed, unless its list is not trusted, and pinned models are kept.
-    CLI providers are refused (their refresh runs model probes): use the
-    dashboard. Needs PLUGBOARD_MCP_ADMIN_TOOLS=1 and PLUGBOARD_ADMIN_KEY;
-    one refresh at a time, and once a minute per provider and mode.
+    removed at once, unless its list is not trusted, and pinned models are
+    kept: run it with dry_run=True first. CLI providers are refused (their
+    refresh runs model probes): use the dashboard. Needs
+    PLUGBOARD_MCP_ADMIN_TOOLS=1 and PLUGBOARD_ADMIN_KEY; one refresh at a
+    time, and once a minute per provider and mode.
 
     Args:
         provider_id: The provider's id, as add_provider or the dashboard
@@ -1158,7 +1172,7 @@ async def refresh_catalog(provider_id: str, dry_run: bool = False) -> str:
             raise AdminToolError("a catalog refresh is already running")
         async with _refresh_lock:
             status, providers = await _admin_request("GET", "/providers")
-            if status != 200:
+            if status != 200 or isinstance(providers, dict):
                 return "Error: " + _gateway_error(status, providers)
             if not isinstance(providers, list):
                 return f"Error: unexpected gateway answer (HTTP {status})"
@@ -1180,31 +1194,48 @@ async def refresh_catalog(provider_id: str, dry_run: bool = False) -> str:
                 path += "?dry_run=true"
             status, payload = await _admin_request("POST", path)
     except AdminToolError as exc:
-        return f"Error: {exc}"
+        maybe = exc.maybe_applied and not dry_run
+        return f"Error: {exc}{_MAYBE_REFRESHED if maybe else ''}"
+    # A write may have happened before a 500/504 or an odd 200 (the gateway's
+    # own 502 comes before any write).
+    maybe = "" if dry_run else _MAYBE_REFRESHED
     if status != 200:
-        return "Error: " + _gateway_error(status, payload)
+        return (
+            "Error: "
+            + _gateway_error(status, payload)
+            + (maybe if status in (500, 504) else "")
+        )
     if not isinstance(payload, dict) or not isinstance(payload.get("discovered"), int):
-        return f"Error: unexpected gateway answer (HTTP {status})"
+        return f"Error: unexpected gateway answer (HTTP {status}){maybe}"
     if dry_run and payload.get("dry_run") is not True:
         return (
             "Error: the gateway did not confirm the preview: it may have written "
             "the catalog, check the dashboard"
         )
-    if payload.get("first_population") is True:
+    added, removed = payload.get("added"), payload.get("removed")
+    first = payload.get("first_population")
+    if first is True:
         # The gateway reports no added model for a first listing.
         text = (
             f"Catalog of '{provider_id}': first listing, "
             f"{payload['discovered']} models: {_names(payload.get('models'))}"
         )
+    elif first is None and not added and not removed and payload.get("models"):
+        # A gateway without first_population cannot tell a first listing
+        # from no change: never claim "added: none".
+        text = (
+            f"Catalog of '{provider_id}': {payload['discovered']} models: "
+            f"{_names(payload.get('models'))} (the gateway did not report "
+            "what changed)"
+        )
     else:
         text = (
             f"Catalog of '{provider_id}': {payload['discovered']} models; "
-            f"added: {_names(payload.get('added'))}; "
-            f"removed: {_names(payload.get('removed'))}"
+            f"added: {_names(added)}; removed: {_names(removed)}"
         )
     if dry_run:
         text += " (preview, nothing written)"
-    if payload.get("removals_allowed") is False:
+    if payload.get("removals_allowed") is False and first is not True:
         text += "; removals skipped: the provider's list is not trusted"
     return text
 
