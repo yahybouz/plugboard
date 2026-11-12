@@ -852,6 +852,8 @@ def create_from_preset(
         provider_type=preset.get("provider_type", "cloud"),
         auth_header_name=preset.get("auth_header_name", "Authorization"),
         auth_header_prefix=preset.get("auth_header_prefix", "Bearer"),
+        # A catalog name without a-z/0-9 ("日本語") gives no id (BUG-65).
+        fallback_id=preset_key,
     )
     # The base_url above is frozen: a later catalog refresh never rewrites
     # an existing provider, so a changed catalog entry cannot redirect keys.

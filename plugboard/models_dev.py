@@ -384,11 +384,12 @@ def is_public_https(url: str) -> bool:
     """https, default port, no credentials, and not a private or local host."""
     try:
         parts = urlsplit(url)
+        port = parts.port  # raises on a port out of range or not a number
     except ValueError:
         return False
     if parts.scheme != "https" or not parts.hostname:
         return False
-    if parts.username or parts.password or parts.port not in (None, 443):
+    if parts.username or parts.password or port not in (None, 443):
         return False
     host = parts.hostname.lower()
     if not re.fullmatch(r"[a-z0-9.-]+", host):

@@ -4671,6 +4671,8 @@ async def test_direct_provider(
     body: DirectProviderTest, _: None = Depends(_require_admin)
 ):
     """Check a key against a preset or custom endpoint without creating anything."""
+    from urllib.parse import urlsplit
+
     from plugboard.config import check_provider_domain_allowed, ProviderDomainNotAllowed
     from plugboard.direct_providers import get_preset
 
@@ -4686,6 +4688,18 @@ async def test_direct_provider(
             pinned = await _require_public_host(base_url)
     if not base_url.startswith(("http://", "https://")):
         raise HTTPException(422, "Give a preset_key or an http(s) base_url")
+    try:
+        # An unclosed IPv6 bracket, a bracketed name or a bad port (urlsplit,
+        # .port), or an empty or over-long label in an ASCII host (the IDNA
+        # step of getaddrinfo, which aiohttp lets through) raised a 500
+        # (BUG-63). A non-ASCII host is encoded by aiohttp, which reports it.
+        parts = urlsplit(base_url)
+        parts.port  # parsed on read
+        host = parts.hostname or ""
+        if host.isascii():
+            host.encode("idna")
+    except ValueError as exc:
+        raise HTTPException(422, f"base_url refused: not a valid address ({exc})")
     try:
         check_provider_domain_allowed(base_url)
     except ProviderDomainNotAllowed as exc:
@@ -5108,6 +5122,15 @@ class KeyCreate(BaseModel):
         # (every in-flight call, no model restriction): never issue it (BUG-60).
         if value.strip().lower() == "admin":
             raise ValueError("client_id 'admin' is reserved for the administrator")
+        return value
+
+    @field_validator("client_id")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        # The chat routes read an empty client_id as "no caller": no budget,
+        # rpm_limit or allowed_models, nothing billed (BUG-64).
+        if not value.strip():
+            raise ValueError("client_id must not be blank")
         return value
 
 

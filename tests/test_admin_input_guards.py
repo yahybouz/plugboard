@@ -1,4 +1,4 @@
-"""Admin routes refuse inputs the gateway would misread (BUG-60, 61, 62)."""
+"""Admin routes refuse inputs the gateway would misread (BUG-60 to 64)."""
 
 from __future__ import annotations
 
@@ -59,6 +59,33 @@ async def test_existing_key_named_admin_is_left_as_is(admin_client, keys_store):
     r = await admin_client.post(f"/admin/keys/{old['key_id']}/rotate", headers=ADMIN)
     assert r.status_code == 201
     assert keys_store.get_key_record(r.json()["key"])["client_id"] == "admin"
+
+
+# -- BUG-64: a client key with a blank client_id ------------------------------
+
+
+@pytest.mark.parametrize("client_id", ["", " ", "\t\n"])
+async def test_key_for_blank_client_is_refused(admin_client, keys_store, client_id):
+    # The chat routes read an empty client_id as "no caller": /v1/preflight
+    # skipped the key's allowed_models, budget and rpm_limit and billed
+    # nothing, and so did /v1/chat/completions in permissive mode.
+    r = await admin_client.post(
+        "/admin/keys", headers=ADMIN, json={"client_id": client_id}
+    )
+    assert r.status_code == 422
+    # Same answer as the refusal of "admin" (BUG-60).
+    errors = r.json()["detail"]
+    assert [e["loc"] for e in errors] == [["body", "client_id"]]
+    assert errors[0]["type"] == "value_error"
+    assert keys_store.load_keys() == []
+
+
+async def test_existing_key_with_blank_client_is_left_as_is(admin_client, keys_store):
+    # Like a key named admin: the store is not touched, rotating still works.
+    old = keys_store.create_key("", "legacy")
+    r = await admin_client.post(f"/admin/keys/{old['key_id']}/rotate", headers=ADMIN)
+    assert r.status_code == 201
+    assert keys_store.get_key_record(r.json()["key"])["client_id"] == ""
 
 
 # -- BUG-61: a provider name that gives an empty id ---------------------------
@@ -201,3 +228,54 @@ def test_dashboard_reports_a_refused_key_creation():
         r'if \(!res\.ok\) \{ toast\("Failed to create key: " \+ await _errorDetail\(res\)',
         js,
     )
+
+
+# -- BUG-63: a custom endpoint address that does not parse --------------------
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://[x",  # unclosed IPv6 bracket
+        "https://[x]/v1",  # bracketed host that is not an IP address
+        "https://api.acme.test:99999/v1",  # port out of range
+        "https://api.acme.test:abc/v1",  # port that is not a number
+    ],
+)
+async def test_direct_provider_test_with_invalid_address_is_refused(
+    admin_client, base_url
+):
+    from aioresponses import aioresponses
+
+    with aioresponses() as mock:
+        r = await admin_client.post(
+            "/admin/direct-providers/test",
+            headers=ADMIN,
+            json={"base_url": base_url, "api_key": "k"},
+        )
+        assert not mock.requests  # refused before any connection
+    # The route's refusal of an unusable base_url: 422 and a detail, not a 500.
+    assert r.status_code == 422
+    assert r.json()["detail"].startswith("base_url refused: not a valid address")
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://api..acme.test/v1",  # empty label
+        "https://" + "a" * 64 + ".acme.test/v1",  # label over 63 characters
+    ],
+)
+async def test_direct_provider_test_with_invalid_host_label_is_refused(
+    admin_client, idna_resolver, base_url
+):
+    # urlsplit and yarl accept these; getaddrinfo's IDNA step raised a
+    # UnicodeError that aiohttp lets through: 500. Any lookup that gets past
+    # it fails in the fixture (no DNS query): only a refusal gives 422.
+    r = await admin_client.post(
+        "/admin/direct-providers/test",
+        headers=ADMIN,
+        json={"base_url": base_url, "api_key": "k"},
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"].startswith("base_url refused: not a valid address")

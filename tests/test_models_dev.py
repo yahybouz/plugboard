@@ -204,10 +204,20 @@ def test_catalog_exclude(catalog_env, raw, monkeypatch):
         ("https://[::1]/v1", False),
         ("https://localhost/v1", False),
         ("https://${X}.example.com/v1", False),
+        ("https://api.example.com:99999/v1", False),  # port out of range
+        ("https://api.example.com:abc/v1", False),  # port not a number
     ],
 )
 def test_is_public_https(url, ok):
     assert models_dev.is_public_https(url) is ok
+
+
+def test_catalog_entry_with_invalid_port_is_skipped(catalog_env, raw):
+    # One unparsable entry from models.dev must not take the other presets down.
+    raw["acme"]["api"] = "https://api.acme.test:99999/v1"
+    _store(catalog_env, raw)
+    keys = {p["key"] for p in models_dev.generated_presets()}
+    assert "catalog-acme" not in keys and "catalog-openrouter" in keys
 
 
 def test_list_presets_hides_catalog_duplicate_of_builtin(catalog_env, raw):
@@ -234,12 +244,38 @@ def test_create_from_catalog_preset_freezes_base_url(
     monkeypatch.setenv("PLUGBOARD_DATA", str(catalog_env))
     record = create_from_preset("catalog-acme", "test-key-123456")
     assert record["preset_key"] == "catalog-acme"
+    # A name with letters gives the id, not the preset key (BUG-65 fallback).
+    assert record["id"] == "acme-ai"
     assert record["auto_discover"] is True
     assert [m["id"] for m in record["models"]] == ["acme-1"]
     # The catalog later points acme somewhere else: the provider keeps its URL.
     raw["acme"]["api"] = "https://attacker.test/v1"
     _store(catalog_env, raw)
     assert get_provider(record["id"])["base_url"] == "https://api.acme.test/v1"
+
+
+@pytest.mark.parametrize("name", ["日本語", "!!!"])
+async def test_catalog_preset_named_without_letter_or_digit_is_created(
+    admin_client, catalog_env, raw, monkeypatch, name
+):
+    # BUG-65: the id is made from the name, and a name without a-z/0-9 is
+    # refused (BUG-61); a catalog preset's name cannot be edited, so the
+    # preset key gives the id instead.
+    from plugboard.config import get_provider
+
+    discovered = []
+    monkeypatch.setattr("plugboard.app._schedule_initial_discovery", discovered.append)
+    raw["acme"]["name"] = name
+    _store(catalog_env, raw)
+    resp = await admin_client.post(
+        "/admin/direct-providers/catalog-acme",
+        json={"api_key": "k"},
+        headers={"Authorization": "Bearer adminkey"},
+    )
+    assert resp.status_code == 201, resp.text
+    assert (resp.json()["id"], resp.json()["name"]) == ("catalog-acme", name)
+    assert get_provider("catalog-acme")["preset_key"] == "catalog-acme"
+    assert discovered == ["catalog-acme"]
 
 
 @pytest.mark.parametrize(
