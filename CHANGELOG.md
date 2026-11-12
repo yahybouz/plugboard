@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **A running chat call is visible on every surface**: a slow call (a CLI starting for 5 to 13 s, a large Ollama model for minutes) looked the same as a hung one. `GET /v1/inflight` lists the calling key's chat calls in flight, each with its model, the surface that sent it (`api`, `playground` or `mcp`, from the `X-Plugboard-Surface` header), the time elapsed, its phase (`waiting_slot`, `running`, `waiting_provider`, `cli_queue`, `cli_running`, `cli_parse`) and a `slow` flag after 60 s, then the last 20 results with their HTTP status. The MCP server gets an `inflight_requests` tool, and the dashboard a corner pill (calls in flight, click for the list) and a ticking status line in the Playground. The admin sees every call with its provider through `GET /admin/inflight`; a client key never sees another key's calls or the routing. Nothing is stored: the list lives in memory and holds no prompt or answer. API contract 1.5.0.
 
+### Changed
+
+- **The dashboard follows a written design system**: [DESIGN.md](DESIGN.md) lists the color, type, spacing and radius tokens shared by the admin dashboard, the client portal and the ticket board, and every page now uses only these tokens: 27 font sizes become 7, 32 spacings a 9-step scale, and inline styles become named classes (the ones scripts toggle stay). `tests/test_dashboard_design_tokens.py` keeps raw values, undefined variables and old labels out. Labels follow one rule: US English, sentence case (*API keys*, *Usage & billing*, *Add direct provider*), *Log out*, and `…` for work in progress. `/suivi` is now in English, with the sidebar link **Tickets**; the status and type values of its API do not change and its server error messages are still in French. The client portal gets the dashboard layout (its header and key figures had none), follows the light or dark system setting instead of forcing dark, and draws its chart with the palette. The Ollama **Delete** button is red as intended. No behavior changes.
+
 ## [4.9.0] — 2026-11-11
 
 ### Security
