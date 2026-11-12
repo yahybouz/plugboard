@@ -813,11 +813,22 @@ _CLEAN_ALIAS_TO_PROVIDER = {
 
 
 def _resolve_all_providers(model_str: str) -> List[tuple[Dict[str, Any], str]]:
-    """Use the same selection/admission contract, retaining unqualified fallback."""
+    """Use the same selection/admission contract, retaining unqualified fallback.
+
+    The unqualified fallback leaves out a CLI route that lists models without
+    this one: the CLI would be sent a name it does not serve, and its refusal
+    would quarantine the bare name another provider serves.
+    """
     active, selected = _select_request(model_str)
     if selected is not None:
         return [selected.candidate()]
-    results = [_model_route(provider, model_str).candidate() for provider in active]
+    results = [
+        _model_route(provider, model_str).candidate()
+        for provider in active
+        if not is_cli_provider(provider)
+        or not _listed_models(provider)
+        or _known_native(provider, model_str) is not None
+    ]
     if len(results) > 1:
         stats = metrics.get_stats()
         results.sort(key=lambda item: _provider_lb_score(item[0]["id"], stats))

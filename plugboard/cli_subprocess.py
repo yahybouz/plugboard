@@ -1649,11 +1649,9 @@ async def complete(
         RuntimeError: if the CLI fails or returns unparseable output.
     """
     backend = get_backend(kind)
+    # The router passes the provider's own model name: kept whole, since a
+    # native name may hold a colon (``qwen3:8b``).
     model = body.get("model") or backend.default_model
-    # Strip the "provider_id:" prefix if present (routing leaves real model only,
-    # but be defensive if the caller passed through).
-    if ":" in model:
-        model = model.split(":", 1)[1]
     prompt = messages_to_prompt(body.get("messages", []) or [])
     if not prompt:
         raise RuntimeError("Empty prompt — no user/assistant/system messages")
