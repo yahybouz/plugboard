@@ -65,14 +65,27 @@ When `API_KEY` is empty it also returns `"auth_disabled": true` and `"dev_mode"`
 
 | Endpoint | Format |
 |---|---|
-| `GET /metrics` | JSON: per provider, request count, error count, average latency |
-| `GET /metrics/prometheus` | Prometheus text format: request totals, error totals and average latency per provider, and an `up` gauge |
+| `GET /metrics` | JSON: per provider, request count, error count, average latency, and under `models` the per-model measures below |
+| `GET /metrics/prometheus` | Prometheus text format: request totals, error totals and average latency per provider, an `up` gauge, and the per-model histograms and counter below |
 | `GET /admin/monitoring` | Full health check of all providers with 24-hour and 7-day uptime |
 | `GET /admin/monitoring/history?provider_id=&limit=` | Stored health snapshots (`data/monitoring.db`) |
 | `GET /admin/circuits` | Per-model circuit breaker state |
 | `GET /admin/cache/stats` | Response cache statistics |
 
 Request metrics live in memory and restart from zero with the server. Prometheus must send the admin key as a bearer token.
+
+### Per-model measures
+
+Each provider entry of `GET /metrics` gains a `models` object once one of its models has a measure. For each model, the time to first token (`ttft`), tokens per second (`tokens_per_second`) and admission wait (`admission_wait`) give `_count`, `_sum`, `_avg`, `_min` and `_max` (`null` until the first value), and `busy_refusals` counts the `503 providers_busy` answers.
+
+| Measure | Prometheus | What it counts |
+|---|---|---|
+| Time to first token | `plugboard_ttft_seconds` (histogram) | Seconds from sending a streamed chat to its provider to the first generated chunk: text, reasoning or a tool call. The admission wait is not included |
+| Tokens per second | `plugboard_tokens_per_second` (histogram) | Completion tokens after the first one, divided by the time from the first generated chunk to the last. Uses the provider's `usage`, else a tiktoken estimate. Only when the words arrived in at least two reads |
+| Admission wait | `plugboard_admission_wait_seconds` (histogram) | Seconds a chat waited for a slot on its provider (`PLUGBOARD_PROVIDER_WAIT_S`); `0` when a slot was free |
+| Busy refusals | `plugboard_providers_busy_total` (counter) | Chats refused with `503 providers_busy`, counted on each full candidate route |
+
+The time to first token and tokens per second are measured on streamed answers from HTTP providers: a non-streamed answer has no first token to time, and a CLI provider's stream is replayed from its complete answer. The admission wait and busy refusals cover streamed and non-streamed chats. Labels are `provider` and `model` only, never a client or a key. At most 256 (provider, model) series are kept; past that, new models are counted under the model `(other)`.
 
 ## Provider watchdog
 

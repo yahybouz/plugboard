@@ -3137,7 +3137,7 @@ async def client_keys(client_id: Optional[str] = Depends(_resolve_client)):
 
 @app.get("/metrics")
 async def get_metrics(_: None = Depends(_require_admin)):
-    return get_stats()
+    return get_stats(per_model=True)
 
 
 @app.get("/admin/circuits")

@@ -929,19 +929,27 @@ async def forward(
     loop = asyncio.get_running_loop()
     deadline: Optional[float] = None
     granted: Optional[provider_admission.Lease] = None
+    granted_wait = 0.0  # seconds the wait that granted ``granted`` took
     # PLU-12: a provider turned off while this request waited for it, or
     # tried another candidate, is never called; the first candidate was
     # checked by _refuse_if_disabled, with no wait since.
     disabled_seen: Optional[str] = None
     recheck = False
 
-    def _take(provider: Dict[str, Any]) -> Optional[provider_admission.Lease]:
-        """The slot the wait granted, when it is this provider's; else a new one."""
+    def _take(
+        provider: Dict[str, Any], model: str
+    ) -> Optional[provider_admission.Lease]:
+        """The slot the wait granted, when it is this provider's; else a new one.
+        A slot taken records its admission wait (PLU-16)."""
         nonlocal granted
         if granted is not None and granted.provider_id == provider["id"]:
             lease, granted = granted, None
+            metrics.record_admission_wait(provider["id"], model, granted_wait)
             return lease
-        return provider_admission.try_acquire(provider)
+        lease = provider_admission.try_acquire(provider)
+        if lease is not None:
+            metrics.record_admission_wait(provider["id"], model, 0.0)
+        return lease
 
     try:
         while queue or busy:
@@ -955,9 +963,11 @@ async def forward(
                 if deadline is None:
                     deadline = loop.time() + provider_admission.WAIT_S
                 _live.update(phase="waiting_provider")
+                wait_t0 = loop.time()
                 granted = await provider_admission.wait_acquire(
                     [p for p, _ in busy], deadline - loop.time()
                 )
+                granted_wait = loop.time() - wait_t0
                 _live.update(phase="running")
                 if granted is None:
                     break
@@ -977,7 +987,7 @@ async def forward(
             # Direct CLI providers short-circuit HTTP.
             auth_source = provider.get("auth_source", "")
             if auth_source.startswith("subprocess:"):
-                lease = _take(provider)
+                lease = _take(provider, real_model)
                 if lease is None:
                     busy.append((provider, real_model))
                     continue
@@ -1093,7 +1103,7 @@ async def forward(
             # Whether the last failure counts against the route's circuit: a
             # timeout or a network error does, an HTTP answer per its status.
             provider_fault = True
-            lease = _take(provider)
+            lease = _take(provider, real_model)
             if lease is None:
                 busy.append((provider, real_model))
                 continue
@@ -1261,6 +1271,8 @@ async def forward(
             if len(still_on) < len(busy):
                 disabled_seen = next(c[0]["id"] for c in busy if c not in still_on)
             if still_on:
+                for p, m in still_on:
+                    metrics.record_busy_refusal(p["id"], m)
                 raise ProvidersBusyError([p["id"] for p, _ in still_on])
         if disabled_seen is not None and refused is None and last_err is None:
             raise ProviderDisabledError(disabled_seen)
@@ -1292,6 +1304,7 @@ async def forward_stream(
         route_guard(provider, real_model)
     lease = provider_admission.try_acquire(provider)
     waited = lease is None
+    wait_t0 = _time.perf_counter()
     if waited:
         _live.update(phase="waiting_provider")
         lease = await provider_admission.wait_acquire(
@@ -1301,11 +1314,14 @@ async def forward_stream(
     if lease is None:
         if _turned_off(provider["id"]):
             raise ProviderDisabledError(provider["id"])  # off, not full
+        metrics.record_busy_refusal(provider["id"], real_model)
         raise ProvidersBusyError([provider["id"]])
     try:
         # Inside the try: the slot goes back whatever the registry read does.
         if waited and _turned_off(provider["id"]):
             raise ProviderDisabledError(provider["id"])  # off while it waited
+        wait_s = _time.perf_counter() - wait_t0 if waited else 0.0
+        metrics.record_admission_wait(provider["id"], real_model, wait_s)
         async with contextlib.aclosing(
             _stream_route(body, provider, real_model, timeout)
         ) as chunks:
@@ -1492,6 +1508,7 @@ async def _stream_route(
 
     session = await session_for(provider)
     streaming = False
+    meter = metrics.StreamMeter(provider["id"], real_model)  # PLU-16
     # aiohttp's text names the provider's host and port: typed like forward().
     try:
         async with session.post(
@@ -1512,7 +1529,9 @@ async def _stream_route(
             route_pauses.clear(circuit_key)
             streaming = True
             async for chunk in resp.content.iter_any():
+                meter.feed(chunk)
                 yield chunk
+            meter.finish()
     except asyncio.TimeoutError as exc:
         # No answer: a timeout or a network error counts, as in forward().
         # Once the stream has begun, its success is already recorded.
