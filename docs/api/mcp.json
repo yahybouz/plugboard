@@ -258,13 +258,9 @@
     },
     {
       "name": "mark_applied",
-      "description": "Mark an update as applied for your project. This prevents it from showing up again.\n\n    Call this AFTER you have successfully applied and tested the changes.\n\n    Args:\n        client_id: Your project identifier, as listed in the registry (e.g. my-app)\n        prompt_id: The update ID that was applied (e.g. CP-001)\n        notes: Optional notes about the application (e.g. 'applied with minor adaptation')",
+      "description": "Mark an update as applied for your project. This prevents it from showing up again.\n\n    Call this AFTER you have successfully applied and tested the changes.\n    The project is the client of this server's key (PLUGBOARD_API_KEY).\n\n    Args:\n        prompt_id: The update ID that was applied (e.g. CP-001)\n        notes: Optional notes about the application (e.g. 'applied with minor adaptation')\n        client_id: Optional; if given, it must be the client of this server's key",
       "inputSchema": {
         "properties": {
-          "client_id": {
-            "title": "Client Id",
-            "type": "string"
-          },
           "prompt_id": {
             "title": "Prompt Id",
             "type": "string"
@@ -273,10 +269,14 @@
             "default": "",
             "title": "Notes",
             "type": "string"
+          },
+          "client_id": {
+            "default": "",
+            "title": "Client Id",
+            "type": "string"
           }
         },
         "required": [
-          "client_id",
           "prompt_id"
         ],
         "title": "mark_appliedArguments",

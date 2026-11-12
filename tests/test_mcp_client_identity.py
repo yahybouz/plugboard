@@ -225,3 +225,47 @@ async def test_refused_identity_reads_nothing(as_client, registry, monkeypatch, 
     monkeypatch.setattr(mcp_server, "_load_registry", forbidden)
     monkeypatch.setattr(mcp_server, "_tracking_conn", forbidden)
     assert (await call()).startswith("Error:")
+
+
+# ── Task 3: mark_applied ─────────────────────────────────────────────────────
+
+
+async def _call(name: str, args: dict) -> str:
+    """Call a tool the way an MCP client does (arguments by name)."""
+    result = await mcp_server.mcp.call_tool(name, args)
+    content = result[0] if isinstance(result, tuple) else result
+    return content[0].text
+
+
+async def test_mark_applied_records_for_the_key_client(as_client, registry):
+    await mcp_server.mark_applied("CP-AB")
+    assert _rows() == {("alpha", "CP-AB")}
+
+
+async def test_mark_applied_refuses_another_client_id(as_client, registry):
+    out = await mcp_server.mark_applied("CP-AB", client_id="beta")
+    assert out.startswith("Error:")
+    assert _rows() == set()
+
+
+async def test_mark_applied_on_another_clients_update_is_not_found(as_client, registry):
+    out = await mcp_server.mark_applied("CP-B")
+    assert out == "Error: prompt 'CP-B' not found in registry"
+    assert _rows() == set()
+
+
+async def test_mark_applied_writes_nothing_when_the_gateway_is_down(
+    as_client, registry
+):
+    as_client["error"] = "HTTP client error: Cannot connect to host 127.0.0.1:9"
+    assert (await mcp_server.mark_applied("CP-A")).startswith("Error:")
+    assert _rows() == set()
+
+
+async def test_old_by_name_call_with_own_client_id_still_works(as_client, registry):
+    out = await _call(
+        "mark_applied", {"client_id": "alpha", "prompt_id": "CP-A", "notes": "n"}
+    )
+    assert "Marked `CP-A`" in out and _rows() == {("alpha", "CP-A")}
+    refused = await _call("mark_applied", {"client_id": "beta", "prompt_id": "CP-AB"})
+    assert refused.startswith("Error:") and _rows() == {("alpha", "CP-A")}

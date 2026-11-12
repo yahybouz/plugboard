@@ -1093,23 +1093,26 @@ async def get_update_prompt(prompt_id: str) -> str:
 
 
 @mcp.tool()
-async def mark_applied(client_id: str, prompt_id: str, notes: str = "") -> str:
+async def mark_applied(prompt_id: str, notes: str = "", client_id: str = "") -> str:
     """Mark an update as applied for your project. This prevents it from showing up again.
 
     Call this AFTER you have successfully applied and tested the changes.
+    The project is the client of this server's key (PLUGBOARD_API_KEY).
 
     Args:
-        client_id: Your project identifier, as listed in the registry (e.g. my-app)
         prompt_id: The update ID that was applied (e.g. CP-001)
         notes: Optional notes about the application (e.g. 'applied with minor adaptation')
+        client_id: Optional; if given, it must be the client of this server's key
     """
-    # Verify prompt exists
+    try:
+        client_id = await _registry_client(client_id)
+    except CallerIdentityError as exc:
+        return f"Error: {exc}"
     registry = _load_registry()
     prompt = next((p for p in registry["prompts"] if p["id"] == prompt_id), None)
-    if not prompt:
+    # Another client's update answers like a missing one: no oracle on its IDs.
+    if not prompt or client_id not in prompt.get("clients", []):
         return f"Error: prompt '{prompt_id}' not found in registry"
-    if client_id not in prompt.get("clients", []):
-        return f"Error: prompt '{prompt_id}' does not target client '{client_id}'"
 
     # Check if already applied
     applied = _get_applied(client_id)
@@ -1141,7 +1144,7 @@ async def mark_applied(client_id: str, prompt_id: str, notes: str = "") -> str:
         return (
             f"Marked `{prompt_id}` as applied for '{client_id}'.\n"
             f"**{len(remaining)} update(s) still pending.** "
-            f'Use `check_updates("{client_id}")` to see them.'
+            "Use `check_updates()` to see them."
         )
     return f"Marked `{prompt_id}` as applied for '{client_id}'. All updates are now applied!"
 
