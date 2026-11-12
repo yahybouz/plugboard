@@ -449,6 +449,15 @@ async def test_preflight_gives_a_limited_key_forbidden_model_first(off, pinged):
     assert calls == []
 
 
+async def test_preflight_gives_a_budgeted_key_provider_disabled_not_a_price(
+    off, pinged
+):
+    client, _auth, calls = pinged
+    result = await _preflight(client, _key(monthly_limit_usd=5.0), "ollama", "qwen3:8b")
+    assert result["error"] == "provider_disabled"
+    assert calls == []
+
+
 async def test_preflight_maps_a_late_refusal(off, pinged, monkeypatch):
     """Turned off between the checks and the ping: provider_disabled too."""
     import plugboard.app as app_module

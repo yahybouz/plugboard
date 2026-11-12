@@ -183,7 +183,7 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 
 ### `503 provider_disabled`
 
-When the operator turns a provider off (the **Ollama** page switch, or **Active** unticked on the **Providers** page), its models leave `GET /v1/models` at once, without a restart. A chat request for one of them, `/v1` or `/v2`, streamed or not, answers `503` and calls nobody: neither that provider nor another one in its place. The model is one of the provider's when its ID prefixes it (`ollama:qwen3:8b`), or when no prefix matches, every active provider has a model list, none knows the name and the disabled provider does (`qwen3:8b`, `llama3`).
+When the operator turns a provider off (the **Ollama** page switch, or **Active** unticked on the **Providers** page), its models leave `GET /v1/models` at once, without a restart. A chat request for one of them, `/v1` or `/v2`, streamed or not, answers `503` and calls nobody: neither that provider nor another one in its place. The model is one of the provider's when its ID prefixes it (`ollama:qwen3:8b`), or when no prefix matches, every active provider has a model list, none knows the name and the disabled provider does (`qwen3:8b`, `llama3`, or a display alias such as `Codex:gpt-6.1-sol` of a CLI provider turned off). A display alias that selects an active provider still goes to it.
 
 ```json
 {
@@ -193,7 +193,7 @@ When the operator turns a provider off (the **Ollama** page switch, or **Active*
 }
 ```
 
-There is no `Retry-After`: nobody knows when the provider comes back. A key limited by `allowed_models` gets `403` first for a model outside its list. No cached answer is served for such a model. A request already running when the provider is turned off goes to its end; one still waiting for a slot on it gets this `503` when its turn comes. `POST /v1/preflight` answers such a pair `"ok": false` with `"error": "provider_disabled"`, without a ping. Embeddings keep their own answer: `503` *Embedding provider unavailable*.
+There is no `Retry-After`: nobody knows when the provider comes back. A key limited by `allowed_models` gets `403` first for a model outside its list. No cached answer is served for such a model. A request already running when the provider is turned off goes to its end; one still waiting for a slot on it gets this `503` when its turn comes, or when its wait (`PLUGBOARD_PROVIDER_WAIT_S`) ends. `POST /v1/preflight` answers such a pair `"ok": false` with `"error": "provider_disabled"`, without a ping. Embeddings keep their own answer: `503` *Embedding provider unavailable*.
 
 ## MCP
 

@@ -80,10 +80,14 @@ async def test_boot_still_syncs_an_enabled_ollama(tmp_path, monkeypatch, daemon)
     assert daemon == ["check_available", "list_models"]
 
 
-async def test_semantic_embed_skips_a_disabled_provider(tmp_path, monkeypatch):
+@pytest.mark.parametrize(("active", "sessions"), [(False, 0), (True, 1)])
+async def test_semantic_embed_skips_a_disabled_provider(
+    tmp_path, monkeypatch, active, sessions
+):
+    """Off: no session is opened. On (the control): one is."""
     from plugboard import netguard
 
-    _isolated_providers(tmp_path, monkeypatch, [OLLAMA, ACME])
+    _isolated_providers(tmp_path, monkeypatch, [{**OLLAMA, "is_active": active}, ACME])
     for name, value in {
         "PLUGBOARD_SEMANTIC_CACHE": "1",
         "PLUGBOARD_SEMANTIC_EMBED": "1",
@@ -97,11 +101,11 @@ async def test_semantic_embed_skips_a_disabled_provider(tmp_path, monkeypatch):
     def _no_session(*args, **_kwargs):
         # _embed swallows any error: record the attempt, the assert is below.
         opened.append(args)
-        raise RuntimeError("no embedding call to a disabled provider")
+        raise RuntimeError("no network in this test")
 
     monkeypatch.setattr(netguard, "client_session", _no_session)
     assert await semantic_cache._embed("a prompt long enough to be embedded") is None
-    assert opened == [], "no session is opened for a disabled provider"
+    assert len(opened) == sessions
 
 
 # ── The switch: GET/PUT /admin/ollama/switch ────────────────────────────────
@@ -234,9 +238,10 @@ async def test_switch_404_when_ollama_is_not_registered(admin_client, registry):
     "body", [{}, {"enabled": "no"}, {"enabled": 0}, {"enabled": False, "x": 1}]
 )
 async def test_switch_put_is_strict(admin_client, registry, body):
+    pfile = registry([{**OLLAMA, "is_active": True}, ACME])
     resp = await admin_client.put("/admin/ollama/switch", json=body, headers=ADMIN)
     assert resp.status_code == 422, resp.text
-    assert _stored(registry([{**OLLAMA, "is_active": True}, ACME]))["is_active"]
+    assert _stored(pfile)["is_active"] is True
 
 
 @pytest.mark.parametrize("method", ["GET", "PUT"])
@@ -259,3 +264,107 @@ async def test_provider_update_audit_keeps_the_is_active_value(admin_client, reg
     assert resp.status_code == 200, resp.text
     (entry,) = audit.get_audit_log(action="provider.update")
     assert json.loads(entry["details"]) == {"fields": ["is_active"], "is_active": False}
+
+
+async def test_switch_on_lists_models_installed_while_off(
+    admin_client, registry, monkeypatch
+):
+    async def _list_models():
+        return [{"name": "qwen3:8b"}, {"name": "mistral:7b"}]
+
+    monkeypatch.setattr(ollama, "list_models", _list_models)
+    registry([OLLAMA, ACME])  # off, lists qwen3:8b and llama3:latest
+    await admin_client.put(
+        "/admin/ollama/switch", json={"enabled": True}, headers=ADMIN
+    )
+    ids = await _model_ids(admin_client)
+    assert "ollama:mistral:7b" in ids and "ollama:llama3:latest" not in ids
+
+
+async def test_switch_on_survives_a_failed_model_sync(
+    admin_client, registry, monkeypatch
+):
+    from plugboard import audit
+
+    async def _daemon_down():
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(ollama, "list_models", _daemon_down)
+    registry([OLLAMA, ACME])
+    resp = await admin_client.put(
+        "/admin/ollama/switch", json={"enabled": True}, headers=ADMIN
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["enabled"] is True
+    assert len(audit.get_audit_log(action="ollama.switch")) == 1
+
+
+async def test_switch_is_audited_before_the_model_sync(
+    admin_client, registry, monkeypatch
+):
+    from plugboard import audit
+
+    seen: list = []
+
+    async def _resync():
+        seen.append(len(audit.get_audit_log(action="ollama.switch")))
+
+    monkeypatch.setattr(ollama, "resync_models", _resync)
+    registry([OLLAMA, ACME])
+    await admin_client.put(
+        "/admin/ollama/switch", json={"enabled": True}, headers=ADMIN
+    )
+    assert seen == [1], "the change is in the audit log before the sync starts"
+
+
+async def test_unchanged_switch_does_not_rewrite_the_registry(
+    admin_client, registry, daemon
+):
+    pfile = registry([OLLAMA, ACME])
+    before = pfile.stat().st_mtime_ns
+    await admin_client.put(
+        "/admin/ollama/switch", json={"enabled": False}, headers=ADMIN
+    )
+    assert pfile.stat().st_mtime_ns == before
+
+
+async def test_switch_reports_calls_waiting(admin_client, registry, daemon):
+    import asyncio
+
+    provider = {**OLLAMA, "is_active": True}
+    held = provider_admission.try_acquire(provider)  # local Ollama: one at a time
+    waiter = asyncio.create_task(provider_admission.wait_acquire([provider], 5))
+    try:
+        for _ in range(100):
+            if provider_admission.waiting("ollama") == 1:
+                break
+            await asyncio.sleep(0.01)
+        state = (await admin_client.get("/admin/ollama/switch", headers=ADMIN)).json()
+        assert (state["in_flight"], state["waiting"]) == (1, 1)
+    finally:
+        held.release()
+        lease = await waiter
+        lease.release()
+
+
+async def test_providers_page_turning_ollama_on_resyncs_the_models(
+    admin_client, registry, daemon
+):
+    registry([OLLAMA, ACME])
+    resp = await admin_client.put(
+        "/providers/ollama", json={"is_active": True}, headers=ADMIN
+    )
+    assert resp.status_code == 200, resp.text
+    assert daemon == ["list_models"], "the same field as the switch: same resync"
+    assert "ollama:qwen3:8b" in await _model_ids(admin_client)
+
+
+async def test_providers_page_other_updates_do_not_resync(
+    admin_client, registry, daemon
+):
+    registry([OLLAMA, ACME])
+    await admin_client.put("/providers/ollama", json={"timeout": 30}, headers=ADMIN)
+    await admin_client.put(
+        "/providers/acme-direct", json={"is_active": True}, headers=ADMIN
+    )
+    assert daemon == []

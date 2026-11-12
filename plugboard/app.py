@@ -340,9 +340,10 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
     ollama_prov = await bootstrap_ollama()
     if ollama_prov:
         log.info(
-            "Ollama auto-registered: %s (%s)",
+            "Ollama auto-registered: %s (%s) active=%s",
             ollama_prov["id"],
             ollama_prov.get("base_url"),
+            ollama_prov.get("is_active", True),
         )
     # Warm up installed subprocess CLIs (gemini/codex/claude) so the first
     # user request saves the cold-start cost (Node.js init, OAuth read, DNS).
@@ -2842,9 +2843,9 @@ async def preflight(
     """Smoke-test a batch of provider+model pairs before a long benchmark.
 
     Each ping goes through the chat admission checks (allowed_models, budget,
-    a model some provider knows, known price, rpm; the inflight cap holds for
-    the whole batch) and is billed like a chat call. Errors are closed codes,
-    never the provider's text.
+    a provider that is not turned off, a model some provider knows, known
+    price, rpm; the inflight cap holds for the whole batch) and is billed
+    like a chat call. Errors are closed codes, never the provider's text.
     """
     key_record = _get_request_key_record(request, client_id=client_id)
     key_id = getattr(request.state, "key_id", "")
@@ -3910,6 +3911,19 @@ async def patch_provider(
         target_id=provider_id,
         details=json.dumps(audit_details),
     )
+    if (
+        provider_id == "ollama"
+        and before is not None
+        and not before.get("is_active", True)
+        and updates.get("is_active") is True
+    ):
+        # The Ollama switch's own field (PLU-12): turned back on here, the
+        # installed model list is synced once, as from the Ollama page.
+        from plugboard import ollama
+
+        await ollama.resync_models()
+        synced = get_provider(provider_id) or {}
+        record = {**record, "models": synced.get("models", record.get("models"))}
     if before is not None and "base_url" in updates:
         old_url = (before.get("base_url") or "").rstrip("/")
         new_url = (updates["base_url"] or "").rstrip("/")
@@ -4798,13 +4812,15 @@ async def ollama_put_switch(
     from plugboard import ollama
 
     try:
-        state = await ollama.set_enabled(body.enabled)
+        state = ollama.set_enabled(body.enabled)
     except LookupError:
         raise HTTPException(
             404,
             "Ollama provider is not registered (see OLLAMA_URL and OLLAMA_ENABLED)",
         ) from None
     before = state.pop("before")
+    # Audited as soon as it is written, before the model sync (up to
+    # OLLAMA_TIMEOUT): concurrent switches are logged in the order they land.
     _audit(
         "ollama.switch",
         target_type="provider",
@@ -4818,6 +4834,9 @@ async def ollama_put_switch(
             }
         ),
     )
+    if body.enabled and not before:
+        await ollama.resync_models()
+        state = ollama.switch_state()
     return state
 
 

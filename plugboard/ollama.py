@@ -477,26 +477,40 @@ def switch_state() -> Dict[str, Any]:
     }
 
 
-async def set_enabled(enabled: bool) -> Dict[str, Any]:
+def set_enabled(enabled: bool) -> Dict[str, Any]:
     """Turn Ollama on or off; ``before`` is the state it replaced.
 
-    Read and written under the provider store's lock. Turned back on, the
-    installed model list is synced once (a failure is only logged). Raises
-    ``LookupError`` when no ``ollama`` provider is registered.
+    Read and written under the provider store's lock, and not written when
+    nothing changes. No call reaches the daemon: once the change is
+    audited, the caller runs ``resync_models()`` when Ollama was turned
+    back on. Raises ``LookupError`` when no ``ollama`` provider is
+    registered.
     """
     from plugboard.config import modify_provider
     from plugboard.router import invalidate_models_cache
 
     seen: Dict[str, bool] = {}
 
-    def _flip(current: Dict[str, Any]) -> Dict[str, Any]:
+    def _flip(current: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         seen["before"] = bool(current.get("is_active", True))
+        if seen["before"] == bool(enabled):
+            return None  # unchanged: providers.json is not rewritten
         return {"is_active": bool(enabled)}
 
-    record = modify_provider(_PROVIDER_ID, _flip)
-    if record is None:
+    if modify_provider(_PROVIDER_ID, _flip) is None:
         raise LookupError(_PROVIDER_ID)
     invalidate_models_cache()
-    if enabled and not seen["before"]:
-        await _sync_models(record)
     return {"before": seen["before"], **switch_state()}
+
+
+async def resync_models() -> None:
+    """Sync the installed model list once, after Ollama is turned back on.
+
+    Its list may have changed while it was off. A failure is only logged
+    (``_sync_models``); without a registered provider nothing happens.
+    """
+    from plugboard.config import get_provider
+
+    provider = get_provider(_PROVIDER_ID)
+    if provider is not None:
+        await _sync_models(provider)
