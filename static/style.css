@@ -1,7 +1,9 @@
 /* ── Plugboard — Design System ─────────────────────────────────────────────
    Ink & champagne. Dark by default; a "paper" light theme follows the system
    setting unless [data-theme] on <html> forces one (see theme.js). Every
-   foreground/background pair below meets WCAG AA (4.5:1 for text). */
+   foreground/background pair below meets WCAG AA (4.5:1 for text).
+   Every token is documented in DESIGN.md. */
+/* design-tokens: start */
 :root {
   color-scheme: dark;
   /* Backgrounds */
@@ -69,6 +71,49 @@
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --display: 'Instrument Serif', 'Iowan Old Style', 'Palatino Linotype', Georgia, serif;
   --mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+
+  /* Type scale (html is 15px, so 1rem = 15px) */
+  --fs-root: 15px;
+  --fs-label: 0.72rem;   /* uppercase labels, badges, table heads */
+  --fs-xs: 0.78rem;      /* hints, metadata, code */
+  --fs-sm: 0.875rem;     /* controls, tables, menus */
+  --fs-md: 1rem;         /* body text, card titles */
+  --fs-lg: 1.3rem;       /* sub-headings, brand */
+  --fs-xl: 1.75rem;      /* page titles (serif) */
+  --fs-2xl: 2.1rem;      /* key figures, sign-in title */
+  --fs-icon: 2.5rem;     /* empty-state icons */
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  /* Spacing scale: quarter-rem steps */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  /* Inner padding of controls: exact values, so no control changes height */
+  --pad-control: 0.45rem 0.9rem;
+  --pad-control-sm: 0.3rem 0.65rem;
+  --pad-input: 0.5rem 0.8rem;
+  --pad-badge: 0.2rem 0.6rem;
+  --pad-chip: 0.15rem 0.45rem;
+  --pad-cell: 0.75rem 1rem;
+
+  /* More geometry */
+  --radius-xs: 4px;
+  --radius-control: 8px;
+  --radius-pill: 999px;
+
+  /* Surfaces shared by both themes */
+  --overlay: rgba(5,6,9,0.6);
+  --logo-bg: radial-gradient(120% 120% at 30% 20%, #2a241a 0%, #120f0a 70%);
+  --inset-highlight: rgba(255,255,255,0.18);
 }
 
 /* Paper: the light theme. */
@@ -114,6 +159,7 @@
   --shadow-glow: 0 0 0 3px rgba(138,106,47,0.16);
   --hairline: linear-gradient(90deg, transparent, rgba(138,106,47,0.4), transparent);
 }
+/* design-tokens: end */
 
 /* ── Reset ────────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }

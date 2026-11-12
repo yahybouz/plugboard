@@ -1620,7 +1620,7 @@ async function loadOllamaModels() {
         h("td", null, modified),
         h("td", null,
           h("button", { className: "btn btn-ghost btn-sm", onClick: function () { showOllamaModelInfo(name); } }, "Info"),
-          h("button", { className: "btn btn-ghost btn-sm", style: "color:var(--danger);", onClick: function () { deleteOllamaModel(name); } }, "Delete")
+          h("button", { className: "btn btn-ghost btn-sm", style: "color:var(--red);", onClick: function () { deleteOllamaModel(name); } }, "Delete")
         )
       ));
     });
