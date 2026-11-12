@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.11.0] — 2026-11-12
+
+### Added
+
+- **MCP admin tools: `add_provider` and `refresh_catalog`**: a coding agent can add an OpenAI-compatible provider and refresh its model list without the dashboard. They are off by default: they need `PLUGBOARD_MCP_ADMIN_TOOLS=1` and `PLUGBOARD_ADMIN_KEY`, run over stdio only (SSE and HTTP never load the admin key) and refuse when the gateway enforces admin MFA. They call `POST /providers` and `POST /providers/{id}/discover`, so the gateway's checks, audit and webhooks apply; `add_provider` creates the provider inactive, with *Public addresses only* on, so an internal address is refused and no client traffic reaches it before an admin activates it; `refresh_catalog` refuses CLI providers. Limits per MCP process: 5 `add_provider` calls per hour, one refresh per provider and mode per minute, one at a time. The tools never show the provider key back and the gateway never audits it; the MCP SDK's DEBUG message logs are dropped. The gateway records these calls with the actor `mcp` (header `X-Plugboard-Surface: mcp`): `provider.create`, `provider.discover`, `provider.egress.rejected`, `provider.domain.rejected`, plus the other refusals (`provider.create.refused`, `provider.discover.refused`) and previews (`provider.discover.preview`); the dashboard's entries are unchanged. `POST /providers/{id}/discover` also answers `first_population`. MCP contract 1.5.0 ([guide](docs/guide/mcp.md#admin-tools-stdio-only)).
+
 ## [4.10.0] — 2026-11-12
 
 ### Security

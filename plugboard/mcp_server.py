@@ -11,6 +11,7 @@ Tools:
     - chat: Send a completion request to any available model
     - list_models: List all available LLM models
     - check_usage: Get current month usage and spending
+    - add_provider, refresh_catalog: admin tools, stdio only, off by default
 
 Resources:
     - models://list — All available models with metadata
@@ -25,14 +26,18 @@ Prompts:
 from __future__ import annotations
 
 import asyncio
+import collections
 import hmac
 import json
 import logging
 import os
+import re
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Literal
+from urllib.parse import quote
 
 import aiohttp
 from mcp.server.auth.provider import AccessToken
@@ -51,7 +56,13 @@ log = logging.getLogger(__name__)
 _BASE_URL = os.environ.get("PLUGBOARD_URL", "http://localhost:8765")
 _API_KEY = os.environ.get("PLUGBOARD_API_KEY", "")
 _ADMIN_KEY = os.environ.get("PLUGBOARD_ADMIN_KEY", "")
+# PB-MCP-02: the admin tools (add_provider, refresh_catalog) are off unless
+# the operator turns them on; an admin key set for provider_status alone
+# never grants them.
+_ADMIN_TOOLS = os.environ.get("PLUGBOARD_MCP_ADMIN_TOOLS", "").strip() == "1"
 _TIMEOUT = envcompat.get_int("PLUGBOARD_MCP_TIMEOUT", default=900)
+_ADMIN_TIMEOUT = max(1, min(_TIMEOUT, 120))
+_ADMIN_RESPONSE_LIMIT = 1024 * 1024
 _DECISION_TIMEOUT = max(1, min(_TIMEOUT, 45))
 _DECISION_RESPONSE_LIMIT = 512 * 1024
 _EMBEDDING_TIMEOUT = max(1, min(_TIMEOUT, 120))
@@ -361,6 +372,227 @@ async def _registry_client(claimed: str = "") -> str:
             f"('{client_id}'): leave client_id out"
         )
     return client_id
+
+
+# ── Admin tools (PB-MCP-02) ──────────────────────────────────────────────────
+#
+# add_provider and refresh_catalog call the gateway's admin routes with the
+# admin key: validation, DNS pinning, audit and webhooks are the gateway's.
+# This process only gates them (stdio, switch, key) and limits an agent that
+# loops; anyone holding the admin key can still call the routes directly.
+
+_CREATE_LIMIT = 5
+_CREATE_WINDOW_S = 3600.0
+_REFRESH_COOLDOWN_S = 60.0
+_NAMES_SHOWN = 20
+_NAME_MAX = 120
+_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+_CLI_AUTH_PREFIXES = ("subprocess:", "cli:")
+_DETAIL_LIMIT = 300
+_MFA_DETAIL = "Admin MFA required"
+_MAYBE_CREATED = (
+    ": the provider may have been created, check the dashboard before retrying"
+)
+_MAYBE_REFRESHED = ": the catalog may have been refreshed, check the dashboard"
+
+_clock = time.monotonic
+# Times of the add_provider calls of the last hour (refusals included).
+_create_calls: collections.deque[float] = collections.deque()
+# (provider_id, dry_run) -> time of the last refresh_catalog call.
+_refresh_last: dict[tuple[str, bool], float] = {}
+_refresh_lock = asyncio.Lock()
+
+
+class AdminToolError(Exception):
+    """An admin tool call refused or failed.
+
+    ``str(exc)`` is shown to the MCP caller, after ``Error: ``.
+    ``maybe_applied``: the request may have reached the gateway (timeout,
+    connection lost mid-answer), so it may have taken effect.
+    """
+
+    def __init__(self, message: str, *, maybe_applied: bool = False) -> None:
+        super().__init__(message)
+        self.maybe_applied = maybe_applied
+
+
+def _admin_gate(tool: str) -> None:
+    """Refuse an admin tool unless it runs over stdio, switched on, with a key.
+
+    No HTTP call is made: the refusal comes before anything else.
+    """
+    if _NETWORK_TRANSPORT:
+        raise AdminToolError(
+            f"{tool} is not available over a network MCP transport: "
+            "PLUGBOARD_ADMIN_KEY is only loaded for stdio."
+        )
+    if not _ADMIN_TOOLS:
+        raise AdminToolError(
+            "MCP admin tools are off: set PLUGBOARD_MCP_ADMIN_TOOLS=1 and "
+            "PLUGBOARD_ADMIN_KEY (stdio only)"
+        )
+    if not _ADMIN_KEY:
+        raise AdminToolError(f"{tool} needs PLUGBOARD_ADMIN_KEY (stdio only)")
+
+
+async def _admin_request(
+    method: str, path: str, body: dict[str, Any] | None = None
+) -> tuple[int, Any]:
+    """One admin call to the gateway: ``(status, JSON body)``.
+
+    Sends the admin key and the ``mcp`` surface, follows no redirect and
+    reads at most 1 MiB. A body that is not JSON comes back as
+    ``{"detail": <text>}``; a larger one as
+    ``{"detail": "gateway answer too large"}``.
+    """
+    session = await _get_http_session()
+    raw = bytearray()
+    status: int | None = None
+    try:
+        async with session.request(
+            method,
+            f"{_BASE_URL}{path}",
+            headers=_auth_headers(admin=True, json_body=body is not None),
+            json=body,
+            timeout=aiohttp.ClientTimeout(total=_ADMIN_TIMEOUT),
+            allow_redirects=False,
+        ) as resp:
+            status = resp.status
+            async for chunk in resp.content.iter_chunked(65536):
+                raw.extend(chunk)
+                if len(raw) > _ADMIN_RESPONSE_LIMIT:
+                    break
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        # Only the exception type: its text could quote the request. Only a
+        # failed connection is sure to come before the request was sent.
+        name = type(exc).__name__
+        if status is not None:
+            raise AdminToolError(
+                f"the gateway answer was cut off ({name})", maybe_applied=True
+            ) from None
+        unsent = isinstance(
+            exc, (aiohttp.ClientConnectorError, aiohttp.ConnectionTimeoutError)
+        )
+        raise AdminToolError(
+            f"could not reach the gateway ({name})", maybe_applied=not unsent
+        ) from None
+    if len(raw) > _ADMIN_RESPONSE_LIMIT:
+        return status, {"detail": "gateway answer too large"}
+    text = raw.decode("utf-8", errors="replace")
+    try:
+        return status, json.loads(text)
+    except (ValueError, RecursionError):
+        return status, {"detail": text}
+
+
+def _error_detail(payload: Any) -> str:
+    """The gateway's reason: ``detail``, else ``error.message``, else the body."""
+    if isinstance(payload, dict):
+        if "detail" in payload:
+            detail = payload["detail"]
+        elif isinstance(payload.get("error"), dict) and "message" in payload["error"]:
+            detail = payload["error"]["message"]
+        else:
+            detail = payload
+    else:
+        detail = payload
+    return detail if isinstance(detail, str) else json.dumps(detail)
+
+
+def _gateway_error(status: int, payload: Any, secret: str = "") -> str:
+    """The message for a refused admin call (without ``Error: ``).
+
+    ``secret`` is removed before the detail is cut to 300 characters, so a
+    cut cannot leave part of it behind.
+    """
+    detail = _scrub(_error_detail(payload), secret)
+    if status == 401:
+        if detail.startswith(_MFA_DETAIL):
+            return (
+                "the gateway enforces admin MFA: MCP admin tools cannot sign in, "
+                "use the dashboard"
+            )
+        return "the gateway refused PLUGBOARD_ADMIN_KEY"
+    return f"HTTP {status}: {detail[:_DETAIL_LIMIT]}"
+
+
+def _scrub(text: str, secret: str) -> str:
+    """``text`` with every copy of ``secret`` replaced by ``***``.
+
+    The JSON-escaped spelling is replaced too: a detail that is a list or a
+    mapping is shown through ``json.dumps``.
+    """
+    if not secret:
+        return text
+    text = text.replace(secret, "***")
+    escaped = json.dumps(secret)[1:-1]
+    return text.replace(escaped, "***") if escaped != secret else text
+
+
+def _retry_in(remaining: float, window: float) -> int:
+    return min(int(remaining) + 1, int(window))
+
+
+def _take_create_slot() -> None:
+    """Count one add_provider call; refuse a sixth within an hour."""
+    now = _clock()
+    while _create_calls and now - _create_calls[0] >= _CREATE_WINDOW_S:
+        _create_calls.popleft()
+    if len(_create_calls) >= _CREATE_LIMIT:
+        wait = _retry_in(_CREATE_WINDOW_S - (now - _create_calls[0]), _CREATE_WINDOW_S)
+        raise AdminToolError(
+            f"add_provider limit reached ({_CREATE_LIMIT} per hour): retry in {wait}s"
+        )
+    _create_calls.append(now)
+
+
+def _take_refresh_slot(provider_id: str, dry_run: bool) -> None:
+    """Count one refresh; refuse the same provider and mode within 60 s."""
+    now = _clock()
+    for old in [k for k, t in _refresh_last.items() if now - t >= _REFRESH_COOLDOWN_S]:
+        del _refresh_last[old]
+    key = (provider_id, dry_run)
+    last = _refresh_last.get(key)
+    if last is not None and now - last < _REFRESH_COOLDOWN_S:
+        wait = _retry_in(_REFRESH_COOLDOWN_S - (now - last), _REFRESH_COOLDOWN_S)
+        raise AdminToolError(
+            f"catalog of '{provider_id}' was refreshed less than "
+            f"{int(_REFRESH_COOLDOWN_S)} s ago: retry in {wait}s"
+        )
+    _refresh_last[key] = now
+
+
+# Loggers of the MCP SDK that log whole received messages at DEBUG
+# (tool arguments, so a provider key): stdio, SSE and streamable HTTP.
+_SDK_MESSAGE_LOGGERS = (
+    "mcp.server.lowlevel.server",
+    "mcp.server.sse",
+    "mcp.server.streamable_http",
+)
+
+
+class _DropDebug(logging.Filter):
+    """Drop the DEBUG records of a logger, whatever level it is set to."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno > logging.DEBUG
+
+
+def _cap_sdk_message_logging() -> None:
+    """Keep the MCP SDK from logging whole messages (tool arguments, keys).
+
+    At DEBUG these loggers write every message they receive, so an
+    add_provider call would put the provider key in the log, even when the
+    tool then refuses. A filter survives a later ``setLevel`` and does not
+    loosen a stricter level set by the operator. Idempotent.
+    """
+    for name in _SDK_MESSAGE_LOGGERS:
+        sdk = logging.getLogger(name)
+        if not any(isinstance(f, _DropDebug) for f in sdk.filters):
+            sdk.addFilter(_DropDebug())
+
+
+_cap_sdk_message_logging()
 
 
 # ── Tools ────────────────────────────────────────────────────────────────────
@@ -825,6 +1057,189 @@ async def provider_status() -> str:
         pass
 
     return "\n".join(lines)
+
+
+@mcp.tool()
+async def add_provider(
+    name: str, base_url: str, api_key: str, default_model: str = ""
+) -> str:
+    """Add an OpenAI-compatible provider to the gateway (admin, stdio only).
+
+    The provider is created inactive, with "Public addresses only" on, so an
+    internal or private address is refused; the gateway checks the rest as
+    POST /providers does. Then run refresh_catalog with the id this tool
+    answers; an admin activates the provider in the dashboard.
+
+    Needs PLUGBOARD_MCP_ADMIN_TOOLS=1 and PLUGBOARD_ADMIN_KEY. At most 5
+    calls per hour reach the gateway, refused ones included. If the answer
+    says the provider may have been created, check the dashboard instead of
+    retrying.
+
+    Args:
+        name: Display name; the gateway derives the id from it (a taken id
+            gets a suffix such as "-1": use the id in the answer).
+        base_url: OpenAI-compatible root URL, usually ending in /v1.
+        api_key: The provider's API key; sent to the gateway only, never
+            shown back.
+        default_model: Optional model ID used when none is given.
+    """
+    try:
+        _admin_gate("add_provider")
+        _take_create_slot()
+        status, payload = await _admin_request(
+            "POST",
+            "/providers",
+            {
+                "name": name,
+                "base_url": base_url,
+                "bearer_token": api_key,
+                "default_model": default_model,
+                "is_active": False,
+                "egress_guard": True,
+            },
+        )
+    except AdminToolError as exc:
+        message = str(exc)
+        if exc.maybe_applied:
+            message += _MAYBE_CREATED
+        return "Error: " + _scrub(message, api_key)
+    if status != 201:
+        message = _gateway_error(status, payload, api_key)
+        if status in (500, 502, 504):
+            message += _MAYBE_CREATED
+        return "Error: " + message
+    provider_id = payload.get("id") if isinstance(payload, dict) else None
+    if not isinstance(provider_id, str) or not provider_id:
+        return f"Error: unexpected gateway answer (HTTP {status}){_MAYBE_CREATED}"
+    if payload.get("egress_guard") is not True or payload.get("is_active") is not False:
+        # A gateway older than 4.9.0 ignores egress_guard: say so, never
+        # claim a protection the gateway did not apply.
+        return (
+            f"Error: provider '{provider_id}' was created, but the gateway did "
+            'not apply "inactive, public addresses only" (gateway older than '
+            "4.9.0?): check it in the dashboard"
+        )
+    shown_url = _scrub(str(payload.get("base_url", "")), api_key)
+    return (
+        f"Provider '{provider_id}' created, inactive, public addresses only "
+        f"({shown_url}). Run refresh_catalog('{provider_id}'), then activate it "
+        "in the dashboard (Providers)."
+    )
+
+
+def _name(item: Any) -> str:
+    """One model ID as shown to the agent: one line, 120 characters at most.
+
+    IDs come from the provider's own API, which may be hostile.
+    """
+    name = _CONTROL_CHARS.sub(" ", str(item))
+    return name if len(name) <= _NAME_MAX else name[:_NAME_MAX] + "…"
+
+
+def _names(items: Any) -> str:
+    """Model IDs for a tool answer: the first 20, then a count."""
+    if not isinstance(items, list) or not items:
+        return "none"
+    names = [_name(item) for item in items]
+    shown = ", ".join(names[:_NAMES_SHOWN])
+    if len(names) > _NAMES_SHOWN:
+        shown += f" (+{len(names) - _NAMES_SHOWN} more)"
+    return shown
+
+
+@mcp.tool()
+async def refresh_catalog(provider_id: str, dry_run: bool = False) -> str:
+    """Refresh a provider's model list from its API (admin, stdio only).
+
+    Same as the dashboard's Discover button: the gateway lists the
+    provider's models and writes them; models it no longer lists are
+    removed at once, unless its list is not trusted, and pinned models are
+    kept: run it with dry_run=True first. CLI providers are refused (their
+    refresh depends on a local CLI and can run model probes): use the
+    dashboard. Needs
+    PLUGBOARD_MCP_ADMIN_TOOLS=1 and PLUGBOARD_ADMIN_KEY; one refresh at a
+    time, and once a minute per provider and mode.
+
+    Args:
+        provider_id: The provider's id, as add_provider or the dashboard
+            shows it.
+        dry_run: Show what would be added and removed, write nothing.
+    """
+    try:
+        _admin_gate("refresh_catalog")
+        if provider_id.strip() in ("", ".", ".."):
+            # "." and ".." would be folded into another URL path.
+            raise AdminToolError(f"invalid provider_id '{provider_id}'")
+        if _refresh_lock.locked():
+            raise AdminToolError("a catalog refresh is already running")
+        async with _refresh_lock:
+            status, providers = await _admin_request("GET", "/providers")
+            if status != 200 or isinstance(providers, dict):
+                return "Error: " + _gateway_error(status, providers)
+            if not isinstance(providers, list):
+                return f"Error: unexpected gateway answer (HTTP {status})"
+            for entry in providers:
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("id") == provider_id
+                    and str(entry.get("auth_source") or "").startswith(
+                        _CLI_AUTH_PREFIXES
+                    )
+                ):
+                    raise AdminToolError(
+                        f"'{provider_id}' is a CLI provider: refresh it from "
+                        "the dashboard"
+                    )
+            _take_refresh_slot(provider_id, dry_run)
+            path = f"/providers/{quote(provider_id, safe='')}/discover"
+            if dry_run:
+                path += "?dry_run=true"
+            status, payload = await _admin_request("POST", path)
+    except AdminToolError as exc:
+        maybe = exc.maybe_applied and not dry_run
+        return f"Error: {exc}{_MAYBE_REFRESHED if maybe else ''}"
+    # A write may have happened before a 500/504 or an odd 200 (the gateway's
+    # own 502 comes before any write).
+    maybe = "" if dry_run else _MAYBE_REFRESHED
+    if status != 200:
+        return (
+            "Error: "
+            + _gateway_error(status, payload)
+            + (maybe if status in (500, 504) else "")
+        )
+    if not isinstance(payload, dict) or not isinstance(payload.get("discovered"), int):
+        return f"Error: unexpected gateway answer (HTTP {status}){maybe}"
+    if dry_run and payload.get("dry_run") is not True:
+        return (
+            "Error: the gateway did not confirm the preview: it may have written "
+            "the catalog, check the dashboard"
+        )
+    added, removed = payload.get("added"), payload.get("removed")
+    first = payload.get("first_population")
+    if first is True:
+        # The gateway reports no added model for a first listing.
+        text = (
+            f"Catalog of '{provider_id}': first listing, "
+            f"{payload['discovered']} models: {_names(payload.get('models'))}"
+        )
+    elif first is None and not added and not removed and payload.get("models"):
+        # A gateway without first_population cannot tell a first listing
+        # from no change: never claim "added: none".
+        text = (
+            f"Catalog of '{provider_id}': {payload['discovered']} models: "
+            f"{_names(payload.get('models'))} (the gateway did not report "
+            "what changed)"
+        )
+    else:
+        text = (
+            f"Catalog of '{provider_id}': {payload['discovered']} models; "
+            f"added: {_names(added)}; removed: {_names(removed)}"
+        )
+    if dry_run:
+        text += " (preview, nothing written)"
+    if payload.get("removals_allowed") is False and first is not True:
+        text += "; removals skipped: the provider's list is not trusted"
+    return text
 
 
 # ── Resources ────────────────────────────────────────────────────────────────

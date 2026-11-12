@@ -197,7 +197,7 @@ There is no `Retry-After`: nobody knows when the provider comes back. A key limi
 
 ## MCP
 
-The MCP server (stdio, SSE or streamable HTTP) wraps the same API for MCP clients: `chat`, `chat_stream`, `list_models`, `embed`, `list_embedding_models`, `list_decision_models`, `decide`, `check_usage`, `provider_status`, plus the update-registry tools. [`mcp.json`](mcp.json) gives each tool's input schema; [MCP server](../guide/mcp.md) explains how to install, configure and connect it.
+The MCP server (stdio, SSE or streamable HTTP) wraps the same API for MCP clients: `chat`, `chat_stream`, `list_models`, `embed`, `list_embedding_models`, `list_decision_models`, `decide`, `check_usage`, `provider_status`, plus the update-registry tools and, over stdio only and off by default, the admin tools `add_provider` and `refresh_catalog`. [`mcp.json`](mcp.json) gives each tool's input schema; [MCP server](../guide/mcp.md) explains how to install, configure and connect it.
 
 ## Versioning
 

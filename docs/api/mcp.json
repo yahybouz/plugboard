@@ -8,6 +8,38 @@
   ],
   "tools": [
     {
+      "name": "add_provider",
+      "description": "Add an OpenAI-compatible provider to the gateway (admin, stdio only).\n\n    The provider is created inactive, with \"Public addresses only\" on, so an\n    internal or private address is refused; the gateway checks the rest as\n    POST /providers does. Then run refresh_catalog with the id this tool\n    answers; an admin activates the provider in the dashboard.\n\n    Needs PLUGBOARD_MCP_ADMIN_TOOLS=1 and PLUGBOARD_ADMIN_KEY. At most 5\n    calls per hour reach the gateway, refused ones included. If the answer\n    says the provider may have been created, check the dashboard instead of\n    retrying.\n\n    Args:\n        name: Display name; the gateway derives the id from it (a taken id\n            gets a suffix such as \"-1\": use the id in the answer).\n        base_url: OpenAI-compatible root URL, usually ending in /v1.\n        api_key: The provider's API key; sent to the gateway only, never\n            shown back.\n        default_model: Optional model ID used when none is given.",
+      "inputSchema": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "api_key": {
+            "title": "Api Key",
+            "type": "string"
+          },
+          "default_model": {
+            "default": "",
+            "title": "Default Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "base_url",
+          "api_key"
+        ],
+        "title": "add_providerArguments",
+        "type": "object"
+      }
+    },
+    {
       "name": "chat",
       "description": "Send a chat completion request to an LLM via Plugboard.\n\n    Use list_models to see available models.\n    Use list_models to discover available model IDs for configured providers.\n\n    Args:\n        model: Model ID as returned by list_models (e.g. my-provider:claude-sonnet-4-6)\n        message: The user message to send\n        max_tokens: Maximum tokens in the response (default: 4096)\n        temperature: Sampling temperature 0.0-1.0 (default: 0.7)\n        system_prompt: Optional system prompt to set context\n        session_id: Optional server-side session ID (PERF-1). When set,\n            Plugboard prepends the stored history so you only need to send the\n            new turn. TTL 24h, 50-turn cap, isolated per API key. Use a UUID\n            per conversation.",
       "inputSchema": {
@@ -289,6 +321,28 @@
       "inputSchema": {
         "properties": {},
         "title": "provider_statusArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "refresh_catalog",
+      "description": "Refresh a provider's model list from its API (admin, stdio only).\n\n    Same as the dashboard's Discover button: the gateway lists the\n    provider's models and writes them; models it no longer lists are\n    removed at once, unless its list is not trusted, and pinned models are\n    kept: run it with dry_run=True first. CLI providers are refused (their\n    refresh depends on a local CLI and can run model probes): use the\n    dashboard. Needs\n    PLUGBOARD_MCP_ADMIN_TOOLS=1 and PLUGBOARD_ADMIN_KEY; one refresh at a\n    time, and once a minute per provider and mode.\n\n    Args:\n        provider_id: The provider's id, as add_provider or the dashboard\n            shows it.\n        dry_run: Show what would be added and removed, write nothing.",
+      "inputSchema": {
+        "properties": {
+          "provider_id": {
+            "title": "Provider Id",
+            "type": "string"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "provider_id"
+        ],
+        "title": "refresh_catalogArguments",
         "type": "object"
       }
     }
