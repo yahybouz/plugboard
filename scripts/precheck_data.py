@@ -7,11 +7,13 @@ keys, pricing grids, update registry), never writes anything and never
 prints a stored value: findings name a file, a ``key_id`` or a provider ID,
 an entry position and a rule.
 
-ERROR (exit 1) when the upgrade would change what a key may do, or a store
-cannot be read by the server:
+ERROR (exit 1) when the upgrade would change what a key may do, when a key
+policy is invalid (in both versions), or when a store cannot be read by the
+server:
 
   cli-published-id         allowed_models holds a published CLI ID such as
-                           ``claude-code:<model>``: 4.4.0 refused it, this
+                           ``claude-code:<model>`` and that CLI is registered
+                           under its own ID: 4.4.0 refused the entry, this
                            version grants that model
   dead-entry               an entry that names no model ("", ``Codex:``,
                            ``<provider>:``): it grants nothing in this
@@ -19,7 +21,9 @@ cannot be read by the server:
                            a route without a model name
   emptied-list             every entry is dead: removing them would leave an
                            empty list, which means "every model"
-  allowed-models-null      allowed_models is null: the chat guard fails (500)
+  allowed-models-null      allowed_models is null: chat, /v1/models and
+                           /v1/preflight fail (500), embeddings read it as
+                           "every model"
   allowed-models-not-list  a string (read letter by letter) or non-text entries
   decision-policy-invalid  allowed_decision_models neither null nor a list of
                            known decision models
@@ -29,9 +33,12 @@ cannot be read by the server:
   registry-invalid, bad-shape, unreadable
 
 WARN (exit 0, exit 1 with --strict): decision-rights, legacy-key-prefix
-(``lle_`` keys), removed-connector, plaintext-token, missing stores, and the
-key faults above on a revoked key. NOTE: active CLI providers, broker
-credentials, catalog presets, keys without model restriction.
+(``lle_`` keys), removed-connector, plaintext-token, registry-clients, a
+published CLI ID whose CLI is not registered (grants nothing yet), missing
+stores, and the key faults above on a revoked key. NOTE: active CLI
+providers, broker credentials, catalog presets, keys without model
+restriction. The registry checked is data/registry.json, not a
+PLUGBOARD_REGISTRY_PATH elsewhere.
 
 Standard library only: it runs with the host's python3 or any image's.
 
@@ -63,6 +70,8 @@ CLI_DISPLAY_ALIASES = {
 DECISION_MODELS = ("jev", "laya", "laya-multilingual")
 REMOVED_CONNECTORS = frozenset({"openclaw", "openclaw-llm-proxy"})
 
+PROMPT_FIELDS = ("title", "impact", "version", "date", "summary", "changes")
+CHANGE_FIELDS = ("action", "file", "description")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 PRICING_NAME = re.compile(r"^\d{4}_\d{2}\.json$")
 _MISSING = object()
@@ -94,6 +103,9 @@ def _load(path: Path, report: Report, name: str) -> Any:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         report.add("ERROR", "unreadable", name, f"cannot be opened ({exc.strerror})")
+        return None
+    except UnicodeDecodeError as exc:
+        report.add("ERROR", "unreadable", name, f"not UTF-8 text (byte {exc.start})")
         return None
     try:
         return json.loads(text)
@@ -181,21 +193,46 @@ def check_providers(data: Path, report: Report) -> set:
 
 
 # ── api_keys.json ──────────────────────────────────────────────────────────
-def _entry_fault(entry: Any, provider_ids: set) -> Optional[tuple[str, str]]:
+def _registered_owner(entry: str, provider_ids: set) -> Optional[str]:
+    """Longest registered provider ID prefixing ``entry`` (model_identity)."""
+    return max(
+        (pid for pid in provider_ids if pid and entry.startswith(pid + ":")),
+        key=len,
+        default=None,
+    )
+
+
+def _entry_fault(entry: Any, provider_ids: set) -> Optional[tuple[str, str, str]]:
+    """(level override or "", code, message) for a faulty entry, else None."""
     if not isinstance(entry, str):
-        return ("allowed-models-not-list", f"entry is {type(entry).__name__}, not text")
+        return (
+            "",
+            "allowed-models-not-list",
+            f"entry is {type(entry).__name__}, not text",
+        )
     if not entry.strip() or entry.endswith(":"):
         return (
+            "",
             "dead-entry",
             'names no model (empty or prefix only): grants nothing in this version; 4.4.0 let "" and "<provider id>:" match a route without a model name',
         )
-    prefix = entry.split(":", 1)[0] if ":" in entry else ""
-    if prefix in CLI_DISPLAY_ALIASES.values() and prefix not in provider_ids:
+    if _registered_owner(entry, provider_ids) is not None:
+        return None  # <provider id>:<model>, the same in both versions
+    alias = entry.split(":", 1)[0] if ":" in entry else ""
+    owners = [o for o, a in CLI_DISPLAY_ALIASES.items() if a == alias]
+    if not owners:
+        return None
+    if owners[0] in provider_ids:
         return (
+            "",
             "cli-published-id",
-            f"published CLI ID ('{prefix}:'): 4.4.0 refused it, this version grants it; write it as <provider id>:<model>",
+            f"published CLI ID ('{alias}:'): 4.4.0 refused it, this version grants it; write it as {owners[0]}:<model>",
         )
-    return None
+    return (
+        "WARN",
+        "cli-published-id",
+        f"published CLI ID ('{alias}:') of a CLI provider not registered under {owners[0]}: grants nothing now, and would grant once it is",
+    )
 
 
 def _check_allowed_models(
@@ -209,7 +246,7 @@ def _check_allowed_models(
             level,
             "allowed-models-null",
             where,
-            "allowed_models is null: chat calls fail with 500",
+            "allowed_models is null: chat, /v1/models and /v1/preflight fail with 500, and /v1/embeddings reads it as every model (both versions)",
         )
         return
     if not isinstance(allowed, list):
@@ -224,9 +261,12 @@ def _check_allowed_models(
     for position, entry in enumerate(allowed):
         fault = _entry_fault(entry, provider_ids)
         if fault:
-            code, message = fault
+            override, code, message = fault
             dead += code == "dead-entry"
-            report.add(level, code, f"{where} allowed_models[{position}]", message)
+            entry_level = "WARN" if override == "WARN" else level
+            report.add(
+                entry_level, code, f"{where} allowed_models[{position}]", message
+            )
     if allowed and dead == len(allowed):
         report.add(
             level,
@@ -360,22 +400,43 @@ def check_pricing(data: Path, report: Report) -> None:
         doc = _load(path, report, name)
         if doc is None or doc is _MISSING:
             continue
-        if not isinstance(doc, dict) or not isinstance(doc.get("models", {}), dict):
-            report.add("ERROR", "bad-shape", name, 'expected {"models": {...}}')
+        if not isinstance(doc, dict):
+            report.add("ERROR", "bad-shape", name, "expected a JSON object")
             continue
-        for model, entry in doc.get("models", {}).items():
-            where = f"{name} model #{list(doc['models']).index(model)}"
-            if not isinstance(entry, dict):
-                report.add("ERROR", "price-invalid", where, "entry is not an object")
+        # The server reads `models` and each `models_by_provider` space, a
+        # missing or null table as empty (billing.match_in_grid).
+        tables = [("model", doc.get("models"))]
+        by_provider = doc.get("models_by_provider")
+        if by_provider is not None and not isinstance(by_provider, dict):
+            report.add(
+                "ERROR", "bad-shape", name, "models_by_provider is not an object"
+            )
+            by_provider = None
+        for space_index, space in enumerate(by_provider or {}):
+            tables.append((f"provider space #{space_index} model", by_provider[space]))
+        for label, table in tables:
+            if table is None:
                 continue
-            for field in ("input_price", "output_price"):
-                if field in entry and _bad_price(entry[field]):
+            if not isinstance(table, dict):
+                report.add(
+                    "ERROR", "bad-shape", name, f"a {label} table is not an object"
+                )
+                continue
+            for index, entry in enumerate(table.values()):
+                where = f"{name} {label} #{index}"
+                if not isinstance(entry, dict):
                     report.add(
-                        "ERROR",
-                        "price-invalid",
-                        where,
-                        f"{field} is not a non-negative number",
+                        "ERROR", "price-invalid", where, "entry is not an object"
                     )
+                    continue
+                for field in ("input_price", "output_price"):
+                    if field in entry and _bad_price(entry[field]):
+                        report.add(
+                            "ERROR",
+                            "price-invalid",
+                            where,
+                            f"{field} is not a non-negative number",
+                        )
 
 
 # ── registry.json ──────────────────────────────────────────────────────────
@@ -391,6 +452,10 @@ def check_registry(data: Path, report: Report) -> None:
     if not isinstance(prompts, list):
         report.add("ERROR", "bad-shape", name, 'expected {"prompts": [...]}')
         return
+    # Fields the MCP update tools index directly (mcp_server.py): a missing
+    # one fails check_updates / get_update_prompt with a KeyError.
+    if "version" not in doc:
+        report.add("ERROR", "registry-invalid", name, "no version")
     ids: set = set()
     for index, prompt in enumerate(prompts):
         where = f"{name} prompt #{index}"
@@ -400,15 +465,31 @@ def check_registry(data: Path, report: Report) -> None:
         if prompt["id"] in ids:
             report.add("ERROR", "registry-invalid", where, "id used twice")
         ids.add(prompt["id"])
-        clients = prompt.get("clients")
-        if not isinstance(clients, list) or not all(
-            isinstance(c, str) for c in clients
+        missing = [f for f in PROMPT_FIELDS if f not in prompt]
+        if missing:
+            report.add(
+                "ERROR", "registry-invalid", where, f"missing {', '.join(missing)}"
+            )
+        changes = prompt.get("changes", [])
+        if not isinstance(changes, list) or not all(
+            isinstance(c, dict) and all(k in c for k in CHANGE_FIELDS) for c in changes
         ):
             report.add(
                 "ERROR",
                 "registry-invalid",
                 where,
-                "clients must be a list of client IDs",
+                f"changes must be a list of objects with {', '.join(CHANGE_FIELDS)}",
+            )
+        clients = prompt.get("clients")
+        if clients is not None and (
+            not isinstance(clients, list)
+            or not all(isinstance(c, str) for c in clients)
+        ):
+            report.add(
+                "WARN",
+                "registry-clients",
+                where,
+                "clients is not a list of client IDs: the update reaches nobody",
             )
 
 

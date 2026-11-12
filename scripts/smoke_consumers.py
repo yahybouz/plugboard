@@ -6,19 +6,25 @@ budget (60 s by default):
 
   health      GET /health answers ok (and the expected version, if given);
               an instance with client auth disabled fails
-  models      GET /v1/models lists the smoke model for the key
+  models      GET /v1/models lists the smoke model as allowed for the key,
+              and the key is a limited client key (GET /v1/me)
   chat        one small chat completion returns text
   stream      the same call streamed returns text and ends with [DONE]
-  structured  response_format json_schema returns the requested JSON object
-  embeddings  only when the key may use a declared embedding model
-              (GET /v1/embeddings/models): one vector is returned. No
-              embedding model is a SKIP, not a failure, unless
-              --require-embeddings is given.
+  structured  response_format json_schema: the answer is exactly the JSON
+              object of a schema whose value is a nonce, which the prompt
+              does not give (a gateway that drops response_format fails)
+  embeddings  when the key may use a declared embedding model
+              (GET /v1/embeddings/models): it is available and one vector is
+              returned. No embedding model declared for the key is a SKIP,
+              not a failure, unless --require-embeddings is given.
 
 Read-only: no admin route, no provider or key change, no quarantine write.
 Chat calls send ``"cache": false`` (a cached answer proves nothing) and a
 small ``max_tokens``; they are billed to the smoke key like any client call,
-so give it a dedicated client key limited to a local model (allowed_models).
+so give it a dedicated client key limited (allowed_models) to a local chat
+model and, where embeddings are served, to the identity listed in
+PLUGBOARD_EMBEDDING_MODELS. Redirects are never followed and no proxy is
+used, so the key only goes to --url.
 
 The key is read from PLUGBOARD_SMOKE_KEY and never printed: any echo of it in
 an error body is masked. Standard library only, so it runs on a host without
@@ -43,22 +49,29 @@ import time
 import uuid
 from typing import Any, Callable, Optional
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 KEY_ENV = "PLUGBOARD_SMOKE_KEY"
 MODEL_ENV = "PLUGBOARD_SMOKE_MODEL"
 EMBEDDING_ENV = "PLUGBOARD_SMOKE_EMBEDDING_MODEL"
 
-SCHEMA = {
-    "name": "smoke_answer",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "properties": {"answer": {"type": "string"}},
-        "required": ["answer"],
-        "additionalProperties": False,
-    },
-}
+
+def structured_schema(word: str) -> dict:
+    """A schema only the gateway can tell the model: its value is a nonce.
+
+    The prompt never mentions JSON nor the field, so a gateway that drops
+    ``response_format`` gets plain text back and the check fails.
+    """
+    return {
+        "name": "smoke_answer",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {"answer": {"type": "string", "enum": [word]}},
+            "required": ["answer"],
+            "additionalProperties": False,
+        },
+    }
 
 
 class CheckFailed(Exception):
@@ -69,6 +82,15 @@ class Skipped(Exception):
     """A check does not apply to this deployment; the message says why."""
 
 
+class _NoRedirect(HTTPRedirectHandler):
+    """Never follow a redirect: it would send the key to another place."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise CheckFailed(
+            f"HTTP {code} redirect to {newurl}: not followed (the key stays here)"
+        )
+
+
 class Smoke:
     def __init__(self, url: str, key: str, timeout: float, deadline: float):
         self.url = url.rstrip("/")
@@ -77,6 +99,8 @@ class Smoke:
         self.started = time.monotonic()
         self.deadline = deadline
         self.failed = False
+        # No proxy (the key would cross it) and no redirect (see _NoRedirect).
+        self._opener = build_opener(ProxyHandler({}), _NoRedirect)
 
     # ── output ──────────────────────────────────────────────────────
     def mask(self, text: str) -> str:
@@ -107,7 +131,7 @@ class Smoke:
             headers["Authorization"] = f"Bearer {self.key}"
         req = Request(self.url + path, data=data, headers=headers, method=method)
         try:
-            return urlopen(req, timeout=min(self.timeout, left))
+            return self._opener.open(req, timeout=min(self.timeout, left))
         except HTTPError as exc:
             detail = ""
             try:
@@ -207,22 +231,24 @@ def build_checks(smoke: Smoke, args) -> list[tuple[str, Callable[[], str]]]:
 
     def models() -> str:
         payload = smoke.get_json("/v1/models")
-        ids = [
-            m.get("id") for m in (payload or {}).get("data", []) if isinstance(m, dict)
-        ]
-        if model not in ids:
+        rows = [m for m in (payload or {}).get("data", []) if isinstance(m, dict)]
+        row = next((m for m in rows if m.get("id") == model), None)
+        if row is None:
             raise CheckFailed(
-                f"{model} is not listed for this key ({len(ids)} model(s))"
+                f"{model} is not listed for this key ({len(rows)} model(s))"
             )
-        try:
-            me = smoke.get_json("/v1/me")
-        except CheckFailed:
-            me = None
-        if isinstance(me, dict) and "allowed_models" in me and not me["allowed_models"]:
-            smoke.say(
-                "WARN", "models", "the smoke key is not limited (allowed_models empty)"
-            )
-        return f"{model} listed among {len(ids)} model(s)"
+        # 4.4.0 lists every model and flags the ones the key may not use.
+        if row.get("account_compatible") is False:
+            raise CheckFailed(f"{model} is listed but not allowed for this key")
+        me = smoke.get_json("/v1/me")
+        if not isinstance(me, dict) or me.get("client_id") in (None, "admin"):
+            raise CheckFailed("not a client key: use a dedicated, limited client key")
+        if not me.get("allowed_models"):
+            message = "the smoke key is not limited (allowed_models empty)"
+            if not args.allow_unlimited_key:
+                raise CheckFailed(f"{message}; pass --allow-unlimited-key to accept it")
+            smoke.say("WARN", "models", message)
+        return f"{model} listed among {len(rows)} model(s), key limited"
 
     def chat() -> str:
         answer = smoke.post_json(
@@ -282,13 +308,17 @@ def build_checks(smoke: Smoke, args) -> list[tuple[str, Callable[[], str]]]:
         return f"{chunks} chunk(s), {len(''.join(text))} character(s), [DONE] received"
 
     def structured() -> str:
+        word = f"pong{uuid.uuid4().hex[:6]}"
         answer = smoke.post_json(
             "/v1/chat/completions",
             _chat_body(
                 model,
-                'Return a JSON object whose "answer" field is the word pong.',
+                "Say pong.",
                 args.max_tokens,
-                response_format={"type": "json_schema", "json_schema": SCHEMA},
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": structured_schema(word),
+                },
             ),
         )
         content, finish = _content(answer)
@@ -297,36 +327,37 @@ def build_checks(smoke: Smoke, args) -> list[tuple[str, Callable[[], str]]]:
         try:
             parsed = json.loads(content.strip())
         except ValueError:
-            raise CheckFailed(f"content is not JSON: {content[:80]!r}") from None
-        if not isinstance(parsed, dict) or not isinstance(parsed.get("answer"), str):
             raise CheckFailed(
-                "JSON does not match the schema (string field 'answer' required)"
+                f"content is not JSON (response_format ignored?): {content[:80]!r}"
+            ) from None
+        if parsed != {"answer": word}:
+            raise CheckFailed(
+                "JSON does not match the schema sent (response_format ignored?)"
             )
-        return "JSON object matching the schema"
+        return "JSON object matching the schema sent"
 
     def embeddings() -> str:
-        try:
-            listed = smoke.get_json("/v1/embeddings/models")
-        except CheckFailed as exc:
-            if "HTTP 404" in str(exc) and not args.require_embeddings:
-                raise Skipped("this version has no /v1/embeddings route") from None
-            raise
+        # The route exists since 4.4.0: a 404 is a routing fault, not a version.
+        listed = smoke.get_json("/v1/embeddings/models")
         rows = [r for r in (listed or {}).get("data", []) if isinstance(r, dict)]
         if args.embedding_model:
             rows = [r for r in rows if r.get("id") == args.embedding_model]
-        available = [r["id"] for r in rows if r.get("available") and r.get("id")]
-        if not available:
-            why = (
-                f"{args.embedding_model} is not usable by this key"
-                if args.embedding_model
-                else "no embedding model declared for this key"
-            )
-            if rows:
-                why = f"declared but unavailable: {', '.join(str(r.get('id')) for r in rows)}"
+            if not rows:
+                raise CheckFailed(
+                    f"{args.embedding_model} is not declared for this key "
+                    "(PLUGBOARD_EMBEDDING_MODELS and the key's allowed_models)"
+                )
+        if not rows:
+            why = "no embedding model declared for this key"
             if args.require_embeddings:
                 raise CheckFailed(why)
             raise Skipped(why)
-        target = available[0]
+        broken = [str(r.get("id")) for r in rows if not r.get("available")]
+        if broken:
+            raise CheckFailed(
+                f"declared for this key but unavailable: {', '.join(broken)}"
+            )
+        target = str(rows[0]["id"])
         payload = smoke.post_json(
             "/v1/embeddings", {"model": target, "input": ["smoke"]}
         )
@@ -336,7 +367,9 @@ def build_checks(smoke: Smoke, args) -> list[tuple[str, Callable[[], str]]]:
             raise CheckFailed("answer without data[0].embedding") from None
         if not isinstance(vector, list) or not vector:
             raise CheckFailed("empty embedding vector")
-        if not all(isinstance(v, (int, float)) for v in vector):
+        if not all(
+            isinstance(v, (int, float)) and not isinstance(v, bool) for v in vector
+        ):
             raise CheckFailed("embedding vector holds non-numbers")
         return f"{target}: {len(vector)} dimension(s)"
 
@@ -372,7 +405,12 @@ def parse_args(argv: Optional[list] = None):
     p.add_argument(
         "--require-embeddings",
         action="store_true",
-        help="fail instead of skipping when no embedding model is usable",
+        help="fail instead of skipping when no embedding model is declared for the key",
+    )
+    p.add_argument(
+        "--allow-unlimited-key",
+        action="store_true",
+        help="accept a client key without allowed_models (a warning instead of a failure)",
     )
     p.add_argument(
         "--expect-version", default="", help="fail unless /health reports it"

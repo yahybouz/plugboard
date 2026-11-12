@@ -81,16 +81,32 @@ def _clean() -> dict:
         },
         "registry.json": {
             "version": "1.0.0",
-            "prompts": [{"id": "CP-001", "clients": [CLIENT], "title": "t"}],
+            "prompts": [
+                {
+                    "id": "CP-001",
+                    "version": "1.0.0",
+                    "date": "2026-01-01",
+                    "impact": "EVOLUTION",
+                    "clients": [CLIENT],
+                    "title": "t",
+                    "summary": "s",
+                    "changes": [
+                        {"action": "replace", "file": ".env", "description": "d"}
+                    ],
+                }
+            ],
         },
     }
 
 
 def _write(root: Path, files: dict) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
     for name, content in files.items():
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        if isinstance(content, (dict, list)):
+        if isinstance(content, bytes):
+            path.write_bytes(content)
+        elif isinstance(content, (dict, list)):
             path.write_text(json.dumps(content), encoding="utf-8")
         else:
             path.write_text(content, encoding="utf-8")
@@ -255,12 +271,20 @@ def test_faults_of_a_revoked_key_are_warnings(tmp_path):
             "price-invalid",
         ),
         ("registry.json", "{", "unreadable"),
-        ("registry.json", {"prompts": {}}, "bad-shape"),
+        ("registry.json", {"version": "1", "prompts": {}}, "bad-shape"),
+        ("registry.json", {"prompts": []}, "registry-invalid"),
         (
             "registry.json",
-            {"prompts": [{"id": "CP-1", "clients": "my-app"}]},
+            {"version": "1", "prompts": [{"id": "CP-1", "clients": ["a"]}]},
             "registry-invalid",
         ),
+        ("api_keys.json", b"\xff\xfe{}", "unreadable"),
+        (
+            "pricing/2026_11.json",
+            {"models_by_provider": {"p": {"m": {"input_price": "3.0"}}}},
+            "price-invalid",
+        ),
+        ("pricing/2026_11.json", {"models_by_provider": []}, "bad-shape"),
     ],
 )
 def test_unreadable_or_incoherent_stores_fail(tmp_path, name, content, code):
@@ -375,3 +399,72 @@ def test_cli_aliases_match_the_server(tmp_path):
 
     assert module.DECISION_MODELS == DECISION_MODELS
     assert module.REMOVED_CONNECTORS == _REMOVED_IDS
+
+
+def test_a_published_id_of_an_unregistered_cli_is_a_warning(tmp_path):
+    proc = _precheck(_write(tmp_path, _with_key(allowed_models=["Codex:gpt-6"])))
+
+    assert proc.returncode == 0, proc.stdout
+    assert "cli-published-id" in _codes(proc, "WARN")
+    assert "cli-published-id" not in _codes(proc, "ERROR")
+
+
+def test_an_owner_registered_under_a_longer_id_is_not_an_alias(tmp_path):
+    files = _with_key(allowed_models=["claude-code:team:m"])
+    files["providers.json"]["providers"].append({"id": "claude-code:team"})
+
+    proc = _precheck(_write(tmp_path, files))
+
+    assert proc.returncode == 0, proc.stdout
+
+
+def test_registry_clients_that_reach_nobody_are_a_warning(tmp_path):
+    files = _clean()
+    files["registry.json"]["prompts"][0]["clients"] = "my-app"
+
+    proc = _precheck(_write(tmp_path, files))
+
+    assert proc.returncode == 0, proc.stdout
+    assert "registry-clients" in _codes(proc, "WARN")
+
+
+def test_a_null_models_table_reads_as_empty(tmp_path):
+    files = _clean()
+    files["pricing/2026_11.json"] = {"month": "2026_11", "models": None}
+
+    proc = _precheck(_write(tmp_path, files))
+
+    assert proc.returncode == 0, proc.stdout
+
+
+# ── The meaning changes the script reports, checked against the code ─────
+
+
+def _matches_4_4_0(allowed, owner, native):
+    """plugboard/model_identity.py model_access_matches as tagged v4.4.0."""
+    allowed = tuple(allowed)
+    return not allowed or native in allowed or f"{owner}:{native}" in allowed
+
+
+@pytest.mark.parametrize(
+    ("entry", "owner", "native", "before", "now"),
+    [
+        # cli-published-id: refused by 4.4.0, granted now.
+        ("claude-code:sonnet", "claude-via-claude-cli", "sonnet", False, True),
+        ("Codex:gpt-6", "chatgpt-via-codex-cli", "gpt-6", False, True),
+        # dead-entry: "" and "<provider id>:" matched a route without a model.
+        ("", "chatgpt-via-codex-cli", "", True, False),
+        ("chatgpt-via-codex-cli:", "chatgpt-via-codex-cli", "", True, False),
+        # An alias prefix alone granted nothing then and grants nothing now.
+        ("Codex:", "chatgpt-via-codex-cli", "", False, False),
+        # <provider id>:<model> is the same in both versions.
+        ("ollama:qwen3:0.6b", "ollama", "qwen3:0.6b", True, True),
+    ],
+)
+def test_reported_meaning_changes_match_the_code(entry, owner, native, before, now):
+    from plugboard.model_identity import model_access_matches
+
+    registered = ("claude-via-claude-cli", "chatgpt-via-codex-cli", "ollama")
+
+    assert _matches_4_4_0([entry, "other:x"], owner, native) is before
+    assert model_access_matches([entry, "other:x"], owner, native, registered) is now

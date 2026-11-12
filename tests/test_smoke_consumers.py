@@ -36,14 +36,21 @@ def _default_behavior() -> dict:
             "active": ["ollama"],
         },
         "models": [MODEL, "ollama:other"],
+        # account_compatible per model, as 4.4.0 publishes it (absent: not sent)
+        "compatible": {},
+        "me_client": "smoke",
         "me_allowed": [MODEL],
+        "redirect_to": None,
         "chat_status": 200,
         "chat_content": "pong",
         "chat_error_body": None,
         "stream_chunks": ["po", "ng"],
         "stream_done": True,
         "stream_error": False,
-        "structured_content": '{"answer": "pong"}',
+        # None: answer what the schema asks (a gateway honouring
+        # response_format); a string: that content whatever was sent.
+        "structured_content": None,
+        "drop_response_format": False,
         "embedding_models": [],
         "embedding_route": True,
         "embedding_vector": [0.1, 0.2, 0.3],
@@ -78,14 +85,27 @@ class _Gateway(BaseHTTPRequestHandler):
         self.seen.append(("GET", self.path, None))
         if self.path == "/health":
             return self._send(200, b["health"])
+        if b["redirect_to"] and self.path == "/v1/models":
+            self.send_response(302)
+            self.send_header("Location", b["redirect_to"] + self.path)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return None
         if not self._authorized():
             return None
         if self.path == "/v1/models":
-            data = [{"id": m, "object": "model"} for m in b["models"]]
+            data = []
+            for m in b["models"]:
+                row = {"id": m, "object": "model"}
+                if m in b["compatible"]:
+                    row["account_compatible"] = b["compatible"][m]
+                data.append(row)
             return self._send(200, {"object": "list", "data": data})
         if self.path == "/v1/me":
+            if b["me_client"] == "admin":  # the admin key has no key record
+                return self._send(200, {"client_id": "admin", "usage": {}})
             return self._send(
-                200, {"client_id": "smoke", "allowed_models": b["me_allowed"]}
+                200, {"client_id": b["me_client"], "allowed_models": b["me_allowed"]}
             )
         if self.path == "/v1/embeddings/models":
             if not b["embedding_route"]:
@@ -113,11 +133,15 @@ class _Gateway(BaseHTTPRequestHandler):
             return self._send(b["chat_status"], detail)
         if body.get("stream"):
             return self._stream(b)
-        content = (
-            b["structured_content"]
-            if body.get("response_format")
-            else b["chat_content"]
-        )
+        fmt = None if b["drop_response_format"] else body.get("response_format")
+        if b["structured_content"] is not None and body.get("response_format"):
+            content = b["structured_content"]
+        elif fmt:
+            # A model under the schema's grammar: the only value allowed.
+            schema = fmt["json_schema"]["schema"]
+            content = json.dumps({"answer": schema["properties"]["answer"]["enum"][0]})
+        else:
+            content = b["chat_content"]
         return self._send(
             200,
             {
@@ -147,6 +171,22 @@ class _Gateway(BaseHTTPRequestHandler):
             self.wfile.write(b"data: [DONE]\n\n")
         self.wfile.flush()
         self.close_connection = True
+
+
+class _Recorder(BaseHTTPRequestHandler):
+    """Another host: records whatever reaches it."""
+
+    headers_seen: list = []
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):  # noqa: N802
+        _Recorder.headers_seen.append(dict(self.headers))
+        self.send_response(200)
+        self.send_header("Content-Length", "2")
+        self.end_headers()
+        self.wfile.write(b"{}")
 
 
 class _Server(ThreadingHTTPServer):
@@ -225,6 +265,9 @@ def test_requests_bypass_the_cache_and_stay_small(gateway):
         assert body["max_tokens"] <= 64
     structured = [b for b in chats if b.get("response_format")]
     assert structured[0]["response_format"]["type"] == "json_schema"
+    # Only the schema tells the model what to answer.
+    prompt = structured[0]["messages"][0]["content"].lower()
+    assert "json" not in prompt and "answer" not in prompt
     # Only reads and chat calls: no admin route, nothing written.
     assert not [p for m, p, b in gw.seen if p.startswith(("/admin", "/providers"))]
 
@@ -266,27 +309,45 @@ def test_empty_embedding_vector_fails(gateway):
     assert _check_names(proc, "FAIL") == ["embeddings"]
 
 
-def test_unavailable_embedding_model_is_skipped_unless_required(gateway):
+def test_a_declared_but_unavailable_embedding_model_fails(gateway):
     server, gw = gateway
     gw.behavior["embedding_models"] = [{"id": EMBED, "available": False}]
 
     proc = _smoke(server)
-    assert proc.returncode == 0, proc.stdout
-    assert _check_names(proc, "SKIP") == ["embeddings"]
+
+    assert proc.returncode == 1, proc.stdout
+    assert _check_names(proc, "FAIL") == ["embeddings"]
+    assert not [p for m, p, b in gw.seen if p == "/v1/embeddings"]
+
+
+def test_no_declared_embedding_model_fails_only_when_required(gateway):
+    server, gw = gateway
 
     proc = _smoke(server, "--require-embeddings")
+
     assert proc.returncode == 1
     assert _check_names(proc, "FAIL") == ["embeddings"]
 
 
-def test_an_older_gateway_without_embeddings_route_is_skipped(gateway):
+def test_an_embedding_model_asked_for_but_not_declared_fails(gateway):
+    server, gw = gateway
+    gw.behavior["embedding_models"] = [{"id": "ollama:other-embed", "available": True}]
+
+    proc = _smoke(server, "--embedding-model", EMBED)
+
+    assert proc.returncode == 1
+    assert _check_names(proc, "FAIL") == ["embeddings"]
+
+
+def test_a_missing_embeddings_route_fails(gateway):
+    # The route exists since 4.4.0: a 404 means the routing is broken.
     server, gw = gateway
     gw.behavior["embedding_route"] = False
 
     proc = _smoke(server)
 
-    assert proc.returncode == 0, proc.stdout
-    assert _check_names(proc, "SKIP") == ["embeddings"]
+    assert proc.returncode == 1, proc.stdout
+    assert _check_names(proc, "FAIL") == ["embeddings"]
 
 
 @pytest.mark.parametrize(
@@ -300,7 +361,12 @@ def test_an_older_gateway_without_embeddings_route_is_skipped(gateway):
         ({"structured_content": "pong"}, ["structured"]),
         ({"structured_content": '```json\n{"answer": "pong"}\n```'}, ["structured"]),
         ({"structured_content": '{"other": 1}'}, ["structured"]),
+        ({"structured_content": '{"answer": "pong"}'}, ["structured"]),
+        ({"drop_response_format": True}, ["structured"]),
         ({"models": ["ollama:other"]}, ["models"]),
+        ({"compatible": {MODEL: False}}, ["models"]),
+        ({"me_allowed": []}, ["models"]),
+        ({"me_client": "admin"}, ["models"]),
         ({"health": {"ok": False, "version": "9.9.9"}}, ["health"]),
         (
             {"health": {"ok": True, "version": "9.9.9", "auth_disabled": True}},
@@ -327,14 +393,42 @@ def test_expected_version_is_enforced(gateway):
     assert _check_names(proc, "FAIL") == ["health"]
 
 
-def test_an_unlimited_key_is_reported(gateway):
+def test_an_unlimited_key_can_be_accepted_explicitly(gateway):
     server, gw = gateway
     gw.behavior["me_allowed"] = []
 
+    proc = _smoke(server, "--allow-unlimited-key")
+
+    assert proc.returncode == 0, proc.stdout
+    assert any("not limited" in line for line in _lines(proc, "WARN"))
+
+
+def test_a_4_4_0_model_list_with_the_model_allowed_passes(gateway):
+    server, gw = gateway
+    gw.behavior["compatible"] = {MODEL: True, "ollama:other": False}
+
     proc = _smoke(server)
 
-    assert proc.returncode == 0
-    assert any("not limited" in line for line in _lines(proc, "WARN"))
+    assert proc.returncode == 0, proc.stdout
+
+
+def test_a_redirect_is_not_followed_and_the_key_stays_here(gateway):
+    server, gw = gateway
+    other = _Server(("127.0.0.1", 0), _Recorder)
+    _Recorder.headers_seen = []
+    thread = threading.Thread(target=other.serve_forever, daemon=True)
+    thread.start()
+    try:
+        gw.behavior["redirect_to"] = f"http://127.0.0.1:{other.server_address[1]}"
+        proc = _smoke(server)
+    finally:
+        other.shutdown()
+        other.server_close()
+
+    assert proc.returncode == 1
+    assert _check_names(proc, "FAIL")[0] == "models"
+    assert "redirect" in proc.stdout
+    assert _Recorder.headers_seen == []
 
 
 def test_the_key_never_appears_even_when_echoed(gateway):
