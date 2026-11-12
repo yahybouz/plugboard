@@ -1,4 +1,4 @@
-/* ── Plugboard Admin Dashboard ──────────────────────────────────────────── */
+/* ── Plugboard admin dashboard ──────────────────────────────────────────── */
 "use strict";
 
 // ── Toast notifications ─────────────────────────────────────────────────────
@@ -299,7 +299,7 @@ async function loadOverview() {
           h("td", null, (metrics[pid].latency_avg || 0).toFixed(3) + "s"),
         );
       });
-      metricsContainer.appendChild(table(["Provider", "Requests", "Errors", "Avg Latency"], rows));
+      metricsContainer.appendChild(table(["Provider", "Requests", "Errors", "Avg latency"], rows));
     } else {
       metricsContainer.appendChild(emptyState("—", "No metrics recorded yet."));
     }
@@ -317,7 +317,7 @@ function statCard(icon, label, value, color) {
   return card;
 }
 
-// ── API Keys ────────────────────────────────────────────────────────────────
+// ── API keys ────────────────────────────────────────────────────────────────
 
 const createKeyForm = document.getElementById("create-key-form");
 const newKeyAlert = document.getElementById("new-key-alert");
@@ -397,7 +397,7 @@ async function deleteKey(keyId) {
   loadKeys();
 }
 
-// ── Usage & Billing ─────────────────────────────────────────────────────────
+// ── Usage & billing ─────────────────────────────────────────────────────────
 
 const usageMonthInput = document.getElementById("usage-month");
 usageMonthInput.value = toHtmlMonth(currentMonth());
@@ -432,9 +432,9 @@ async function loadUsage() {
 
     cardsEl.innerHTML = "";
     cardsEl.appendChild(statCard("📈", "Requests", fmt(s.total_entries || 0), "accent"));
-    cardsEl.appendChild(statCard("💬", "Prompt Tokens", fmt(s.total_prompt_tokens || 0), ""));
-    cardsEl.appendChild(statCard("💬", "Completion Tokens", fmt(s.total_completion_tokens || 0), ""));
-    cardsEl.appendChild(statCard("💰", "Total Cost", usd(s.total_cost_usd || 0), "orange"));
+    cardsEl.appendChild(statCard("💬", "Prompt tokens", fmt(s.total_prompt_tokens || 0), ""));
+    cardsEl.appendChild(statCard("💬", "Completion tokens", fmt(s.total_completion_tokens || 0), ""));
+    cardsEl.appendChild(statCard("💰", "Total cost", usd(s.total_cost_usd || 0), "orange"));
 
     // By client
     const byClient = {};
@@ -515,7 +515,7 @@ document.getElementById("btn-add-provider").addEventListener("click", function (
   document.getElementById("pf-timeout").value = "60";
   document.getElementById("pf-edit-id").value = "";
   document.getElementById("pf-submit-btn").textContent = "Create";
-  document.getElementById("pf-form-title").textContent = "Add Provider";
+  document.getElementById("pf-form-title").textContent = "Add provider";
   document.getElementById("pf-token").placeholder = "Bearer token";
   document.getElementById("pf-token").required = true;
   document.getElementById("pf-auto-discover").checked = false;
@@ -579,7 +579,7 @@ function _fillPresetSelect(query) {
   count.textContent = query ? shown + " provider" + plural + " match" : _directPresets.length + " providers available";
   if (previous && Array.prototype.some.call(select.options, function (o) { return o.value === previous; })) select.value = previous;
   if (!shown) {
-    document.getElementById("dp-setup-guide").innerHTML = '<p class="muted">No provider matches. Add it as a custom endpoint with <strong>+ Add Custom Provider</strong>.</p>';
+    document.getElementById("dp-setup-guide").innerHTML = '<p class="muted">No provider matches. Add it as a custom endpoint with <strong>+ Add custom provider</strong>.</p>';
     document.getElementById("btn-dp-create").disabled = true;
     document.getElementById("btn-dp-test").disabled = true;
     return;
@@ -700,8 +700,8 @@ async function _renderPresetView() {
 
   // Header info
   let header = '';
-  if (preset.base_url) header += '<div class="preset-endpoint">Endpoint : <code>' + _escape(preset.base_url) + '</code>';
-  if (preset.default_model) header += ' · Default model : <code>' + _escape(preset.default_model) + '</code>';
+  if (preset.base_url) header += '<div class="preset-endpoint">Endpoint: <code>' + _escape(preset.base_url) + '</code>';
+  if (preset.default_model) header += ' · Default model: <code>' + _escape(preset.default_model) + '</code>';
   if (preset.base_url) header += '</div>';
   if (preset.reason) header += '<div class="alert alert-warning small mb-2">⚠️ ' + _escape(preset.reason) + '</div>';
 
@@ -854,7 +854,7 @@ async function _checkBrokerConnection(preset) {
 async function _checkCLI(preset) {
   const statusEl = document.getElementById("dp-status");
   const createBtn = document.getElementById("btn-dp-create");
-  statusEl.innerHTML = '<span class="text-muted">Checking CLI...</span>';
+  statusEl.innerHTML = '<span class="text-muted">Checking CLI…</span>';
   try {
     const res = await api("GET", "/admin/direct-providers/" + preset.key + "/check");
     const status = await res.json();
@@ -957,7 +957,7 @@ let _oauthMsgHandler = null;
 
 async function _startBrokerFlow(preset) {
   const statusEl = document.getElementById("dp-status");
-  statusEl.innerHTML = '<span class="text-muted">Starting OAuth flow...</span>';
+  statusEl.innerHTML = '<span class="text-muted">Starting OAuth flow…</span>';
   try {
     const res = await api("POST", "/admin/oauth/start", { preset: preset.key });
     if (!res.ok) {
@@ -989,7 +989,7 @@ function _runPopupFlow(preset, data) {
     toast("Popup blocked — allow popups and retry", "error");
     return;
   }
-  statusEl.innerHTML = '<span class="text-muted">Waiting for authorization in the popup window...</span>';
+  statusEl.innerHTML = '<span class="text-muted">Waiting for authorization in the popup window…</span>';
 
   // Clean up any previous listener
   if (_oauthMsgHandler) window.removeEventListener("message", _oauthMsgHandler);
@@ -1027,7 +1027,7 @@ function _runDeviceFlow(preset, data) {
   const deviceStatus = document.getElementById("device-status");
 
   codeEl.textContent = data.user_code || "----";
-  deviceStatus.textContent = "Waiting for authorization...";
+  deviceStatus.textContent = "Waiting for authorization…";
   modal.style.display = "flex";
   modal.classList.remove("hidden");
 
@@ -1054,7 +1054,7 @@ function _runDeviceFlow(preset, data) {
         _closeDeviceFlow();
         toast("OAuth " + d.status + ": " + (d.error || ""), "error");
       } else {
-        deviceStatus.textContent = "Waiting for authorization... (" + d.status + ")";
+        deviceStatus.textContent = "Waiting for authorization… (" + d.status + ")";
       }
     } catch (e) { console.debug("discovery poll failed:", e); /* keep polling */ }
   }, interval);
@@ -1153,7 +1153,7 @@ async function loadProviders() {
         )),
       );
     });
-    container.appendChild(table(["Name / ID", "Base URL", "Default Model", "Timeout", "Status", "Health", "Models", "Actions"], rows));
+    container.appendChild(table(["Name / ID", "Base URL", "Default model", "Timeout", "Status", "Health", "Models", "Actions"], rows));
   } catch (e) { console.warn("providers load failed:", e); container.innerHTML = ""; container.appendChild(h("div", { className: "alert alert-error" }, "Failed to load providers.")); }
 }
 
@@ -1175,7 +1175,7 @@ function editProvider(p) {
   document.getElementById("pf-token").placeholder = "Leave empty to keep current";
   document.getElementById("pf-token").required = false;
   document.getElementById("pf-submit-btn").textContent = "Update";
-  document.getElementById("pf-form-title").textContent = "Edit Provider";
+  document.getElementById("pf-form-title").textContent = "Edit provider";
 }
 
 async function deleteProvider(id) {
@@ -1295,7 +1295,7 @@ async function loadMonitoring() {
         );
       });
       providersEl.appendChild(table(
-        ["Provider", "Status", "Latency", "Requests", "Error Rate", "Uptime 24h", "Models"],
+        ["Provider", "Status", "Latency", "Requests", "Error rate", "Uptime 24h", "Models"],
         rows
       ));
     } else {
@@ -1763,16 +1763,16 @@ function _initPlaygroundEvents() {
     const btn = document.getElementById("btn-check-internet");
     const oldText = btn.textContent;
     btn.disabled = true;
-    btn.textContent = "⏳ Probing...";
+    btn.textContent = "⏳ Probing…";
 
-    toast("Checking internet access for " + modelId + "...", "success");
+    toast("Checking internet access for " + modelId + "…", "success");
 
     try {
       const res = await api("POST", "/admin/models/check-internet", { model_id: modelId, persist: true });
       const data = await res.json();
 
       if (data.status === "quarantined") {
-        toast("Model not found and has been quarantined. Reloading selector...", "error");
+        toast("Model not found and has been quarantined. Reloading selector…", "error");
         await loadPlayground();
       } else if (data.status === "busy") {
         toast("The provider is busy: nothing was checked. Retry in a few seconds.", "warning");
@@ -1802,8 +1802,8 @@ function _initPlaygroundEvents() {
     if (!await confirmAction("Probe ALL models for live internet access? This calls each model with a real prompt — may take a few minutes and consume some quota. Persistence: results saved to providers.json.")) return;
 
     btn.disabled = true;
-    btn.textContent = "⏳ Probing all...";
-    statusEl.textContent = "Bulk internet check in progress...";
+    btn.textContent = "⏳ Probing all…";
+    statusEl.textContent = "Bulk internet check in progress…";
 
     try {
       const res = await api("POST", "/admin/models/check-internet/all", { persist: true });
@@ -1945,7 +1945,7 @@ async function _pgSend() {
   const assistantBubble = _pgAddMessage("assistant", "...");
   assistantBubble.dataset.model = model;
   assistantBubble.title = "Answer from " + model;
-  statusEl.textContent = "Sending to " + model + "...";
+  statusEl.textContent = "Sending to " + model + "…";
   statusEl.dataset.state = "sending";  // live-test completion hook (C9)
   if (window.plugboardLive) window.plugboardLive.ticker(statusEl, model);  // PLU-13
 

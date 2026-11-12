@@ -10,7 +10,7 @@ Provider credentials stay on the gateway host. API keys and tokens are encrypted
 |---|---|---|
 | API key | *Anthropic Direct*, *Google Gemini Direct*, *GitHub Models*, *OpenAI Direct* | HTTP call to the vendor with your key |
 | Catalog (models.dev) | *OpenRouter · unverified*, *Groq · unverified*, *Moonshot AI (Kimi) · unverified*, *OpenCode Zen · unverified* and every other provider with a standard chat API that the catalog lists | HTTP call with your key |
-| Custom endpoint | **+ Add Custom Provider** | HTTP call to any server with a standard chat API |
+| Custom endpoint | **+ Add custom provider** | HTTP call to any server with a standard chat API |
 | Local models | *Ollama* (automatic) | HTTP call to your Ollama daemon |
 | Subscription through an official CLI | *Claude (via claude CLI)*, *ChatGPT (via codex CLI)*, *Antigravity (via agy CLI)* | Plugboard runs the CLI as a subprocess for each request |
 | Subscription through CLI credentials | *ChatGPT (via Codex CLI)*, *Gemini (via Gemini CLI)*, *GitHub Copilot (via gh CLI)*, *GitHub Models (via gh CLI)* | HTTP call with the token the CLI stored on the host |
@@ -56,7 +56,7 @@ A model hidden by exposure filters can still be called with its unambiguous expl
    - OpenAI: <https://platform.openai.com/api-keys> (API access is billed separately from a ChatGPT subscription)
    - Google AI Studio: <https://aistudio.google.com/app/apikey>
    - GitHub Models: a personal access token with the `models:read` scope, from <https://github.com/settings/tokens>
-2. In the dashboard, open **Providers → + Add Direct Provider**.
+2. In the dashboard, open **Providers → + Add direct provider**.
 3. Search for the provider, paste the key and click **Test and create**. The key is tested first (see [Test the connection](#test-the-connection)); when the test fails you can still **Save anyway**.
 4. Click **Discover** on the new row to load its model list, then **Ping** to check it answers.
 
@@ -102,14 +102,14 @@ Each provider has two settings, in **Edit** on the Providers page or through `PU
 
 ### Custom endpoint
 
-Use **+ Add Custom Provider** for any server that implements `POST /v1/chat/completions` (vLLM, LM Studio, llama.cpp server, another gateway):
+Use **+ Add custom provider** for any server that implements `POST /v1/chat/completions` (vLLM, LM Studio, llama.cpp server, another gateway):
 
 | Field | Value |
 |---|---|
 | Name | A readable name; the provider ID is derived from it |
 | Base URL | The server root (`http://localhost:8000`) or its versioned API root (`https://api.example.com/v1`). Plugboard adds `/v1` only to a bare host, then calls `/chat/completions` and `/models`. |
-| Bearer Token | Optional; sent as `Authorization: Bearer <token>` |
-| Default Model | Used when a request names this provider without a model |
+| Bearer token | Optional; sent as `Authorization: Bearer <token>` |
+| Default model | Used when a request names this provider without a model |
 | Timeout (s) | Request timeout (default 60) |
 | Public addresses only | Off by default; see [below](#public-addresses-only). Leave it off for Ollama or another local server. |
 
@@ -156,7 +156,7 @@ Read [the risks](#risks-of-using-subscriptions) first. These presets run the ven
    | Codex | `npm install -g @openai/codex` | `codex login` |
    | Antigravity CLI | see [antigravity.google](https://antigravity.google/), then `agy install` | run `agy` once and sign in with Google |
 
-2. **Providers → + Add Direct Provider**, choose *Claude (via claude CLI)*, *ChatGPT (via codex CLI)* or *Antigravity (via agy CLI)*.
+2. **Providers → + Add direct provider**, choose *Claude (via claude CLI)*, *ChatGPT (via codex CLI)* or *Antigravity (via agy CLI)*.
 3. Click **Check CLI**: Plugboard verifies that the binary is on the `PATH` and runs. Then **Create**.
 
 What to expect:

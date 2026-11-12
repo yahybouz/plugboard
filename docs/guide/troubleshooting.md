@@ -52,7 +52,7 @@ auth.auto_login refused reason=<reason> peer=<address>
 | `non_loopback_peer` | The connection does not come from this machine (another host, a container network). Enter `ADMIN_KEY`. |
 | `non_loopback_host` | Open `http://localhost:8765`, not `http://0.0.0.0:8765`, a LAN address or a domain name. |
 | `not_navigation` | Open the URL directly in the browser's address bar, not through curl, a script or a page served on another port. Safari: use `localhost`, not `127.0.0.1`. |
-| `logged_out` | Normal right after clicking **Logout**: open `http://localhost:8765` again. |
+| `logged_out` | Normal right after clicking **Log out**: open `http://localhost:8765` again. |
 | `mfa_required` | Admin MFA is enforced: sign in with `ADMIN_KEY` and the TOTP code. |
 | `no_local_secret` | This browser has neither the login token nor a remembered-browser cookie: start with `make dev`, or open `http://localhost:8765/login?token=` followed by the content of `data/.login_token`. |
 | `bad_token` | The token is wrong or was already used (it is single-use and replaced after each sign-in): read the current one from `data/.login_token`, or restart with `make dev`. |
@@ -77,7 +77,7 @@ With `PLUGBOARD_ADMIN_MFA_REQUIRED=1`, an `admin_mfa.json` that exists but canno
 
 | Symptom | Cause and fix |
 |---|---|
-| `401 Invalid API key` | Unknown, revoked or mistyped key. Check it under **API Keys**; create a new one if it was lost (keys cannot be recovered). |
+| `401 Invalid API key` | Unknown, revoked or mistyped key. Check it under **API keys**; create a new one if it was lost (keys cannot be recovered). |
 | `401 Authentication required: missing client_id` | A chat request without a key. Send `Authorization: Bearer pb_...`. |
 | `403 Model '...' not allowed` | The model is outside the key's `allowed_models`. Entries are exact IDs: the bare model name, `<provider-id>:<model>` or the full ID `/v1/models` lists (`Codex:gpt-6.1-sol`). Since 4.3.1 a provider prefix or part of a name no longer allows the models it used to cover, and a display prefix alone (`Codex:`) allows nothing either. The message names the ID that was checked as `<provider-id>:<model>` (`chatgpt-via-codex-cli:gpt-6.1-sol` for the Codex CLI): if it is the provider and model you mean to allow, create a new key that lists it in one of these spellings; otherwise have the client send `<provider-id>:<model>` or the ID `/v1/models` lists, since a name without a provider prefix can be routed to another provider ([allowed models](clients-and-keys.md#allowed-models)). |
 | `404` with `"code": "model_not_found"` | No provider knows the model: its prefix is no provider ID and no provider lists it. Check the spelling against `GET /v1/models`, or send `<provider-id>:<model>`. A model pulled with the `ollama` command rather than the dashboard's Ollama page is listed after the next refresh, or at once with **Discover** on the provider ([details](../api/README.md#404-model_not_found)). |

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Plugboard — Admin Dashboard</title>
+  <title>Plugboard — Admin dashboard</title>
   <link rel="icon" href="/dashboard/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -38,7 +38,7 @@
     </div>
     <form id="login-form">
       <div class="form-group">
-        <input type="password" id="login-key" placeholder="Admin Key" autocomplete="off" required>
+        <input type="password" id="login-key" placeholder="Admin key" autocomplete="off" required>
       </div>
       <div id="login-error" class="error hidden"></div>
       <button type="submit" class="btn btn-primary btn-block btn-login">Sign in</button>
@@ -66,10 +66,10 @@
 
       <div class="nav-section">Management</div>
       <a href="#keys" class="nav-link" data-tab="keys">
-        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-key"/></svg></span> API Keys
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-key"/></svg></span> API keys
       </a>
       <a href="#usage" class="nav-link" data-tab="usage">
-        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-usage"/></svg></span> Usage &amp; Billing
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-usage"/></svg></span> Usage &amp; billing
       </a>
       <a href="#providers" class="nav-link" data-tab="providers">
         <span class="nav-icon" aria-hidden="true"><svg><use href="#i-providers"/></svg></span> Providers
@@ -101,7 +101,7 @@
     </nav>
     <div class="sidebar-footer">
       <button type="button" id="theme-toggle" class="btn btn-ghost btn-sm theme-toggle" aria-label="Switch theme"><svg aria-hidden="true"><use href="#i-theme"/></svg><span>Theme</span></button>
-      <button id="logout-btn" class="btn btn-ghost btn-sm">Logout</button>
+      <button id="logout-btn" class="btn btn-ghost btn-sm">Log out</button>
       <button type="button" id="logout-all-btn" class="btn btn-ghost btn-sm">Log out everywhere</button>
     </div>
   </aside>
@@ -150,17 +150,17 @@
           <p class="live3d-fallback">The 3D view needs WebGL, which this browser does not provide.</p>
         </section>
         <div class="stats-grid" id="overview-cards"></div>
-        <div class="section-title">Metrics by Provider</div>
+        <div class="section-title">Metrics by provider</div>
         <div id="metrics-table-container"></div>
       </div>
     </section>
 
-    <!-- API Keys -->
+    <!-- API keys -->
     <section id="page-keys" class="page">
       <div class="topbar">
-        <h2>API Keys</h2>
+        <h2>API keys</h2>
         <div class="topbar-actions">
-          <button class="btn btn-primary btn-sm" id="btn-create-key">+ New Key</button>
+          <button class="btn btn-primary btn-sm" id="btn-create-key">+ New key</button>
         </div>
       </div>
       <div class="content">
@@ -174,17 +174,17 @@
           </div>
         </div>
         <div id="create-key-form" class="card form-card hidden">
-          <div class="card-header"><span class="card-title">Create API Key</span></div>
+          <div class="card-header"><span class="card-title">Create API key</span></div>
           <div class="form-row">
             <div class="form-group"><label for="key-client-id">Client ID</label><input type="text" id="key-client-id" placeholder="e.g. acme-corp" required></div>
             <div class="form-group"><label for="key-label">Label</label><input type="text" id="key-label" placeholder="e.g. Production"></div>
           </div>
           <div class="form-row">
-            <div class="form-group"><label for="key-limit">Monthly Limit ($)</label><input type="number" id="key-limit" placeholder="0 = unlimited" step="0.01" min="0"></div>
-            <div class="form-group"><label for="key-rpm">RPM Limit</label><input type="number" id="key-rpm" placeholder="0 = unlimited" step="1" min="0"></div>
+            <div class="form-group"><label for="key-limit">Monthly limit ($)</label><input type="number" id="key-limit" placeholder="0 = unlimited" step="0.01" min="0"></div>
+            <div class="form-group"><label for="key-rpm">RPM limit</label><input type="number" id="key-rpm" placeholder="0 = unlimited" step="1" min="0"></div>
           </div>
           <div class="form-actions">
-            <button class="btn btn-primary" id="btn-submit-key">Create Key</button>
+            <button class="btn btn-primary" id="btn-submit-key">Create key</button>
             <button class="btn btn-ghost" id="btn-cancel-key">Cancel</button>
           </div>
         </div>
@@ -192,10 +192,10 @@
       </div>
     </section>
 
-    <!-- Usage & Billing -->
+    <!-- Usage & billing -->
     <section id="page-usage" class="page">
       <div class="topbar">
-        <h2>Usage &amp; Billing</h2>
+        <h2>Usage &amp; billing</h2>
         <div class="topbar-actions">
           <input type="month" id="usage-month" class="input-month" aria-label="Usage month">
           <button class="btn btn-sm" id="btn-export-csv">Export CSV</button>
@@ -203,9 +203,9 @@
       </div>
       <div class="content">
         <div class="stats-grid" id="usage-summary-cards"></div>
-        <div class="section-title">By Client</div>
+        <div class="section-title">By client</div>
         <div id="usage-by-client"></div>
-        <div class="section-title">By Model</div>
+        <div class="section-title">By model</div>
         <div id="usage-by-model"></div>
         <div class="section-title">Recent requests</div>
         <p class="muted small">The price key says which grid entry priced the call: a provider price (<code>provider|model</code>) or the vendor price.</p>
@@ -218,8 +218,8 @@
       <div class="topbar">
         <h2>Providers</h2>
         <div class="topbar-actions">
-          <button class="btn btn-primary btn-sm" id="btn-add-direct-provider">+ Add Direct Provider</button>
-          <button class="btn btn-sm" id="btn-add-provider">+ Add Custom Provider</button>
+          <button class="btn btn-primary btn-sm" id="btn-add-direct-provider">+ Add direct provider</button>
+          <button class="btn btn-sm" id="btn-add-provider">+ Add custom provider</button>
         </div>
       </div>
       <div class="content">
@@ -227,13 +227,13 @@
         <div id="direct-provider-form" class="card mb-4" style="display:none">
           <div class="card-body">
             <div class="row row-between mb-4">
-              <div class="wizard-title">Add Direct Provider</div>
+              <div class="wizard-title">Add direct provider</div>
               <button class="btn btn-ghost btn-sm" id="btn-dp-cancel">&times; Close</button>
             </div>
             <!-- Preset selector -->
             <div class="mb-4">
               <label for="dp-search" class="field-label">Choose a provider</label>
-              <input type="search" id="dp-search" placeholder="Search providers (OpenRouter, Groq, Kimi...)" aria-describedby="dp-search-count" class="mb-2">
+              <input type="search" id="dp-search" placeholder="Search providers (OpenRouter, Groq, Kimi…)" aria-describedby="dp-search-count" class="mb-2">
               <select id="dp-preset" aria-label="Provider preset"></select>
               <div id="dp-search-count" class="muted small" aria-live="polite"></div>
             </div>
@@ -254,14 +254,14 @@
         </div>
         <div id="provider-form-container" class="hidden">
           <form id="provider-form" class="card form-card">
-            <div class="card-header"><span class="card-title" id="pf-form-title">Add Provider</span></div>
+            <div class="card-header"><span class="card-title" id="pf-form-title">Add provider</span></div>
             <div class="form-row">
               <div class="form-group"><label for="pf-name">Name</label><input type="text" id="pf-name" required></div>
               <div class="form-group"><label for="pf-url">Base URL</label><input type="url" id="pf-url" required></div>
             </div>
             <div class="form-row">
-              <div class="form-group"><label for="pf-token">Bearer Token</label><input type="password" id="pf-token"></div>
-              <div class="form-group"><label for="pf-model">Default Model</label><input type="text" id="pf-model"></div>
+              <div class="form-group"><label for="pf-token">Bearer token</label><input type="password" id="pf-token"></div>
+              <div class="form-group"><label for="pf-model">Default model</label><input type="text" id="pf-model"></div>
             </div>
             <div class="form-row">
               <div class="form-group"><label for="pf-timeout">Timeout (s)</label><input type="number" id="pf-timeout" value="60" step="1"></div>
@@ -297,14 +297,14 @@
     <!-- Device Flow modal (GitHub) -->
     <div id="device-flow-modal" class="modal device-flow-modal hidden" style="display:none">
       <div class="modal-box device-flow-box">
-        <h3>Connect via GitHub Device Flow</h3>
+        <h3>Connect via GitHub device flow</h3>
         <p>Enter the code below on GitHub to authorize this dashboard.</p>
         <div id="device-code" class="device-code">----</div>
         <div class="row row-center mb-4">
           <button class="btn btn-primary btn-sm" id="device-open-btn">Open GitHub page</button>
           <button class="btn btn-sm" id="device-copy-btn">Copy code</button>
         </div>
-        <div id="device-status" class="device-status">Waiting for authorization...</div>
+        <div id="device-status" class="device-status">Waiting for authorization…</div>
         <div class="mt-4">
           <button class="btn btn-ghost btn-sm" id="device-cancel-btn">Cancel</button>
         </div>
@@ -368,7 +368,7 @@
       </div>
       <div class="content">
         <div id="jobs-list"></div>
-        <div class="section-title">Job Log</div>
+        <div class="section-title">Job log</div>
         <div id="job-log-container"></div>
       </div>
     </section>
@@ -430,13 +430,13 @@
         <!-- Model selector -->
         <div class="pg-toolbar">
           <select id="pg-model" data-testid="pg-model" aria-label="Model" class="pg-select">
-            <option value="">Loading models...</option>
+            <option value="">Loading models…</option>
           </select>
           <button id="btn-check-internet" class="btn pg-check-btn" title="Check the currently selected model only">
-            🔍 Check Internet
+            🔍 Check internet
           </button>
           <button id="btn-check-internet-all" class="btn pg-check-btn" title="Probe ALL models for internet access (sequential, may take a few minutes)">
-            🌐 Check All
+            🌐 Check all
           </button>
           <label class="pg-option">
             <input type="checkbox" id="pg-stream" data-testid="pg-stream" checked> Stream
@@ -454,7 +454,7 @@
         </div>
         <!-- Input -->
         <div class="pg-composer">
-          <textarea id="pg-input" data-testid="pg-input" rows="2" placeholder="Type your message..." class="pg-input"></textarea>
+          <textarea id="pg-input" data-testid="pg-input" rows="2" placeholder="Type your message…" class="pg-input"></textarea>
           <button class="btn btn-primary pg-send" id="btn-send-chat" data-testid="pg-send">Send</button>
         </div>
         <div id="pg-status" data-testid="pg-status" class="muted pg-status"></div>

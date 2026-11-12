@@ -60,8 +60,8 @@ The dashboard has these pages:
 | Page | What it is for |
 |---|---|
 | Overview | Request counts, errors and latency per provider |
-| API Keys | Create, revoke, rotate and delete client keys |
-| Usage & Billing | Monthly usage per client, CSV export |
+| API keys | Create, revoke, rotate and delete client keys |
+| Usage & billing | Monthly usage per client, CSV export |
 | Providers | Add API-key presets, CLI-based providers and custom endpoints; discover models |
 | Connections | GitHub device-flow sign-in for GitHub Models and Copilot |
 | Pricing | View and edit the current month's prices |
@@ -75,17 +75,17 @@ The dashboard has these pages:
 The fastest options:
 
 - **Ollama**: if Ollama answers on `http://localhost:11434` when the server starts, it is registered automatically as the `ollama` provider.
-- **API key**: Providers → **+ Add Direct Provider** → choose *Anthropic Direct*, *Google Gemini Direct*, *GitHub Models* or *OpenAI Direct* → paste the key → **Create**.
+- **API key**: Providers → **+ Add direct provider** → choose *Anthropic Direct*, *Google Gemini Direct*, *GitHub Models* or *OpenAI Direct* → paste the key → **Create**.
 
 All options are described in [Providers and subscriptions](providers-and-subscriptions.md).
 
 ## Create a client key
 
-API Keys → **+ New Key**:
+API keys → **+ New key**:
 
 - **Client ID**: a slug for the application, for example `my-app`. Usage is aggregated per client ID.
 - **Label**: free text, for example `production`.
-- **Monthly Limit ($)** and **RPM Limit**: leave empty to apply the server defaults (`PLUGBOARD_DEFAULT_MONTHLY_LIMIT_USD`, 10 USD, and `PLUGBOARD_DEFAULT_RPM_LIMIT`, 60 requests per minute), or enter `0` for unlimited.
+- **Monthly limit ($)** and **RPM limit**: leave empty to apply the server defaults (`PLUGBOARD_DEFAULT_MONTHLY_LIMIT_USD`, 10 USD, and `PLUGBOARD_DEFAULT_RPM_LIMIT`, 60 requests per minute), or enter `0` for unlimited.
 
 Copy the `pb_...` key immediately: only its hash is stored. More in [Clients and keys](clients-and-keys.md).
 
@@ -100,7 +100,7 @@ curl -s http://localhost:8765/v1/chat/completions \
   -d '{"model": "anthropic-direct:claude-haiku-5-5", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-Replace the model with `<provider-id>:<model>` for a provider you configured. Then open **Usage & Billing** to see the request and its cost.
+Replace the model with `<provider-id>:<model>` for a provider you configured. Then open **Usage & billing** to see the request and its cost.
 
 ## Where your data lives
 

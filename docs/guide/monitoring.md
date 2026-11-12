@@ -24,7 +24,7 @@ curl -s -b admin.cookies http://localhost:8765/admin/watchdog
 curl -s -b admin.cookies -X POST http://localhost:8765/auth/admin/logout
 ```
 
-Sessions are stored on the server (`data/admin_sessions.json`) and last `ADMIN_SESSION_MAX_AGE` (8 hours). Logout revokes that session; `POST /auth/admin/logout-all` (dashboard: **Log out everywhere**) revokes every session, this one included, and forgets every browser remembered for local auto-login (sign in again with the link `make dev` opens, or with `ADMIN_KEY`); enrolling, rotating or disabling MFA revokes every session; a session opened without a code stops working once MFA is enforced. Keep the cookie file private and delete it after use. Without enforced MFA the bearer alone works as before.
+Sessions are stored on the server (`data/admin_sessions.json`) and last `ADMIN_SESSION_MAX_AGE` (8 hours). Log out revokes that session; `POST /auth/admin/logout-all` (dashboard: **Log out everywhere**) revokes every session, this one included, and forgets every browser remembered for local auto-login (sign in again with the link `make dev` opens, or with `ADMIN_KEY`); enrolling, rotating or disabling MFA revokes every session; a session opened without a code stops working once MFA is enforced. Keep the cookie file private and delete it after use. Without enforced MFA the bearer alone works as before.
 
 Once a secret is enrolled, changing the second factor needs a current code from it, even from an open session: `DELETE /admin/mfa` takes it in the `X-Plugboard-Admin-TOTP` header, and rotating through `POST /admin/mfa/setup` takes it as `current_code` next to the new `secret` and `code`. Without it the call is refused with 403; wrong codes count towards the login lockout. With a lost authenticator, run `scripts/admin_mfa_setup.py --rotate` on the host.
 
@@ -34,7 +34,7 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 |---|---|
 | Overview | Totals and a table of requests, errors and average latency per provider since the last restart |
 | Monitoring | Health of each active provider (status, latency, error rate, uptime over 24 hours and 7 days) and the check history of the last 24 hours |
-| Usage & Billing | Requests, tokens and cost per client for a month |
+| Usage & billing | Requests, tokens and cost per client for a month |
 | Jobs | The price refresh, the model catalog refresh and the provider watchdog: state, last and next run, **Run now** |
 | Playground | Per-model connectivity and internet-access indicators |
 | Suivi (`/suivi`) | Kanban of Plugboard tickets, see below |

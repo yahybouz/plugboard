@@ -21,7 +21,7 @@ With an empty `API_KEY`, the server logs a critical warning every five minutes (
 
 ## Create a key
 
-From the dashboard: **API Keys → + New Key**, fill in the client ID, an optional label, the monthly limit and the RPM limit, then **Create Key** and copy the key.
+From the dashboard: **API keys → + New key**, fill in the client ID, an optional label, the monthly limit and the RPM limit, then **Create key** and copy the key.
 
 From the admin API:
 
@@ -111,10 +111,10 @@ When `ALERT_WEBHOOK_URL` is set, every billed request from a client at or above 
 
 | Action | Dashboard | API |
 |---|---|---|
-| Revoke (keep the record, refuse the key) | API Keys → Revoke | `POST /admin/keys/{key_id}/revoke` |
+| Revoke (keep the record, refuse the key) | API keys → Revoke | `POST /admin/keys/{key_id}/revoke` |
 | Rotate (revoke and issue a new key with the same settings) | not in the dashboard | `POST /admin/keys/{key_id}/rotate` |
-| Delete | API Keys → Delete | `DELETE /admin/keys/{key_id}` |
-| List | API Keys | `GET /admin/keys`, `GET /admin/keys/client/{client_id}` |
+| Delete | API keys → Delete | `DELETE /admin/keys/{key_id}` |
+| List | API keys | `GET /admin/keys`, `GET /admin/keys/client/{client_id}` |
 
 ## What clients get back
 
@@ -171,7 +171,7 @@ A client can check its own consumption with its key, without admin access:
 
 ## Usage reports for the operator
 
-The **Usage & Billing** page shows the month per client and exports CSV. The same data over the admin API:
+The **Usage & billing** page shows the month per client and exports CSV. The same data over the admin API:
 
 | Endpoint | Content |
 |---|---|

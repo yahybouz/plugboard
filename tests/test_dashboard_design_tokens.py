@@ -237,3 +237,66 @@ def test_portal_follows_the_theme_and_has_no_inline_style():
     html = _read("portal.html")
     assert "data-theme=" not in html and 'style="' not in html
     assert html.index("/dashboard/theme.js") < html.index("/dashboard/style.css")
+
+
+LABEL_FILES = [
+    "index.html",
+    "app.js",
+    "portal.html",
+    "portal.js",
+    "auto_update.js",
+    "live_requests.js",
+]
+# Labels the wording rule replaced: US English, sentence case, "Log out",
+# no space before a colon.
+FORBIDDEN_LABELS = (
+    "API Keys",
+    "Usage &amp; Billing",
+    "Usage & Billing",
+    "Create API Key",
+    "Create Key",
+    "RPM Limit",
+    "Admin Key",
+    "Metrics by Provider",
+    "By Client",
+    "By Model",
+    "Add Direct Provider",
+    "Add Provider",
+    "Edit Provider",
+    "Bearer Token",
+    "Default Model",
+    "GitHub Device Flow",
+    "Job Log",
+    "Avg Latency",
+    "Prompt Tokens",
+    "Completion Tokens",
+    "Total Cost",
+    "Error Rate",
+    "Logout",
+    "Endpoint :",
+    "Default model :",
+    "Client Portal",
+    "My Usage",
+    "Spending Limit",
+    "Usage by Model",
+    "Daily Usage",
+    "Daily Breakdown",
+    "Total Tokens",
+    "Admin Dashboard",
+    "New Key",
+    "Monthly Limit",
+    "Add Custom Provider",
+    "Check Internet",
+    "Check All",
+)
+FRENCH = re.compile(r"[àâçéèêëîïôûùüÿœÀÂÇÉÈÊËÎÏÔÛÙÜŸŒ]")
+# "Loading..." and `+ "..."` become "…"; a bare "..." placeholder stays.
+ELLIPSIS = re.compile(r'\w\.\.\.|\+\s*"\.\.\."')
+
+
+@pytest.mark.parametrize("name", LABEL_FILES)
+def test_labels_follow_the_copy_rules(name):
+    text = _without_pending_js(_without_pending_html(_read(name)))
+    assert [label for label in FORBIDDEN_LABELS if label in text] == []
+    assert ELLIPSIS.findall(text) == []
+    assert FRENCH.findall(text) == []
