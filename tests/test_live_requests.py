@@ -365,3 +365,21 @@ async def test_cli_call_reports_queue_run_and_parse_phases(monkeypatch, tmp_path
     finally:
         _request_id_var.reset(token)
         live.finish(rid)
+
+
+def test_dashboard_polling_stays_under_the_per_address_rate_limit():
+    """The gateway allows 60 requests a minute per address, for every route.
+
+    Idle polling plus a running Playground call (ticker) must leave room for
+    the dashboard's own calls, or the dashboard gets 429.
+    """
+    import re
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parent.parent / "static" / "live_requests.js"
+    ).read_text()
+    idle = int(re.search(r"var POLL_MS = (\d+);", src).group(1))
+    busy = int(re.search(r"var BUSY_POLL_MS = (\d+);", src).group(1))
+    per_minute = 60_000 / idle + 60_000 / busy
+    assert per_minute <= 30, per_minute
