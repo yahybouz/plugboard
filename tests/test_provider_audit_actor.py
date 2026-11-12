@@ -93,6 +93,7 @@ async def test_mcp_domain_refusal_is_audited_as_mcp(
     r = await admin_client.post("/providers", headers=MCP, json=body)
     assert r.status_code == 400
     assert _entries("provider.domain.rejected")[0]["actor"] == "mcp"
+    assert _entries("provider.create.refused") == []  # audited once
 
 
 async def test_mcp_value_error_refusal_is_audited(admin_client, audit_db, public):
@@ -166,13 +167,25 @@ async def test_mcp_discover_failure_is_audited(admin_client, audit_db, monkeypat
     assert json.loads(refused["details"])["status"] == 502
 
 
-@pytest.mark.parametrize("dns", ["public", "private"])
+@pytest.mark.parametrize(
+    "dns,name,allowed,status",
+    [
+        ("public", "K", "", 201),
+        ("private", "K", "", 422),
+        ("public", "OpenClaw", "", 400),
+        ("public", "K", "api.acme.test", 400),
+    ],
+)
 async def test_provider_key_never_reaches_the_audit(
-    admin_client, audit_db, request, dns
+    admin_client, audit_db, request, monkeypatch, dns, name, allowed, status
 ):
-    request.getfixturevalue(dns)  # a create that succeeds (public) or is refused
-    body = _create(name="K", base_url="https://k.test", egress_guard=True)
+    request.getfixturevalue(dns)
+    if allowed:
+        monkeypatch.setenv("PLUGBOARD_PROVIDER_DOMAINS_ALLOWED", allowed)
+    body = _create(name=name, base_url="https://k.test", egress_guard=True)
     body["bearer_token"] = PROVIDER_KEY
-    await admin_client.post("/providers", headers=MCP, json=body)
-    assert audit_mod.get_audit_log(limit=500)
-    assert PROVIDER_KEY not in json.dumps(audit_mod.get_audit_log(limit=500))
+    r = await admin_client.post("/providers", headers=MCP, json=body)
+    assert r.status_code == status
+    entries = audit_mod.get_audit_log(limit=500)
+    assert entries and all(e["actor"] == "mcp" for e in entries)
+    assert PROVIDER_KEY not in json.dumps(entries)

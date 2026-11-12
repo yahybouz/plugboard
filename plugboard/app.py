@@ -3967,7 +3967,9 @@ async def discover_provider_models(
                 actor=actor,
                 target_type="provider",
                 target_id=provider_id,
-                details=json.dumps({"status": exc.status_code, "reason": exc.detail}),
+                details=json.dumps(
+                    {"status": exc.status_code, "reason": exc.detail}, default=str
+                ),
             )
         raise
 
