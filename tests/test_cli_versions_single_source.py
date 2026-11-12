@@ -27,7 +27,9 @@ CLI_VERSION_ARGS = {
 }
 
 ASSIGNMENT = re.compile(
-    r"\b(" + "|".join(CLI_VERSION_ARGS) + r")\s*[:=]\s*[\"']?(\d|latest)"
+    r"\b("
+    + "|".join(CLI_VERSION_ARGS)
+    + r")[\"']?\s*(?::=|\?=|[:=])\s*[\"']?(\d|latest)"
 )
 SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -95,6 +97,10 @@ def test_assignment_pattern_catches_the_forms_a_copy_would_take():
     assert ASSIGNMENT.search('        GEMINI_CLI_VERSION: "0.65.0"')
     assert ASSIGNMENT.search("--build-arg CLAUDE_CODE_VERSION=2.1.0")
     assert ASSIGNMENT.search("CODEX_VERSION='latest'")
+    # A JSON key in quotes (a deployer entry's build_args) and Make assignments.
+    assert ASSIGNMENT.search('    "CODEX_VERSION": "0.163.0",')
+    assert ASSIGNMENT.search("CODEX_VERSION := 0.163.0")
+    assert ASSIGNMENT.search("CODEX_VERSION ?= 0.163.0")
     assert not ASSIGNMENT.search('"@openai/codex@${CODEX_VERSION}"')
     assert not ASSIGNMENT.search("--build-arg CODEX_VERSION=<version>")
 

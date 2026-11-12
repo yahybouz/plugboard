@@ -126,8 +126,30 @@ def test_readme_keeps_runtime_secret_values_out_of_the_repository():
     assert re.search(r"values .*not (?:in the repository|committed|versioned)", readme)
 
 
+def _table_row_holds(readme: str, name: str, digest: str) -> bool:
+    """A Markdown table row whose first cell is ``name`` holds ``digest``."""
+    for line in readme.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if cells[0] == f"`{name}`" and f"`{digest}`" in cells[1:]:
+            return True
+    return False
+
+
+def test_the_row_check_catches_swapped_digests():
+    readme = (
+        "| File | SHA-256 |\n|---|---|\n| `a.yml` | `bbb` |\n| `b.json` | `aaa` |\n"
+    )
+    assert _table_row_holds(readme, "a.yml", "bbb")
+    assert not _table_row_holds(readme, "a.yml", "aaa")
+    assert not _table_row_holds("`a.yml` and `aaa` in prose", "a.yml", "aaa")
+
+
 @pytest.mark.parametrize("name", FAITHFUL_COPIES)
 def test_readme_records_the_sha256_of_each_faithful_copy(name):
     digest = hashlib.sha256((UAT / name).read_bytes()).hexdigest()
     readme = (UAT / "README.md").read_text(encoding="utf-8")
-    assert digest in readme
+    assert _table_row_holds(readme, name, digest), (
+        f"README.md needs a table row for `{name}` holding its digest {digest}"
+    )

@@ -1884,6 +1884,63 @@ def _unsupported_on_cli_response(exc: UnsupportedOnCliError) -> JSONResponse:
     )
 
 
+async def _replay_completion_as_sse(
+    completion: Dict[str, Any], *, completion_id: str, created: int, model: str
+):
+    """Replay a complete chat completion as OpenAI SSE chunks.
+
+    Used when a streamed request is answered from a complete answer: a CLI
+    route (or the provider that served the request in its place) and the
+    response cache. The text goes out word by word, then the tool calls in
+    one delta (``index`` = position), then a final chunk with the answer's
+    own ``finish_reason`` and its ``usage``, then ``[DONE]``. An empty or
+    missing ``content`` sends no content delta.
+    """
+    choice = (completion.get("choices") or [{}])[0]
+    message = choice.get("message") or {}
+    content = message.get("content") or ""
+    tool_calls = message.get("tool_calls") or []
+    finish_reason = choice.get("finish_reason") or "stop"
+    usage = completion.get("usage") or {}
+
+    def _chunk(delta: Dict[str, Any], finish: Optional[str]) -> Dict[str, Any]:
+        return {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created,
+            "model": model,
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+        }
+
+    if content:
+        tokens = content.split(" ")
+        for i, tok in enumerate(tokens):
+            delta = tok + (" " if i < len(tokens) - 1 else "")
+            evt = _chunk({"content": delta}, None)
+            yield f"data: {json.dumps(evt)}\n\n".encode("utf-8")
+    if tool_calls:
+        calls = []
+        for i, tc in enumerate(tool_calls):
+            fn = tc.get("function") or {}
+            calls.append(
+                {
+                    "index": i,
+                    "id": tc.get("id"),
+                    "type": tc.get("type") or "function",
+                    "function": {
+                        "name": fn.get("name"),
+                        "arguments": fn.get("arguments") or "",
+                    },
+                }
+            )
+        evt = _chunk({"tool_calls": calls}, None)
+        yield f"data: {json.dumps(evt)}\n\n".encode("utf-8")
+    final_evt = _chunk({}, finish_reason)
+    final_evt["usage"] = usage
+    yield f"data: {json.dumps(final_evt)}\n\n".encode("utf-8")
+    yield b"data: [DONE]\n\n"
+
+
 def _provider_http_error_response(
     exc: ProviderHTTPError | ProviderNetworkError, client_id: Optional[str]
 ) -> JSONResponse:
@@ -2267,47 +2324,13 @@ async def chat_completions(
                 pass  # fall into the replay block
         if cached and _cache_key is not None and _is_streaming:
             # (subprocess-only replay path)
-            import json as _json_mod
-
-            content = (
-                (cached.get("choices") or [{}])[0].get("message", {}).get("content", "")
-            )
-            usage = cached.get("usage") or {}
-            completion_id = cached.get("id", "chatcmpl-cache")
-            created = cached.get("created", int(time.time()))
-            model_name = cached.get("model", body.get("model", ""))
-
-            async def _replay_cached_as_stream():
-                tokens = content.split(" ")
-                for i, tok in enumerate(tokens):
-                    delta = tok + (" " if i < len(tokens) - 1 else "")
-                    evt = {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": model_name,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"content": delta},
-                                "finish_reason": None,
-                            }
-                        ],
-                    }
-                    yield f"data: {_json_mod.dumps(evt)}\n\n".encode("utf-8")
-                final_evt = {
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model_name,
-                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-                    "usage": usage,
-                }
-                yield f"data: {_json_mod.dumps(final_evt)}\n\n".encode("utf-8")
-                yield b"data: [DONE]\n\n"
-
             return StreamingResponse(
-                _replay_cached_as_stream(),
+                _replay_completion_as_sse(
+                    cached,
+                    completion_id=cached.get("id", "chatcmpl-cache"),
+                    created=cached.get("created", int(time.time())),
+                    model=cached.get("model", body.get("model", "")),
+                ),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
@@ -2463,51 +2486,21 @@ async def chat_completions(
                 except Exception as exc:
                     log.warning("Cache write error (non-fatal): %s", exc)
 
-            # Replay as SSE
-            import json as _json_mod
-
+            # Replay as SSE: the answer may come from the provider that served
+            # the request in the CLI's place, tool calls included.
             content = (result.get("choices") or [{}])[0].get("message", {}).get(
                 "content", ""
             ) or ""
             _record_session_turn(
                 client_id, session_id, list(body.get("messages") or []), content
             )
-            usage = result.get("usage") or {}
-            completion_id = result.get("id", "chatcmpl-subproc")
-            created = result.get("created", int(time.time()))
-            model_name = result.get("model", body.get("model", ""))
-
-            async def _subproc_stream():
-                tokens = content.split(" ")
-                for i, tok in enumerate(tokens):
-                    delta = tok + (" " if i < len(tokens) - 1 else "")
-                    evt = {
-                        "id": completion_id,
-                        "object": "chat.completion.chunk",
-                        "created": created,
-                        "model": model_name,
-                        "choices": [
-                            {
-                                "index": 0,
-                                "delta": {"content": delta},
-                                "finish_reason": None,
-                            }
-                        ],
-                    }
-                    yield f"data: {_json_mod.dumps(evt)}\n\n".encode("utf-8")
-                final_evt = {
-                    "id": completion_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": model_name,
-                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-                    "usage": usage,
-                }
-                yield f"data: {_json_mod.dumps(final_evt)}\n\n".encode("utf-8")
-                yield b"data: [DONE]\n\n"
-
             return StreamingResponse(
-                _subproc_stream(),
+                _replay_completion_as_sse(
+                    result,
+                    completion_id=result.get("id", "chatcmpl-subproc"),
+                    created=result.get("created", int(time.time())),
+                    model=result.get("model", body.get("model", "")),
+                ),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",

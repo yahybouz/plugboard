@@ -198,7 +198,7 @@ A CLI subscription route is a provider whose `auth_source` starts with `subproce
 | `response_format` | its `type` is anything other than `text` (`json_object`, `json_schema`) |
 | a content part of a message | its `type` is anything other than `text` (`image_url`, `input_audio`, ...) |
 
-When another provider that is not a CLI also serves the model name sent without a provider prefix (an API provider or Ollama), that provider gets the request, with every field intact. When only CLI routes serve the model, or the model names a CLI provider (`<provider-id>:<model>`), the answer is `400` and nothing is called, counted or cached, also for `stream: true` (the `400` is JSON, not a stream):
+When another provider that is not a CLI also serves the model name sent without a provider prefix (an API provider or Ollama), the request reaches that provider with every field intact. A streamed request (`stream: true`) whose first route is a CLI is answered as a replay of that provider's complete answer, tool calls and `finish_reason` included, not as live tokens. When only CLI routes serve the model, or the model names a CLI provider (`<provider-id>:<model>`), the answer is `400` and nothing is called, counted or cached, also for `stream: true` (the `400` is JSON, not a stream):
 
 ```json
 {

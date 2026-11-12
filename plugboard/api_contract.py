@@ -50,7 +50,8 @@ class ChatMessage(_Open):
         description=(
             "Text, or OpenAI content parts (text, image_url, input_audio...). "
             "A CLI subscription route (subprocess provider) serves text parts "
-            "only: any other part gets 400 unsupported_on_cli."
+            "only: any other part gets 400 unsupported_on_cli, unless another "
+            "provider of the same model serves the request."
         ),
     )
 
@@ -623,8 +624,9 @@ _CHAT_ERRORS = {
     " nothing was called. code context_length_exceeded: a CLI subscription route"
     " found the prompt too long for the model's context; no other provider was"
     " tried. Without code: an invalid body (not a JSON object, messages empty or"
-    " malformed), or an HTTP provider that rejected the request, after the other"
-    " candidates were tried.",
+    " malformed), or an HTTP provider that rejected the request: after the other"
+    " candidates were tried, or at once when it was to serve stream true live"
+    " (a live stream goes to one provider only).",
     "402": "The key has a monthly budget and the model no known price; nothing was called.",
     "403": "The key may not use this model.",
     "404": "No provider knows the model: no provider ID prefixes it, no provider"
