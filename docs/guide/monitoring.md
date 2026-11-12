@@ -87,6 +87,19 @@ Each provider entry of `GET /metrics` gains a `models` object once one of its mo
 
 The time to first token and tokens per second are measured on streamed answers from HTTP providers: a non-streamed answer has no first token to time, and a CLI provider's stream is replayed from its complete answer. Labels are `provider` and `model` only, never a client or a key; a model the provider does not list (nor has as its default model) is labelled `(unlisted)`, so a name a client typed never becomes a label. At most 256 (provider, model) series are kept; past that, each provider's new models are counted under one `(other)` series of that provider.
 
+### Load bench
+
+`scripts/bench_concurrency.py` measures what a gateway holds, outside the CI. It sends streamed chats from 1, 2, 4 then 8 clients at once (`--clients`), `--rounds` chats each, and prints per level the status codes and the time to the status, to the first word and to the end, and the tokens per second. Each chat carries a distinct prompt and `"cache": false`. The client key is read from the variable named by `--key-env` (default `PLUGBOARD_BENCH_KEY`) and is never printed or written; it needs only the model under test in its `allowed_models`.
+
+```bash
+PLUGBOARD_BENCH_KEY=... .venv/bin/python scripts/bench_concurrency.py \
+  --url https://gateway.example --model ollama:qwen2.5:7b \
+  --clients 1,2,4,8 --rounds 3 --check --first-word-p95-max 5 --tps-median-min 5 \
+  --json bench.json
+```
+
+`--check` fails (exit `1`) unless every answer is a `200` or a `503 providers_busy` and every `503` came within `--max-refusal-s` (default 10.5 s: the 10 s admission wait plus a margin). `--first-word-p95-max` and `--tps-median-min` add the D-26 targets. Each chat is a real inference on the provider: run it on purpose, not on a production gateway in use.
+
 ## Provider watchdog
 
 The watchdog starts with the server and checks every active provider every `WATCHDOG_INTERVAL` seconds (default 30):
