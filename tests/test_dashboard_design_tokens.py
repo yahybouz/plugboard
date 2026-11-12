@@ -188,7 +188,7 @@ def test_index_inline_styles_only_where_js_needs_them():
     assert [d for d in _inline_declarations(html) if not allowed.match(d)] == []
 
 
-@pytest.mark.parametrize("name", ["app.js", "auto_update.js"])
+@pytest.mark.parametrize("name", ["app.js", "auto_update.js", "portal.js"])
 def test_scripts_inline_styles_only_where_js_needs_them(name):
     js = _without_pending_js(_read(name))
     assert "cssText" not in js
@@ -206,7 +206,7 @@ def test_playground_keeps_its_js_hooks():
     assert 'bubble.dataset.testid = "message-bubble"' in js
 
 
-JS_COLOUR_FREE = ["app.js", "auto_update.js", "live_requests.js"]
+JS_COLOUR_FREE = ["app.js", "auto_update.js", "live_requests.js", "portal.js"]
 
 
 @pytest.mark.parametrize("name", JS_COLOUR_FREE)
@@ -218,3 +218,22 @@ def test_live_requests_styles_live_in_the_stylesheet():
     assert 'el("style"' not in _read("live_requests.js")
     css = _read("style.css")
     assert "#live-pill" in css and "#live-panel" in css
+
+
+def test_portal_classes_exist_in_stylesheet():
+    css = _read("style.css")
+    classes = {
+        c
+        for a in re.findall(r'class="([^"]+)"', _read("portal.html"))
+        for c in a.split()
+    }
+    missing = [
+        c for c in classes if not re.search(r"\." + re.escape(c) + r"(?![\w-])", css)
+    ]
+    assert sorted(missing) == []
+
+
+def test_portal_follows_the_theme_and_has_no_inline_style():
+    html = _read("portal.html")
+    assert "data-theme=" not in html and 'style="' not in html
+    assert html.index("/dashboard/theme.js") < html.index("/dashboard/style.css")

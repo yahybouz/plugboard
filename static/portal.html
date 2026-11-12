@@ -1,10 +1,11 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Plugboard — Client Portal</title>
+  <title>Plugboard — Client portal</title>
   <link rel="icon" href="/dashboard/favicon.svg">
+  <script src="/dashboard/theme.js?v=2"></script>
   <link rel="stylesheet" href="/dashboard/style.css?v=10">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <script src="/dashboard/vendor/chartjs/chart.umd.js"></script>
@@ -14,11 +15,11 @@
 <!-- Login modal -->
 <div id="login-modal" class="modal">
   <div class="modal-box">
-    <h2>Client Portal</h2>
+    <h2>Client portal</h2>
     <p class="muted">Enter your API key to view your usage.</p>
     <form id="login-form">
       <div class="form-group">
-        <input type="password" id="login-key" placeholder="pb_..." autocomplete="off" required>
+        <input type="password" id="login-key" placeholder="pb_…" autocomplete="off" required>
       </div>
       <div id="login-error" class="error hidden"></div>
       <button type="submit" class="btn btn-primary btn-block">Sign in</button>
@@ -26,36 +27,36 @@
   </div>
 </div>
 
-<div id="app" class="app hidden">
-  <header>
-    <div class="header-left">
-      <h1>Plugboard — My Usage</h1>
+<div id="app" class="app portal-app hidden">
+  <header class="portal-head">
+    <div class="portal-head-left">
+      <h1>Plugboard — My usage</h1>
       <span id="client-badge" class="badge badge-accent"></span>
     </div>
-    <button id="logout-btn" class="btn btn-ghost">Logout</button>
+    <button id="logout-btn" class="btn btn-ghost">Log out</button>
   </header>
-  <main>
+  <main class="portal-main">
     <!-- Summary cards -->
-    <div class="overview-grid" id="summary-cards"></div>
+    <div class="stats-grid" id="summary-cards"></div>
 
     <!-- Spending limit bar -->
     <div id="spending-bar-container" class="hidden">
-      <div class="section-title">Spending Limit</div>
+      <div class="section-title">Spending limit</div>
       <div id="spending-bar"></div>
     </div>
 
     <!-- By model -->
-    <div class="section-title">Usage by Model</div>
+    <div class="section-title">Usage by model</div>
     <div id="by-model"></div>
 
     <!-- Chart -->
-    <div class="section-title">Daily Usage</div>
-    <div class="card" id="chart-container" style="padding:1rem;">
+    <div class="section-title">Daily usage</div>
+    <div class="card chart-card" id="chart-container">
       <canvas id="usage-chart" height="220"></canvas>
     </div>
 
     <!-- By day table -->
-    <div class="section-title">Daily Breakdown</div>
+    <div class="section-title">Daily breakdown</div>
     <div id="by-day"></div>
   </main>
 </div>

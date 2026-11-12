@@ -756,3 +756,19 @@ textarea.pg-input {
 .live-row { display: flex; gap: var(--space-2); flex-wrap: wrap; padding: var(--space-1) 0; }
 .live-row[data-state='slow'] { color: var(--orange-text); }
 .live-row[data-state='error'] { color: var(--red); }
+
+/* Client portal */
+.portal-app { flex-direction: column; }
+.portal-head {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: var(--space-3); padding: var(--space-4) var(--space-8);
+  border-bottom: 1px solid var(--border); background: var(--bg-glass);
+}
+.portal-head-left { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.portal-head h1 { font-family: var(--display); font-size: var(--fs-xl); font-weight: var(--fw-regular); line-height: 1.1; }
+.portal-main { max-width: 1320px; margin: 0 auto; padding: var(--space-6) var(--space-8) var(--space-12); }
+.chart-card { padding: var(--space-4); }
+@media (max-width: 768px) {
+  .portal-head { padding: var(--space-3) var(--space-4); }
+  .portal-main { padding: var(--space-4); }
+}

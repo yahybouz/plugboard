@@ -113,7 +113,7 @@ async function loadPortal() {
   const spendingContainer = document.getElementById("spending-bar-container");
   const spendingBar = document.getElementById("spending-bar");
 
-  cardsEl.innerHTML = "Loading...";
+  cardsEl.innerHTML = "Loading…";
   byModelEl.innerHTML = "";
   byDayEl.innerHTML = "";
   spendingContainer.classList.add("hidden");
@@ -135,7 +135,7 @@ async function loadPortal() {
     // Summary cards
     cardsEl.innerHTML = "";
     cardsEl.appendChild(statCard("Requests", fmt(summary.total_entries || 0), "accent"));
-    cardsEl.appendChild(statCard("Total Tokens", fmt(summary.total_tokens || 0), ""));
+    cardsEl.appendChild(statCard("Total tokens", fmt(summary.total_tokens || 0), ""));
     cardsEl.appendChild(statCard("Cost (month)", usd(summary.total_cost_usd || 0), "orange"));
 
     // Spending limit
@@ -219,6 +219,12 @@ async function loadPortal() {
 
 let _chart = null;
 
+// Chart colors come from the design tokens of the theme in use when the chart
+// is drawn; a theme change shows after a reload.
+function _cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
 function renderDailyChart(days, byDay) {
   const canvas = document.getElementById("usage-chart");
   if (!canvas || typeof Chart === "undefined") return;
@@ -233,6 +239,10 @@ function renderDailyChart(days, byDay) {
   const costs = days.map(function (d) { return +(byDay[d].cost || 0).toFixed(4); });
   const requests = days.map(function (d) { return byDay[d].requests || 0; });
 
+  const accent = _cssVar("--accent");
+  const sapphire = _cssVar("--sapphire");
+  const muted = _cssVar("--text-muted");
+  const grid = _cssVar("--border");
   _chart = new Chart(canvas.getContext("2d"), {
     type: "bar",
     data: {
@@ -241,7 +251,7 @@ function renderDailyChart(days, byDay) {
         {
           label: "Cost ($)",
           data: costs,
-          backgroundColor: "rgba(59,130,246,0.7)",
+          backgroundColor: accent,
           yAxisID: "y",
           order: 2,
         },
@@ -249,8 +259,8 @@ function renderDailyChart(days, byDay) {
           label: "Requests",
           data: requests,
           type: "line",
-          borderColor: "rgba(251,191,36,0.9)",
-          backgroundColor: "rgba(251,191,36,0.1)",
+          borderColor: sapphire,
+          backgroundColor: sapphire,
           yAxisID: "y1",
           tension: 0.3,
           pointRadius: 3,
@@ -262,20 +272,20 @@ function renderDailyChart(days, byDay) {
       responsive: true,
       interaction: { mode: "index", intersect: false },
       plugins: {
-        legend: { labels: { color: "#ccc" } },
+        legend: { labels: { color: muted } },
       },
       scales: {
-        x: { ticks: { color: "#999" }, grid: { color: "rgba(255,255,255,0.05)" } },
+        x: { ticks: { color: muted }, grid: { color: grid } },
         y: {
           type: "linear", position: "left",
-          title: { display: true, text: "Cost ($)", color: "#3b82f6" },
-          ticks: { color: "#3b82f6" },
-          grid: { color: "rgba(255,255,255,0.05)" },
+          title: { display: true, text: "Cost ($)", color: accent },
+          ticks: { color: accent },
+          grid: { color: grid },
         },
         y1: {
           type: "linear", position: "right",
-          title: { display: true, text: "Requests", color: "#fbbf24" },
-          ticks: { color: "#fbbf24" },
+          title: { display: true, text: "Requests", color: sapphire },
+          ticks: { color: sapphire },
           grid: { drawOnChartArea: false },
         },
       },
