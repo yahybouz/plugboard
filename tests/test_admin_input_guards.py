@@ -80,12 +80,153 @@ async def test_key_for_blank_client_is_refused(admin_client, keys_store, client_
     assert keys_store.load_keys() == []
 
 
-async def test_existing_key_with_blank_client_is_left_as_is(admin_client, keys_store):
-    # Like a key named admin: the store is not touched, rotating still works.
+CHAT = {
+    "model": "test-provider:fake:model-v1",
+    "messages": [{"role": "user", "content": "hi"}],
+}
+# Every route that takes a client key (D-40).
+CLIENT_KEY_ROUTES = [
+    ("POST", "/v1/chat/completions", CHAT),
+    ("POST", "/v2/chat/completions", CHAT),
+    (
+        "POST",
+        "/v1/preflight",
+        {"items": [{"provider": "test-provider", "model": "fake:model-v1"}]},
+    ),
+    ("GET", "/v1/models", None),
+    ("GET", "/v1/models/benchmarks", None),
+    ("GET", "/v1/models/test-provider:fake:model-v1/info", None),
+    ("GET", "/v2/models", None),
+    ("GET", "/v2/models/benchmarks", None),
+    ("GET", "/v1/inflight", None),
+    ("GET", "/v1/me", None),
+    ("GET", "/v1/me/keys", None),
+    ("GET", "/usage/me", None),
+    ("POST", "/v1/embeddings", {}),
+    ("GET", "/v1/embeddings/models", None),
+    ("POST", "/v1/decisions", {}),
+    ("GET", "/v1/decisions/models", None),
+]
+
+
+@pytest.fixture
+def gateway(admin_client, keys_store, monkeypatch, tmp_path):
+    """The app with forward() and the usage store watched: nothing may reach them."""
+    from aioresponses import aioresponses
+
+    from plugboard import app as app_mod
+    from plugboard import usage
+
+    calls = []
+
+    async def _forward(body, *args, **kwargs):
+        calls.append(body.get("model"))
+        raise AssertionError("forward() must not be reached")
+
+    monkeypatch.setattr(app_mod, "forward", _forward)
+    monkeypatch.setattr(usage, "_DB_PATH", tmp_path / "usage.db")
+    with aioresponses():  # any other outgoing call fails: no network
+        yield admin_client, calls, usage
+
+
+async def _call(client, method, path, body, key):
+    return await client.request(
+        method, path, headers={"Authorization": f"Bearer {key}"}, json=body
+    )
+
+
+@pytest.mark.parametrize("api_key", ["testkey", ""], ids=["enforced", "dev"])
+@pytest.mark.parametrize("client_id", ["", "  \t"])
+@pytest.mark.parametrize("method, path, body", CLIENT_KEY_ROUTES)
+async def test_old_key_with_blank_client_is_refused_like_an_unknown_key(
+    gateway, keys_store, monkeypatch, api_key, client_id, method, path, body
+):
+    # A key issued before the creation check, written to the store as is.
+    # Permissive mode: where such a key used to get the most through. With
+    # API_KEY empty (dev), a presented key is still checked.
+    import secrets
+
+    from plugboard import billing
+
+    monkeypatch.setenv("PLUGBOARD_ALLOW_PERMISSIVE", "1")
+    monkeypatch.setattr("plugboard.app._API_KEY", api_key)
+    client, calls, usage = gateway
+    old = keys_store.create_key(client_id, "legacy", allowed_models=["x:y"])
+    unknown = keys_store.KEY_PREFIX + secrets.token_hex(32)
+    expected = await _call(client, method, path, body, unknown)
+    r = await _call(client, method, path, body, old["key"])
+    assert expected.status_code == 401
+    assert (r.status_code, r.json()) == (expected.status_code, expected.json())
+    assert calls == []
+    assert usage.get_usage(billing.current_pricing_month()) == []
+
+
+async def test_old_key_with_blank_client_is_refused_in_strict_mode(gateway, keys_store):
+    # Strict mode already answered 401, but "missing client_id", not the
+    # answer to an unknown key.
+    import secrets
+
+    client, calls, _ = gateway
     old = keys_store.create_key("", "legacy")
+    unknown = keys_store.KEY_PREFIX + secrets.token_hex(32)
+    expected = await _call(client, "POST", "/v1/chat/completions", CHAT, unknown)
+    r = await _call(client, "POST", "/v1/chat/completions", CHAT, old["key"])
+    assert (r.status_code, r.json()) == (401, expected.json())
+    assert calls == []
+
+
+async def test_old_key_with_blank_client_is_refused_beside_an_admin_session(
+    gateway, keys_store
+):
+    # A client key sent with the admin cookie is resolved as the key (MF3):
+    # the cookie must not turn the refusal into an admin call.
+    import secrets
+
+    from plugboard.app import _ADMIN_COOKIE_NAME, _create_admin_session_token
+
+    client, _, _ = gateway
+    old = keys_store.create_key("", "legacy")
+    client.cookies.set(_ADMIN_COOKIE_NAME, _create_admin_session_token())
+    unknown = keys_store.KEY_PREFIX + secrets.token_hex(32)
+    expected = await _call(client, "GET", "/v1/me", None, unknown)
+    r = await _call(client, "GET", "/v1/me", None, old["key"])
+    assert (r.status_code, r.json()) == (401, expected.json())
+
+
+async def test_old_key_with_blank_client_refusal_is_logged_without_the_key(
+    gateway, keys_store, caplog
+):
+    import logging
+
+    client, _, _ = gateway
+    old = keys_store.create_key("", "legacy")
+    with caplog.at_level(logging.WARNING, logger="plugboard.apikeys"):
+        r = await _call(client, "GET", "/v1/me", None, old["key"])
+    assert r.status_code == 401
+    [line] = [
+        rec.getMessage()
+        for rec in caplog.records
+        if rec.name == "plugboard.apikeys" and "blank_client_id" in rec.getMessage()
+    ]
+    assert old["key_id"] in line
+    assert old["key"] not in caplog.text
+
+
+async def test_old_key_with_blank_client_is_listed_and_not_rotated(
+    admin_client, keys_store
+):
+    # The admin still sees it, to revoke it; rotating would issue a new key
+    # with the same blank client_id, so it is refused.
+    old = keys_store.create_key("", "legacy")
+    r = await admin_client.get("/admin/keys", headers=ADMIN)
+    assert [k["key_id"] for k in r.json()] == [old["key_id"]]
     r = await admin_client.post(f"/admin/keys/{old['key_id']}/rotate", headers=ADMIN)
-    assert r.status_code == 201
-    assert keys_store.get_key_record(r.json()["key"])["client_id"] == ""
+    assert r.status_code == 422
+    assert "revoke it and create a new key" in r.json()["detail"]
+    [kept] = keys_store.load_keys()
+    assert (kept["key_id"], kept["is_active"]) == (old["key_id"], True)
+    r = await admin_client.post(f"/admin/keys/{old['key_id']}/revoke", headers=ADMIN)
+    assert r.status_code == 200
 
 
 # -- BUG-61: a provider name that gives an empty id ---------------------------
