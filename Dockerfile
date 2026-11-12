@@ -121,6 +121,13 @@ COPY --from=node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
  && node --version && npm --version
+# npm 11 replaces the npm 10.9.x shipped with Node 22, whose bundled
+# brace-expansion, picomatch, ip-address, pacote and sigstore carry HIGH
+# CVEs (CVE-2026-102276, CVE-2026-102278, CVE-2026-13149, CVE-2026-14257,
+# CVE-2026-69152, CVE-2026-33671, CVE-2026-69192, CVE-2026-9496,
+# CVE-2026-48815) that no npm 10 release fixes. Major npm bump approved by
+# the project owner on 2026-11-12; npm 11 needs Node ^20.17.0 || >=22.9.0.
+RUN npm install -g npm@11.21.2 && npm --version
 
 # Each CLI is installed in its own step so that one failing package (rate
 # limit, rename) does not prevent the others from landing.
