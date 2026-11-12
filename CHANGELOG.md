@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Security
 
-- **A call without a valid key took a slot of the chat cap** (PLU-15, audit A-14): on `/v1/chat/completions`, `/v2/chat/completions` and `/v1/preflight` the global slot (`PLUGBOARD_MAX_INFLIGHT_CHAT`) was taken before the key was checked, so calls with no key or a wrong one could fill the cap, and such a call waited for a slot and got `503` when the cap was full. The key is now checked first: such a call gets `401` at once, never takes nor waits for a slot, and is no longer listed in `GET /v1/inflight`. On the two chat routes, strict tenant mode's `401` for a call without a client (an empty `API_KEY`, a configuration refused at startup) also comes before the slot ([clients and keys](docs/guide/clients-and-keys.md#how-limits-are-enforced)).
+- **A call without a valid key took a slot of the chat cap** (PLU-15, audit A-14): on `/v1/chat/completions`, `/v2/chat/completions` and `/v1/preflight` the global slot (`PLUGBOARD_MAX_INFLIGHT_CHAT`) was taken before the key was checked, so calls with no key or a wrong one could fill the cap, and such a call waited for a slot and got `503` when the cap was full. The key is now checked first: such a call gets `401` at once, never takes nor waits for a slot, and is no longer listed in `GET /v1/inflight`. On the two chat routes, strict tenant mode's `401` for a call without a client (an empty `API_KEY`, a configuration logged as critical at startup) also comes before the slot ([clients and keys](docs/guide/clients-and-keys.md#how-limits-are-enforced)).
 
 ### Changed
 
