@@ -115,6 +115,7 @@ from plugboard.legacy_connectors import (
 )
 from plugboard.decisions import is_decision_model
 from plugboard.cli_auth import AuthError
+from plugboard.cli_limits import UNSUPPORTED_ON_CLI
 from plugboard.cli_subprocess import CliSubprocessError
 from plugboard.router import (
     ProviderDisabledError,
@@ -122,6 +123,8 @@ from plugboard.router import (
     ProviderNetworkError,
     ProvidersBusyError,
     ProviderQuotaError,
+    UnsupportedOnCliError,
+    cli_refusal,
     disabled_route,
     discover_models,
     forward,
@@ -1857,6 +1860,30 @@ def _provider_disabled_response(provider_id: str) -> JSONResponse:
     )
 
 
+def _unsupported_on_cli_response(exc: UnsupportedOnCliError) -> JSONResponse:
+    """400 ``unsupported_on_cli``: every route of the model is a CLI
+    subscription, and a CLI cannot serve the fields ``exc.unsupported``
+    names (tools, a structured response format, an image...). Nothing was
+    called. The body holds no secret: a client key and the admin get it alike.
+    """
+    log.info(
+        "unsupported on cli: provider=%s fields=%s",
+        exc.provider_id,
+        ",".join(exc.unsupported),
+    )
+    return JSONResponse(
+        status_code=400,
+        content={
+            "detail": f"Model route '{exc.provider_id}' is a CLI subscription: "
+            f"it cannot serve {', '.join(exc.unsupported)}. Nothing was called.",
+            "code": UNSUPPORTED_ON_CLI,
+            "unsupported": list(exc.unsupported),
+            "hint": "Send plain text messages, or pick a model served by an API "
+            "or Ollama provider from GET /v1/models.",
+        },
+    )
+
+
 def _provider_http_error_response(
     exc: ProviderHTTPError | ProviderNetworkError, client_id: Optional[str]
 ) -> JSONResponse:
@@ -2110,6 +2137,13 @@ async def chat_completions(
     if is_unknown_model(body.get("model", "")):
         return _model_not_found_response(body["model"])
 
+    # After the 404, before the 402 and the rpm count, the session turn and
+    # the cache: a request only CLI routes serve, asking for what a CLI cannot
+    # (tools, structured output, images), is refused with nothing counted.
+    refusal = cli_refusal(body)
+    if refusal is not None:
+        return _unsupported_on_cli_response(refusal)
+
     # A budget cannot hold a call whose price is unknown (402, nothing called)
     if client_id and client_id != "admin":
         _check_price_known(client_id, body.get("model", ""), key_record=key_record)
@@ -2298,6 +2332,8 @@ async def chat_completions(
                     return _providers_busy_response(exc, client_id)
                 if isinstance(exc, ProviderDisabledError):
                     return _provider_disabled_response(exc.provider_id)
+                if isinstance(exc, UnsupportedOnCliError):
+                    return _unsupported_on_cli_response(exc)
                 log.error("subprocess stream forward error: %s", exc)
                 err_str = str(exc)
                 # Before the timeout test: a CLI message quotes its stderr.
@@ -2487,6 +2523,8 @@ async def chat_completions(
                 return _providers_busy_response(exc, client_id)
             if isinstance(exc, ProviderDisabledError):
                 return _provider_disabled_response(exc.provider_id)
+            if isinstance(exc, UnsupportedOnCliError):
+                return _unsupported_on_cli_response(exc)
             log.error("stream error: %s", exc)
             err_str = str(exc)
             if isinstance(exc, ProviderQuotaError):
@@ -2633,6 +2671,8 @@ async def chat_completions(
             return _providers_busy_response(exc, client_id)
         if isinstance(exc, ProviderDisabledError):
             return _provider_disabled_response(exc.provider_id)
+        if isinstance(exc, UnsupportedOnCliError):
+            return _unsupported_on_cli_response(exc)
         log.error("forward error: %s", exc)
         err_str = str(exc)
         # Before the timeout test: a CLI message quotes its stderr.

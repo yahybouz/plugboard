@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`plugboard.cli_limits` names what a CLI subscription route cannot serve** (lot L3): `unsupported_on_cli(body)` lists, in a fixed order, the fields of a chat body that a `subprocess:` route would drop (`tools`, `tool_choice` other than `none`/`auto`, `functions`, `function_call` other than `none`/`auto`, a `response_format` other than text, and each non-text content part as `content:<type>`), with the reason code `unsupported_on_cli`. Nothing calls it yet.
 
+### Changed
+
+- **`POST /v1/chat/completions` answers `400 unsupported_on_cli` instead of free text when only CLI subscription routes serve the model** and the request asks for tools, a forced tool choice, a structured `response_format` or a non-text content part: the body gives `detail`, `code` (`unsupported_on_cli`), `unsupported` (the refused fields, such as `tools` or `content:image_url`) and `hint`, the same for a client key and the admin, also for `stream: true` (JSON, not a stream). The check runs after the `404` for an unknown model and before the price and rate checks, the session turn and the cache: nothing is called or counted. A client that relied on the free-text `200` now gets this `400`; send plain text, or pick a model served by an API or Ollama provider. Empty `tools`, `tool_choice` `auto`/`none` and `response_format` `text` still go to the CLI.
+
 ### Fixed
 
 - **A CLI subscription route no longer receives a request it cannot serve**: when a chat body has any field `unsupported_on_cli` names, the router leaves the `subprocess:` routes out of the candidates and sends the request, unchanged, to the other candidates. When only CLI routes serve the model, `forward()` raises `UnsupportedOnCliError` (the refused fields and the first candidate) before the key's route guard, any circuit read, any provider slot and any CLI call; `forward_stream()` raises it after the route guard, before any slot or call. `router.cli_refusal(body)` tells a caller beforehand. The chat route does not answer it with a `400` yet.
