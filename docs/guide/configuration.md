@@ -54,8 +54,8 @@ A completed rotation also signs out every dashboard session and forgets the brow
 | `PLUGBOARD_SKIP_DOTENV` | empty | `1` stops the configuration module from loading `.env` (used by the test suite). |
 | `RATE_LIMIT` | `60` | Requests per minute per client IP address, all routes. `0` disables it. |
 | `MAX_BODY_BYTES` | `10485760` | Maximum request body size (10 MB). |
-| `PLUGBOARD_MAX_INFLIGHT_CHAT` | `0` | Maximum concurrent chat requests, streaming included. `0` means no cap. |
-| `PLUGBOARD_INFLIGHT_WAIT_S` | `0` | How long a request waits for a free slot before `503`. `0` fails immediately. |
+| `PLUGBOARD_MAX_INFLIGHT_CHAT` | `8` | Maximum concurrent chat requests, streaming included. `0` means no cap. |
+| `PLUGBOARD_INFLIGHT_WAIT_S` | `10` | How long a request waits for a free slot before `503`. `0` fails immediately. A request's waits (slot, session turn, provider) share one budget, the longer of this and `PLUGBOARD_PROVIDER_WAIT_S`; with both at `0`, a session turn sent while the previous one runs gets `503` at once ([one wait per request](clients-and-keys.md#how-limits-are-enforced)). |
 | `PLUGBOARD_LOG_FILE` | empty | Also write logs to this file, with rotation. |
 | `PLUGBOARD_LOG_MAX_BYTES` | `20971520` | Size of one log file before rotation. |
 | `PLUGBOARD_LOG_BACKUPS` | `5` | Rotated log files to keep. |
@@ -79,7 +79,8 @@ A completed rotation also signs out every dashboard session and forgets the brow
 | `PLUGBOARD_LB_ERROR_RATE_WEIGHT` | `5.0` | Weight of the error rate in the provider score used for fallback ordering. |
 | `PLUGBOARD_LB_INFLIGHT_WEIGHT` | `0.35` | Weight of in-flight requests in that score. Streamed requests and CLI calls count as in flight. |
 | `PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT` | `1` | Concurrent requests a local provider (`sovereign`, a loopback or private address, or an Ollama over plain `http://`, whatever its host; see [concurrent requests per provider](providers-and-subscriptions.md#concurrent-requests-per-provider)) takes when its record sets no `max_concurrency`. `0` means no cap. |
-| `PLUGBOARD_PROVIDER_WAIT_S` | `10` | How long a request waits when every candidate provider is at its cap, before `503 providers_busy`. `0` answers at once. |
+| `PLUGBOARD_CLI_PROVIDER_MAX_INFLIGHT` | `1` | Concurrent requests a CLI provider (`auth_source` `subprocess:`: Claude Code, Codex, Gemini CLI, agy) takes when its record sets no `max_concurrency`; the next ones wait for it within the request's wait budget, then get `503 providers_busy`. `0` means no cap. |
+| `PLUGBOARD_PROVIDER_WAIT_S` | `10` | How long a request waits when every candidate provider is at its cap, before `503 providers_busy`. `0` answers at once. The wait also takes no more than what is left of the request's wait budget, shared with the waits for a global slot and for the session's turn (see `PLUGBOARD_INFLIGHT_WAIT_S`). |
 | `PLUGBOARD_HTTP_POOL_SIZE` | `100` | Shared HTTP connection pool size. |
 | `PLUGBOARD_HTTP_POOL_PER_HOST` | `20` | Connections per upstream host. |
 | `PLUGBOARD_HTTP_DNS_TTL` | `300` | DNS cache lifetime, in seconds. |

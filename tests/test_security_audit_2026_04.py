@@ -808,7 +808,7 @@ async def test_post_provider_accepts_allowlisted_host(
 
 
 @pytest.mark.asyncio
-async def test_inflight_cap_disabled_by_default(client, monkeypatch):
+async def test_inflight_cap_zero_turns_it_off(client, monkeypatch):
     """With _INFLIGHT_CHAT_MAX=0 the dependency is a no-op — no slot,
     no latency, no 503."""
     import plugboard.app as app_mod
@@ -834,6 +834,7 @@ async def test_inflight_cap_disabled_by_default(client, monkeypatch):
             },
         )
     assert resp.status_code == 200
+    assert app_mod._inflight_chat_sem is None  # no slot was ever counted
 
 
 @pytest.mark.asyncio

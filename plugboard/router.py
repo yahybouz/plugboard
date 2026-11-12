@@ -30,7 +30,14 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Set
 
 import aiohttp
 
-from plugboard import envcompat, metrics, netguard, provider_admission, route_pauses
+from plugboard import (
+    envcompat,
+    metrics,
+    netguard,
+    provider_admission,
+    request_wait,
+    route_pauses,
+)
 from plugboard.alerts import record_provider_failure, record_provider_success
 from plugboard.circuit_breaker import is_request_too_long
 from plugboard.cli_subprocess import MAX_RETRY_AFTER_S, CliSubprocessError
@@ -951,13 +958,15 @@ async def forward(
                 granted = None
             if not queue:
                 # Every candidate left is full: wait for the first to free a slot,
-                # one deadline for the whole request (PLUGBOARD_PROVIDER_WAIT_S).
+                # one deadline for the whole call (PLUGBOARD_PROVIDER_WAIT_S),
+                # within the chat request's wait budget (PLU-15).
                 if deadline is None:
                     deadline = loop.time() + provider_admission.WAIT_S
                 _live.update(phase="waiting_provider")
-                granted = await provider_admission.wait_acquire(
-                    [p for p, _ in busy], deadline - loop.time()
-                )
+                with request_wait.waiting(deadline - loop.time()) as wait_s:
+                    granted = await provider_admission.wait_acquire(
+                        [p for p, _ in busy], wait_s
+                    )
                 _live.update(phase="running")
                 if granted is None:
                     break
@@ -1294,9 +1303,8 @@ async def forward_stream(
     waited = lease is None
     if waited:
         _live.update(phase="waiting_provider")
-        lease = await provider_admission.wait_acquire(
-            [provider], provider_admission.WAIT_S
-        )
+        with request_wait.waiting(provider_admission.WAIT_S) as wait_s:
+            lease = await provider_admission.wait_acquire([provider], wait_s)
         _live.update(phase="running")
     if lease is None:
         if _turned_off(provider["id"]):

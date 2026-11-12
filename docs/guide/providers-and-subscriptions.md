@@ -172,7 +172,7 @@ Read [the risks](#risks-of-using-subscriptions) first. These presets run the ven
 What to expect:
 
 - Each request starts a CLI process, so the first token takes seconds rather than milliseconds.
-- Concurrent processes per CLI are capped by `PLUGBOARD_SUBPROCESS_LIMIT` (default 4).
+- A CLI provider takes one request at a time by default (`PLUGBOARD_CLI_PROVIDER_MAX_INFLIGHT`, or its `max_concurrency`): the next requests wait for it, and get `503 providers_busy` if it is still busy when their wait budget ends ([concurrent requests per provider](#concurrent-requests-per-provider)). Concurrent processes per CLI are also capped by `PLUGBOARD_SUBPROCESS_LIMIT` (default 4).
 - The CLI runs in a neutral temporary working directory, so it does not pick up project files or settings; `PLUGBOARD_SUBPROCESS_CWD` overrides this.
 - Codex runs with `--sandbox read-only`; `PLUGBOARD_CODEX_SANDBOX` changes the mode.
 - Gemini with an **API key** goes through *Google Gemini Direct* (AI Studio key); with a **Google subscription** it goes through *Antigravity (via agy CLI)*. agy ignores `GEMINI_API_KEY`: it only uses its own Google sign-in. In the `full` container image agy is preinstalled; sign in once with `docker exec -it <gateway> agy` (the session is kept in the `/home/app` volume). An unsigned agy returns an explicit "not signed in" error.
@@ -209,12 +209,13 @@ Each provider takes a limited number of requests at once:
   - any provider whose `base_url` host is `localhost` or a loopback or private IP address written as digits (`127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `::1`, `fc00::/7`), over `http://` or `https://`;
   - an Ollama (its id starts with `ollama`, or its `base_url` uses port `11434`) reached over plain `http://`, whatever its host: `http://ollama:11434` in Docker, but also a Tailscale or CGNAT address (`100.64.0.0/10`) or any other host name.
 
-  Not local: Ollama Cloud (`https://ollama.com`) and any Ollama over `https://` on a host name; any other provider on a CGNAT or Tailscale address or a host name, unless it is `sovereign`; every CLI provider. Set `max_concurrency` to cap one of these, or to lift the cap of a remote Ollama reached over `http://` (`0` for no cap).
+  Not local: Ollama Cloud (`https://ollama.com`) and any Ollama over `https://` on a host name; any other provider on a CGNAT or Tailscale address or a host name, unless it is `sovereign`; every CLI provider (capped by the next rule). Set `max_concurrency` to cap one of these, or to lift the cap of a remote Ollama reached over `http://` (`0` for no cap).
+- A **CLI** provider (`auth_source` `subprocess:`, such as Claude Code, Codex, Gemini CLI or agy) takes one request at a time by default (`PLUGBOARD_CLI_PROVIDER_MAX_INFLIGHT`, `0` for no cap). Its next requests wait in its queue, within the request's wait budget, instead of waiting without limit for a CLI process.
 - Any other provider has no cap.
-- A provider's `max_concurrency` wins over both: a whole number, `0` for no cap. Set it with `PUT /providers/{id}` (`{"max_concurrency": 2}`) or in `providers.json`.
-- CLI providers are also capped by `PLUGBOARD_SUBPROCESS_LIMIT` (concurrent processes per CLI).
+- A provider's `max_concurrency` wins over these defaults: a whole number, `0` for no cap. Set it with `PUT /providers/{id}` (`{"max_concurrency": 2}`) or in `providers.json`.
+- CLI providers are also capped by `PLUGBOARD_SUBPROCESS_LIMIT` (concurrent processes per CLI, shared by the providers of one CLI and the internal model checks). A request that reaches this limit waits for a process without the budget's bound: keep it at or above the sum of the caps of the providers that use a CLI.
 
-A full provider passes a non-streamed request for a model without provider prefix to the next candidate; a streamed request has a single route and waits for that provider only, even when another candidate is free. A full provider counts neither against its circuit breaker nor as an error. When every candidate is full, the request waits up to `PLUGBOARD_PROVIDER_WAIT_S` seconds (default 10) for the first freed slot, oldest request first, then gets `503` with `"code": "providers_busy"` and `Retry-After: 5`. Each gateway worker counts its own requests.
+A full provider passes a non-streamed request for a model without provider prefix to the next candidate; a streamed request has a single route and waits for that provider only, even when another candidate is free, except a streamed request to a CLI provider, which is routed like a non-streamed one (a CLI answers once, then the answer is replayed as a stream). A full provider counts neither against its circuit breaker nor as an error. When every candidate is full, the request waits up to `PLUGBOARD_PROVIDER_WAIT_S` seconds (default 10) for the first freed slot, oldest request first, then gets `503` with `"code": "providers_busy"` and `Retry-After: 5`. A chat request that already waited for a global slot or for its session's turn only gets what is left of its wait budget ([one wait per request](clients-and-keys.md#how-limits-are-enforced)). Each gateway worker counts its own requests.
 
 ## Add providers from `.env` or scripts
 

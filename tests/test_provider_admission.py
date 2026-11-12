@@ -41,18 +41,42 @@ def test_local_providers_are_capped_at_one_by_default(provider):
     [
         CLOUD,
         {"id": "ollama-cloud", "base_url": "https://ollama.com"},
-        {
-            "id": "cli",
-            "base_url": "subprocess://claude",
-            "auth_source": "subprocess:claude",
-        },
         {"id": "x", "base_url": "http://127.0.0.1.nip.io:8080"},
     ],
-    ids=["cloud", "ollama-cloud", "cli", "dns-lookalike"],
+    ids=["cloud", "ollama-cloud", "dns-lookalike"],
 )
 def test_other_providers_have_no_cap_by_default(provider):
     assert not pa.is_local(provider)
     assert pa.max_inflight(provider) == 0
+
+
+def _cli(kind, **extra):
+    return {
+        "id": f"{kind}-cli",
+        "base_url": f"subprocess://{kind}",
+        "auth_source": f"subprocess:{kind}",
+        **extra,
+    }
+
+
+@pytest.mark.parametrize("kind", ["claude", "codex", "gemini", "agy"])
+def test_cli_providers_take_one_request_at_a_time_by_default(kind):
+    """D-43: a CLI provider queues its extra requests in its own bounded wait
+    instead of the CLI's spawn queue, which has no limit."""
+    assert not pa.is_local(_cli(kind))
+    assert pa.is_cli(_cli(kind))
+    assert pa.max_inflight(_cli(kind)) == 1
+
+
+def test_cli_default_follows_the_setting_and_max_concurrency_wins(monkeypatch):
+    monkeypatch.setattr(pa, "CLI_DEFAULT", 2)
+    assert pa.max_inflight(_cli("claude")) == 2
+    monkeypatch.setattr(pa, "CLI_DEFAULT", 0)
+    assert pa.max_inflight(_cli("claude")) == 0
+    monkeypatch.setattr(pa, "CLI_DEFAULT", 1)
+    assert pa.max_inflight(_cli("claude", max_concurrency=3)) == 3
+    assert pa.max_inflight(_cli("claude", max_concurrency=0)) == 0
+    assert not pa.is_cli(CLOUD) and not pa.is_cli(LOCAL)
 
 
 def test_max_concurrency_field_wins_over_the_default():
