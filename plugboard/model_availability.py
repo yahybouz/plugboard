@@ -419,7 +419,9 @@ async def _probe_ollama_provider(
 ) -> Dict[str, Any]:
     """Probe one Ollama provider; returns partial {compound_key: entry} dict."""
     results: Dict[str, Any] = {}
-    if "ollama" not in kinds or not _is_ollama_provider_dict(provider):
+    if not ("all" in kinds or "ollama" in kinds) or not _is_ollama_provider_dict(
+        provider
+    ):
         return results
 
     provider_id: str = provider.get("id", "")
@@ -1306,8 +1308,9 @@ class ModelAvailabilityScheduler:
         if self.bootstrap_delay_s:
             await self._sleep(self.bootstrap_delay_s)
 
-        # PLUGBOARD_PROBE_ON_BOOT=true (default): always probe at bootstrap,
-        # ignoring the 24h marker.  Ensures every redeploy gets fresh status.
+        # PLUGBOARD_PROBE_ON_BOOT=true (default): always run the bootstrap
+        # refresh, ignoring the 24h marker. It probes only the kinds of
+        # PLUGBOARD_MODEL_REFRESH_PROBE_KINDS (none by default, BUG-45).
         # Set to false to restore the previous skip-if-recent behaviour.
         should_run_bootstrap = True
         if not _PROBE_ON_BOOT:

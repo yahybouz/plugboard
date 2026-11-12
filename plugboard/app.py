@@ -442,9 +442,11 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
     # Runs in background after schedulers are up so boot isn't blocked.
     # It sends a chat request to every model: off by default (BUG-45),
     # opt-in via PLUGBOARD_INTERNET_CHECK_ON_BOOT=1.
+    # An accept-list: now that the check is opt-in, "off" or "False" must
+    # not turn it on.
     _internet_boot_enabled = os.environ.get(
-        "PLUGBOARD_INTERNET_CHECK_ON_BOOT", "0"
-    ).strip() not in ("0", "false", "no", "")
+        "PLUGBOARD_INTERNET_CHECK_ON_BOOT", ""
+    ).strip().lower() in ("1", "true", "yes", "on")
 
     async def _internet_boot_probe():
         # Small delay so warm-up + ollama sync settle first, and so a quick

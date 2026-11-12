@@ -204,7 +204,7 @@ The catalog is downloaded with each price update. A download that fails, is inva
 | `PLUGBOARD_IGNORE_MODEL_STATUS` | `false` | `true` ignores `model_status.json` when listing models. |
 | `MODEL_STATUS_PATH` | `data/model_status.json` | Location of the model status file. |
 | `PLUGBOARD_REFRESH_COOLDOWN_S` | `60` | Minimum interval between two `POST /admin/models/refresh`. |
-| `PLUGBOARD_INTERNET_CHECK_ON_BOOT` | `0` | `1` runs the internet-access check at startup, which sends one chat request to every model except local Ollama ones. Off by default: with the defaults, a start calls no model. |
+| `PLUGBOARD_INTERNET_CHECK_ON_BOOT` | `0` | `1` (or `true`, `yes`, `on`) runs the internet-access check at startup, which sends one chat request to every model except local Ollama ones. Off by default, like the probes: the startup calls no model (the watchdog's deep check, below, comes about 60 seconds later). |
 | `PLUGBOARD_BULK_INTERNET_CONCURRENCY` | `3` | Concurrency of the internet-access check over all models. |
 | `PLUGBOARD_BULK_INTERNET_PER_MODEL_TIMEOUT_S` | `25` | Timeout per model in that check. |
 
