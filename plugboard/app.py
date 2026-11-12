@@ -4068,6 +4068,8 @@ async def _discover_provider(
         "removed": diff.removed,
         "removals_allowed": trusted,
         "dry_run": dry_run,
+        # The provider had no model yet: added/removed are empty by design.
+        "first_population": diff.first_population,
         **extra,
     }
 

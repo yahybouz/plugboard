@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import json
 import logging
 
 import pytest
@@ -39,10 +40,11 @@ def admin_on(monkeypatch):
 @pytest.fixture
 async def fake_gateway(monkeypatch):
     """Loopback aiohttp gateway: records the requests, answers {"ok": true}."""
-    state = {"headers": {}, "hits": [], "redirect": None, "respond": None}
+    state = {"headers": {}, "hits": [], "raw": [], "redirect": None, "respond": None}
 
     async def handle(request):
         state["hits"].append(request.path)
+        state["raw"].append((request.method, request.raw_path))
         state["headers"] = dict(request.headers)
         if state["redirect"]:
             raise web.HTTPFound(state["redirect"])
@@ -603,3 +605,211 @@ async def test_a_short_key_does_not_change_the_id(admin_on, monkeypatch):
     text = await mcp_server.add_provider("Test Provider", "https://x.test", "test")
     assert "Provider 'test-provider' created" in text
     assert "refresh_catalog('test-provider')" in text
+
+
+# ── Task 4: refresh_catalog ─────────────────────────────────────────────────
+
+
+@pytest.fixture
+def gateway_with_providers(
+    admin_on, _providers_file, _admin_key, audit_db, monkeypatch
+):
+    """refresh_catalog against the real gateway: two HTTP providers and a CLI one."""
+    from tests.factories import PROVIDER_A, PROVIDER_B
+
+    cli = {
+        **PROVIDER_A,
+        "id": "cli-x",
+        "name": "CLI X",
+        "auth_source": "subprocess:agy",
+    }
+    _providers_file.write_text(json.dumps({"providers": [PROVIDER_A, PROVIDER_B, cli]}))
+    return _relay(monkeypatch)
+
+
+def _discovery(monkeypatch, models, trusted=True):
+    state = {"calls": 0}
+
+    async def discover(provider):
+        from plugboard import router
+
+        state["calls"] += 1
+        router._discovery_trusted.set(trusted)  # as the real discovery does
+        return models
+
+    monkeypatch.setattr("plugboard.app.discover_models", discover)
+    return state
+
+
+@pytest.fixture
+def found_m1(monkeypatch):
+    return _discovery(monkeypatch, [{"id": "m1"}])
+
+
+@pytest.fixture
+def untrusted_discovery(monkeypatch):
+    return _discovery(monkeypatch, [{"id": "m1"}], trusted=False)
+
+
+@pytest.fixture
+def blocking_discovery(monkeypatch):
+    state = {"started": asyncio.Event(), "release": asyncio.Event()}
+
+    async def discover(provider):
+        state["started"].set()
+        await state["release"].wait()
+        return [{"id": "m1"}]
+
+    monkeypatch.setattr("plugboard.app.discover_models", discover)
+    return state
+
+
+async def test_refresh_writes_the_catalog(gateway_with_providers, found_m1):
+    from plugboard import audit as audit_mod
+    from plugboard import config
+
+    text = await mcp_server.refresh_catalog("test-provider")
+    assert text == "Catalog of 'test-provider': first listing, 1 models: m1"
+    assert [m["id"] for m in config.get_provider("test-provider")["models"]] == ["m1"]
+    assert gateway_with_providers["calls"] == [
+        ("GET", "/providers"),
+        ("POST", "/providers/test-provider/discover"),
+    ]
+    [entry] = audit_mod.get_audit_log(action="provider.discover")
+    assert entry["actor"] == "mcp"
+
+
+async def test_preview_writes_nothing(gateway_with_providers, found_m1):
+    from plugboard import config
+
+    text = await mcp_server.refresh_catalog("test-provider", dry_run=True)
+    assert text.endswith(" (preview, nothing written)")
+    assert not config.get_provider("test-provider").get("models")
+    assert gateway_with_providers["calls"][-1] == (
+        "POST",
+        "/providers/test-provider/discover?dry_run=true",
+    )
+
+
+async def test_changes_are_listed_and_long_lists_cut(
+    gateway_with_providers, monkeypatch
+):
+    from plugboard import config
+
+    config.update_provider("test-provider", {"models": [{"id": "old"}]})
+    _discovery(monkeypatch, [{"id": f"m{i:02d}"} for i in range(30)])
+    text = await mcp_server.refresh_catalog("test-provider")
+    shown = ", ".join(f"m{i:02d}" for i in range(20))
+    assert text == (
+        f"Catalog of 'test-provider': 30 models; added: {shown} (+10 more); "
+        "removed: old"
+    )
+
+
+async def test_unknown_provider_gives_the_admin_api_refusal(gateway_with_providers):
+    text = await mcp_server.refresh_catalog("nope")
+    assert text == "Error: HTTP 404: Provider 'nope' not found"
+
+
+async def test_discovery_failure_gives_the_admin_api_refusal(
+    gateway_with_providers, monkeypatch
+):
+    _discovery(monkeypatch, [])
+    text = await mcp_server.refresh_catalog("test-provider")
+    assert text == ("Error: HTTP 502: Could not discover models from 'test-provider'")
+
+
+async def test_path_characters_are_encoded(gateway_with_providers):
+    text = await mcp_server.refresh_catalog("../admin")
+    assert ("POST", "/providers/..%2Fadmin/discover") in gateway_with_providers["calls"]
+    assert text.startswith("Error: HTTP 404")
+
+
+async def test_encoded_path_reaches_the_wire(admin_on, fake_gateway):
+    async def answer(request):
+        if request.method == "GET":
+            return web.json_response([])
+        return web.json_response({"detail": "Not Found"}, status=404)
+
+    fake_gateway["respond"] = answer
+    await mcp_server.refresh_catalog("a/b?c#d")
+    assert fake_gateway["raw"][-1] == ("POST", "/providers/a%2Fb%3Fc%23d/discover")
+
+
+@pytest.mark.parametrize("pid", ["", " ", ".", ".."])
+async def test_ids_a_url_would_rewrite_are_refused(gateway_with_providers, pid):
+    text = await mcp_server.refresh_catalog(pid)
+    assert text == f"Error: invalid provider_id '{pid}'"
+    assert gateway_with_providers["calls"] == []
+
+
+async def test_cli_provider_is_refused_before_discovery(
+    gateway_with_providers, found_m1
+):
+    text = await mcp_server.refresh_catalog("cli-x")
+    assert text == (
+        "Error: 'cli-x' is a CLI provider: its refresh runs model probes, "
+        "refresh it from the dashboard"
+    )
+    assert found_m1["calls"] == 0
+    assert gateway_with_providers["calls"] == [("GET", "/providers")]
+    assert mcp_server._refresh_last == {}  # no slot taken
+
+
+async def test_second_write_within_a_minute_is_refused(
+    gateway_with_providers, found_m1, admin_on
+):
+    await mcp_server.refresh_catalog("test-provider", dry_run=True)
+    await mcp_server.refresh_catalog("test-provider")
+    text = await mcp_server.refresh_catalog("test-provider")
+    assert text == (
+        "Error: catalog of 'test-provider' was refreshed less than 60 s ago: "
+        "retry in 60s"
+    )
+    assert found_m1["calls"] == 2
+    admin_on["now"] += 61
+    assert (await mcp_server.refresh_catalog("test-provider")).startswith("Catalog")
+
+
+async def test_one_refresh_at_a_time(gateway_with_providers, blocking_discovery):
+    first = asyncio.create_task(mcp_server.refresh_catalog("test-provider"))
+    await blocking_discovery["started"].wait()
+    busy = await mcp_server.refresh_catalog("other-provider")
+    assert busy == "Error: a catalog refresh is already running"
+    assert ("other-provider", False) not in mcp_server._refresh_last
+    blocking_discovery["release"].set()
+    assert (await first).startswith("Catalog of 'test-provider'")
+
+
+async def test_untrusted_list_says_removals_were_skipped(
+    gateway_with_providers, untrusted_discovery
+):
+    text = await mcp_server.refresh_catalog("test-provider")
+    assert text.endswith("; removals skipped: the provider's list is not trusted")
+
+
+@pytest.mark.parametrize(
+    "attr,value,expected",
+    [
+        ("_NETWORK_TRANSPORT", True, "only loaded for stdio"),
+        ("_ADMIN_TOOLS", False, "PLUGBOARD_MCP_ADMIN_TOOLS=1"),
+        ("_ADMIN_KEY", "", "refresh_catalog needs PLUGBOARD_ADMIN_KEY"),
+    ],
+)
+async def test_refresh_refused_without_rights_and_without_a_call(
+    gateway_with_providers, monkeypatch, attr, value, expected
+):
+    monkeypatch.setattr(mcp_server, attr, value)
+    text = await mcp_server.refresh_catalog("test-provider")
+    assert text.startswith("Error: ") and expected in text
+    assert gateway_with_providers["calls"] == []
+
+
+async def test_providers_list_refusal_is_reported(admin_on, monkeypatch):
+    async def mfa(method, path, body=None):
+        return 401, {"detail": "Admin MFA required: sign in"}
+
+    monkeypatch.setattr(mcp_server, "_admin_request", mfa)
+    text = await mcp_server.refresh_catalog("test-provider")
+    assert "enforces admin MFA" in text
+    assert mcp_server._refresh_last == {}

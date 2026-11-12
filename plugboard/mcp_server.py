@@ -36,6 +36,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Literal
+from urllib.parse import quote
 
 import aiohttp
 from mcp.server.auth.provider import AccessToken
@@ -382,6 +383,8 @@ async def _registry_client(claimed: str = "") -> str:
 _CREATE_LIMIT = 5
 _CREATE_WINDOW_S = 3600.0
 _REFRESH_COOLDOWN_S = 60.0
+_NAMES_SHOWN = 20
+_CLI_AUTH_PREFIXES = ("subprocess:", "cli:")
 _DETAIL_LIMIT = 300
 _MFA_DETAIL = "Admin MFA required"
 _MAYBE_CREATED = (
@@ -1117,6 +1120,93 @@ async def add_provider(
         f"({shown_url}). Run refresh_catalog('{provider_id}'), then activate it "
         "in the dashboard (Providers)."
     )
+
+
+def _names(items: Any) -> str:
+    """Model IDs for a tool answer: the first 20, then a count."""
+    if not isinstance(items, list) or not items:
+        return "none"
+    names = [str(item) for item in items]
+    shown = ", ".join(names[:_NAMES_SHOWN])
+    if len(names) > _NAMES_SHOWN:
+        shown += f" (+{len(names) - _NAMES_SHOWN} more)"
+    return shown
+
+
+@mcp.tool()
+async def refresh_catalog(provider_id: str, dry_run: bool = False) -> str:
+    """Refresh a provider's model list from its API (admin, stdio only).
+
+    Same as the dashboard's Discover button: the gateway lists the
+    provider's models and writes them; models it no longer lists are
+    removed, unless its list is not trusted, and pinned models are kept.
+    CLI providers are refused (their refresh runs model probes): use the
+    dashboard. Needs PLUGBOARD_MCP_ADMIN_TOOLS=1 and PLUGBOARD_ADMIN_KEY;
+    one refresh at a time, and once a minute per provider and mode.
+
+    Args:
+        provider_id: The provider's id, as add_provider or the dashboard
+            shows it.
+        dry_run: Show what would be added and removed, write nothing.
+    """
+    try:
+        _admin_gate("refresh_catalog")
+        if provider_id.strip() in ("", ".", ".."):
+            # "." and ".." would be folded into another URL path.
+            raise AdminToolError(f"invalid provider_id '{provider_id}'")
+        if _refresh_lock.locked():
+            raise AdminToolError("a catalog refresh is already running")
+        async with _refresh_lock:
+            status, providers = await _admin_request("GET", "/providers")
+            if status != 200:
+                return "Error: " + _gateway_error(status, providers)
+            if not isinstance(providers, list):
+                return f"Error: unexpected gateway answer (HTTP {status})"
+            for entry in providers:
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("id") == provider_id
+                    and str(entry.get("auth_source") or "").startswith(
+                        _CLI_AUTH_PREFIXES
+                    )
+                ):
+                    raise AdminToolError(
+                        f"'{provider_id}' is a CLI provider: its refresh runs "
+                        "model probes, refresh it from the dashboard"
+                    )
+            _take_refresh_slot(provider_id, dry_run)
+            path = f"/providers/{quote(provider_id, safe='')}/discover"
+            if dry_run:
+                path += "?dry_run=true"
+            status, payload = await _admin_request("POST", path)
+    except AdminToolError as exc:
+        return f"Error: {exc}"
+    if status != 200:
+        return "Error: " + _gateway_error(status, payload)
+    if not isinstance(payload, dict) or not isinstance(payload.get("discovered"), int):
+        return f"Error: unexpected gateway answer (HTTP {status})"
+    if dry_run and payload.get("dry_run") is not True:
+        return (
+            "Error: the gateway did not confirm the preview: it may have written "
+            "the catalog, check the dashboard"
+        )
+    if payload.get("first_population") is True:
+        # The gateway reports no added model for a first listing.
+        text = (
+            f"Catalog of '{provider_id}': first listing, "
+            f"{payload['discovered']} models: {_names(payload.get('models'))}"
+        )
+    else:
+        text = (
+            f"Catalog of '{provider_id}': {payload['discovered']} models; "
+            f"added: {_names(payload.get('added'))}; "
+            f"removed: {_names(payload.get('removed'))}"
+        )
+    if dry_run:
+        text += " (preview, nothing written)"
+    if payload.get("removals_allowed") is False:
+        text += "; removals skipped: the provider's list is not trusted"
+    return text
 
 
 # ── Resources ────────────────────────────────────────────────────────────────
