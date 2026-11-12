@@ -3892,11 +3892,15 @@ async def patch_provider(
     if record is None:
         raise HTTPException(404, f"Provider '{provider_id}' not found")
     invalidate_models_cache()
+    audit_details: Dict[str, Any] = {"fields": sorted(updates.keys())}
+    if "is_active" in updates:
+        # The switch's value, not only its name (PLU-12).
+        audit_details["is_active"] = updates["is_active"]
     _audit(
         "provider.update",
         target_type="provider",
         target_id=provider_id,
-        details=json.dumps({"fields": sorted(updates.keys())}),
+        details=json.dumps(audit_details),
     )
     if before is not None and "base_url" in updates:
         old_url = (before.get("base_url") or "").rstrip("/")
@@ -4757,6 +4761,56 @@ async def ollama_put_settings(
         details=f"value={body.local_downloads_enabled}",
     )
     return ollama_admin.settings_payload()
+
+
+class OllamaSwitchUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    enabled: bool
+
+
+@app.get("/admin/ollama/switch")
+async def ollama_get_switch(_: None = Depends(_require_admin)):
+    """Whether Ollama serves the API, the MCP server and the Playground (PLU-12)."""
+    from plugboard import ollama
+
+    return ollama.switch_state()
+
+
+@app.put("/admin/ollama/switch")
+async def ollama_put_switch(
+    body: OllamaSwitchUpdate, _: None = Depends(_require_admin)
+):
+    """Turn Ollama on or off for every surface, at once and without a restart.
+
+    Off, its models leave the catalogue and every request for one gets 503
+    provider_disabled without any call; requests already running go to
+    their end. Persisted in providers.json (``is_active``), audited.
+    """
+    from plugboard import ollama
+
+    try:
+        state = await ollama.set_enabled(body.enabled)
+    except LookupError:
+        raise HTTPException(
+            404,
+            "Ollama provider is not registered (see OLLAMA_URL and OLLAMA_ENABLED)",
+        ) from None
+    before = state.pop("before")
+    _audit(
+        "ollama.switch",
+        target_type="provider",
+        target_id=state["provider_id"],
+        details=json.dumps(
+            {
+                "from": before,
+                "to": body.enabled,
+                "in_flight": state["in_flight"],
+                "waiting": state["waiting"],
+            }
+        ),
+    )
+    return state
 
 
 @app.get("/admin/ollama/cloud-catalog")

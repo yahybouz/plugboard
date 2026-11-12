@@ -448,3 +448,55 @@ async def _sync_models(provider: Dict[str, Any]) -> None:
             )
     except Exception as exc:
         log.warning("Failed to sync Ollama models: %s", exc)
+
+
+# ── Switch (PLU-12) ──────────────────────────────────────────────────────────
+#
+# The switch is the ``is_active`` field of the ``ollama`` provider: turned
+# off, its models leave the catalogue and every request for one gets 503
+# provider_disabled without any call (router.disabled_route). It lives in
+# providers.json, so it survives restarts and needs no redeploy.
+
+
+def switch_state() -> Dict[str, Any]:
+    """Whether Ollama serves the API, the MCP server and the Playground.
+
+    ``in_flight`` and ``waiting`` count the requests running on it and
+    waiting for its slot. No call reaches the daemon.
+    """
+    from plugboard import provider_admission
+    from plugboard.config import get_provider
+
+    provider = get_provider(_PROVIDER_ID)
+    return {
+        "provider_id": _PROVIDER_ID,
+        "registered": provider is not None,
+        "enabled": bool(provider.get("is_active", True)) if provider else False,
+        "in_flight": provider_admission.in_flight(_PROVIDER_ID),
+        "waiting": provider_admission.waiting(_PROVIDER_ID),
+    }
+
+
+async def set_enabled(enabled: bool) -> Dict[str, Any]:
+    """Turn Ollama on or off; ``before`` is the state it replaced.
+
+    Read and written under the provider store's lock. Turned back on, the
+    installed model list is synced once (a failure is only logged). Raises
+    ``LookupError`` when no ``ollama`` provider is registered.
+    """
+    from plugboard.config import modify_provider
+    from plugboard.router import invalidate_models_cache
+
+    seen: Dict[str, bool] = {}
+
+    def _flip(current: Dict[str, Any]) -> Dict[str, Any]:
+        seen["before"] = bool(current.get("is_active", True))
+        return {"is_active": bool(enabled)}
+
+    record = modify_provider(_PROVIDER_ID, _flip)
+    if record is None:
+        raise LookupError(_PROVIDER_ID)
+    invalidate_models_cache()
+    if enabled and not seen["before"]:
+        await _sync_models(record)
+    return {"before": seen["before"], **switch_state()}
