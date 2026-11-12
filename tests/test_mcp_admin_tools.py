@@ -756,10 +756,7 @@ async def test_cli_provider_is_refused_before_discovery(
     cli = {**PROVIDER_A, "id": "cli-x", "auth_source": auth_source}
     _providers_file.write_text(json.dumps({"providers": [cli]}))
     text = await mcp_server.refresh_catalog("cli-x")
-    assert text == (
-        "Error: 'cli-x' is a CLI provider: its refresh runs model probes, "
-        "refresh it from the dashboard"
-    )
+    assert text == ("Error: 'cli-x' is a CLI provider: refresh it from the dashboard")
     assert found_m1["calls"] == 0
     assert gateway_with_providers["calls"] == [("GET", "/providers")]
     assert mcp_server._refresh_last == {}  # no slot taken

@@ -37,7 +37,7 @@ Python 3.12 · FastAPI · no external database (JSON files and SQLite under `dat
 - **Fallback and resilience**: retries with backoff on 429/5xx, fallback to other providers for unprefixed model names, a per-model circuit breaker, latency- and error-aware load balancing.
 - **Monitoring**: admin dashboard, provider health history, a provider watchdog, a JSON and Prometheus metrics endpoint, an admin audit log, and webhook alerts for failing providers and clients nearing their budget.
 - **Admin security**: dashboard auto-login only for a local install opened in the local browser; everywhere else an `ADMIN_KEY` login with brute-force lockout and optional TOTP MFA. Provider credentials are encrypted at rest.
-- **MCP server**: exposes chat, model listing, usage and provider status to MCP clients, plus an update registry that tells client projects what to change when the gateway changes.
+- **MCP server**: exposes chat, model listing, usage and provider status to MCP clients, plus an update registry that tells client projects what to change when the gateway changes, and opt-in admin tools (stdio only) that add a provider and refresh its catalog.
 
 ## Screenshots
 

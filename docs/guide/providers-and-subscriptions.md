@@ -249,7 +249,7 @@ curl -s -X POST http://localhost:8765/providers \
 curl -s -X POST http://localhost:8765/providers/local-vllm/discover -H "Authorization: Bearer $ADMIN_KEY"
 ```
 
-A discovery answers with the models found (`discovered`, `models`), what changed (`added`, `removed`), `removals_allowed` (false when the provider's list is not trusted, so nothing is removed), `dry_run`, and `first_population`: true when the provider had no model yet, in which case `added` and `removed` are empty by design. A coding agent can do the same through the MCP tools `add_provider` and `refresh_catalog` ([MCP admin tools](mcp.md#admin-tools-stdio-only)).
+A discovery answers with the `provider`, the models found (`discovered`, `models`), what changed (`added`, `removed`), `removals_allowed` (false when the provider's list is not trusted, so nothing is removed), `dry_run`, and `first_population`: true when the provider had no model yet, in which case `added` and `removed` are empty by design. A `subprocess:` provider also gets `verified` and `dropped` (its model probes). For a public OpenAI-compatible provider, a coding agent can do the same through the MCP tools `add_provider` (created inactive, public addresses only) and `refresh_catalog` ([MCP admin tools](mcp.md#admin-tools-stdio-only)).
 
 `PUT /providers/{id}` updates a provider (base URL, token, default model, active flag, timeout, `auto_discover`, `pinned_models`) and `DELETE /providers/{id}` removes it. Catalog presets are keyed `catalog-<models.dev id>` (`catalog-openrouter`, `catalog-groq`, `catalog-moonshotai`...); `GET /admin/direct-providers/presets` lists them with `"catalog": true`.
 

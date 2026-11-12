@@ -1071,8 +1071,9 @@ async def add_provider(
     answers; an admin activates the provider in the dashboard.
 
     Needs PLUGBOARD_MCP_ADMIN_TOOLS=1 and PLUGBOARD_ADMIN_KEY. At most 5
-    calls per hour, refused ones included. If the answer says the provider
-    may have been created, check the dashboard instead of retrying.
+    calls per hour reach the gateway, refused ones included. If the answer
+    says the provider may have been created, check the dashboard instead of
+    retrying.
 
     Args:
         name: Display name; the gateway derives the id from it (a taken id
@@ -1154,7 +1155,8 @@ async def refresh_catalog(provider_id: str, dry_run: bool = False) -> str:
     provider's models and writes them; models it no longer lists are
     removed at once, unless its list is not trusted, and pinned models are
     kept: run it with dry_run=True first. CLI providers are refused (their
-    refresh runs model probes): use the dashboard. Needs
+    refresh depends on a local CLI and can run model probes): use the
+    dashboard. Needs
     PLUGBOARD_MCP_ADMIN_TOOLS=1 and PLUGBOARD_ADMIN_KEY; one refresh at a
     time, and once a minute per provider and mode.
 
@@ -1185,8 +1187,8 @@ async def refresh_catalog(provider_id: str, dry_run: bool = False) -> str:
                     )
                 ):
                     raise AdminToolError(
-                        f"'{provider_id}' is a CLI provider: its refresh runs "
-                        "model probes, refresh it from the dashboard"
+                        f"'{provider_id}' is a CLI provider: refresh it from "
+                        "the dashboard"
                     )
             _take_refresh_slot(provider_id, dry_run)
             path = f"/providers/{quote(provider_id, safe='')}/discover"

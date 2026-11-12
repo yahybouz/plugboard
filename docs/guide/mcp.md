@@ -2,7 +2,7 @@
 
 Plugboard ships a [Model Context Protocol](https://modelcontextprotocol.io) server named `plugboard`. It lets MCP clients (Claude Code, Claude Desktop, Cursor, agent frameworks) chat through the gateway, list models, check usage and provider health, and receive **update instructions** when the gateway changes in a way that affects them.
 
-The MCP server is a separate process. It does not access providers itself: it calls a running Plugboard instance over HTTP, with a client key, so budgets, limits and usage tracking apply as for any other client.
+The MCP server is a separate process. It does not access providers itself: it calls a running Plugboard instance over HTTP, with a client key, so budgets, limits and usage tracking apply as for any other client. Only `provider_status` and the [admin tools](#admin-tools-stdio-only) use the admin key, over stdio.
 
 ## Install
 
@@ -82,7 +82,7 @@ Example client configuration (stdio):
 | `check_usage` | none | Usage, spend and limits of the key (`/v1/me`) |
 | `inflight_requests` | none | Chat calls of the key's client running now (model, time, phase, "slow" flag) and their last results: tells a slow call from a broken one (`/v1/inflight`); refused with the admin key |
 | `provider_status` | none | Watchdog state and provider health (admin key required) |
-| `add_provider` | `name`, `base_url`, `api_key`, `default_model` | Add an OpenAI-compatible provider, inactive, public addresses only ([admin tools](#admin-tools-stdio-only)) |
+| `add_provider` | `name`, `base_url`, `api_key`, `default_model` (optional) | Add an OpenAI-compatible provider, inactive, public addresses only ([admin tools](#admin-tools-stdio-only)) |
 | `refresh_catalog` | `provider_id`, `dry_run` (false) | Refresh a provider's model list, like the dashboard's Discover button ([admin tools](#admin-tools-stdio-only)) |
 | `check_updates` | `client_id` (optional) | Pending updates for the key's client |
 | `get_update_prompt` | `prompt_id` | Full instructions of one update for the key's client |
@@ -110,21 +110,21 @@ configured server-side key returns 503; no real Jev call is claimed. The optiona
 Laya runtime is qualified only for macOS arm64 ≥14, not Linux/OVH. Historical
 multilingual smoke remains 2/3; the Torch pt2 reserve and final reviews remain open.
 
+Prompts: `quick_chat`, `deep_analysis`, `code_review`. Their default model IDs come from the original deployment and are unlikely to exist on yours; pass a model from `list_models` explicitly.
+
 ## Admin tools (stdio only)
 
 `add_provider` and `refresh_catalog` let a coding agent add a provider and refresh its model list without the dashboard. They change the gateway for every client, so they are off by default and guarded:
 
 - **Turning them on.** Set `PLUGBOARD_MCP_ADMIN_TOOLS=1` and `PLUGBOARD_ADMIN_KEY`, and run the server over stdio. Over SSE or HTTP they refuse, like `provider_status`: the admin key is never loaded there. An admin key set only for `provider_status` does not turn them on.
 - **Admin MFA.** When the gateway enforces admin MFA, the admin key alone is refused, so both tools refuse and send you to the dashboard. The MCP server never holds a TOTP secret.
-- **Same checks as the admin API.** The tools call `POST /providers` and `POST /providers/{id}/discover` with the admin key: the gateway validates, writes, audits and sends its webhooks exactly as for the dashboard, and a refused input gets the same answer as from the API.
+- **Same checks as the admin API.** The tools call `POST /providers`, `GET /providers` and `POST /providers/{id}/discover` with the admin key: the gateway validates, writes and sends its webhooks as for the dashboard, and audits as for it with the actor `mcp` (see Audit). A refused input gets the gateway's reason (`Error: HTTP <status>: <detail>`, cut at 300 characters); a refused admin key or enforced MFA gets its own message.
 - **`add_provider`** creates the provider **inactive**, with **Public addresses only** on: an internal or private address (`127.0.0.1`, `10.x`, `169.254.169.254`...) is refused, and every later connection is checked again. An inactive provider receives no client traffic, so an agent misled by a text it read cannot divert other clients' calls to a host it chose: an admin activates the provider in the dashboard. A local provider (Ollama, vLLM on `localhost`) is added from the dashboard. The answer gives the provider's id (a taken id gets a suffix such as `-1`). If it says the provider may have been created (timeout, answer cut off, `500`), check the dashboard before retrying.
-- **`refresh_catalog`** is the Discover button: the gateway lists the provider's models and writes them, and models it no longer lists are removed at once unless its list is not trusted; `default_model` and `pinned_models` are kept. Run it with `dry_run: true` first to see what would change. CLI providers (`subprocess:`, `cli:`) are refused: their refresh runs model probes, so refresh them from the dashboard. The answer shows at most 20 model IDs, each on one line and cut at 120 characters, since they come from the provider's own API.
-- **Limits** (per MCP server process, in memory): 5 `add_provider` calls per hour, refused ones included; per provider, one `refresh_catalog` preview and one write per minute; one refresh at a time. They stop an agent that loops; anyone with the admin key can still call the API directly.
-- **Audit.** The gateway records these calls with the actor `mcp` (from the `X-Plugboard-Surface: mcp` header the MCP server sends): `provider.create`, `provider.discover`, and, for this actor only, the refusals `provider.create.refused` and `provider.discover.refused` and the previews `provider.discover.preview` ([admin audit log](monitoring.md#admin-audit-log)). The header tells MCP calls apart; it proves nothing, since any admin can send it.
-- **The provider key.** `api_key` goes through the agent's context, then to the gateway, which stores it encrypted. It is never shown back, in an answer or an error, and never written to the audit. The MCP server drops the SDK's DEBUG records that hold whole messages (`mcp.server.lowlevel.server`, `mcp.server.sse`, `mcp.server.streamable_http`). The SDK still logs a request that fails its validation through the root logger (the message at DEBUG, the error at WARNING): keep the root logger above DEBUG while these tools are on.
+- **`refresh_catalog`** is the Discover button: the gateway lists the provider's models and writes them, and models it no longer lists are removed at once unless its list is not trusted; `default_model` and `pinned_models` are kept. Run it with `dry_run: true` first to see what would change. CLI providers (`subprocess:`, `cli:`) are refused: they depend on a local CLI sign-in, and a `subprocess:` refresh runs model probes, so refresh them from the dashboard. The answer shows at most 20 model IDs per list (models, added, removed); since they come from the provider's own API, control characters are replaced by spaces and each ID is cut at 120 characters.
+- **Limits** (per MCP server process, in memory): 5 `add_provider` calls per hour that reach the gateway, refused ones included; per provider, one `refresh_catalog` preview and one write per minute; one refresh at a time. They stop an agent that loops; anyone with the admin key can still call the API directly.
+- **Audit.** The gateway records these calls with the actor `mcp` (from the `X-Plugboard-Surface: mcp` header the MCP server sends): `provider.create` and `provider.discover`; a refused address as `provider.egress.rejected` (internal or private address) or `provider.domain.rejected` (host outside `PLUGBOARD_PROVIDER_DOMAINS_ALLOWED`); and, for this actor only, the other refusals `provider.create.refused` and `provider.discover.refused` and the previews `provider.discover.preview` ([admin audit log](monitoring.md#admin-audit-log)). The header tells MCP calls apart; it proves nothing, since any admin can send it.
+- **The provider key.** `api_key` goes through the agent's context, then to the gateway, which stores it encrypted. The tool never shows it back, in an answer or an error, and the gateway never writes it to the audit. If the MCP SDK rejects the arguments before the tool runs (a missing field, a wrong type), its error to the caller quotes them in part. The MCP server drops the SDK's DEBUG records that hold whole messages (`mcp.server.lowlevel.server`, `mcp.server.sse`, `mcp.server.streamable_http`). The SDK still logs a request that fails its JSON-RPC validation through the root logger, the message at DEBUG and part of it (about 25 characters) at WARNING: keep the root logger above WARNING while these tools are on.
 - **Not available** over MCP: editing or deleting a provider (a new `base_url` would send the stored key elsewhere), and catalog presets (use the dashboard).
-
-Prompts: `quick_chat`, `deep_analysis`, `code_review`. Their default model IDs come from the original deployment and are unlikely to exist on yours; pass a model from `list_models` explicitly.
 
 ## Update registry
 

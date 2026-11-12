@@ -258,7 +258,8 @@ These are read by `scripts/run_mcp.py` and the maintenance scripts, not by the s
 |---|---|---|
 | `PLUGBOARD_URL` | `http://localhost:8765` | URL of the Plugboard instance to call. |
 | `PLUGBOARD_API_KEY` | empty | Client key used by the MCP server for chat and usage. |
-| `PLUGBOARD_ADMIN_KEY` | empty | Admin key used by the MCP server for provider status (stdio only), and by `scripts/setup_railway_providers.py`. |
+| `PLUGBOARD_ADMIN_KEY` | empty | Admin key used by the MCP server for provider status and the MCP admin tools (stdio only), and by `scripts/setup_railway_providers.py`. |
+| `PLUGBOARD_MCP_ADMIN_TOOLS` | empty | `1` turns on the MCP admin tools `add_provider` and `refresh_catalog` (stdio only, with `PLUGBOARD_ADMIN_KEY`); see [MCP admin tools](mcp.md#admin-tools-stdio-only). |
 | `PLUGBOARD_MCP_TIMEOUT` | `900` | Timeout of MCP chat calls, in seconds. |
 | `PLUGBOARD_MCP_TOKEN` | empty | Bearer token the MCP server requires in SSE or HTTP mode (32+ characters); it refuses to start without it. |
 | `MCP_HOST` | `127.0.0.1` | Bind address of the MCP server in SSE or HTTP mode. |

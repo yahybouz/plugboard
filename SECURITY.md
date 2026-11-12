@@ -49,7 +49,7 @@ Hardening measures in place include: hashed client keys with constant-time compa
 - Each admin session records the MFA generation it was opened under. Any enrolment, rotation or disable changes the generation, so older sessions are refused even when `admin_sessions.json` cannot be rewritten; that write failure is still raised to the caller. The code that confirms a new secret on `/admin/mfa/setup` is consumed.
 - MCP over SSE/HTTP keeps an allowlist of variables (`PLUGBOARD_URL`, `PLUGBOARD_API_KEY`, `PLUGBOARD_MCP_*`, `MCP_HOST`, `MCP_PORT`, the data paths and system variables) after `.env` is loaded, not only in the server module.
 - A Copilot token derived from a GitHub connection that was saved or removed during the exchange is not cached.
-- Accepted, not addressed: the client plane (`/v1/*`) accepts the admin key as a bearer; `/admin/mfa*` asks for no fresh code; the TOTP replay lock is per process (workers sharing one data directory rely on the file record alone); `scripts/setup_railway_providers.py` and the stdio MCP `provider_status` tool send the admin key without a TOTP code, so they are refused on admin routes once MFA is enforced.
+- Accepted, not addressed: the client plane (`/v1/*`) accepts the admin key as a bearer; `/admin/mfa*` asks for no fresh code; the TOTP replay lock is per process (workers sharing one data directory rely on the file record alone); `scripts/setup_railway_providers.py` and the stdio MCP tools `provider_status`, `add_provider` and `refresh_catalog` send the admin key without a TOTP code, so they are refused on admin routes once MFA is enforced.
 
 ### Budgets and accepted limits
 
