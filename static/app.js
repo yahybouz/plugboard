@@ -1888,7 +1888,7 @@ async function loadPlayground() {
 function _pgAddDivider(text) {
   const container = document.getElementById("pg-messages");
   const divider = document.createElement("p");
-  divider.style.cssText = "align-self:stretch; text-align:center; font-size:0.75rem; color:var(--text-muted); border-top:1px dashed var(--border-strong); padding-top:0.4rem; margin:0.5rem 0;";
+  divider.className = "chat-divider";
   divider.textContent = text;
   divider.dataset.role = "divider";
   container.appendChild(divider);
@@ -1908,9 +1908,7 @@ function _pgAddMessage(role, content) {
   if (placeholder) placeholder.remove();
 
   const bubble = document.createElement("div");
-  bubble.style.cssText = role === "user"
-    ? "align-self:flex-end; background:var(--accent); color:var(--on-accent); border-radius:12px 12px 2px 12px; padding:0.6rem 0.9rem; max-width:75%; white-space:pre-wrap; font-size:0.9rem;"
-    : "align-self:flex-start; background:var(--bg-card); border:1px solid var(--border-strong); border-radius:12px 12px 12px 2px; padding:0.6rem 0.9rem; max-width:75%; white-space:pre-wrap; font-size:0.9rem;";
+  bubble.className = role === "user" ? "chat-bubble chat-bubble-user" : "chat-bubble chat-bubble-assistant";
   bubble.textContent = content;
   bubble.dataset.role = role;
   bubble.dataset.testid = "message-bubble";  // live-test UI selector (C9 / P4-05)
@@ -1996,13 +1994,13 @@ async function _pgSend() {
         if (thinkingEl) return;
         thinkingEl = document.createElement("details");
         thinkingEl.open = true; // open while streaming, will collapse on done
-        thinkingEl.style.cssText = "align-self:flex-start; max-width:75%; margin-bottom:0.25rem; background:var(--bg-secondary); border:1px solid var(--border-strong); border-radius:10px; padding:0.35rem 0.6rem; font-size:0.8rem; color:var(--text-secondary);";
+        thinkingEl.className = "chat-thinking";
         const summary = document.createElement("summary");
-        summary.style.cssText = "cursor:pointer; user-select:none; font-weight:500;";
+        summary.className = "chat-thinking-summary";
         summary.textContent = "🧠 Thinking…";
         thinkingEl.appendChild(summary);
         thinkingContent = document.createElement("div");
-        thinkingContent.style.cssText = "white-space:pre-wrap; margin-top:0.4rem; font-family:ui-monospace,monospace; font-size:0.75rem; max-height:300px; overflow-y:auto;";
+        thinkingContent.className = "chat-thinking-body";
         thinkingEl.appendChild(thinkingContent);
         assistantBubble.parentNode.insertBefore(thinkingEl, assistantBubble);
       }
@@ -2112,13 +2110,13 @@ async function _pgSend() {
       // UX as the streaming path so thinking models behave consistently.
       if (reasoning) {
         const thinkEl = document.createElement("details");
-        thinkEl.style.cssText = "align-self:flex-start; max-width:75%; margin-bottom:0.25rem; background:var(--bg-secondary); border:1px solid var(--border-strong); border-radius:10px; padding:0.35rem 0.6rem; font-size:0.8rem; color:var(--text-secondary);";
+        thinkEl.className = "chat-thinking";
         const sumEl = document.createElement("summary");
-        sumEl.style.cssText = "cursor:pointer; user-select:none; font-weight:500;";
+        sumEl.className = "chat-thinking-summary";
         sumEl.textContent = "🧠 Thinking (click to expand)";
         thinkEl.appendChild(sumEl);
         const contentEl = document.createElement("div");
-        contentEl.style.cssText = "white-space:pre-wrap; margin-top:0.4rem; font-family:ui-monospace,monospace; font-size:0.75rem; max-height:300px; overflow-y:auto;";
+        contentEl.className = "chat-thinking-body";
         contentEl.textContent = reasoning;
         thinkEl.appendChild(contentEl);
         assistantBubble.parentNode.insertBefore(thinkEl, assistantBubble);
@@ -2154,6 +2152,6 @@ function _pgClear() {
   _pgHistory = [];
   _pgContextModel = "";
   const container = document.getElementById("pg-messages");
-  container.innerHTML = '<div class="muted" style="text-align:center; padding:2rem;">Select a model and start chatting.</div>';
+  container.innerHTML = '<div class="muted pg-empty">Select a model and start chatting.</div>';
   document.getElementById("pg-status").textContent = "";
 }

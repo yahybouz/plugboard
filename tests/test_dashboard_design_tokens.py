@@ -151,11 +151,8 @@ def test_touch_rule_still_covers_controls():
 
 # Pages still waiting for their own task: their inline styles and labels are
 # checked once the task that cleans them removes them from these tuples.
-PENDING_HTML_SECTIONS = ("page-playground", "page-ollama")
-PENDING_JS = (
-    ("function _initOllamaEvents", "function _initPlaygroundEvents"),
-    ("function _initPlaygroundEvents", None),
-)
+PENDING_HTML_SECTIONS = ("page-ollama",)
+PENDING_JS = (("function _initOllamaEvents", "function _initPlaygroundEvents"),)
 INLINE_STYLE = re.compile(r'style=\\?"([^"\\]*)|style:\s*"([^"]*)"')
 
 
@@ -197,3 +194,13 @@ def test_scripts_inline_styles_only_where_js_needs_them(name):
     assert "cssText" not in js
     allowed = re.compile(r"^(?:display|width):")
     assert [d for d in _inline_declarations(js) if not allowed.match(d)] == []
+
+
+def test_playground_keeps_its_js_hooks():
+    js, html = _read("app.js"), _read("index.html")
+    # The welcome line is removed through its ``muted`` class; no bubble has it.
+    assert 'container.querySelector(".muted")' in js
+    assert re.search(r'class="muted[^"]*pg-empty|class="pg-empty[^"]*muted', html)
+    # The waiting bubble shows a bare "..." that the browser tests wait on.
+    assert '_pgAddMessage("assistant", "...")' in js
+    assert 'bubble.dataset.testid = "message-bubble"' in js

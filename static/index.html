@@ -426,38 +426,38 @@
           <button class="btn btn-sm" id="btn-clear-chat">Clear</button>
         </div>
       </div>
-      <div class="content" style="display:flex; flex-direction:column; height:calc(100vh - 120px);">
+      <div class="content pg-layout">
         <!-- Model selector -->
-        <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.75rem; flex-wrap:wrap;">
-          <select id="pg-model" data-testid="pg-model" aria-label="Model" style="flex:1; min-width:250px; padding:0.4rem 0.6rem; border:1px solid var(--border-strong); border-radius:6px; font-size:0.85rem;">
+        <div class="pg-toolbar">
+          <select id="pg-model" data-testid="pg-model" aria-label="Model" class="pg-select">
             <option value="">Loading models...</option>
           </select>
-          <button id="btn-check-internet" class="btn" style="padding: 0.4rem 0.6rem; border:1px solid var(--border-strong); border-radius: 6px; font-size: 0.85rem; background:var(--bg-card); cursor: pointer; display: flex; align-items: center; gap: 0.25rem;" title="Check the currently selected model only">
+          <button id="btn-check-internet" class="btn pg-check-btn" title="Check the currently selected model only">
             🔍 Check Internet
           </button>
-          <button id="btn-check-internet-all" class="btn" style="padding: 0.4rem 0.6rem; border:1px solid var(--border-strong); border-radius: 6px; font-size: 0.85rem; background:var(--bg-card); cursor: pointer; display: flex; align-items: center; gap: 0.25rem;" title="Probe ALL models for internet access (sequential, may take a few minutes)">
+          <button id="btn-check-internet-all" class="btn pg-check-btn" title="Probe ALL models for internet access (sequential, may take a few minutes)">
             🌐 Check All
           </button>
-          <label style="font-size:0.8rem; display:flex; align-items:center; gap:0.25rem;">
+          <label class="pg-option">
             <input type="checkbox" id="pg-stream" data-testid="pg-stream" checked> Stream
           </label>
-          <label style="font-size:0.8rem; display:flex; align-items:center; gap:0.25rem;">
-            Temp: <input type="number" id="pg-temp" data-testid="pg-temp" value="0.7" min="0" max="2" step="0.1" style="width:55px; padding:0.3rem; border:1px solid var(--border-strong); border-radius:4px;">
+          <label class="pg-option">
+            Temp: <input type="number" id="pg-temp" data-testid="pg-temp" value="0.7" min="0" max="2" step="0.1" class="pg-num">
           </label>
-          <label style="font-size:0.8rem; display:flex; align-items:center; gap:0.25rem;">
-            Max: <input type="number" id="pg-max-tokens" data-testid="pg-max-tokens" value="2048" min="1" max="32768" step="256" style="width:70px; padding:0.3rem; border:1px solid var(--border-strong); border-radius:4px;">
+          <label class="pg-option">
+            Max: <input type="number" id="pg-max-tokens" data-testid="pg-max-tokens" value="2048" min="1" max="32768" step="256" class="pg-num pg-num-wide">
           </label>
         </div>
         <!-- Chat messages -->
-        <div id="pg-messages" data-testid="pg-messages" style="flex:1; overflow-y:auto; border:1px solid var(--border-strong); border-radius:8px; padding:1rem; background:var(--bg-secondary); display:flex; flex-direction:column; gap:0.75rem;">
-          <div class="muted" style="text-align:center; padding:2rem;">Select a model and start chatting.</div>
+        <div id="pg-messages" data-testid="pg-messages" class="pg-messages">
+          <div class="muted pg-empty">Select a model and start chatting.</div>
         </div>
         <!-- Input -->
-        <div style="display:flex; gap:0.5rem; margin-top:0.75rem;">
-          <textarea id="pg-input" data-testid="pg-input" rows="2" placeholder="Type your message..." style="flex:1; padding:0.5rem 0.75rem; border:1px solid var(--border-strong); border-radius:8px; resize:none; font-size:0.9rem; font-family:inherit;"></textarea>
-          <button class="btn btn-primary" id="btn-send-chat" data-testid="pg-send" style="align-self:flex-end; padding:0.5rem 1.25rem;">Send</button>
+        <div class="pg-composer">
+          <textarea id="pg-input" data-testid="pg-input" rows="2" placeholder="Type your message..." class="pg-input"></textarea>
+          <button class="btn btn-primary pg-send" id="btn-send-chat" data-testid="pg-send">Send</button>
         </div>
-        <div id="pg-status" data-testid="pg-status" class="muted" style="font-size:0.75rem; margin-top:0.25rem;"></div>
+        <div id="pg-status" data-testid="pg-status" class="muted pg-status"></div>
       </div>
     </section>
 
