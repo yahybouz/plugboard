@@ -433,3 +433,36 @@ def test_a_failed_compaction_keeps_the_deleted_count(stores, monkeypatch):
     assert report["deleted_total"] == 1
     assert report["errors"] == 1
     assert len(audit.get_audit_log(action="retention.run")) == 1
+
+
+def test_a_failure_after_committed_batches_keeps_their_count(stores, monkeypatch):
+    from plugboard import audit, retention, storage
+
+    seed_watchdog(
+        [_event_row(f"w-old-{i}", "2026-10-01T00:00:00.000Z") for i in range(5003)]
+        + [_event_row("w-new", "2026-11-11T00:00:00.000Z")]
+    )
+    real_batch = storage._delete_batch
+    watchdog_batches = []
+
+    def locked_on_the_second_batch(conn, table, *args, **kwargs):
+        if table == "watchdog_events":
+            watchdog_batches.append(table)
+            if len(watchdog_batches) == 2:
+                raise sqlite3.OperationalError("database is locked")
+        return real_batch(conn, table, *args, **kwargs)
+
+    monkeypatch.setattr(storage, "_delete_batch", locked_on_the_second_batch)
+
+    report = retention.run_retention(NOW)
+
+    watchdog = report["stores"]["watchdog"]
+    assert watchdog["deleted"] == 5000  # the first batch, committed
+    assert watchdog["compacted"] is False
+    assert watchdog["error"] == "OperationalError: database is locked"
+    assert report["deleted_total"] == 5000
+    assert report["errors"] == 1
+    assert len(column(stores["watchdog"], "watchdog_events", "id")) == 4
+    entries = audit.get_audit_log(action="retention.run")
+    assert len(entries) == 1
+    assert "watchdog=5000" in entries[0]["details"]

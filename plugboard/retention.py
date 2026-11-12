@@ -113,14 +113,21 @@ def _purge_and_compact(path: Path, purge: Callable[[], int]) -> Dict[str, Any]:
     """Purge one store, then compact it; a failure is reported, never raised.
 
     The purge is committed before compaction starts: when compaction fails,
-    the rows are gone for good and the report keeps their count.
+    the rows are gone for good and the report keeps their count. The purge
+    commits in batches: when it fails after some of them, its
+    ``storage.PartialPurgeError`` gives the rows already deleted, which the
+    report keeps too, with the error that stopped it.
     """
     entry: Dict[str, Any] = {"deleted": 0, "compacted": False}
     try:
         entry["deleted"] = purge()
         entry["compacted"] = storage.compact_sqlite(path)
     except (sqlite3.Error, OSError) as exc:
-        message = f"{type(exc).__name__}: {exc}"[:_ERROR_MAX_CHARS]
+        reported: BaseException = exc
+        if isinstance(exc, storage.PartialPurgeError):
+            entry["deleted"] = exc.deleted
+            reported = exc.__cause__ or exc
+        message = f"{type(reported).__name__}: {reported}"[:_ERROR_MAX_CHARS]
         log.warning("Retention pass: %s", message)
         entry["error"] = message
     return entry

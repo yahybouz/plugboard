@@ -28,6 +28,7 @@ import os
 import sqlite3
 import stat
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, Tuple, TypeVar
 
@@ -123,6 +124,37 @@ def _open_existing_sqlite(
     )
 
 
+class PartialPurgeError(sqlite3.Error):
+    """A purge failed after some of its batches were committed.
+
+    ``deleted`` is the number of rows those batches removed for good; the
+    error that stopped the purge is ``__cause__``.
+    """
+
+    def __init__(self, deleted: int, cause: sqlite3.Error) -> None:
+        super().__init__(
+            f"{type(cause).__name__}: {cause} (after {deleted} rows deleted)"
+        )
+        self.deleted = deleted
+
+
+def _delete_batch(
+    conn: sqlite3.Connection,
+    table: str,
+    where: str,
+    params: Tuple[Any, ...],
+    limit: int,
+) -> int:
+    """Delete at most ``limit`` matching rows in one committed transaction."""
+    cursor = conn.execute(
+        f"DELETE FROM {table} WHERE rowid IN "
+        f"(SELECT rowid FROM {table} WHERE {where} LIMIT ?)",
+        (*params, limit),
+    )
+    conn.commit()
+    return cursor.rowcount
+
+
 def purge_sqlite_rows(
     path: Path,
     table: str,
@@ -130,17 +162,35 @@ def purge_sqlite_rows(
     params: Sequence[Any] = (),
     *,
     busy_timeout_ms: int = 5000,
+    batch_size: int = 5000,
+    pause_s: float = 0.05,
 ) -> int:
-    """Run ``DELETE FROM {table} WHERE {where}`` and return the rows deleted.
+    """Delete the rows of ``table`` matching ``where``; return how many.
+
+    The rows go in batches of at most ``batch_size``, each in its own
+    transaction, with a pause of ``pause_s`` seconds between two batches: the
+    write lock is held for one batch at a time, so the gateway's own writers
+    (billing, watchdog, sessions) get through between two of them instead of
+    waiting for the whole purge. The purge ends with the first batch that is
+    not full. It blocks: run it in a worker thread, never on the event loop.
 
     ``table`` and ``where`` are formatted into the SQL: they must be constants
-    of the code, never user input. Values go through ``params``. A missing
-    file or table deletes nothing and returns 0, without creating either; any
-    other ``sqlite3.Error`` (locked or corrupt store) is raised.
+    of the code, never user input. Values go through ``params``. The table
+    must have a ``rowid``. A missing file or table deletes nothing and
+    returns 0, without creating either.
+
+    Any other ``sqlite3.Error`` (locked or corrupt store) is raised. When it
+    comes after one batch or more was committed, those rows are gone for
+    good: the error is then a ``PartialPurgeError`` whose ``deleted`` gives
+    their number and whose ``__cause__`` is the original error. Before any
+    commit, the original error is raised as it is.
     """
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
     conn = _open_existing_sqlite(path, busy_timeout_ms)
     if conn is None:
         return 0
+    deleted = 0
     try:
         found = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -148,9 +198,18 @@ def purge_sqlite_rows(
         ).fetchone()
         if found is None:
             return 0
-        deleted = conn.execute(f"DELETE FROM {table} WHERE {where}", tuple(params))
-        conn.commit()
-        return deleted.rowcount
+        values = tuple(params)
+        while True:
+            batch = _delete_batch(conn, table, where, values, batch_size)
+            deleted += batch
+            if batch < batch_size:
+                return deleted
+            if pause_s > 0:
+                time.sleep(pause_s)
+    except sqlite3.Error as exc:
+        if deleted == 0:
+            raise
+        raise PartialPurgeError(deleted, exc) from exc
     finally:
         conn.close()
 
