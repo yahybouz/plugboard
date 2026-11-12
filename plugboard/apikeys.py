@@ -141,6 +141,9 @@ def load_keys() -> List[Dict[str, Any]]:
 def get_key_record(raw_key: str) -> Optional[Dict[str, Any]]:
     """Return the active key record for raw_key, or None.
 
+    None also for a key whose client_id is blank (BUG-64, D-40): it is
+    refused like an unknown key, and the refusal is logged with its key_id.
+
     SHA-256 hashes the incoming key and uses an O(1) dict lookup on the
     cached index. The 256-bit output space of SHA-256 makes timing attacks
     on dict lookup infeasible in practice (any leak would still require a
