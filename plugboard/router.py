@@ -827,14 +827,20 @@ def _resolve_all_providers(model_str: str) -> List[tuple[Dict[str, Any], str]]:
 def cli_refusal(body: Dict[str, Any]) -> Optional[UnsupportedOnCliError]:
     """The ``UnsupportedOnCliError`` forward() would raise for ``body``, or None.
 
-    None when the body asks for nothing a CLI route cannot serve, when a
-    candidate that is not a CLI route is left, or when routing itself fails
-    (a ``ValueError``: the chat route answers it as before). Never raises.
+    None when the body asks for nothing a CLI route cannot serve; when only a
+    disabled provider serves the model (forward() raises
+    ``ProviderDisabledError`` first); when routing raises ``ValueError`` (the
+    chat route answers it as before); or when a candidate that is not a CLI
+    route is left. Any other exception from reading the provider registry or
+    routing propagates, as it would from forward().
     """
     if not unsupported_on_cli(body):
         return None
+    model_str = body.get("model", "")
+    if disabled_route(model_str) is not None:
+        return None
     try:
-        candidates = _resolve_all_providers(body.get("model", ""))
+        candidates = _resolve_all_providers(model_str)
     except ValueError:
         return None
     try:

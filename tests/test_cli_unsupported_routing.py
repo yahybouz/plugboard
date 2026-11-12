@@ -70,7 +70,8 @@ def _chat(model: str, **extra) -> dict:
 
 @pytest.fixture
 def isolated(monkeypatch, tmp_path):
-    """Fresh breaker, metrics, admission; counters on every side effect."""
+    """Fresh breaker, alerts, metrics, admission; counters on every side effect."""
+    import plugboard.alerts as alerts
     import plugboard.config as cfg
     import plugboard.metrics as metrics
     import plugboard.router as router
@@ -84,6 +85,8 @@ def isolated(monkeypatch, tmp_path):
     monkeypatch.setattr(cfg, "PROVIDERS_LOCK", data_dir / "providers.json.lock")
     monkeypatch.setattr(router, "_DELAYS", [0, 0, 0])
     monkeypatch.setattr(cb, "_circuits", {})
+    monkeypatch.setattr(alerts, "_provider_failures", {})
+    monkeypatch.setattr(alerts, "_provider_alerted", {})
     # Equal load-balancing scores keep the candidates in providers.json order.
     monkeypatch.setattr(metrics, "_stats", {})
     provider_admission.reset()
@@ -235,6 +238,23 @@ def test_cli_refusal_is_none_when_a_non_cli_candidate_is_left(isolated):
     router, _, write, _ = isolated
     write(CLI_PROVIDER, PROVIDER_A)
     assert router.cli_refusal(_chat(ANY_ROUTE, tools=TOOLS)) is None
+
+
+@pytest.mark.asyncio
+async def test_cli_refusal_is_none_for_a_disabled_provider(isolated):
+    """forward() answers ProviderDisabledError there: cli_refusal must not
+    name another, active CLI provider in its place."""
+    router, calls, write, _ = isolated
+    off = {**CLI_PROVIDER, "id": "pbtest-off-cli", "is_active": False}
+    on = {**OTHER_CLI, "id": "pbtest-on-cli"}
+    write(off, on)
+    body = _chat("pbtest-off-cli:m", tools=TOOLS)
+
+    assert router.cli_refusal(body) is None
+    with pytest.raises(router.ProviderDisabledError) as err:
+        await router.forward(body)
+    assert err.value.provider_id == "pbtest-off-cli"
+    assert calls["complete"] == []
 
 
 def test_cli_refusal_names_the_first_cli_candidate(isolated):
