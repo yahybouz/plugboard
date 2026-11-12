@@ -17,6 +17,7 @@ from aiohttp import web
 pytest.importorskip("mcp")
 
 from plugboard import mcp_server  # noqa: E402
+from plugboard.llm_pricing import UnsafeURL  # noqa: E402
 
 PROVIDER_KEY = "sk-synthetic-provider-key"
 
@@ -297,3 +298,228 @@ def test_sdk_message_logging_is_capped_at_import_once():
     for name in mcp_server._SDK_MESSAGE_LOGGERS:
         filters = logging.getLogger(name).filters
         assert sum(isinstance(f, mcp_server._DropDebug) for f in filters) == 1
+
+
+# ── Task 3: add_provider ────────────────────────────────────────────────────
+
+ADMIN_HEADERS = {"Authorization": "Bearer adminkey"}
+
+
+@pytest.fixture
+def private(monkeypatch):
+    async def _resolve(host, port):
+        raise UnsafeURL(f"{host} resolves to a non-public address (10.0.0.5)")
+
+    monkeypatch.setattr("plugboard.llm_pricing._resolve_public", _resolve)
+
+
+@pytest.fixture
+def public(monkeypatch):
+    async def _resolve(host, port):
+        return []
+
+    monkeypatch.setattr("plugboard.llm_pricing._resolve_public", _resolve)
+
+
+@pytest.fixture
+def unresolvable(monkeypatch):
+    async def _resolve(host, port):
+        raise UnsafeURL(f"cannot resolve {host}: synthetic")
+
+    monkeypatch.setattr("plugboard.llm_pricing._resolve_public", _resolve)
+
+
+@pytest.fixture
+def audit_db(monkeypatch, tmp_path):
+    from plugboard import audit as audit_mod
+
+    monkeypatch.setattr(audit_mod, "_DB_PATH", tmp_path / "audit.db")
+
+
+def _relay(monkeypatch):
+    """Send the MCP server's admin calls to the real gateway app, in process."""
+    import plugboard.ratelimit as rl
+    from httpx import ASGITransport, AsyncClient
+
+    from plugboard.app import app
+
+    monkeypatch.setattr(rl, "_LIMIT", 0)
+    rl._buckets.clear()
+    rl._client_buckets.clear()
+    state = {"calls": []}
+
+    async def forward(method, path, body=None):
+        state["calls"].append((method, path))
+        headers = mcp_server._auth_headers(admin=True, json_body=body is not None)
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://127.0.0.1"
+        ) as c:
+            resp = await c.request(method, path, headers=headers, json=body)
+        return resp.status_code, resp.json()
+
+    async def direct(body):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://127.0.0.1"
+        ) as c:
+            resp = await c.post("/providers", headers=ADMIN_HEADERS, json=body)
+        return resp.status_code, resp.json()
+
+    monkeypatch.setattr(mcp_server, "_admin_request", forward)
+    state["direct"] = direct
+    return state
+
+
+@pytest.fixture
+def gateway(admin_on, _empty_providers_file, _admin_key, audit_db, monkeypatch):
+    """add_provider against the real gateway: no provider yet."""
+    return _relay(monkeypatch)
+
+
+async def test_add_provider_creates_an_inactive_guarded_provider(
+    gateway, public, _empty_providers_file
+):
+    from plugboard import audit as audit_mod
+    from plugboard import config
+
+    text = await mcp_server.add_provider(
+        "Acme", "https://api.acme.test/v1/", PROVIDER_KEY
+    )
+    assert text == (
+        "Provider 'acme' created, inactive, public addresses only "
+        "(https://api.acme.test/v1). Run refresh_catalog('acme'), then "
+        "activate it in the dashboard (Providers)."
+    )
+    p = config.get_provider("acme")
+    assert p["is_active"] is False and p["egress_guard"] is True
+    assert p["bearer_token"] == PROVIDER_KEY  # reached the gateway intact
+    assert PROVIDER_KEY not in _empty_providers_file.read_text()  # encrypted
+    [entry] = audit_mod.get_audit_log(action="provider.create")
+    assert entry["actor"] == "mcp"
+    assert gateway["calls"] == [("POST", "/providers")]
+
+
+async def test_add_provider_returns_the_gateway_id_on_a_name_clash(gateway, public):
+    await mcp_server.add_provider("Acme", "https://api.acme.test/v1", PROVIDER_KEY)
+    text = await mcp_server.add_provider(
+        "Acme", "https://api.acme.test/v1", PROVIDER_KEY
+    )
+    assert text.startswith("Provider 'acme-1' created")
+
+
+@pytest.mark.parametrize(
+    "attr,value,expected",
+    [
+        ("_NETWORK_TRANSPORT", True, "only loaded for stdio"),
+        ("_ADMIN_TOOLS", False, "PLUGBOARD_MCP_ADMIN_TOOLS=1"),
+        ("_ADMIN_KEY", "", "add_provider needs PLUGBOARD_ADMIN_KEY"),
+    ],
+)
+async def test_add_provider_refused_without_rights_and_without_a_call(
+    gateway, monkeypatch, attr, value, expected
+):
+    monkeypatch.setattr(mcp_server, attr, value)
+    text = await mcp_server.add_provider(
+        "Acme", "https://api.acme.test/v1", PROVIDER_KEY
+    )
+    assert text.startswith("Error: ") and expected in text
+    assert gateway["calls"] == []
+    assert list(mcp_server._create_calls) == []  # a refused call takes no slot
+
+
+@pytest.mark.parametrize(
+    "name,url,resolver,allowed,status",
+    [
+        ("In", "http://10.0.0.5/v1", "private", "", 422),
+        ("Ftp", "ftp://files.test", "public", "", 422),
+        ("Gone", "https://gone.test", "unresolvable", "", 503),
+        ("Out", "https://api.other.test", "public", "api.acme.test", 400),
+        ("OpenClaw", "https://x.test", "public", "", 400),
+    ],
+)
+async def test_add_provider_gives_the_admin_api_refusal(
+    gateway, monkeypatch, request, name, url, resolver, allowed, status
+):
+    from plugboard import config
+
+    request.getfixturevalue(resolver)
+    if allowed:
+        monkeypatch.setenv("PLUGBOARD_PROVIDER_DOMAINS_ALLOWED", allowed)
+    body = {
+        "name": name,
+        "base_url": url,
+        "bearer_token": PROVIDER_KEY,
+        "is_active": False,
+        "egress_guard": True,
+    }
+    got_status, payload = await gateway["direct"](body)
+    assert got_status == status
+    text = await mcp_server.add_provider(name, url, PROVIDER_KEY)
+    assert text == "Error: " + mcp_server._gateway_error(status, payload, PROVIDER_KEY)
+    assert config.load_providers() == []
+
+
+async def test_key_is_scrubbed_from_a_refusal(admin_on, monkeypatch):
+    async def echo(method, path, body=None):
+        return 422, {"detail": f"bad key {body['bearer_token']}"}
+
+    monkeypatch.setattr(mcp_server, "_admin_request", echo)
+    text = await mcp_server.add_provider("A", "https://a.test", PROVIDER_KEY)
+    assert text == "Error: HTTP 422: bad key ***"
+
+
+async def test_add_provider_with_enforced_mfa(gateway, monkeypatch):
+    monkeypatch.setattr("plugboard.admin_mfa.is_required", lambda: True)
+    text = await mcp_server.add_provider("A", "https://a.test", PROVIDER_KEY)
+    assert text == (
+        "Error: the gateway enforces admin MFA: MCP admin tools cannot sign in, "
+        "use the dashboard"
+    )
+
+
+async def test_add_provider_with_a_wrong_admin_key(gateway, monkeypatch):
+    monkeypatch.setattr(mcp_server, "_ADMIN_KEY", "wrong-admin-key")
+    text = await mcp_server.add_provider("A", "https://a.test", PROVIDER_KEY)
+    assert text == "Error: the gateway refused PLUGBOARD_ADMIN_KEY"
+
+
+async def test_add_provider_gateway_down(admin_on, monkeypatch):
+    monkeypatch.setattr(mcp_server, "_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setattr(mcp_server, "_HTTP_SESSION", None)
+    try:
+        text = await mcp_server.add_provider("A", "https://a.test", PROVIDER_KEY)
+    finally:
+        if mcp_server._HTTP_SESSION is not None:
+            await mcp_server._HTTP_SESSION.close()
+    assert text == "Error: could not reach the gateway (ClientConnectorError)"
+
+
+async def test_add_provider_timeout_says_it_may_exist(admin_on, monkeypatch):
+    async def timeout(method, path, body=None):
+        raise mcp_server.AdminToolError(
+            "could not reach the gateway (TimeoutError)", maybe_applied=True
+        )
+
+    monkeypatch.setattr(mcp_server, "_admin_request", timeout)
+    text = await mcp_server.add_provider("A", "https://a.test", PROVIDER_KEY)
+    assert text == (
+        "Error: could not reach the gateway (TimeoutError): the provider may "
+        "have been created, check the dashboard before retrying"
+    )
+
+
+async def test_unexpected_success_answer_is_an_error(admin_on, monkeypatch):
+    async def odd(method, path, body=None):
+        return 201, {"detail": "gateway answer too large"}
+
+    monkeypatch.setattr(mcp_server, "_admin_request", odd)
+    text = await mcp_server.add_provider("A", "https://a.test", PROVIDER_KEY)
+    assert text == "Error: unexpected gateway answer (HTTP 201)"
+
+
+async def test_sixth_add_provider_is_refused_before_the_gateway(gateway, private):
+    for i in range(5):
+        text = await mcp_server.add_provider(f"P{i}", "http://10.0.0.5", PROVIDER_KEY)
+        assert text.startswith("Error: HTTP 422")
+    text = await mcp_server.add_provider("P5", "http://10.0.0.5", PROVIDER_KEY)
+    assert text == "Error: add_provider limit reached (5 per hour): retry in 3600s"
+    assert len(gateway["calls"]) == 5

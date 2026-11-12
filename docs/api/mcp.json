@@ -8,6 +8,38 @@
   ],
   "tools": [
     {
+      "name": "add_provider",
+      "description": "Add an OpenAI-compatible provider to the gateway (admin, stdio only).\n\n    The provider is created inactive, with \"Public addresses only\" on, so an\n    internal or private address is refused. The gateway checks it exactly\n    as POST /providers does. Then run refresh_catalog to list its models;\n    an admin activates it in the dashboard. Needs PLUGBOARD_MCP_ADMIN_TOOLS=1\n    and PLUGBOARD_ADMIN_KEY; at most 5 calls per hour. api_key is sent to\n    the gateway only and never shown back.",
+      "inputSchema": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "base_url": {
+            "title": "Base Url",
+            "type": "string"
+          },
+          "api_key": {
+            "title": "Api Key",
+            "type": "string"
+          },
+          "default_model": {
+            "default": "",
+            "title": "Default Model",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "base_url",
+          "api_key"
+        ],
+        "title": "add_providerArguments",
+        "type": "object"
+      }
+    },
+    {
       "name": "chat",
       "description": "Send a chat completion request to an LLM via Plugboard.\n\n    Use list_models to see available models.\n    Use list_models to discover available model IDs for configured providers.\n\n    Args:\n        model: Model ID as returned by list_models (e.g. my-provider:claude-sonnet-4-6)\n        message: The user message to send\n        max_tokens: Maximum tokens in the response (default: 4096)\n        temperature: Sampling temperature 0.0-1.0 (default: 0.7)\n        system_prompt: Optional system prompt to set context\n        session_id: Optional server-side session ID (PERF-1). When set,\n            Plugboard prepends the stored history so you only need to send the\n            new turn. TTL 24h, 50-turn cap, isolated per API key. Use a UUID\n            per conversation.",
       "inputSchema": {

@@ -11,6 +11,7 @@ Tools:
     - chat: Send a completion request to any available model
     - list_models: List all available LLM models
     - check_usage: Get current month usage and spending
+    - add_provider, refresh_catalog: admin tools, stdio only, off by default
 
 Resources:
     - models://list — All available models with metadata
@@ -1038,6 +1039,55 @@ async def provider_status() -> str:
         pass
 
     return "\n".join(lines)
+
+
+@mcp.tool()
+async def add_provider(
+    name: str, base_url: str, api_key: str, default_model: str = ""
+) -> str:
+    """Add an OpenAI-compatible provider to the gateway (admin, stdio only).
+
+    The provider is created inactive, with "Public addresses only" on, so an
+    internal or private address is refused. The gateway checks it exactly
+    as POST /providers does. Then run refresh_catalog to list its models;
+    an admin activates it in the dashboard. Needs PLUGBOARD_MCP_ADMIN_TOOLS=1
+    and PLUGBOARD_ADMIN_KEY; at most 5 calls per hour. api_key is sent to
+    the gateway only and never shown back.
+    """
+    try:
+        _admin_gate("add_provider")
+        _take_create_slot()
+        status, payload = await _admin_request(
+            "POST",
+            "/providers",
+            {
+                "name": name,
+                "base_url": base_url,
+                "bearer_token": api_key,
+                "default_model": default_model,
+                "is_active": False,
+                "egress_guard": True,
+            },
+        )
+    except AdminToolError as exc:
+        message = str(exc)
+        if exc.maybe_applied:
+            message += (
+                ": the provider may have been created, check the dashboard "
+                "before retrying"
+            )
+        return "Error: " + _scrub(message, api_key)
+    if status != 201:
+        return "Error: " + _gateway_error(status, payload, api_key)
+    if not isinstance(payload, dict) or not isinstance(payload.get("id"), str):
+        return f"Error: unexpected gateway answer (HTTP {status})"
+    provider_id = payload["id"]
+    text = (
+        f"Provider '{provider_id}' created, inactive, public addresses only "
+        f"({payload.get('base_url', '')}). Run refresh_catalog('{provider_id}'), "
+        "then activate it in the dashboard (Providers)."
+    )
+    return _scrub(text, api_key)
 
 
 # ── Resources ────────────────────────────────────────────────────────────────
