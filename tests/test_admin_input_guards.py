@@ -262,7 +262,10 @@ async def test_admin_key_and_session_still_work_beside_a_key_named_admin(
     assert (await _call(client, "GET", "/v1/me", None, "adminkey")).json()[
         "client_id"
     ] == "admin"
-    r = await _call(client, "POST", "/v1/chat/completions", CHAT, "adminkey")
+    # cache=False: an admin answer for this model and prompt must not stay in
+    # the shared response cache, where later files would be served it.
+    no_cache = {**CHAT, "cache": False}
+    r = await _call(client, "POST", "/v1/chat/completions", no_cache, "adminkey")
     assert r.status_code == 200, r.text
     client.cookies.set(_ADMIN_COOKIE_NAME, _create_admin_session_token())
     r = await client.get("/v1/me")
