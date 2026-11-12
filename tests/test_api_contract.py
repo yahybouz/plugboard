@@ -290,7 +290,8 @@ def test_contract_states_what_a_cli_subscription_route_refuses():
     """The committed document names both 400 codes of the chat routes, and the
     request fields a CLI subscription route refuses carry that reserve."""
     doc = json.loads((ROOT / "docs" / "api" / "openapi.json").read_text("utf-8"))
-    assert doc["info"]["version"] == "1.7.0"
+    # 1.7.0 brought these codes; 2.0.0 (the reduced /health) keeps them.
+    assert tuple(map(int, doc["info"]["version"].split("."))) >= (1, 7, 0)
     for path in ("/v1/chat/completions", "/v2/chat/completions"):
         bad_request = doc["paths"][path]["post"]["responses"]["400"]["description"]
         assert "unsupported_on_cli" in bad_request, path

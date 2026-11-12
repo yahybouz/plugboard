@@ -267,7 +267,14 @@ class TestInProcessJobs:
         prop.status_dict = prop.status_dict()
         state.model_availability_scheduler = prop
         by_id = {j["id"]: j for j in jobs.get_jobs_status(state)}
-        assert set(by_id) == {"pricing_refresh", "model_refresh", "provider_watchdog"}
+        assert set(by_id) == {
+            "pricing_refresh",
+            "model_refresh",
+            "provider_watchdog",
+            # the periodic jobs of 4.12.0 (PLU-32, PLU-34)
+            "data_retention",
+            "availability_snapshots",
+        }
         assert by_id["pricing_refresh"]["last_status"] == "success"
         assert by_id["pricing_refresh"]["schedule"] == "every 6 h (in-process)"
         assert by_id["pricing_refresh"]["next_run"] == "2026-10-18 12:00 UTC"
