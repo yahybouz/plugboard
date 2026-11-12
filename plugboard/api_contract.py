@@ -624,25 +624,24 @@ _AUTH_ERRORS = {
     "429": "Rate limit or monthly spending limit exceeded.",
 }
 _CHAT_ERRORS = {
-    "400": "Invalid request; nothing was billed: a body that is not valid JSON or not"
-    " a JSON object, a model that is not a string or is removed, missing or invalid"
-    " messages, a session_id that is a list or an object, a decision model (use"
-    " /v1/decisions), or a request the provider rejected (context too long,"
-    " parameters; error_ref).",
     **_AUTH_ERRORS,
     "429": "Rate limit or monthly spending limit exceeded, or the quota of the last"
     " provider tried is exhausted (retry_after and Retry-After when it gives a delay).",
-    "400": "code unsupported_on_cli: only CLI subscription routes (subprocess"
+    "400": "Invalid request; nothing was billed."
+    " code unsupported_on_cli: only CLI subscription routes (subprocess"
     " providers) serve the model and the request asks for what they cannot serve:"
     " tools, a tool_choice other than none or auto, functions, a function_call"
     " other than none or auto, a response_format other than text, or a content"
     " part other than text; unsupported lists them, hint says what to send;"
     " nothing was called. code context_length_exceeded: a CLI subscription route"
     " found the prompt too long for the model's context; no other provider was"
-    " tried. Without code: an invalid body (not a JSON object, messages empty or"
-    " malformed), or an HTTP provider that rejected the request: after the other"
-    " candidates were tried, or at once when it was to serve stream true live"
-    " (a live stream goes to one provider only).",
+    " tried. Without code: a body that is not valid JSON or not a JSON object, a"
+    " model that is not a string or is removed, missing or invalid messages, a"
+    " session_id that is a list or an object, a decision model (use"
+    " /v1/decisions), or a request an HTTP provider rejected (context too long,"
+    " parameters; error_ref): after the other candidates were tried, or at once"
+    " when it was to serve stream true live (a live stream goes to one provider"
+    " only).",
     "402": "The key has a monthly budget and the model no known price; nothing was called.",
     "403": "The key may not use this model.",
     "404": "No provider knows the model: no provider ID prefixes it, no provider"
