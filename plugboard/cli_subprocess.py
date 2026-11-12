@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from plugboard import envcompat
+from plugboard.circuit_breaker import is_request_too_long
 from plugboard import live_requests as _live
 
 log = logging.getLogger(__name__)
@@ -60,6 +61,9 @@ class CliSubprocessError(RuntimeError):
             limit is exhausted (decided when raised, never from the model's
             output).
         retry_after: seconds until the CLI said its quota reopens, or None.
+        request_too_long: the CLI's own error or its stderr says the messages
+            do not fit the model's context (decided like ``quota``, and never
+            set with it): the request caused it, no other provider is tried.
     """
 
     def __init__(
@@ -73,6 +77,7 @@ class CliSubprocessError(RuntimeError):
         model_id: str = "",
         quota: bool = False,
         retry_after: Optional[int] = None,
+        request_too_long: bool = False,
     ):
         super().__init__(message)
         self.exit_code = exit_code
@@ -82,6 +87,7 @@ class CliSubprocessError(RuntimeError):
         self.model_id = model_id
         self.quota = quota
         self.retry_after = retry_after
+        self.request_too_long = request_too_long
 
 
 _SPAWN_CWD_CACHE: Optional[str] = None
@@ -1191,16 +1197,20 @@ def quota_retry_after(message: str) -> Optional[int]:
 def _quota_fields(
     cli_error: str, stderr_text: str, *, rate_limited: bool = False
 ) -> Dict[str, Any]:
-    """quota/retry_after of a CliSubprocessError, never from the model's stdout.
+    """quota/retry_after/request_too_long of a CliSubprocessError, never from
+    the model's stdout.
 
     The CLI's own error decides; stderr is read only when the CLI gave none
     (a retry log there must not override "model not found"). ``rate_limited``
-    is claude's structured rate-limit sign (``_claude_rate_limited``).
+    is claude's structured rate-limit sign (``_claude_rate_limited``). A quota
+    is never also a prompt too long.
     """
-    quota = rate_limited or is_quota_error(cli_error if cli_error else stderr_text)
+    reason = cli_error if cli_error else stderr_text
+    quota = rate_limited or is_quota_error(reason)
     return {
         "quota": quota,
         "retry_after": quota_retry_after(cli_error) if quota else None,
+        "request_too_long": not quota and is_request_too_long(reason),
     }
 
 

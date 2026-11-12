@@ -1107,6 +1107,11 @@ async def forward(
                     log.warning(
                         "Subprocess provider %s failed: %s", provider["id"], exc
                     )
+                    # The CLI found the prompt too long: the same messages fail
+                    # the same way anywhere. No quarantine, no circuit count,
+                    # no other candidate; the chat route answers 400.
+                    if isinstance(exc, CliSubprocessError) and exc.request_too_long:
+                        raise
                     try:
                         from plugboard.model_quarantine import (
                             is_account_unsupported_error,

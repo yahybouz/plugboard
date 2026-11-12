@@ -1929,15 +1929,17 @@ def _provider_http_error_response(
 def _cli_error_response(
     exc: CliSubprocessError, client_id: Optional[str]
 ) -> JSONResponse:
-    """502 for a failed CLI provider, 429 when it failed on its quota.
+    """502 for a failed CLI provider, 429 when it failed on its quota, 400
+    (``context_length_exceeded``) when it found the prompt too long.
 
-    ``exc.quota`` was decided by the CLI wrapper from the CLI's own error and
-    stderr, never from the model's output. The CLI's message, stderr, pid and
-    exit code can carry local paths, account names or tokens: only the admin
-    (dashboard Playground, admin key) gets them. A client key gets a
-    reference to the server log entry.
+    ``exc.quota`` and ``exc.request_too_long`` were decided by the CLI wrapper
+    from the CLI's own error and stderr, never from the model's output. The
+    CLI's message, stderr, pid and exit code can carry local paths, account
+    names or tokens: only the admin (dashboard Playground, admin key) gets
+    them. A client key gets a reference to the server log entry.
     """
     quota = exc.quota
+    too_long = exc.request_too_long and not quota
     ref = secrets.token_hex(4)
     log.warning(
         "cli provider error ref=%s provider=%s model=%s exit=%s pid=%s: %s | stderr=%s",
@@ -1961,14 +1963,24 @@ def _cli_error_response(
         }
     else:
         name = exc.provider_name or "CLI"
+        if quota:
+            detail = _quota_detail(name, exc.retry_after)
+        elif too_long:
+            detail = (
+                f"The {name} provider rejected the request: the messages are too "
+                f"long for the model's context (reference {ref} in the gateway log)."
+            )
+        else:
+            detail = f"The {name} provider failed (reference {ref} in the gateway log)."
         content = {
-            "detail": _quota_detail(name, exc.retry_after)
-            if quota
-            else f"The {name} provider failed (reference {ref} in the gateway log).",
+            "detail": detail,
             "error_ref": ref,
             "provider_name": exc.provider_name,
             "model_id": exc.model_id,
         }
+    if too_long:
+        content["code"] = "context_length_exceeded"
+        return JSONResponse(status_code=400, content=content)
     if not quota:
         return JSONResponse(status_code=502, content=content)
     headers = _retry_after_headers(content, exc.retry_after)
