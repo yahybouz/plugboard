@@ -30,6 +30,9 @@ PREFIXED = re.compile(r"^PLUGBOARD_[A-Z0-9_]*[A-Z0-9]$")
 NOT_CONFIGURATION = {
     # Set by plugboard/decision_runtime.py for the worker it starts.
     "TMPDIR": "scripts/decision_worker.py",
+    # The key the load bench sends; read by the operator's script, not the
+    # server (PLU-17).
+    "PLUGBOARD_BENCH_KEY": "scripts/bench_concurrency.py",
 }
 
 
