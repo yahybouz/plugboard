@@ -1,4 +1,4 @@
-"""Admin routes refuse inputs the gateway would misread (BUG-60, 61, 62)."""
+"""Admin routes refuse inputs the gateway would misread (BUG-60, 61, 62, 64)."""
 
 from __future__ import annotations
 
@@ -59,6 +59,33 @@ async def test_existing_key_named_admin_is_left_as_is(admin_client, keys_store):
     r = await admin_client.post(f"/admin/keys/{old['key_id']}/rotate", headers=ADMIN)
     assert r.status_code == 201
     assert keys_store.get_key_record(r.json()["key"])["client_id"] == "admin"
+
+
+# -- BUG-64: a client key with a blank client_id ------------------------------
+
+
+@pytest.mark.parametrize("client_id", ["", " ", "\t\n"])
+async def test_key_for_blank_client_is_refused(admin_client, keys_store, client_id):
+    # The chat routes read an empty client_id as "no caller": /v1/preflight
+    # skipped the key's allowed_models, budget and rpm_limit and billed
+    # nothing, and so did /v1/chat/completions in permissive mode.
+    r = await admin_client.post(
+        "/admin/keys", headers=ADMIN, json={"client_id": client_id}
+    )
+    assert r.status_code == 422
+    # Same answer as the refusal of "admin" (BUG-60).
+    errors = r.json()["detail"]
+    assert [e["loc"] for e in errors] == [["body", "client_id"]]
+    assert errors[0]["type"] == "value_error"
+    assert keys_store.load_keys() == []
+
+
+async def test_existing_key_with_blank_client_is_left_as_is(admin_client, keys_store):
+    # Like a key named admin: the store is not touched, rotating still works.
+    old = keys_store.create_key("", "legacy")
+    r = await admin_client.post(f"/admin/keys/{old['key_id']}/rotate", headers=ADMIN)
+    assert r.status_code == 201
+    assert keys_store.get_key_record(r.json()["key"])["client_id"] == ""
 
 
 # -- BUG-61: a provider name that gives an empty id ---------------------------

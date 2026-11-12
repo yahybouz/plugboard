@@ -5110,6 +5110,15 @@ class KeyCreate(BaseModel):
             raise ValueError("client_id 'admin' is reserved for the administrator")
         return value
 
+    @field_validator("client_id")
+    @classmethod
+    def _not_blank(cls, value: str) -> str:
+        # The chat routes read an empty client_id as "no caller": no budget,
+        # rpm_limit or allowed_models, nothing billed (BUG-64).
+        if not value.strip():
+            raise ValueError("client_id must not be blank")
+        return value
+
 
 def _default_rpm_limit() -> int:
     """Production-safe default applied when a key is created without an
