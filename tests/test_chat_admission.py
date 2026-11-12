@@ -5,6 +5,10 @@ the code and in the OVH deployment. With one chat at a time and no wait, the
 cap came before the provider queue: a second application got 503 at once
 while a provider capped at one request (Ollama) could have queued it.
 
+D-43: a CLI provider takes one request at a time by default; the next ones
+wait in its bounded queue (within the request's wait budget), not in the
+CLI's spawn queue, which has no limit.
+
 PLU-15: the key is checked before a global slot is taken, and a request waits
 once: its waits for a global slot, for its session's turn and for a provider
 share one budget (10 s in all by default).
@@ -452,3 +456,115 @@ def test_wait_budget_adds_up_the_waits_only():
             assert wait_s == 0.0
 
     asyncio.run(inside())
+
+
+# ── D-43: one request at a time per CLI provider ────────────────────────────
+
+
+def _cli_provider(kind):
+    return {
+        "id": f"pbtest-{kind}",
+        "name": f"{kind} CLI test",
+        "base_url": f"subprocess://{kind}",
+        "bearer_token": "(via CLI)",
+        "default_model": "model-x",
+        "auth_source": f"subprocess:{kind}",
+        "is_active": True,
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+
+
+@pytest.fixture
+def two_clis(_providers_file, monkeypatch):
+    """Two CLI providers, no cap set on them; every CLI run waits for the
+    gate of its kind (no real CLI)."""
+    from plugboard import cli_subprocess, router
+
+    providers = [_cli_provider("claude"), _cli_provider("codex")]
+    _providers_file.write_text(json.dumps({"providers": providers}))
+    router.invalidate_models_cache()
+    runs = {"claude": 0, "codex": 0}
+    gates = {"claude": asyncio.Event(), "codex": asyncio.Event()}
+
+    async def fake_complete(kind, body, *, timeout_s=None):
+        runs[kind] += 1
+        await gates[kind].wait()
+        return {**FAKE_COMPLETION}
+
+    monkeypatch.setattr(cli_subprocess, "complete", fake_complete)
+    return runs, gates
+
+
+def test_ovh_deployment_runs_one_request_at_a_time_per_cli():
+    assert _gateway()["environment"]["PLUGBOARD_CLI_PROVIDER_MAX_INFLIGHT"] == "1"
+
+
+async def test_second_request_to_a_cli_waits_then_is_served(client, two_clis):
+    from plugboard import provider_admission
+
+    runs, gates = two_clis
+    body = _chat("pbtest-claude:model-x")
+    first = asyncio.create_task(
+        client.post("/v1/chat/completions", headers=AUTH, json=body)
+    )
+    await _until(lambda: runs["claude"] == 1)
+    second = asyncio.create_task(
+        client.post("/v1/chat/completions", headers=AUTH, json=body)
+    )
+    await _until(lambda: provider_admission.waiting("pbtest-claude") == 1)
+    queued_outside_the_cli = runs["claude"] == 1  # not in the spawn queue
+    gates["claude"].set()
+    r1, r2 = await asyncio.gather(first, second)
+    assert queued_outside_the_cli
+    assert r1.status_code == r2.status_code == 200, r2.text
+    assert runs["claude"] == 2
+
+
+async def test_second_request_to_a_busy_cli_gets_503_after_the_budget(
+    client, app_mod, two_clis, monkeypatch
+):
+    runs, gates = two_clis
+    _waits(app_mod, monkeypatch, slot_s=0.4, provider_s=0.4)
+    body = _chat("pbtest-claude:model-x")
+    first = asyncio.create_task(
+        client.post("/v1/chat/completions", headers=AUTH, json=body)
+    )
+    await _until(lambda: runs["claude"] == 1)
+    started = time.monotonic()
+    try:
+        second = await asyncio.wait_for(
+            client.post("/v1/chat/completions", headers=AUTH, json=body), 3.0
+        )
+    finally:
+        gates["claude"].set()
+    elapsed = time.monotonic() - started
+    assert (await first).status_code == 200
+    assert second.status_code == 503, second.text
+    assert second.json()["code"] == "providers_busy"
+    assert second.headers["Retry-After"] == "5"
+    assert elapsed >= 0.35, f"answered after {elapsed:.2f} s"
+    assert runs["claude"] == 1  # the CLI never ran it
+
+
+async def test_another_cli_is_not_blocked(client, two_clis):
+    runs, gates = two_clis
+    first = asyncio.create_task(
+        client.post(
+            "/v1/chat/completions", headers=AUTH, json=_chat("pbtest-claude:model-x")
+        )
+    )
+    await _until(lambda: runs["claude"] == 1)
+    gates["codex"].set()
+    try:
+        other = await asyncio.wait_for(
+            client.post(
+                "/v1/chat/completions",
+                headers=AUTH,
+                json=_chat("pbtest-codex:model-x"),
+            ),
+            2.0,
+        )
+    finally:
+        gates["claude"].set()
+    assert other.status_code == 200, other.text
+    assert (await first).status_code == 200

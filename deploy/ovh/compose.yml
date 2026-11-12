@@ -28,6 +28,9 @@ services:
       PLUGBOARD_MAX_INFLIGHT_CHAT: "8"
       PLUGBOARD_INFLIGHT_WAIT_S: "10"
       PLUGBOARD_PROVIDER_WAIT_S: "10"
+      # Each CLI provider runs one chat at a time; the next ones wait in its
+      # queue, within the same 10 s, then get 503 providers_busy (D-43).
+      PLUGBOARD_CLI_PROVIDER_MAX_INFLIGHT: "1"
       PLUGBOARD_SUBPROCESS_LIMIT: "1"
       PLUGBOARD_CODEX_SANDBOX: read-only
       # Model catalog and pricing jobs run on their default cadence (see

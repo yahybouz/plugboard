@@ -6,8 +6,11 @@ Every request in flight holds a lease on its provider, whatever the path
 many leases it hands out (D-22): a local one (``sovereign``, loopback or
 private address, or an Ollama over plain ``http://``, whatever its host)
 takes one request at a time by default
-(``PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT``); the others have no cap unless
-their record sets ``max_concurrency``. When every candidate is full, a
+(``PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT``), and so does a CLI provider
+(``PLUGBOARD_CLI_PROVIDER_MAX_INFLIGHT``, D-43: its extra requests wait here,
+within the request's wait budget, instead of the CLI's spawn queue, which
+has no limit); the others have no cap unless their record sets
+``max_concurrency``. When every candidate is full, a
 request waits at most ``PLUGBOARD_PROVIDER_WAIT_S`` for the first freed
 slot, oldest waiter first (D-23).
 
@@ -27,6 +30,10 @@ from plugboard.billing import _is_local_host, _is_ollama
 LOCAL_DEFAULT = envcompat.get_int(
     "PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT", default=1, minimum=0
 )
+# Cap of a CLI provider whose record sets no ``max_concurrency``; 0 = none.
+CLI_DEFAULT = envcompat.get_int(
+    "PLUGBOARD_CLI_PROVIDER_MAX_INFLIGHT", default=1, minimum=0
+)
 # Seconds a request waits when every candidate is full; 0 = no wait.
 WAIT_S = envcompat.get_float("PLUGBOARD_PROVIDER_WAIT_S", default=10.0, minimum=0.0)
 
@@ -39,11 +46,16 @@ _caps: Dict[str, int] = {}
 _waiters: Dict[str, Deque["asyncio.Future[str]"]] = {}
 
 
+def is_cli(provider: Dict[str, Any]) -> bool:
+    """A provider served by a vendor CLI (``auth_source`` ``subprocess:``)."""
+    return str(provider.get("auth_source") or "").startswith("subprocess:")
+
+
 def is_local(provider: Dict[str, Any]) -> bool:
     """A provider on this machine or its private network: ``sovereign``, a
     ``localhost`` / loopback / private IP literal (``billing._is_local_host``),
     or an Ollama reached over plain ``http://``. A CLI never is."""
-    if str(provider.get("auth_source") or "").startswith("subprocess:"):
+    if is_cli(provider):
         return False
     if provider.get("provider_type") == "sovereign":
         return True
@@ -57,12 +69,14 @@ def max_inflight(provider: Dict[str, Any]) -> int:
     """Requests ``provider`` may run at once; 0 means no cap.
 
     Its ``max_concurrency`` wins when it is a whole number >= 0 (not a
-    boolean); otherwise a local provider gets ``LOCAL_DEFAULT`` and the
-    others no cap.
+    boolean); otherwise a CLI provider gets ``CLI_DEFAULT``, a local one
+    ``LOCAL_DEFAULT`` and the others no cap.
     """
     value = provider.get("max_concurrency")
     if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
         return value
+    if is_cli(provider):
+        return CLI_DEFAULT
     return LOCAL_DEFAULT if is_local(provider) else 0
 
 

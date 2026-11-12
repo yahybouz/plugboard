@@ -79,6 +79,7 @@ A completed rotation also signs out every dashboard session and forgets the brow
 | `PLUGBOARD_LB_ERROR_RATE_WEIGHT` | `5.0` | Weight of the error rate in the provider score used for fallback ordering. |
 | `PLUGBOARD_LB_INFLIGHT_WEIGHT` | `0.35` | Weight of in-flight requests in that score. Streamed requests and CLI calls count as in flight. |
 | `PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT` | `1` | Concurrent requests a local provider (`sovereign`, a loopback or private address, or an Ollama over plain `http://`, whatever its host; see [concurrent requests per provider](providers-and-subscriptions.md#concurrent-requests-per-provider)) takes when its record sets no `max_concurrency`. `0` means no cap. |
+| `PLUGBOARD_CLI_PROVIDER_MAX_INFLIGHT` | `1` | Concurrent requests a CLI provider (`auth_source` `subprocess:`: Claude Code, Codex, Gemini CLI, agy) takes when its record sets no `max_concurrency`; the next ones wait for it within the request's wait budget, then get `503 providers_busy`. `0` means no cap. |
 | `PLUGBOARD_PROVIDER_WAIT_S` | `10` | How long a request waits when every candidate provider is at its cap, before `503 providers_busy`. `0` answers at once. The wait also takes no more than what is left of the request's wait budget, shared with the waits for a global slot and for the session's turn (see `PLUGBOARD_INFLIGHT_WAIT_S`). |
 | `PLUGBOARD_HTTP_POOL_SIZE` | `100` | Shared HTTP connection pool size. |
 | `PLUGBOARD_HTTP_POOL_PER_HOST` | `20` | Connections per upstream host. |
