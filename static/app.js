@@ -201,7 +201,7 @@ function table(headers, rows) {
 
 function skeleton(count) {
   const els = [];
-  for (let i = 0; i < count; i++) els.push(h("div", { className: "skeleton skeleton-card", style: "margin-bottom:0.75rem;" }));
+  for (let i = 0; i < count; i++) els.push(h("div", { className: "skeleton skeleton-card mb-3" }));
   return h("div", null, els);
 }
 
@@ -614,23 +614,23 @@ function _copyToClipboard(text, btn) {
 
 function _renderSetupSteps(preset) {
   if (!preset.setup_steps?.length) return "";
-  let html = '<div style="background:var(--bg-secondary); border:1px solid var(--border-strong); border-radius:8px; padding:0.75rem 1rem;">';
-  html += '<div style="font-weight:600; font-size:0.85rem; margin-bottom:0.5rem; color:var(--text);">Setup guide</div>';
-  html += '<ol style="margin:0; padding-left:1.25rem; font-size:0.85rem; line-height:1.5;">';
+  let html = '<div class="setup-guide">';
+  html += '<div class="setup-guide-title">Setup guide</div>';
+  html += '<ol class="setup-guide-steps">';
   preset.setup_steps.forEach(function (step, i) {
-    html += '<li style="margin-bottom:0.6rem;">';
+    html += '<li class="setup-guide-step">';
     html += '<strong>' + _escape(step.title) + '</strong>';
     if (step.description) {
-      html += '<div style="color:var(--text-muted); font-size:0.8rem; margin-top:0.15rem;">' + _escape(step.description) + '</div>';
+      html += '<div class="setup-guide-desc">' + _escape(step.description) + '</div>';
     }
     if (step.link) {
-      html += '<div style="margin-top:0.2rem;"><a href="' + _escape(_safeHref(step.link)) + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent-dark); font-size:0.8rem;">' + _escape(step.link) + ' →</a></div>';
+      html += '<div class="setup-guide-link"><a href="' + _escape(_safeHref(step.link)) + '" target="_blank" rel="noopener noreferrer">' + _escape(step.link) + ' →</a></div>';
     }
     if (step.command) {
       const cmdId = "dp-cmd-" + i;
-      html += '<div style="margin-top:0.3rem; display:flex; gap:0.4rem; align-items:center;">';
-      html += '<code id="' + cmdId + '" style="flex:1; background:var(--code-bg); color:var(--code-text); padding:0.35rem 0.6rem; border-radius:4px; font-size:0.78rem; font-family:var(--mono);">' + _escape(step.command) + '</code>';
-      html += '<button type="button" data-cmd="' + _escape(step.command) + '" class="btn btn-ghost btn-sm dp-copy-btn" style="font-size:0.75rem; padding:0.2rem 0.5rem;">Copy</button>';
+      html += '<div class="row mt-1">';
+      html += '<code id="' + cmdId + '" class="setup-guide-cmd">' + _escape(step.command) + '</code>';
+      html += '<button type="button" data-cmd="' + _escape(step.command) + '" class="btn btn-ghost btn-sm dp-copy-btn setup-guide-copy">Copy</button>';
       html += '</div>';
     }
     html += '</li>';
@@ -700,10 +700,10 @@ async function _renderPresetView() {
 
   // Header info
   let header = '';
-  if (preset.base_url) header += '<div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:0.5rem;">Endpoint : <code>' + _escape(preset.base_url) + '</code>';
+  if (preset.base_url) header += '<div class="preset-endpoint">Endpoint : <code>' + _escape(preset.base_url) + '</code>';
   if (preset.default_model) header += ' · Default model : <code>' + _escape(preset.default_model) + '</code>';
   if (preset.base_url) header += '</div>';
-  if (preset.reason) header += '<div style="background:var(--orange-bg); border:1px solid var(--orange-border); color:var(--orange-text); padding:0.5rem 0.75rem; border-radius:6px; margin-bottom:0.5rem; font-size:0.85rem;">⚠️ ' + _escape(preset.reason) + '</div>';
+  if (preset.reason) header += '<div class="alert alert-warning small mb-2">⚠️ ' + _escape(preset.reason) + '</div>';
 
   // Setup steps
   guideEl.innerHTML = header + _renderSetupSteps(preset);
@@ -764,7 +764,7 @@ async function _renderPresetView() {
   document.getElementById("dp-test-token").checked = false;
   _dpTested = null;
   if (preset.catalog) {
-    guideEl.insertAdjacentHTML("afterbegin", '<div class="alert alert-warning small" style="margin-bottom:0.5rem;">Community preset from models.dev, not verified by Plugboard. Test the key before relying on it.</div>');
+    guideEl.insertAdjacentHTML("afterbegin", '<div class="alert alert-warning small mb-2">Community preset from models.dev, not verified by Plugboard. Test the key before relying on it.</div>');
   }
 }
 
@@ -829,10 +829,10 @@ async function _checkBrokerConnection(preset) {
       return c.source === preset.oauth_source;
     });
     if (match) {
-      statusEl.innerHTML = '<span style="color:var(--green);">✓ Already connected as <strong>'
+      statusEl.innerHTML = '<span class="text-green">✓ Already connected as <strong>'
         + _escape(match.account) + '</strong></span>'
-        + ' <button type="button" class="btn btn-ghost btn-sm" id="dp-reconnect-btn" style="margin-left:0.5rem;">Reconnect</button>'
-        + ' <button type="button" class="btn btn-danger btn-sm" id="dp-disconnect-btn" style="margin-left:0.25rem;">Disconnect</button>';
+        + ' <button type="button" class="btn btn-ghost btn-sm ml-2" id="dp-reconnect-btn">Reconnect</button>'
+        + ' <button type="button" class="btn btn-danger btn-sm ml-1" id="dp-disconnect-btn">Disconnect</button>';
       createBtn.textContent = "Provider ready";
       createBtn.disabled = false;
       const reconnectBtn = document.getElementById("dp-reconnect-btn");
@@ -846,7 +846,7 @@ async function _checkBrokerConnection(preset) {
         });
       }
     } else {
-      statusEl.innerHTML = '<span style="color:var(--text-muted);">Not connected yet. Click the button to start.</span>';
+      statusEl.innerHTML = '<span class="text-muted">Not connected yet. Click the button to start.</span>';
     }
   } catch (e) { console.debug("broker status unavailable:", e); }
 }
@@ -854,7 +854,7 @@ async function _checkBrokerConnection(preset) {
 async function _checkCLI(preset) {
   const statusEl = document.getElementById("dp-status");
   const createBtn = document.getElementById("btn-dp-create");
-  statusEl.innerHTML = '<span style="color:var(--text-muted);">Checking CLI...</span>';
+  statusEl.innerHTML = '<span class="text-muted">Checking CLI...</span>';
   try {
     const res = await api("GET", "/admin/direct-providers/" + preset.key + "/check");
     const status = await res.json();
@@ -867,15 +867,15 @@ async function _checkCLI(preset) {
       } else {
         label = '✓ Logged in as <strong>' + _escape(status.account || "user") + '</strong>';
       }
-      statusEl.innerHTML = '<span style="color:var(--green);">' + label + '</span>';
+      statusEl.innerHTML = '<span class="text-green">' + label + '</span>';
       createBtn.disabled = false;
     } else {
-      statusEl.innerHTML = '<span style="color:var(--red);">✗ ' + _escape(status.error || "Not available") + '</span>';
+      statusEl.innerHTML = '<span class="text-red">✗ ' + _escape(status.error || "Not available") + '</span>';
       createBtn.disabled = true;
     }
   } catch (e) {
     if (!_presetStillSelected(preset)) return;
-    statusEl.innerHTML = '<span style="color:var(--red);">✗ Check failed: ' + _escape(e.message) + '</span>';
+    statusEl.innerHTML = '<span class="text-red">✗ Check failed: ' + _escape(e.message) + '</span>';
     createBtn.disabled = true;
   }
 }
@@ -957,7 +957,7 @@ let _oauthMsgHandler = null;
 
 async function _startBrokerFlow(preset) {
   const statusEl = document.getElementById("dp-status");
-  statusEl.innerHTML = '<span style="color:var(--text-muted);">Starting OAuth flow...</span>';
+  statusEl.innerHTML = '<span class="text-muted">Starting OAuth flow...</span>';
   try {
     const res = await api("POST", "/admin/oauth/start", { preset: preset.key });
     if (!res.ok) {
@@ -973,7 +973,7 @@ async function _startBrokerFlow(preset) {
       throw new Error("Unknown flow type: " + data.flow);
     }
   } catch (e) {
-    statusEl.innerHTML = '<span style="color:var(--red);">✗ ' + _escape(e.message) + '</span>';
+    statusEl.innerHTML = '<span class="text-red">✗ ' + _escape(e.message) + '</span>';
     toast("OAuth start failed: " + e.message, "error");
   }
 }
@@ -985,11 +985,11 @@ function _runPopupFlow(preset, data) {
   const popup = window.open(data.auth_url, "oauth_" + preset.oauth_source,
                           "width=600,height=720,left=200,top=100,noreferrer");
   if (!popup) {
-    statusEl.innerHTML = '<span style="color:var(--red);">✗ Popup blocked. Allow popups for this site.</span>';
+    statusEl.innerHTML = '<span class="text-red">✗ Popup blocked. Allow popups for this site.</span>';
     toast("Popup blocked — allow popups and retry", "error");
     return;
   }
-  statusEl.innerHTML = '<span style="color:var(--text-muted);">Waiting for authorization in the popup window...</span>';
+  statusEl.innerHTML = '<span class="text-muted">Waiting for authorization in the popup window...</span>';
 
   // Clean up any previous listener
   if (_oauthMsgHandler) window.removeEventListener("message", _oauthMsgHandler);
@@ -1001,7 +1001,7 @@ function _runPopupFlow(preset, data) {
         && event.data.source === preset.oauth_source) {
       window.removeEventListener("message", _oauthMsgHandler);
       _oauthMsgHandler = null;
-      statusEl.innerHTML = '<span style="color:var(--green);">✓ Connected as <strong>'
+      statusEl.innerHTML = '<span class="text-green">✓ Connected as <strong>'
         + _escape(event.data.account) + '</strong></span>';
       toast("Connected: " + event.data.account, "success");
       directProviderForm.style.display = "none";
@@ -1010,7 +1010,7 @@ function _runPopupFlow(preset, data) {
                && event.data.source === preset.oauth_source) {
       window.removeEventListener("message", _oauthMsgHandler);
       _oauthMsgHandler = null;
-      statusEl.innerHTML = '<span style="color:var(--red);">✗ OAuth failed: '
+      statusEl.innerHTML = '<span class="text-red">✗ OAuth failed: '
         + _escape(event.data.error) + '</span>';
       toast("OAuth failed: " + event.data.error, "error");
     }
@@ -1394,7 +1394,7 @@ async function runJob(jobId) {
     logEl.innerHTML = "";
     logEl.appendChild(h("div", { className: "card" },
       h("div", { className: "card-header" }, h("span", { className: "card-title" }, jobName + " — Output")),
-      h("pre", { style: "font-family:var(--mono);font-size:0.8rem;white-space:pre-wrap;max-height:400px;overflow:auto;color:var(--text-secondary);margin:0;" }, data.output || errMsg || "No output")
+      h("pre", { className: "log-pre" }, data.output || errMsg || "No output")
     ));
   } catch (err) { toast("Failed to run job: " + err.message, "error"); }
 }
@@ -1411,7 +1411,7 @@ async function viewJobLog(jobId) {
         h("span", { className: "card-title" }, data.name + " — last result"),
         h("span", { className: "badge badge-" + ({ success: "green", error: "red" }[data.status] || "muted") }, data.status || "unknown"),
       ),
-      h("pre", { style: "font-family:var(--mono);font-size:0.78rem;white-space:pre-wrap;max-height:500px;overflow:auto;color:var(--text-secondary);margin:0;padding:1rem;background:var(--bg);border-radius:8px;" }, data.output || "No result yet.")
+      h("pre", { className: "log-pre log-pre-boxed" }, data.output || "No result yet.")
     ));
   } catch (err) {
     logEl.innerHTML = "";

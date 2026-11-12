@@ -31,8 +31,8 @@
 <!-- Login modal -->
 <div id="login-modal" class="modal hidden">
   <div class="modal-box">
-    <div style="text-align:center;margin-bottom:1.5rem;">
-      <div class="modal-logo" style="width:52px;height:52px;border-radius:14px;"><svg width="30" height="30" aria-hidden="true"><use href="#i-logo"/></svg></div>
+    <div class="login-head">
+      <div class="modal-logo"><svg width="30" height="30" aria-hidden="true"><use href="#i-logo"/></svg></div>
       <h2>Plugboard</h2>
       <p class="muted">Enter your admin key to continue</p>
     </div>
@@ -41,7 +41,7 @@
         <input type="password" id="login-key" placeholder="Admin Key" autocomplete="off" required>
       </div>
       <div id="login-error" class="error hidden"></div>
-      <button type="submit" class="btn btn-primary btn-block" style="margin-top:0.5rem;padding:0.65rem;">Sign in</button>
+      <button type="submit" class="btn btn-primary btn-block btn-login">Sign in</button>
     </form>
   </div>
 </div>
@@ -224,32 +224,32 @@
       </div>
       <div class="content">
         <!-- Direct provider preset wizard -->
-        <div id="direct-provider-form" class="card" style="display:none; margin-bottom:1rem;">
-          <div style="padding:1.25rem;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
-              <div style="font-weight:600; font-size:1.05rem;">Add Direct Provider</div>
+        <div id="direct-provider-form" class="card mb-4" style="display:none">
+          <div class="card-body">
+            <div class="row row-between mb-4">
+              <div class="wizard-title">Add Direct Provider</div>
               <button class="btn btn-ghost btn-sm" id="btn-dp-cancel">&times; Close</button>
             </div>
             <!-- Preset selector -->
-            <div style="margin-bottom:1rem;">
-              <label for="dp-search" style="display:block; font-size:0.8rem; color:var(--text-secondary); margin-bottom:0.25rem;">Choose a provider</label>
-              <input type="search" id="dp-search" placeholder="Search providers (OpenRouter, Groq, Kimi...)" aria-describedby="dp-search-count" style="width:100%; margin-bottom:0.4rem;">
+            <div class="mb-4">
+              <label for="dp-search" class="field-label">Choose a provider</label>
+              <input type="search" id="dp-search" placeholder="Search providers (OpenRouter, Groq, Kimi...)" aria-describedby="dp-search-count" class="mb-2">
               <select id="dp-preset" aria-label="Provider preset"></select>
               <div id="dp-search-count" class="muted small" aria-live="polite"></div>
             </div>
             <!-- Setup guide (steps) -->
-            <div id="dp-setup-guide" style="margin-bottom:1rem;"></div>
+            <div id="dp-setup-guide" class="mb-4"></div>
             <!-- Input + actions -->
-            <div id="dp-input-row" style="display:flex; gap:0.5rem; align-items:center;">
-              <input type="password" id="dp-api-key" placeholder="API key" autocomplete="off" style="flex:1; padding:0.5rem 0.75rem; border:1px solid var(--border-strong); border-radius:6px;">
+            <div id="dp-input-row" class="row">
+              <input type="password" id="dp-api-key" placeholder="API key" autocomplete="off" class="grow">
               <button class="btn btn-sm" id="btn-dp-check" style="display:none;">Check CLI</button>
               <button class="btn btn-sm" id="btn-dp-test" style="display:none;">Test connection</button>
               <button class="btn btn-primary" id="btn-dp-create">Create</button>
             </div>
-            <label class="check small" id="dp-test-token-row" style="display:none; margin-top:0.4rem;">
+            <label class="check small mt-2" id="dp-test-token-row" style="display:none">
               <input type="checkbox" id="dp-test-token"> Also send one test token (billed by the provider)
             </label>
-            <output id="dp-status" aria-live="polite" style="display:block; margin-top:0.5rem; font-size:0.85rem;"></output>
+            <output id="dp-status" class="dp-status mt-2" aria-live="polite"></output>
           </div>
         </div>
         <div id="provider-form-container" class="hidden">
@@ -295,17 +295,17 @@
     </section>
 
     <!-- Device Flow modal (GitHub) -->
-    <div id="device-flow-modal" class="modal hidden" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;">
-      <div style="background:var(--bg-card); border-radius:12px; padding:2rem; max-width:440px; text-align:center; box-shadow:0 4px 20px rgba(0,0,0,0.15);">
-        <h3 style="margin:0 0 0.5rem;">Connect via GitHub Device Flow</h3>
-        <p style="color:var(--text-muted); font-size:0.9rem; margin:0 0 1rem;">Enter the code below on GitHub to authorize this dashboard.</p>
-        <div id="device-code" style="font-size:1.75rem; font-family:var(--mono); font-weight:700; letter-spacing:0.1em; background:var(--bg-secondary); padding:1rem; border-radius:8px; margin-bottom:1rem;">----</div>
-        <div style="display:flex; gap:0.5rem; justify-content:center; margin-bottom:1rem;">
+    <div id="device-flow-modal" class="modal device-flow-modal hidden" style="display:none">
+      <div class="modal-box device-flow-box">
+        <h3>Connect via GitHub Device Flow</h3>
+        <p>Enter the code below on GitHub to authorize this dashboard.</p>
+        <div id="device-code" class="device-code">----</div>
+        <div class="row row-center mb-4">
           <button class="btn btn-primary btn-sm" id="device-open-btn">Open GitHub page</button>
           <button class="btn btn-sm" id="device-copy-btn">Copy code</button>
         </div>
-        <div id="device-status" style="color:var(--text-muted); font-size:0.85rem;">Waiting for authorization...</div>
-        <div style="margin-top:1rem;">
+        <div id="device-status" class="device-status">Waiting for authorization...</div>
+        <div class="mt-4">
           <button class="btn btn-ghost btn-sm" id="device-cancel-btn">Cancel</button>
         </div>
       </div>
@@ -347,16 +347,16 @@
         <div id="pricing-note" class="muted"></div>
         <div id="pricing-table-container"></div>
         <div id="pricing-pager" class="pager"></div>
-        <div id="pricing-actions" class="hidden" style="margin-top:1rem;">
+        <div id="pricing-actions" class="hidden mt-4">
           <div class="form-inline">
-            <input type="text" id="new-model-name" placeholder="Model name" aria-label="New model name" style="width:200px;">
-            <input type="text" id="new-model-provider" placeholder="Provider (optional)" aria-label="Provider price space (optional)" style="width:170px;">
-            <input type="number" id="new-model-input" placeholder="Input $/1M" aria-label="Input price per million tokens" step="0.01" min="0" style="width:120px;">
-            <input type="number" id="new-model-output" placeholder="Output $/1M" aria-label="Output price per million tokens" step="0.01" min="0" style="width:120px;">
+            <input type="text" id="new-model-name" placeholder="Model name" aria-label="New model name" class="pricing-new-name">
+            <input type="text" id="new-model-provider" placeholder="Provider (optional)" aria-label="Provider price space (optional)" class="pricing-new-provider">
+            <input type="number" id="new-model-input" placeholder="Input $/1M" aria-label="Input price per million tokens" step="0.01" min="0" class="pricing-new-price">
+            <input type="number" id="new-model-output" placeholder="Output $/1M" aria-label="Output price per million tokens" step="0.01" min="0" class="pricing-new-price">
             <button class="btn btn-sm" id="btn-add-pricing-row">+ Add</button>
           </div>
-          <button class="btn btn-primary" id="btn-save-pricing" style="margin-top:0.75rem;" disabled>Save changes</button>
-          <span id="pricing-save-status" class="muted" aria-live="polite" style="margin-left:0.5rem;"></span>
+          <button class="btn btn-primary mt-3" id="btn-save-pricing" disabled>Save changes</button>
+          <span id="pricing-save-status" class="muted ml-2" aria-live="polite"></span>
         </div>
       </div>
     </section>

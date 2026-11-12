@@ -147,3 +147,53 @@ def test_touch_rule_still_covers_controls():
     assert rule, "the touch-screen rule is gone"
     for selector in (".btn", "input", "select", ".nav-link"):
         assert selector in rule.group(1)
+
+
+# Pages still waiting for their own task: their inline styles and labels are
+# checked once the task that cleans them removes them from these tuples.
+PENDING_HTML_SECTIONS = ("page-playground", "page-ollama")
+PENDING_JS = (
+    ("function _initOllamaEvents", "function _initPlaygroundEvents"),
+    ("function _initPlaygroundEvents", None),
+)
+INLINE_STYLE = re.compile(r'style=\\?"([^"\\]*)|style:\s*"([^"]*)"')
+
+
+def _without_pending_html(text: str) -> str:
+    for section in PENDING_HTML_SECTIONS:
+        text = re.sub(rf'<section id="{section}".*?</section>', "", text, flags=re.S)
+    return text
+
+
+def _without_pending_js(text: str) -> str:
+    for start, end in PENDING_JS:
+        i = text.find(start)
+        if i == -1:
+            continue
+        j = text.find(end, i) if end else len(text)
+        text = text[:i] + text[j if j != -1 else len(text) :]
+    return text
+
+
+def _inline_declarations(text: str) -> list[str]:
+    """Each declaration of every style attribute or ``style:`` property."""
+    found = []
+    for attr, prop in INLINE_STYLE.findall(text):
+        for decl in (attr or prop).split(";"):
+            if decl.strip():
+                found.append(re.sub(r"\s*:\s*", ":", decl.strip(), count=1))
+    return found
+
+
+def test_index_inline_styles_only_where_js_needs_them():
+    html = _without_pending_html(_read("index.html"))
+    allowed = re.compile(r"^(?:display:none|--c:#[0-9a-fA-F]{6}|position:absolute)$")
+    assert [d for d in _inline_declarations(html) if not allowed.match(d)] == []
+
+
+@pytest.mark.parametrize("name", ["app.js", "auto_update.js"])
+def test_scripts_inline_styles_only_where_js_needs_them(name):
+    js = _without_pending_js(_read(name))
+    assert "cssText" not in js
+    allowed = re.compile(r"^(?:display|width):")
+    assert [d for d in _inline_declarations(js) if not allowed.match(d)] == []
