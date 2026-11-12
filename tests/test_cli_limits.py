@@ -1,4 +1,4 @@
-"""What a CLI subscription route cannot serve (lot L3).
+"""What a CLI subscription route cannot serve.
 
 A CLI subscription route (``auth_source`` ``subprocess:...``) flattens the
 conversation to text: it cannot pass tools, a tool choice, legacy functions, a

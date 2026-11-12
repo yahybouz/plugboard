@@ -507,7 +507,8 @@ async def test_preflight_maps_a_late_refusal(off, pinged, monkeypatch):
 def test_contract_documents_provider_disabled():
     import typing
 
-    assert api_contract.CONTRACT_VERSION == "1.6.0"
+    version = tuple(int(part) for part in api_contract.CONTRACT_VERSION.split("."))
+    assert version >= (1, 6, 0)
     annotation = api_contract.PreflightResult.model_fields["error"].annotation
     literal = next(a for a in typing.get_args(annotation) if a is not type(None))
     assert "provider_disabled" in typing.get_args(literal)

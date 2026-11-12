@@ -3,7 +3,7 @@
 A CLI subscription route (a provider whose ``auth_source`` starts with
 ``subprocess:``) hands the conversation to a CLI as plain text. It cannot pass
 tools, a tool choice, legacy functions, a structured response format or a
-non-text content part: before lot L3 these were dropped silently.
+non-text content part: these used to be dropped silently.
 
 ``unsupported_on_cli()`` names each such field of an OpenAI-style chat body so
 that a caller can refuse the request with the reason ``UNSUPPORTED_ON_CLI``.

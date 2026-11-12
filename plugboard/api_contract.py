@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "1.6.0"
+CONTRACT_VERSION = "1.7.0"
 _JSON = "application/json"
 
 
@@ -47,7 +47,11 @@ class ChatMessage(_Open):
     role: str = Field(description="system, user, assistant, tool (OpenAI roles).")
     content: Optional[Union[str, List[Dict[str, Any]]]] = Field(
         default=None,
-        description="Text, or OpenAI content parts (text, image_url).",
+        description=(
+            "Text, or OpenAI content parts (text, image_url, input_audio...). "
+            "A CLI subscription route (subprocess provider) serves text parts "
+            "only: any other part gets 400 unsupported_on_cli."
+        ),
     )
 
 
@@ -79,9 +83,33 @@ class ChatCompletionRequest(_Open):
     )
     max_completion_tokens: Optional[int] = None
     stop: Optional[Union[str, List[str]]] = None
-    tools: Optional[List[Dict[str, Any]]] = None
-    tool_choice: Optional[Union[str, Dict[str, Any]]] = None
-    response_format: Optional[Dict[str, Any]] = None
+    tools: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description=(
+            "OpenAI tool definitions. A CLI subscription route (subprocess "
+            "provider) does not serve them: a non-empty list gets 400 "
+            "unsupported_on_cli, unless another provider of the same model "
+            "serves the request."
+        ),
+    )
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = Field(
+        default=None,
+        description=(
+            "OpenAI tool choice. A CLI subscription route (subprocess provider) "
+            "does not serve a value other than none or auto: 400 "
+            "unsupported_on_cli, unless another provider of the same model "
+            "serves the request."
+        ),
+    )
+    response_format: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "OpenAI structured output (json_object, json_schema). A CLI "
+            "subscription route (subprocess provider) serves type text only: "
+            "any other gets 400 unsupported_on_cli, unless another provider of "
+            "the same model serves the request."
+        ),
+    )
     cache: bool = Field(
         default=True,
         description="Plugboard: false bypasses the response cache for this call.",
@@ -496,15 +524,27 @@ class ErrorResponse(_Open):
     `hint`. A chat whose candidate providers all stayed at their concurrency
     cap (503) adds `code` providers_busy, `retry_after` and Retry-After. A
     chat model of a provider the admin turned off (503) adds `code`
-    provider_disabled and `hint`, without Retry-After."""
+    provider_disabled and `hint`, without Retry-After. A chat request only
+    CLI subscription routes could serve, asking for what they cannot serve
+    (400), adds `code` unsupported_on_cli, `unsupported` (the refused fields)
+    and `hint`. A prompt a CLI subscription route finds too long (400) adds
+    `code` context_length_exceeded, `error_ref`, `provider_name` and
+    `model_id`."""
 
     detail: Union[str, List[Any], Dict[str, Any]]
     retry_after: Optional[int] = None
     code: Optional[str] = Field(
         default=None,
         description="Stable reason for programs, when the route gives one: "
+        "unsupported_on_cli (chat, 400), context_length_exceeded (chat, 400), "
         "model_not_found (chat, 404), providers_busy (chat, 503), "
         "provider_disabled (chat, 503).",
+    )
+    unsupported: Optional[List[str]] = Field(
+        default=None,
+        description="With code unsupported_on_cli: the request fields a CLI "
+        "subscription route cannot serve (tools, tool_choice, functions, "
+        "function_call, response_format, content:<part type>).",
     )
     hint: Optional[str] = Field(
         default=None, description="What to do next, when the gateway knows."
@@ -575,6 +615,16 @@ _CHAT_ERRORS = {
     **_AUTH_ERRORS,
     "429": "Rate limit or monthly spending limit exceeded, or the quota of the last"
     " provider tried is exhausted (retry_after and Retry-After when it gives a delay).",
+    "400": "code unsupported_on_cli: only CLI subscription routes (subprocess"
+    " providers) serve the model and the request asks for what they cannot serve:"
+    " tools, a tool_choice other than none or auto, functions, a function_call"
+    " other than none or auto, a response_format other than text, or a content"
+    " part other than text; unsupported lists them, hint says what to send;"
+    " nothing was called. code context_length_exceeded: a CLI subscription route"
+    " found the prompt too long for the model's context; no other provider was"
+    " tried. Without code: an invalid body (not a JSON object, messages empty or"
+    " malformed), or an HTTP provider that rejected the request, after the other"
+    " candidates were tried.",
     "402": "The key has a monthly budget and the model no known price; nothing was called.",
     "403": "The key may not use this model.",
     "404": "No provider knows the model: no provider ID prefixes it, no provider"

@@ -947,7 +947,12 @@ async def forward(
     Forward a /v1/chat/completions request to the resolved provider.
     Retries on transient errors per provider, then falls back to next provider.
     An error saying the context is too long is not retried: the same request
-    would fail again, so it goes straight to the next provider.
+    would fail again. From an HTTP provider it goes straight to the next
+    provider; from a CLI subscription route (``request_too_long``) it is
+    raised at once, and no other provider is tried.
+    A request with a field a CLI route cannot serve (``unsupported_on_cli``)
+    leaves the CLI routes out; when only they serve the model,
+    ``UnsupportedOnCliError`` is raised before any call.
     A provider at its concurrency cap is skipped; when every candidate left
     is, the request waits up to ``PLUGBOARD_PROVIDER_WAIT_S`` for the first
     freed slot, then raises ``ProvidersBusyError``.
