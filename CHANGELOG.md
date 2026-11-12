@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.11.1] — 2026-11-12
+
 ### Fixed
 
 - **A client key could be named `admin`** (BUG-60): `POST /admin/keys` accepted the `client_id` `admin`, and the gateway takes a key's `client_id` as the caller's identity, so such a key was treated as the administrator on the chat routes: no monthly budget, no `402` for an unknown price, no `rpm_limit`, no `allowed_models`; the administrator's response cache; provider error details, busy provider IDs and `X-Price-Key`; every call in `GET /v1/inflight`. `admin`, in any case and with surrounding spaces, is now refused with `422`, like the route's other invalid fields; nothing is written, and the dashboard's **Create key** form shows the refusal instead of reporting a key created. Existing keys are not changed, and rotating one keeps its `client_id`: look for them with `GET /admin/keys/client/admin`, revoke them and create keys under another client ID.
