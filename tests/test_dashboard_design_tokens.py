@@ -149,27 +149,7 @@ def test_touch_rule_still_covers_controls():
         assert selector in rule.group(1)
 
 
-# Pages still waiting for their own task: their inline styles and labels are
-# checked once the task that cleans them removes them from these tuples.
-PENDING_HTML_SECTIONS = ("page-ollama",)
-PENDING_JS = (("function _initOllamaEvents", "function _initPlaygroundEvents"),)
 INLINE_STYLE = re.compile(r'style=\\?"([^"\\]*)|style:\s*"([^"]*)"')
-
-
-def _without_pending_html(text: str) -> str:
-    for section in PENDING_HTML_SECTIONS:
-        text = re.sub(rf'<section id="{section}".*?</section>', "", text, flags=re.S)
-    return text
-
-
-def _without_pending_js(text: str) -> str:
-    for start, end in PENDING_JS:
-        i = text.find(start)
-        if i == -1:
-            continue
-        j = text.find(end, i) if end else len(text)
-        text = text[:i] + text[j if j != -1 else len(text) :]
-    return text
 
 
 def _inline_declarations(text: str) -> list[str]:
@@ -183,14 +163,14 @@ def _inline_declarations(text: str) -> list[str]:
 
 
 def test_index_inline_styles_only_where_js_needs_them():
-    html = _without_pending_html(_read("index.html"))
+    html = _read("index.html")
     allowed = re.compile(r"^(?:display:none|--c:#[0-9a-fA-F]{6}|position:absolute)$")
     assert [d for d in _inline_declarations(html) if not allowed.match(d)] == []
 
 
 @pytest.mark.parametrize("name", ["app.js", "auto_update.js", "portal.js"])
 def test_scripts_inline_styles_only_where_js_needs_them(name):
-    js = _without_pending_js(_read(name))
+    js = _read(name)
     assert "cssText" not in js
     allowed = re.compile(r"^(?:display|width):")
     assert [d for d in _inline_declarations(js) if not allowed.match(d)] == []
@@ -290,6 +270,12 @@ FORBIDDEN_LABELS = (
     "Add Custom Provider",
     "Check Internet",
     "Check All",
+    "Sovereign Provider",
+    "Pull Model",
+    "Installed Models",
+    "Cloud Catalogue",
+    "catalogue is empty",
+    "cloud catalogue:",
 )
 FRENCH = re.compile(r"[àâçéèêëîïôûùüÿœÀÂÇÉÈÊËÎÏÔÛÙÜŸŒ]")
 # "Loading..." and `+ "..."` become "…"; a bare "..." placeholder stays.
@@ -298,7 +284,7 @@ ELLIPSIS = re.compile(r'\w\.\.\.|\+\s*"\.\.\."')
 
 @pytest.mark.parametrize("name", LABEL_FILES)
 def test_labels_follow_the_copy_rules(name):
-    text = _without_pending_js(_without_pending_html(_read(name)))
+    text = _read(name)
     assert [label for label in FORBIDDEN_LABELS if label in text] == []
     assert ELLIPSIS.findall(text) == []
     assert FRENCH.findall(text) == []

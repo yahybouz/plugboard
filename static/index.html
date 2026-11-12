@@ -376,44 +376,44 @@
     <!-- Ollama -->
     <section id="page-ollama" class="page">
       <div class="topbar">
-        <h2>Ollama — Sovereign Provider</h2>
+        <h2>Ollama — sovereign provider</h2>
         <div class="topbar-actions">
-          <button class="btn btn-primary btn-sm" id="btn-pull-model">+ Pull Model</button>
+          <button class="btn btn-primary btn-sm" id="btn-pull-model">+ Pull model</button>
           <button class="btn btn-sm" id="btn-refresh-ollama">Refresh</button>
         </div>
       </div>
       <div class="content">
         <div class="stats-grid" id="ollama-status"></div>
-        <div class="card" id="ollama-settings" style="margin-bottom:1rem;">
-          <div style="padding:1rem;">
+        <div class="card mb-4" id="ollama-settings">
+          <div class="card-body-sm">
             <label class="check" for="ollama-local-downloads">
-              <input type="checkbox" id="ollama-local-downloads" data-testid="ollama-local-downloads"> <span style="font-weight:600; color:var(--text);">Local model downloads</span>
+              <input type="checkbox" id="ollama-local-downloads" data-testid="ollama-local-downloads"> <span class="check-title">Local model downloads</span>
             </label>
-            <div class="muted" style="font-size:0.8rem; margin-top:0.25rem;">Off: only cloud models (:cloud) can be added — recommended on small VMs.</div>
-            <div class="muted" id="ollama-disk" style="font-size:0.8rem; margin-top:0.25rem;"></div>
+            <div class="muted text-xs mt-1">Off: only cloud models (:cloud) can be added — recommended on small VMs.</div>
+            <div class="muted text-xs mt-1" id="ollama-disk"></div>
           </div>
         </div>
-        <div id="ollama-pull-form" class="card" style="display:none; margin-bottom:1rem;">
-          <div style="padding:1rem;">
-            <div style="font-weight:600; margin-bottom:0.5rem;">Pull Model</div>
-            <div style="display:flex; gap:0.5rem; align-items:center;">
-              <input type="text" id="ollama-model-name" placeholder="e.g. llama3, mistral:7b, phi3" style="flex:1; padding:0.4rem 0.6rem; border:1px solid var(--border-strong); border-radius:6px;">
+        <div id="ollama-pull-form" class="card mb-4" style="display:none">
+          <div class="card-body-sm">
+            <div class="fw-semibold mb-2">Pull model</div>
+            <div class="row">
+              <input type="text" id="ollama-model-name" placeholder="e.g. llama3, mistral:7b, phi3" class="grow">
               <button class="btn btn-primary btn-sm" id="btn-start-pull">Pull</button>
               <button class="btn btn-ghost btn-sm" id="btn-cancel-pull">Cancel</button>
             </div>
-            <div class="muted" id="ollama-pull-hint" style="font-size:0.75rem; margin-top:0.35rem;"></div>
-            <div id="ollama-pull-progress" style="display:none; margin-top:0.5rem;">
-              <div style="background:var(--bg-secondary); border-radius:4px; height:8px; overflow:hidden;">
-                <div id="ollama-progress-fill" style="background:var(--accent); height:100%; width:0%; transition:width 0.3s;"></div>
+            <div class="muted text-xs mt-1" id="ollama-pull-hint"></div>
+            <div id="ollama-pull-progress" class="mt-2" style="display:none">
+              <div class="progress">
+                <div id="ollama-progress-fill" class="progress-fill"></div>
               </div>
-              <div class="muted" id="ollama-pull-status" style="font-size:0.75rem; margin-top:0.25rem;"></div>
+              <div class="muted text-xs mt-1" id="ollama-pull-status"></div>
             </div>
           </div>
         </div>
-        <div class="section-title">Installed Models</div>
+        <div class="section-title">Installed models</div>
         <div id="ollama-models-container"></div>
-        <div class="section-title">Cloud Catalogue</div>
-        <div class="muted" style="font-size:0.8rem; margin-bottom:0.5rem;">Ollama Cloud models are manifest-only (a few KB on disk). Some need a paid Ollama plan: the free plan returns an error when they are used.</div>
+        <div class="section-title">Cloud catalog</div>
+        <div class="muted text-xs mb-2">Ollama Cloud models are manifest-only (a few KB on disk). Some need a paid Ollama plan: the free plan returns an error when they are used.</div>
         <div id="ollama-cloud-container"></div>
       </div>
     </section>

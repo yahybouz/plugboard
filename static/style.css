@@ -627,6 +627,15 @@ code, kbd, .mono { font-family: var(--mono); }
 .row-center { justify-content: center; }
 .grow { flex: 1; min-width: 0; }
 .card-body { padding: var(--space-5); }
+.card-body-sm { padding: var(--space-4); }
+.btn.text-red, .btn.text-red:hover { color: var(--red); }
+
+/* Ollama page */
+.check-title { font-weight: var(--fw-semibold); color: var(--text); }
+.empty-note { padding: var(--space-4); }
+.stat-card .stat-value.stat-value-sm { font-size: var(--fs-sm); }
+.progress { background: var(--bg-secondary); border-radius: var(--radius-xs); height: 8px; overflow: hidden; }
+.progress-fill { background: var(--accent); height: 100%; width: 0; transition: width 0.3s; }
 
 /* Sign-in dialog */
 .login-head { text-align: center; margin-bottom: var(--space-6); }

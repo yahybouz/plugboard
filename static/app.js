@@ -1512,7 +1512,7 @@ async function loadOllamaCloudCatalog() {
     const models = data.models || [];
     el.innerHTML = "";
     if (models.length === 0) {
-      el.appendChild(h("div", { className: "muted", style: "padding:1rem;" }, "The public cloud catalogue is empty or unreachable."));
+      el.appendChild(h("div", { className: "muted empty-note" }, "The public cloud catalog is empty or unreachable."));
       return;
     }
     // Adding a cloud model goes through the local Ollama: offer nothing while
@@ -1533,7 +1533,7 @@ async function loadOllamaCloudCatalog() {
       else if (m.installed) badge = h("span", { className: "badge badge-green" }, "installed");
       else badge = h("span", { className: "badge badge-muted" }, "available");
       tbody.appendChild(h("tr", null,
-        h("td", null, h("span", { style: "font-weight:600;" }, id)),
+        h("td", null, h("span", { className: "fw-semibold" }, id)),
         h("td", null, badge),
         h("td", null, (!online || m.installed) ? null : h("button", { className: "btn btn-ghost btn-sm", onClick: function () { _pullFromCatalog(id); } }, "Add"))
       ));
@@ -1542,7 +1542,7 @@ async function loadOllamaCloudCatalog() {
     el.appendChild(table);
   } catch (err) {
     el.innerHTML = "";
-    el.appendChild(h("div", { className: "alert alert-error" }, "Failed to load the cloud catalogue: " + err.message));
+    el.appendChild(h("div", { className: "alert alert-error" }, "Failed to load the cloud catalog: " + err.message));
   }
 }
 
@@ -1565,7 +1565,7 @@ async function loadOllamaStatus() {
     ));
     el.appendChild(h("div", { className: "stat-card" },
       h("div", { className: "stat-label" }, "URL"),
-      h("div", { className: "stat-value", style: "font-size:0.85rem;" }, d.url)
+      h("div", { className: "stat-value stat-value-sm" }, d.url)
     ));
     el.appendChild(h("div", { className: "stat-card" },
       h("div", { className: "stat-label" }, "Provider"),
@@ -1594,7 +1594,7 @@ async function loadOllamaModels() {
     const models = data.models || [];
     if (models.length === 0) {
       el.innerHTML = "";
-      el.appendChild(h("div", { className: "muted", style: "padding:1rem;" }, "No models installed. Use \"+ Pull Model\" to download one."));
+      el.appendChild(h("div", { className: "muted empty-note" }, "No models installed. Use \"+ Pull model\" to download one."));
       return;
     }
     const table = h("table", { className: "data-table" },
@@ -1614,13 +1614,13 @@ async function loadOllamaModels() {
       const modified = m.modified_at ? new Date(m.modified_at).toLocaleDateString() : "-";
       tbody.appendChild(h("tr", null,
         h("td", null,
-          h("span", { style: "font-weight:600;" }, name)
+          h("span", { className: "fw-semibold" }, name)
         ),
         h("td", null, size),
         h("td", null, modified),
         h("td", null,
           h("button", { className: "btn btn-ghost btn-sm", onClick: function () { showOllamaModelInfo(name); } }, "Info"),
-          h("button", { className: "btn btn-ghost btn-sm", style: "color:var(--red);", onClick: function () { deleteOllamaModel(name); } }, "Delete")
+          h("button", { className: "btn btn-ghost btn-sm text-red", onClick: function () { deleteOllamaModel(name); } }, "Delete")
         )
       ));
     });
@@ -1639,7 +1639,7 @@ async function pullOllamaModel(name) {
   const statusEl = document.getElementById("ollama-pull-status");
   progressEl.style.display = "block";
   fillEl.style.width = "0%";
-  statusEl.textContent = "Starting pull for " + name + "...";
+  statusEl.textContent = "Starting pull for " + name + "…";
 
   try {
     const res = await fetch("/admin/ollama/models/pull", {
