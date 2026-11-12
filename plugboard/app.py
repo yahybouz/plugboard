@@ -62,7 +62,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from contextlib import asynccontextmanager
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -5096,6 +5096,15 @@ class KeyCreate(BaseModel):
     ] = None
     rpm_limit: Optional[int] = None  # requests per minute
     org_id: str = ""  # organisation (empty = no org)
+
+    @field_validator("client_id")
+    @classmethod
+    def _not_the_admin(cls, value: str) -> str:
+        # A key resolves to its client_id, and "admin" is the admin's identity
+        # (every in-flight call, no model restriction): never issue it (BUG-60).
+        if value.strip().lower() == "admin":
+            raise ValueError("client_id 'admin' is reserved for the administrator")
+        return value
 
 
 def _default_rpm_limit() -> int:

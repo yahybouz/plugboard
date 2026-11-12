@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A client key could be named `admin`** (BUG-60): `POST /admin/keys` accepted the `client_id` `admin`, and the gateway takes a key's `client_id` as the caller's identity, so such a key was treated as the administrator in places (every call in `GET /v1/inflight`, no `allowed_models` restriction). `admin`, in any case and with surrounding spaces, is now refused with `422`, like the route's other invalid fields; nothing is written. Existing keys are not changed.
+
 ## [4.11.0] — 2026-11-12
 
 ### Added
