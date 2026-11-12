@@ -109,31 +109,31 @@ def _day_cutoff(now: datetime, days: int) -> Optional[str]:
     return cutoff.replace(tzinfo=None).isoformat(timespec="seconds")
 
 
+def _purge_and_compact(path: Path, purge: Callable[[], int]) -> Dict[str, Any]:
+    """Purge one store, then compact it; a failure is reported, never raised.
+
+    The purge is committed before compaction starts: when compaction fails,
+    the rows are gone for good and the report keeps their count.
+    """
+    entry: Dict[str, Any] = {"deleted": 0, "compacted": False}
+    try:
+        entry["deleted"] = purge()
+        entry["compacted"] = storage.compact_sqlite(path)
+    except (sqlite3.Error, OSError) as exc:
+        message = f"{type(exc).__name__}: {exc}"[:_ERROR_MAX_CHARS]
+        log.warning("Retention pass: %s", message)
+        entry["error"] = message
+    return entry
+
+
 def _purge_store(
     path: Path, table: str, where: str, cutoff: Optional[str]
 ) -> Dict[str, Any]:
     if cutoff is None:
         return {"deleted": 0, "compacted": False, "kept": "all"}
-    deleted = storage.purge_sqlite_rows(path, table, where, (cutoff,))
-    return {"deleted": deleted, "compacted": storage.compact_sqlite(path)}
-
-
-def _purge_sessions() -> Dict[str, Any]:
-    deleted = session_store.purge_expired()
-    return {
-        "deleted": deleted,
-        "compacted": storage.compact_sqlite(session_store._DB_PATH),
-    }
-
-
-def _guarded(step: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
-    """Run one store's purge; a failure is reported, never raised."""
-    try:
-        return step()
-    except (sqlite3.Error, OSError) as exc:
-        message = f"{type(exc).__name__}: {exc}"[:_ERROR_MAX_CHARS]
-        log.warning("Retention pass: %s", message)
-        return {"deleted": 0, "compacted": False, "error": message}
+    return _purge_and_compact(
+        path, lambda: storage.purge_sqlite_rows(path, table, where, (cutoff,))
+    )
 
 
 def run_retention(now: Optional[datetime] = None) -> Dict[str, Any]:
@@ -148,39 +148,33 @@ def run_retention(now: Optional[datetime] = None) -> Dict[str, Any]:
     conf = settings()
     month_cutoff = _month_cutoff(now, conf["usage_months"])
     stores = {
-        "usage": _guarded(
-            lambda: _purge_store(
-                usage._DB_PATH,
-                "usage_entries",
-                "month < ? AND month GLOB '[0-9][0-9][0-9][0-9]_[0-9][0-9]'",
-                month_cutoff,
-            )
+        "usage": _purge_store(
+            usage._DB_PATH,
+            "usage_entries",
+            "month < ? AND month GLOB '[0-9][0-9][0-9][0-9]_[0-9][0-9]'",
+            month_cutoff,
         ),
-        "audit": _guarded(
-            lambda: _purge_store(
-                audit._DB_PATH,
-                "audit_log",
-                "ts < ?",
-                _day_cutoff(now, conf["audit_days"]),
-            )
+        "audit": _purge_store(
+            audit._DB_PATH,
+            "audit_log",
+            "ts < ?",
+            _day_cutoff(now, conf["audit_days"]),
         ),
-        "watchdog": _guarded(
-            lambda: _purge_store(
-                provider_watchdog._DB_PATH,
-                "watchdog_events",
-                "ts < ?",
-                _day_cutoff(now, conf["watchdog_days"]),
-            )
+        "watchdog": _purge_store(
+            provider_watchdog._DB_PATH,
+            "watchdog_events",
+            "ts < ?",
+            _day_cutoff(now, conf["watchdog_days"]),
         ),
-        "monitoring": _guarded(
-            lambda: _purge_store(
-                monitoring._DB_PATH,
-                "monitoring_snapshots",
-                "ts < ?",
-                _day_cutoff(now, conf["monitoring_days"]),
-            )
+        "monitoring": _purge_store(
+            monitoring._DB_PATH,
+            "monitoring_snapshots",
+            "ts < ?",
+            _day_cutoff(now, conf["monitoring_days"]),
         ),
-        "sessions": _guarded(_purge_sessions),
+        "sessions": _purge_and_compact(
+            session_store._DB_PATH, session_store.purge_expired
+        ),
     }
     deleted_total = sum(store["deleted"] for store in stores.values())
     report = {

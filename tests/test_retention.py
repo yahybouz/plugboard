@@ -409,3 +409,27 @@ def test_compaction_of_a_real_wal_store(stores):
     assert report["stores"]["watchdog"]["compacted"] is True
     assert stores["watchdog"].stat().st_size < size_before
     assert column(stores["watchdog"], "watchdog_events", "id") == ["recent"]
+
+
+def test_a_failed_compaction_keeps_the_deleted_count(stores, monkeypatch):
+    from plugboard import audit, retention, storage
+
+    real_compact = storage.compact_sqlite
+
+    def locked(path, *args, **kwargs):
+        if path == stores["watchdog"]:
+            raise sqlite3.OperationalError("database is locked")
+        return real_compact(path, *args, **kwargs)
+
+    monkeypatch.setattr(storage, "compact_sqlite", locked)
+    seed_watchdog([_event_row("w-old", "2026-10-01T00:00:00.000Z")])
+
+    report = retention.run_retention(NOW)
+
+    watchdog = report["stores"]["watchdog"]
+    assert watchdog["deleted"] == 1
+    assert watchdog["compacted"] is False
+    assert watchdog["error"] == "OperationalError: database is locked"
+    assert report["deleted_total"] == 1
+    assert report["errors"] == 1
+    assert len(audit.get_audit_log(action="retention.run")) == 1
