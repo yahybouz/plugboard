@@ -10,7 +10,8 @@ Usage:
 Environment variables:
     PLUGBOARD_URL       — Plugboard base URL (default: http://localhost:8765)
     PLUGBOARD_API_KEY   — Client API key for chat/usage
-    PLUGBOARD_ADMIN_KEY — Admin key for provider status (stdio only)
+    PLUGBOARD_ADMIN_KEY — Admin key for provider status and admin tools (stdio only)
+    PLUGBOARD_MCP_ADMIN_TOOLS — 1 turns on add_provider and refresh_catalog (stdio only)
     (SSE/HTTP keep only the variables in _NETWORK_ENV; other secrets are dropped)
     PLUGBOARD_MCP_TIMEOUT — Timeout for LLM calls in seconds (default: 900)
     PLUGBOARD_MCP_TOKEN — Bearer token required by SSE/HTTP (32+ characters)
