@@ -51,6 +51,8 @@ About the image:
 
 The `full` image installs exact releases of the provider CLIs, never `latest`. The versions live in one place only, the `ARG` lines of the `full` stage in the `Dockerfile`: `GEMINI_CLI_VERSION`, `CLAUDE_CODE_VERSION` and `CODEX_VERSION` for the npm packages, and `AGY_URL` with its `AGY_SHA512` checksum for the Antigravity CLI (`agy`). To upgrade a CLI, edit its line in the `Dockerfile`, rebuild the `full` image and redeploy. Compose files and deployment scripts do not pass these versions again (`tests/test_cli_versions_single_source.py` refuses a second copy), so every deployment builds the same releases. A one-off local build may still override one with `docker build --target full --build-arg CODEX_VERSION=<version> .`. The private OVH host installs the same Codex, Claude Code and `agy` releases natively with `deploy/ovh/install-host-tools.sh`, which carries one checksum per release: when the host tools follow, bump that script in the same change; the same test keeps it aligned with the `Dockerfile`.
 
+The UAT gateway's configuration (Compose file, seccomp and AppArmor profiles, deployer entry, env variable names without values) is versioned in `deploy/uat/`; see [deploy/uat/README.md](../../deploy/uat/README.md). Its deployer entry carries no `build_args` either.
+
 ## Without Docker (systemd)
 
 ```bash

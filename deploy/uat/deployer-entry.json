@@ -1,0 +1,29 @@
+{
+  "projet": "plugboard",
+  "depot": "/srv/dev/plugboard",
+  "git_user": "agent",
+  "racine": "/srv/plugboard",
+  "env_file": "/srv/plugboard/compose.env",
+  "compose_files": [
+    "/srv/plugboard/compose.yml"
+  ],
+  "services": [
+    "gateway"
+  ],
+  "images": [
+    {
+      "var": "PLUGBOARD_IMAGE",
+      "prefixe": "plugboard",
+      "dockerfile": "Dockerfile",
+      "target": "full",
+      "conteneur": "uat-plugboard-gateway-1"
+    }
+  ],
+  "sante": [
+    {
+      "url": "http://127.0.0.1:18765/health",
+      "conteneur": "uat-plugboard-gateway-1"
+    }
+  ],
+  "sante_delai_s": 120
+}

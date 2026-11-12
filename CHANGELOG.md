@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - **`plugboard.cli_limits` names what a CLI subscription route cannot serve** (lot L3): `unsupported_on_cli(body)` lists, in a fixed order, the fields of a chat body that a `subprocess:` route would drop (`tools`, `tool_choice` other than `none`/`auto`, `functions`, `function_call` other than `none`/`auto`, a `response_format` other than text, and each non-text content part as `content:<type>`), with the reason code `unsupported_on_cli`. Nothing calls it yet.
+- **The UAT deployment configuration is versioned in `deploy/uat/`, without secrets**: byte-for-byte copies of the host's `compose.yml`, seccomp profile and AppArmor profile, with their SHA-256 in `deploy/uat/README.md` so a root operator can check the host for drift; `compose.env.example` and `runtime.env.example` list the variable names only; `deployer-entry.json` is the deployer's `plugboard` entry without `build_args`, since the CLI versions come from the `Dockerfile`. Only the values of `secrets/runtime.env` stay out of the repository. `tests/test_uat_deploy_config.py` keeps the digests, the loopback port, the dropped capabilities and the absence of secret values in check.
 
 ### Changed
 
