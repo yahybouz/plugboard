@@ -7,8 +7,11 @@ selects another client. Keys, clients and tokens are synthetic.
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import sqlite3
+import sys
 from pathlib import Path
 
 import pytest
@@ -278,3 +281,224 @@ async def test_inflight_refuses_the_admin_identity(as_client):
     as_client["client_id"] = "admin"
     assert (await mcp_server.inflight_requests()).startswith("Error:")
     assert as_client["calls"] == [("/v1/me", False)]
+
+
+# ── Task 5: stdio, streamable HTTP and SSE ───────────────────────────────────
+
+ROOT = Path(__file__).resolve().parents[1]
+ALPHA_KEY = "pb_synthetic_alpha"
+TOKEN = "T" * 16 + "synthetic-mcp-identity-token"  # 44 characters
+
+
+@pytest.fixture
+async def fake_gateway():
+    """Gateway stand-in on a loopback port: only ``ALPHA_KEY`` is a client."""
+    from aiohttp import web
+
+    async def me(request):
+        if request.headers.get("Authorization") == f"Bearer {ALPHA_KEY}":
+            return web.json_response({"client_id": "alpha"})
+        return web.json_response({"detail": "Invalid API key"}, status=401)
+
+    app = web.Application()
+    app.router.add_get("/v1/me", me)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        await runner.cleanup()
+
+
+@pytest.fixture
+def net_data(tmp_path):
+    """Data directory: the registry, and beta's CP-B already marked applied."""
+    data = tmp_path / "data"
+    data.mkdir(mode=0o700)
+    _write_registry(data / "registry.json")
+    conn = sqlite3.connect(str(data / "client_updates.db"))
+    try:
+        conn.execute(mcp_server._TRACKING_CREATE)
+        conn.execute(
+            "INSERT INTO applied_updates (client_id, prompt_id, applied_at) "
+            "VALUES ('beta', 'CP-B', '2026-11-12T00:00:00Z')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return data
+
+
+@pytest.fixture
+async def net_server(monkeypatch, fake_gateway, net_data):
+    """A fresh server module set up for SSE/HTTP, acting with ``ALPHA_KEY``."""
+    import plugboard
+
+    # Restored on teardown, so later tests get back the module they imported.
+    monkeypatch.setattr(plugboard, "mcp_server", mcp_server, raising=False)
+    monkeypatch.delitem(sys.modules, "plugboard.mcp_server", raising=False)
+    import plugboard.mcp_server as ms
+
+    ms.configure_network_transport(TOKEN)
+    monkeypatch.setattr(ms, "_BASE_URL", fake_gateway)
+    monkeypatch.setattr(ms, "_API_KEY", ALPHA_KEY)
+    monkeypatch.setattr(ms, "_HTTP_SESSION", None)
+    monkeypatch.setattr(ms, "_REGISTRY_PATH", net_data / "registry.json")
+    monkeypatch.setattr(ms, "_DATA_DIR", net_data)
+    monkeypatch.setattr(ms, "_TRACKING_DB", net_data / "client_updates.db")
+    monkeypatch.setattr(ms, "_TRACKING_SCHEMA_READY", False)
+    try:
+        yield ms
+    finally:
+        if ms._HTTP_SESSION is not None:
+            await ms._HTTP_SESSION.close()
+        sys.modules.pop("plugboard.mcp_server", None)
+
+
+async def _scenario(call, db: Path) -> None:
+    """As alpha, whatever client_id is sent, beta's data stays out of reach."""
+    refused = await call("check_updates", {"client_id": "beta"})
+    assert refused.startswith("Error:") and "`CP-B`" not in refused
+    own = await call("check_updates", {})
+    assert "`CP-A`" in own and "`CP-B`" not in own
+    other = await call("mark_applied", {"prompt_id": "CP-B"})
+    assert other == "Error: prompt 'CP-B' not found in registry"
+    claimed = await call("mark_applied", {"client_id": "beta", "prompt_id": "CP-AB"})
+    assert claimed.startswith("Error:")
+    listed = await call("list_applied", {"client_id": "beta"})
+    assert listed.startswith("Error:") and "CP-B" not in listed
+    assert _db_rows(db) == {("beta", "CP-B")}
+
+
+async def test_stdio_caller_cannot_reach_another_client(
+    fake_gateway, net_data, tmp_path
+):
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": str(tmp_path),
+        "TMPDIR": os.environ.get("TMPDIR", str(tmp_path)),
+        "PLUGBOARD_URL": fake_gateway,
+        "PLUGBOARD_API_KEY": ALPHA_KEY,
+        "PLUGBOARD_DATA": str(net_data),
+        "PLUGBOARD_REGISTRY_PATH": str(net_data / "registry.json"),
+        "PLUGBOARD_SKIP_DOTENV": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=[str(ROOT / "scripts" / "run_mcp.py")],
+        env=env,
+        cwd=str(ROOT),
+    )
+    with open(tmp_path / "mcp-stderr.log", "w", encoding="utf-8") as errlog:
+        async with stdio_client(params, errlog=errlog) as (read, write):
+            async with ClientSession(read, write) as session:
+                await asyncio.wait_for(session.initialize(), 60)
+
+                async def call(name, args):
+                    result = await asyncio.wait_for(session.call_tool(name, args), 30)
+                    return result.content[0].text
+
+                await _scenario(call, net_data / "client_updates.db")
+
+
+async def test_http_caller_cannot_reach_another_client(net_server, net_data):
+    from httpx import ASGITransport, AsyncClient
+
+    ms = net_server
+    app = ms.mcp.streamable_http_app()
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {TOKEN}",
+    }
+    init = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "identity-test", "version": "0"},
+        },
+    }
+    async with ms.mcp.session_manager.run():
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://127.0.0.1:8766"
+        ) as client:
+            r = await asyncio.wait_for(
+                client.post("/mcp", json=init, headers=headers), 10
+            )
+            assert r.status_code == 200
+            headers["mcp-session-id"] = r.headers["mcp-session-id"]
+            headers["mcp-protocol-version"] = "2025-06-18"
+            note = {"jsonrpc": "2.0", "method": "notifications/initialized"}
+            await asyncio.wait_for(client.post("/mcp", json=note, headers=headers), 10)
+            ids = iter(range(2, 100))
+
+            async def call(name, args):
+                body = {
+                    "jsonrpc": "2.0",
+                    "id": next(ids),
+                    "method": "tools/call",
+                    "params": {"name": name, "arguments": args},
+                }
+                r = await asyncio.wait_for(
+                    client.post("/mcp", json=body, headers=headers), 30
+                )
+                assert r.status_code == 200, r.text
+                message = next(
+                    json.loads(line[len("data:") :])
+                    for line in r.text.splitlines()
+                    if line.startswith("data:")
+                )
+                return message["result"]["content"][0]["text"]
+
+            await _scenario(call, net_data / "client_updates.db")
+
+
+async def test_sse_caller_cannot_reach_another_client(net_server, net_data):
+    import uvicorn
+    from mcp import ClientSession
+    from mcp.client.sse import sse_client
+
+    ms = net_server
+    server = uvicorn.Server(
+        uvicorn.Config(
+            ms.mcp.sse_app(),
+            host="127.0.0.1",
+            port=0,
+            log_level="warning",
+            lifespan="off",
+            timeout_graceful_shutdown=2,
+        )
+    )
+    task = asyncio.create_task(server.serve())
+    try:
+        for _ in range(200):
+            if server.started:
+                break
+            await asyncio.sleep(0.05)
+        assert server.started, "the SSE server did not start"
+        port = server.servers[0].sockets[0].getsockname()[1]
+        async with sse_client(
+            f"http://127.0.0.1:{port}/sse",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        ) as (read, write):
+            async with ClientSession(read, write) as session:
+                await asyncio.wait_for(session.initialize(), 30)
+
+                async def call(name, args):
+                    result = await asyncio.wait_for(session.call_tool(name, args), 30)
+                    return result.content[0].text
+
+                await _scenario(call, net_data / "client_updates.db")
+    finally:
+        server.should_exit = True
+        await asyncio.wait_for(task, 15)
