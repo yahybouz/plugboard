@@ -959,15 +959,20 @@ def _get_applied(client_id: str) -> set[str]:
 
 
 @mcp.tool()
-async def check_updates(client_id: str) -> str:
+async def check_updates(client_id: str = "") -> str:
     """Check for pending Plugboard updates that need to be applied to your project.
 
     Call this at the START of every session to see if there are breaking changes
     or new features to integrate. CRITIQUE updates must be applied immediately.
+    The project is the client of this server's key (PLUGBOARD_API_KEY).
 
     Args:
-        client_id: Your project identifier, as listed in the registry (e.g. my-app)
+        client_id: Optional; if given, it must be the client of this server's key
     """
+    try:
+        client_id = await _registry_client(client_id)
+    except CallerIdentityError as exc:
+        return f"Error: {exc}"
     registry = _load_registry()
     if registry.get("missing"):
         return (
@@ -1027,15 +1032,21 @@ async def get_update_prompt(prompt_id: str) -> str:
     which files to modify in your project, exact code changes,
     and how to verify it works.
 
-    Apply the changes, then call mark_applied(client_id, prompt_id).
+    Apply the changes, then call mark_applied(prompt_id). Only the updates
+    for the client of this server's key (PLUGBOARD_API_KEY) can be read.
 
     Args:
         prompt_id: The update ID (e.g. CP-001, CP-002)
     """
+    try:
+        client_id = await _caller_client_id()
+    except CallerIdentityError as exc:
+        return f"Error: {exc}"
     registry = _load_registry()
 
     prompt = next((p for p in registry["prompts"] if p["id"] == prompt_id), None)
-    if not prompt:
+    # Another client's update answers like a missing one: no oracle on its IDs.
+    if not prompt or client_id not in prompt.get("clients", []):
         return f"Error: prompt '{prompt_id}' not found in registry"
 
     lines = [
@@ -1043,7 +1054,7 @@ async def get_update_prompt(prompt_id: str) -> str:
         f"**Impact:** {prompt['impact']}",
         f"**Version:** Plugboard {prompt['version']}",
         f"**Date:** {prompt['date']}",
-        f"**Clients:** {', '.join(prompt['clients'])}",
+        f"**Client:** {client_id}",
         "",
         "## Summary",
         prompt["summary"],
@@ -1076,7 +1087,7 @@ async def get_update_prompt(prompt_id: str) -> str:
         lines.append(prompt["verification"])
 
     lines.append("\n---")
-    lines.append(f'After applying, call: `mark_applied(client_id, "{prompt_id}")`')
+    lines.append(f'After applying, call: `mark_applied("{prompt_id}")`')
 
     return "\n".join(lines)
 
@@ -1136,12 +1147,18 @@ async def mark_applied(client_id: str, prompt_id: str, notes: str = "") -> str:
 
 
 @mcp.tool()
-async def list_applied(client_id: str) -> str:
-    """List all updates that have been applied for a client.
+async def list_applied(client_id: str = "") -> str:
+    """List all updates that have been applied for your project.
+
+    The project is the client of this server's key (PLUGBOARD_API_KEY).
 
     Args:
-        client_id: Your project identifier, as listed in the registry (e.g. my-app)
+        client_id: Optional; if given, it must be the client of this server's key
     """
+    try:
+        client_id = await _registry_client(client_id)
+    except CallerIdentityError as exc:
+        return f"Error: {exc}"
     conn = _tracking_conn()
     try:
         rows = conn.execute(
@@ -1166,28 +1183,27 @@ async def list_applied(client_id: str) -> str:
 
 @mcp.resource("updates://pending")
 async def resource_pending_updates() -> str:
-    """All pending updates across all clients."""
+    """Pending updates for the client of this server's key."""
+    try:
+        client_id = await _caller_client_id()
+    except CallerIdentityError as exc:
+        return f"Error: {exc}"
     registry = _load_registry()
-    clients = set()
-    for p in registry["prompts"]:
-        clients.update(p.get("clients", []))
+    applied = _get_applied(client_id)
+    pending = [
+        p
+        for p in registry["prompts"]
+        if client_id in p.get("clients", []) and p["id"] not in applied
+    ]
 
     lines = [f"**Plugboard v{registry['version']}** — Pending updates\n"]
-    for cid in sorted(clients):
-        applied = _get_applied(cid)
-        pending = [
-            p
-            for p in registry["prompts"]
-            if cid in p.get("clients", []) and p["id"] not in applied
-        ]
-        if pending:
-            lines.append(f"**{cid}** — {len(pending)} pending:")
-            for p in pending:
-                lines.append(f"  [{p['impact']}] `{p['id']}` — {p['title']}")
-        else:
-            lines.append(f"**{cid}** — all up to date")
-        lines.append("")
-
+    if pending:
+        lines.append(f"**{client_id}** — {len(pending)} pending:")
+        for p in pending:
+            lines.append(f"  [{p['impact']}] `{p['id']}` — {p['title']}")
+    else:
+        lines.append(f"**{client_id}** — all up to date")
+    lines.append("")
     return "\n".join(lines)
 
 

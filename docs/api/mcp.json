@@ -93,17 +93,15 @@
     },
     {
       "name": "check_updates",
-      "description": "Check for pending Plugboard updates that need to be applied to your project.\n\n    Call this at the START of every session to see if there are breaking changes\n    or new features to integrate. CRITIQUE updates must be applied immediately.\n\n    Args:\n        client_id: Your project identifier, as listed in the registry (e.g. my-app)",
+      "description": "Check for pending Plugboard updates that need to be applied to your project.\n\n    Call this at the START of every session to see if there are breaking changes\n    or new features to integrate. CRITIQUE updates must be applied immediately.\n    The project is the client of this server's key (PLUGBOARD_API_KEY).\n\n    Args:\n        client_id: Optional; if given, it must be the client of this server's key",
       "inputSchema": {
         "properties": {
           "client_id": {
+            "default": "",
             "title": "Client Id",
             "type": "string"
           }
         },
-        "required": [
-          "client_id"
-        ],
         "title": "check_updatesArguments",
         "type": "object"
       }
@@ -192,7 +190,7 @@
     },
     {
       "name": "get_update_prompt",
-      "description": "Get the full technical prompt for a specific update.\n\n    Returns the complete instructions: what changed in Plugboard,\n    which files to modify in your project, exact code changes,\n    and how to verify it works.\n\n    Apply the changes, then call mark_applied(client_id, prompt_id).\n\n    Args:\n        prompt_id: The update ID (e.g. CP-001, CP-002)",
+      "description": "Get the full technical prompt for a specific update.\n\n    Returns the complete instructions: what changed in Plugboard,\n    which files to modify in your project, exact code changes,\n    and how to verify it works.\n\n    Apply the changes, then call mark_applied(prompt_id). Only the updates\n    for the client of this server's key (PLUGBOARD_API_KEY) can be read.\n\n    Args:\n        prompt_id: The update ID (e.g. CP-001, CP-002)",
       "inputSchema": {
         "properties": {
           "prompt_id": {
@@ -218,17 +216,15 @@
     },
     {
       "name": "list_applied",
-      "description": "List all updates that have been applied for a client.\n\n    Args:\n        client_id: Your project identifier, as listed in the registry (e.g. my-app)",
+      "description": "List all updates that have been applied for your project.\n\n    The project is the client of this server's key (PLUGBOARD_API_KEY).\n\n    Args:\n        client_id: Optional; if given, it must be the client of this server's key",
       "inputSchema": {
         "properties": {
           "client_id": {
+            "default": "",
             "title": "Client Id",
             "type": "string"
           }
         },
-        "required": [
-          "client_id"
-        ],
         "title": "list_appliedArguments",
         "type": "object"
       }
@@ -313,7 +309,7 @@
     {
       "uri": "updates://pending",
       "name": "resource_pending_updates",
-      "description": "All pending updates across all clients.",
+      "description": "Pending updates for the client of this server's key.",
       "mimeType": "text/plain"
     },
     {

@@ -7,11 +7,83 @@ selects another client. Keys, clients and tokens are synthetic.
 
 from __future__ import annotations
 
+import json
+import sqlite3
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("mcp")
 
 from plugboard import mcp_server  # noqa: E402
+
+
+def _prompt(prompt_id: str, clients: list[str], title: str = "") -> dict:
+    return {
+        "id": prompt_id,
+        "version": "9.9.9",
+        "date": "2026-11-12",
+        "impact": "IMPORTANT",
+        "clients": clients,
+        "title": title or f"Step {prompt_id}",
+        "summary": f"Summary of {prompt_id}",
+        "changes": [{"file": ".env", "action": "replace", "description": "Synthetic"}],
+    }
+
+
+def _write_registry(path: Path) -> Path:
+    path.write_text(
+        json.dumps(
+            {
+                "version": "9.9.9",
+                "prompts": [
+                    _prompt("CP-A", ["alpha"]),
+                    _prompt("CP-B", ["beta"], title="Beta secret step"),
+                    _prompt("CP-AB", ["alpha", "beta"]),
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _db_rows(db: Path) -> set[tuple[str, str]]:
+    if not db.exists():
+        return set()
+    conn = sqlite3.connect(str(db))
+    try:
+        return set(conn.execute("SELECT client_id, prompt_id FROM applied_updates"))
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def registry(tmp_path, monkeypatch):
+    """Registry with CP-A (alpha), CP-B (beta), CP-AB (both); private tracking DB."""
+    path = _write_registry(tmp_path / "registry.json")
+    monkeypatch.setattr(mcp_server, "_REGISTRY_PATH", path)
+    monkeypatch.setattr(mcp_server, "_DATA_DIR", tmp_path)
+    monkeypatch.setattr(mcp_server, "_TRACKING_DB", tmp_path / "client_updates.db")
+    monkeypatch.setattr(mcp_server, "_TRACKING_SCHEMA_READY", False)
+    return path
+
+
+def _seed(client_id: str, prompt_id: str) -> None:
+    conn = mcp_server._tracking_conn()
+    try:
+        conn.execute(
+            "INSERT INTO applied_updates (client_id, prompt_id, applied_at) "
+            "VALUES (?, ?, '2026-11-12T00:00:00Z')",
+            (client_id, prompt_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _rows() -> set[tuple[str, str]]:
+    return _db_rows(Path(mcp_server._TRACKING_DB))
 
 
 @pytest.fixture
@@ -85,3 +157,71 @@ async def test_own_or_absent_client_id_is_accepted(as_client, claimed):
 async def test_another_client_id_is_refused(as_client, claimed):
     with pytest.raises(mcp_server.CallerIdentityError, match="leave client_id out"):
         await mcp_server._registry_client(claimed)
+
+
+# ── Task 2: registry reads ───────────────────────────────────────────────────
+
+
+async def test_check_updates_lists_only_the_key_client(as_client, registry):
+    out = await mcp_server.check_updates()
+    assert "`CP-A`" in out and "`CP-AB`" in out
+    assert "`CP-B`" not in out
+
+
+async def test_check_updates_refuses_another_client_id(as_client, registry):
+    out = await mcp_server.check_updates("beta")
+    assert out.startswith("Error:")
+    assert "`CP-B`" not in out and "Beta secret step" not in out
+
+
+async def test_check_updates_accepts_its_own_client_id(as_client, registry):
+    assert await mcp_server.check_updates("alpha") == await mcp_server.check_updates()
+
+
+async def test_list_applied_shows_only_the_key_client(as_client, registry):
+    _seed("alpha", "CP-A")
+    _seed("beta", "CP-B")
+    own = await mcp_server.list_applied()
+    assert "CP-A" in own and "CP-B" not in own
+    refused = await mcp_server.list_applied("beta")
+    assert refused.startswith("Error:") and "CP-B" not in refused
+
+
+async def test_get_update_prompt_hides_other_clients_updates(as_client, registry):
+    other = await mcp_server.get_update_prompt("CP-B")
+    missing = await mcp_server.get_update_prompt("CP-NONE")
+    assert other == missing.replace("CP-NONE", "CP-B")
+    assert "Beta secret step" not in other
+
+
+async def test_get_update_prompt_names_only_the_caller(as_client, registry):
+    out = await mcp_server.get_update_prompt("CP-AB")
+    assert "**Client:** alpha" in out and "beta" not in out
+    assert 'mark_applied("CP-AB")' in out
+
+
+async def test_pending_resource_shows_only_the_key_client(as_client, registry):
+    out = await mcp_server.resource_pending_updates()
+    assert "`CP-A`" in out
+    assert "beta" not in out and "`CP-B`" not in out
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: mcp_server.check_updates(),
+        lambda: mcp_server.list_applied(),
+        lambda: mcp_server.get_update_prompt("CP-A"),
+        lambda: mcp_server.resource_pending_updates(),
+    ],
+    ids=["check_updates", "list_applied", "get_update_prompt", "pending"],
+)
+async def test_refused_identity_reads_nothing(as_client, registry, monkeypatch, call):
+    as_client["client_id"] = "admin"
+
+    def forbidden(*_a, **_k):
+        pytest.fail("read before the caller was identified")
+
+    monkeypatch.setattr(mcp_server, "_load_registry", forbidden)
+    monkeypatch.setattr(mcp_server, "_tracking_conn", forbidden)
+    assert (await call()).startswith("Error:")
