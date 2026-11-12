@@ -734,3 +734,25 @@ textarea.pg-input {
   white-space: pre-wrap; margin-top: var(--space-2); font-family: var(--mono);
   font-size: var(--fs-xs); max-height: 300px; overflow-y: auto;
 }
+
+/* Live requests (PLU-13): corner pill and its panel, built by live_requests.js */
+#live-pill {
+  position: fixed; right: var(--space-3); bottom: var(--space-3); z-index: 900;
+  padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill);
+  font-size: var(--fs-xs); cursor: pointer; background: var(--bg-secondary);
+  color: var(--text-secondary); border: 1px solid var(--border-strong);
+}
+#live-pill[data-count]:not([data-count='0']) { color: var(--text); border-color: var(--green); }
+#live-pill[data-slow='1'] { border-color: var(--orange); }
+#live-panel {
+  position: fixed; right: var(--space-3); bottom: 46px; z-index: 900;
+  max-width: min(560px, 94vw); max-height: 60vh; overflow: auto;
+  padding: var(--space-2) var(--space-3); border-radius: var(--radius); font-size: var(--fs-xs);
+  background: var(--bg-secondary); color: var(--text); border: 1px solid var(--border-strong);
+}
+#live-panel[hidden] { display: none; }
+.live-title { font-weight: var(--fw-semibold); margin: var(--space-2) 0 var(--space-1); }
+.live-empty { opacity: 0.7; }
+.live-row { display: flex; gap: var(--space-2); flex-wrap: wrap; padding: var(--space-1) 0; }
+.live-row[data-state='slow'] { color: var(--orange-text); }
+.live-row[data-state='error'] { color: var(--red); }

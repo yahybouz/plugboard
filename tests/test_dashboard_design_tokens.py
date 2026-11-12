@@ -204,3 +204,17 @@ def test_playground_keeps_its_js_hooks():
     # The waiting bubble shows a bare "..." that the browser tests wait on.
     assert '_pgAddMessage("assistant", "...")' in js
     assert 'bubble.dataset.testid = "message-bubble"' in js
+
+
+JS_COLOUR_FREE = ["app.js", "auto_update.js", "live_requests.js"]
+
+
+@pytest.mark.parametrize("name", JS_COLOUR_FREE)
+def test_scripts_have_no_raw_colour(name):
+    assert COLOUR.findall(_read(name)) == []
+
+
+def test_live_requests_styles_live_in_the_stylesheet():
+    assert 'el("style"' not in _read("live_requests.js")
+    css = _read("style.css")
+    assert "#live-pill" in css and "#live-panel" in css
