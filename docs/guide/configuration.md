@@ -263,6 +263,8 @@ A retention pass deletes the rows older than each store's retention, then compac
 
 The pass runs inside the server once a day, as the *Data retention* job of the Jobs page, where **Run now** starts it at once, even when the daily pass is turned off. `GET /admin/retention` (admin) returns the settings in force and the last report. Back up `data/` before you shorten a retention: the rows it no longer covers are deleted for good at the next pass.
 
+Rows are deleted in short batches, so the server's own writes get through during a long purge. Compaction is different: it locks the store for as long as it runs, and it happens only when at least 20 % of the file is free at the time of the pass, typically after a large purge such as the first one. While `data/usage.db` is compacted, billing writes can wait or fail, and `GET /health/ready` can wait up to 5 seconds, then answer `503` with `usage_db: "fail"` ([health endpoints](monitoring.md#health-endpoints)).
+
 | Variable | Default | Description |
 |---|---|---|
 | `PLUGBOARD_USAGE_RETENTION_MONTHS` | `13` | Whole months of usage entries kept before the current month (`data/usage.db`): with `13`, in November 2026 the oldest month kept is October 2025. Lowering it deletes the older months, and their cost history, for good. |
@@ -270,7 +272,7 @@ The pass runs inside the server once a day, as the *Data retention* job of the J
 | `PLUGBOARD_WATCHDOG_RETENTION_DAYS` | `14` | Days a watchdog event is kept (`data/watchdog.db`). |
 | `PLUGBOARD_MONITORING_RETENTION_DAYS` | `90` | Days a monitoring snapshot is kept (`data/monitoring.db`). |
 | `PLUGBOARD_RETENTION_HOUR_UTC` | `4` | Hour (UTC, `0` to `23`) of the daily pass; a value above `23` gives `23`. |
-| `PLUGBOARD_RETENTION_DISABLED` | empty | `1`, `true` or `yes` turns the daily pass off: nothing is deleted. |
+| `PLUGBOARD_RETENTION_DISABLED` | empty | `1`, `true` or `yes` turns the daily pass off; **Run now** still runs it. |
 
 ## MCP server and scripts
 

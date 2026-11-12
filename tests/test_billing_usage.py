@@ -925,7 +925,8 @@ def _current_usage_month() -> str:
 
 
 def test_purge_old_usage_refuses_zero_and_negative(tmp_path, monkeypatch):
-    """keep_months below 1 would delete the current month: refused."""
+    """keep_months below 1 is refused: 0 would delete every month before the
+    current one, a negative value the current month too."""
     import plugboard.usage as u
     import plugboard.billing as b
 

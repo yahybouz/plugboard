@@ -386,7 +386,10 @@ def delete_usage(month: str) -> bool:
 def purge_old_usage(keep_months: int = 6) -> List[str]:
     """Delete entries older than `keep_months`. Returns list of deleted months.
 
-    `keep_months` below 1 is refused: it would reach the current month.
+    `keep_months` below 1 is refused. A negative value would delete the
+    current month along with every older one; `0` would delete every month
+    before the current one (where `PLUGBOARD_USAGE_RETENTION_MONTHS=0` keeps
+    every month).
     """
     if keep_months < 1:
         raise ValueError("keep_months must be at least 1")

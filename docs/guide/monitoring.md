@@ -33,7 +33,7 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 | Page | What you see |
 |---|---|
 | Overview | Totals and a table of requests, errors and average latency per provider since the last restart |
-| Monitoring | Health of each active provider (status, latency, error rate, uptime over 24 hours and 7 days) and the check history of the last 24 hours. Uptime comes from availability snapshots taken every 5 minutes, not from opening the page, which stores nothing; it shows `—` until a first snapshot exists |
+| Monitoring | Health of each active provider (status, latency, error rate, uptime over 24 hours and 7 days) and the check history of the last 24 hours. Uptime comes from availability snapshots taken every 5 minutes, not from opening the page, which stores nothing; it shows `—` when the period (24 hours or 7 days) holds no snapshot, as before the first one |
 | Catalog history | Models each provider gained or lost, newest first, filtered by provider, period and model name ([details](#catalog-history)) |
 | Usage & billing | Requests, tokens and cost per client for a month |
 | Jobs | The price refresh, the model catalog refresh, the provider watchdog, the availability snapshots (every `PLUGBOARD_MONITORING_INTERVAL_S` seconds) and the daily data retention pass ([data retention](configuration.md#data-retention)): state, last and next run, **Run now** |
@@ -67,7 +67,7 @@ The list of providers is on the admin `GET /providers`. The client authenticatio
 
 | Check | States | Blocks readiness |
 |---|---|---|
-| `usage_db` | `ok`: `data/usage.db` takes a write lock; `fail`: it cannot | yes, unless `ok` |
+| `usage_db` | `ok`: `data/usage.db` takes a write lock; `fail`: it cannot within 5 seconds, for example while the retention pass compacts it after a large purge, when billing writes can wait or fail too ([data retention](configuration.md#data-retention)) | yes, unless `ok` |
 | `cli` | `ok`: every active CLI provider finds its binary on PATH; `fail`: one does not; `none`: no active CLI provider | on `fail` |
 | `auth` | `ok`: `API_KEY` is set; `dev`: empty with `PLUGBOARD_DEV=1`; `fail`: empty outside dev mode | on `fail` |
 | `ollama` | `ok` or `unreachable` from the watchdog's last check of the active Ollama providers; `unknown` when the watchdog is stopped or its last check is older than three intervals; `not_configured` without an active Ollama provider | never |
