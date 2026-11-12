@@ -5,10 +5,15 @@ Jobs — the background tasks Plugboard runs in-process, for the Jobs page.
   grid, every ``PLUGBOARD_PRICING_REFRESH_INTERVAL_H`` hours);
 - ``model_refresh``: the ModelAvailabilityScheduler (model lists and
   connectivity probes);
-- ``provider_watchdog``: the health monitor, continuous.
+- ``provider_watchdog``: the health monitor, continuous;
+- ``availability_snapshots``: a PeriodicJob probing every active provider
+  every ``PLUGBOARD_MONITORING_INTERVAL_S`` seconds for the uptime figures;
+- ``data_retention``: a PeriodicJob purging old rows from the SQLite
+  stores, daily at ``PLUGBOARD_RETENTION_HOUR_UTC``.
 
 Nothing is scheduled outside the server: no crontab, no script. "Run now"
-starts the scheduler's own update in the background.
+starts the scheduler's own update in the background, also for a job whose
+scheduled runs are disabled.
 """
 
 from __future__ import annotations
@@ -39,6 +44,18 @@ _JOBS: Dict[str, Dict[str, Any]] = {
         "description": "Checks every active provider every 30 s and marks unhealthy ones inactive.",
         "continuous": True,
     },
+    "availability_snapshots": {
+        "name": "Availability snapshots",
+        "description": "Probes every active provider and stores the result; the "
+        "Monitoring page computes uptime from these snapshots.",
+        "state_attr": "availability_job",
+    },
+    "data_retention": {
+        "name": "Data retention",
+        "description": "Deletes usage, audit, watchdog, monitoring and session rows "
+        "older than their retention, then compacts the stores.",
+        "state_attr": "retention_job",
+    },
 }
 
 # Strong references to manual runs, so a started task is not garbage collected.
@@ -57,6 +74,9 @@ def _status(sched: Any) -> Dict[str, Any]:
 
 
 def _schedule_label(status: Dict[str, Any]) -> str:
+    seconds = int(status.get("interval_s") or 0)
+    if seconds > 0:
+        return f"every {seconds // 60} min (in-process)"
     hours = int(status.get("refresh_interval_h") or 0)
     if hours > 0:
         return f"every {hours} h (in-process)"
@@ -68,11 +88,13 @@ def _next_run(status: Dict[str, Any]) -> str:
         return "disabled"
     if status.get("running_since"):
         return "running now"
-    hours = int(status.get("refresh_interval_h") or 0)
+    seconds = int(status.get("interval_s") or 0)
+    if seconds <= 0:
+        seconds = int(status.get("refresh_interval_h") or 0) * 3600
     last = status.get("last_run_at") or status.get("last_success_at")
-    if hours > 0 and last:
+    if seconds > 0 and last:
         try:
-            when = datetime.fromisoformat(str(last)) + timedelta(hours=hours)
+            when = datetime.fromisoformat(str(last)) + timedelta(seconds=seconds)
             return when.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         except ValueError:
             pass

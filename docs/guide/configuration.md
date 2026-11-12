@@ -13,7 +13,7 @@ Boolean flags accept `1`, `true`, `yes`, `on` unless stated otherwise. Values be
 | Variable | Default | Description |
 |---|---|---|
 | `ADMIN_KEY` | empty | Admin secret for the dashboard and `/admin/*`. Required: the server refuses to start without it, with fewer than 16 characters, or with a placeholder written `<...>` as in these guides, unless `PLUGBOARD_DEV=1`. `make init` generates one. |
-| `API_KEY` | empty | Any non-empty value turns on client authentication for `/v1/*` (clients use `pb_` keys). The value itself is not a client key. Empty: client authentication is off, a critical warning is logged every five minutes and `/health` reports `auth_disabled`. |
+| `API_KEY` | empty | Any non-empty value turns on client authentication for `/v1/*` (clients use `pb_` keys). The value itself is not a client key. Empty: client authentication is off, a critical warning is logged every five minutes and `/health/ready` answers `503` with `checks.auth: "fail"` (`"dev"` with `PLUGBOARD_DEV=1`). |
 | `ENCRYPTION_KEY` | empty | Key used to encrypt provider tokens, OAuth credentials and the MFA secret at rest. Empty: a key is generated once in `data/.encryption_key`. Changing it makes stored credentials unreadable. |
 | `PLUGBOARD_DEV` | empty | `1` marks a development instance: the server may start without `ADMIN_KEY`, and the empty-`API_KEY` warning is logged once instead of repeated. With `API_KEY` empty too, every route is open, so `run.py` then listens on a loopback `HOST` only, and the server answers only requests that arrive on a loopback interface. |
 | `PLUGBOARD_LOCAL_AUTO_LOGIN` | `auto` | Dashboard auto-login. `auto`: only when `run.py` listens on a loopback address. `1`: also when listening on another interface (personal workstation). `0`: never. Unknown values count as `0`. See [Security notes](../../README.md#security-notes). |
@@ -221,6 +221,12 @@ The catalog is downloaded with each price update. A download that fails, is inva
 | `WATCHDOG_DEEP_TIMEOUT` | `60` | Timeout of a deep check (real completion). |
 | `WATCHDOG_DEEP_INTERVAL` | `3` | Run a deep check every N checks. |
 
+## Availability snapshots
+
+| Variable | Default | Description |
+|---|---|---|
+| `PLUGBOARD_MONITORING_INTERVAL_S` | `300` | Seconds between two availability snapshots (one probe of every active provider, stored in `data/monitoring.db`), from which the Monitoring page computes uptime. `0` turns the snapshots off; a value from `1` to `59` gives `60`. The job is listed on the Jobs page ([monitoring](monitoring.md#dashboard-pages)). |
+
 ## Alerts and webhooks
 
 | Variable | Default | Description |
@@ -251,6 +257,23 @@ See [typed decisions](decisions.md) and the [local decision runtime](decisions-r
 | `PLUGBOARD_REGISTRY_PATH` | `data/registry.json` | Update registry served to client projects over MCP. Format: `plugboard/registry.example.json`. |
 | `PLUGBOARD_JOB_PYTHON` | the server's interpreter | Python used by scheduled jobs (pricing, model refresh). |
 | `GEMINI_OAUTH_CLIENT_ID`, `GEMINI_OAUTH_CLIENT_SECRET` | empty | Google OAuth desktop client used to sign in to Gemini from the dashboard and to refresh Gemini CLI tokens. Not shipped with Plugboard. |
+
+## Data retention
+
+A retention pass deletes the rows older than each store's retention, then compacts the store when at least 20 % of its pages are free. Its last report is written to `data/retention.json`, and a pass that deleted rows records a `retention.run` line in the audit trail. For the four retentions below, `0` keeps every row, and a value that is negative or not a whole number gives the default. Chat sessions are purged after `PLUGBOARD_SESSION_TTL_S` ([client keys](#client-keys)).
+
+The pass runs inside the server once a day, as the *Data retention* job of the Jobs page, where **Run now** starts it at once, even when the daily pass is turned off. `GET /admin/retention` (admin) returns the settings in force and the last report. Back up `data/` before you shorten a retention: the rows it no longer covers are deleted for good at the next pass.
+
+Rows are deleted in short batches, so the server's own writes get through during a long purge. Compaction is different: it locks the store for as long as it runs, and it happens only when at least 20 % of the file is free at the time of the pass, typically after a large purge such as the first one. While `data/usage.db` is compacted, billing writes can wait or fail, and `GET /health/ready` can wait up to 5 seconds, then answer `503` with `usage_db: "fail"` ([health endpoints](monitoring.md#health-endpoints)).
+
+| Variable | Default | Description |
+|---|---|---|
+| `PLUGBOARD_USAGE_RETENTION_MONTHS` | `13` | Whole months of usage entries kept before the current month (`data/usage.db`): with `13`, in November 2026 the oldest month kept is October 2025. Lowering it deletes the older months, and their cost history, for good. |
+| `PLUGBOARD_AUDIT_RETENTION_DAYS` | `365` | Days an audit entry is kept (`data/audit.db`). |
+| `PLUGBOARD_WATCHDOG_RETENTION_DAYS` | `14` | Days a watchdog event is kept (`data/watchdog.db`). |
+| `PLUGBOARD_MONITORING_RETENTION_DAYS` | `90` | Days a monitoring snapshot is kept (`data/monitoring.db`). |
+| `PLUGBOARD_RETENTION_HOUR_UTC` | `4` | Hour (UTC, `0` to `23`) of the daily pass; a value above `23` gives `23`. |
+| `PLUGBOARD_RETENTION_DISABLED` | empty | `1`, `true` or `yes` turns the daily pass off; **Run now** still runs it. |
 
 ## MCP server and scripts
 

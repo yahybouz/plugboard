@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "1.7.0",
+    "version": "2.0.0",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
@@ -1500,6 +1500,7 @@
         "type": "object"
       },
       "Health": {
+        "description": "Liveness: always 200 while the process answers. The provider list is\non the admin `GET /providers`, the auth posture on `GET /health/ready`.",
         "properties": {
           "ok": {
             "title": "Ok",
@@ -1508,51 +1509,11 @@
           "version": {
             "title": "Version",
             "type": "string"
-          },
-          "providers": {
-            "description": "Number of active providers.",
-            "title": "Providers",
-            "type": "integer"
-          },
-          "active": {
-            "description": "Ids of the active providers.",
-            "items": {
-              "type": "string"
-            },
-            "title": "Active",
-            "type": "array"
-          },
-          "auth_disabled": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "Present (true) when client auth is off.",
-            "title": "Auth Disabled"
-          },
-          "dev_mode": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Dev Mode"
           }
         },
         "required": [
           "ok",
-          "version",
-          "providers",
-          "active"
+          "version"
         ],
         "title": "Health",
         "type": "object"
@@ -2441,6 +2402,34 @@
         "title": "PreflightResult",
         "type": "object"
       },
+      "Ready": {
+        "description": "Readiness: `ready` is false when `usage_db` is not `ok`, `cli` is\n`fail` or `auth` is `fail`; `ollama` and `background` never block.",
+        "properties": {
+          "ready": {
+            "title": "Ready",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          },
+          "checks": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "usage_db: ok|fail; cli: ok|fail|none; auth: ok|dev|fail; ollama: ok|unreachable|unknown|not_configured; background: ok|degraded.",
+            "title": "Checks",
+            "type": "object"
+          }
+        },
+        "required": [
+          "ready",
+          "version",
+          "checks"
+        ],
+        "title": "Ready",
+        "type": "object"
+      },
       "ScoreQuestion": {
         "additionalProperties": false,
         "properties": {
@@ -2630,7 +2619,7 @@
   "paths": {
     "/health": {
       "get": {
-        "summary": "Liveness and active providers",
+        "summary": "Liveness",
         "operationId": "get_health",
         "responses": {
           "200": {
@@ -2639,6 +2628,35 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "summary": "Readiness: whether this instance can serve requests",
+        "operationId": "get_health_ready",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ready"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Not ready: same body, `ready` is false.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ready"
                 }
               }
             }

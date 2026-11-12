@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "1.7.0"
+CONTRACT_VERSION = "2.0.0"
 _JSON = "application/json"
 
 
@@ -478,14 +478,25 @@ class ClientUsage(BaseModel):
 
 
 class Health(BaseModel):
+    """Liveness: always 200 while the process answers. The provider list is
+    on the admin `GET /providers`, the auth posture on `GET /health/ready`."""
+
     ok: bool
     version: str
-    providers: int = Field(description="Number of active providers.")
-    active: List[str] = Field(description="Ids of the active providers.")
-    auth_disabled: Optional[bool] = Field(
-        default=None, description="Present (true) when client auth is off."
+
+
+class Ready(BaseModel):
+    """Readiness: `ready` is false when `usage_db` is not `ok`, `cli` is
+    `fail` or `auth` is `fail`; `ollama` and `background` never block."""
+
+    ready: bool
+    version: str
+    checks: Dict[str, str] = Field(
+        description=(
+            "usage_db: ok|fail; cli: ok|fail|none; auth: ok|dev|fail; "
+            "ollama: ok|unreachable|unknown|not_configured; background: ok|degraded."
+        )
     )
-    dev_mode: Optional[bool] = None
 
 
 class ErrorResponse(_Open):
@@ -664,14 +675,21 @@ _ROUTES: List[_Route] = [
      None, InflightResponse, _AUTH_ERRORS, True),
     ("get", "/usage/me", "The calling client's usage entries for a month",
      None, ClientUsage, _AUTH_ERRORS, True),
-    ("get", "/health", "Liveness and active providers",
+    ("get", "/health", "Liveness",
      None, Health, {}, False),
+    ("get", "/health/ready", "Readiness: whether this instance can serve requests",
+     None, Ready, {"503": "Not ready: same body, `ready` is false."}, False),
     ("get", "/v1/openapi.json", "This contract (OpenAPI 3.1)",
      None, BaseModel, {}, False),
 ]  # fmt: skip
 
 # Routes whose 200 body is a JSON array of the response model.
 _ARRAY_RESPONSES = {"/v1/me/keys"}
+
+# Error answers whose body is not ErrorResponse: (path, status) -> model.
+_ERROR_MODELS: Dict[Tuple[str, str], Type[BaseModel]] = {
+    ("/health/ready", "503"): Ready,
+}
 
 #: (METHOD, path) of every route in the contract, as the contract writes them.
 PUBLIC_ROUTES = {(method.upper(), path) for method, path, *_ in _ROUTES}
@@ -774,9 +792,11 @@ def build_openapi() -> Dict[str, Any]:
         if errors:
             error_ref = _schema_ref(ErrorResponse, components)
             for code, text in errors.items():
+                model = _ERROR_MODELS.get((path, code))
+                ref = error_ref if model is None else _schema_ref(model, components)
                 responses[code] = {
                     "description": text,
-                    "content": {_JSON: {"schema": error_ref}},
+                    "content": {_JSON: {"schema": ref}},
                 }
         op["responses"] = responses
         op["security"] = [{"bearer": []}] if needs_key else []

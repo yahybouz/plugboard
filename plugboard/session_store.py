@@ -31,7 +31,7 @@ import time
 from threading import Lock
 from typing import Any, Dict, List, Optional
 from plugboard import envcompat
-from plugboard.storage import data_dir, private_sqlite_file
+from plugboard.storage import data_dir, private_sqlite_file, purge_sqlite_rows
 
 _DATA_DIR = data_dir()
 _DB_PATH = _DATA_DIR / "sessions.db"
@@ -142,15 +142,14 @@ def delete_session(client_id: str, session_id: str) -> bool:
 
 
 def purge_expired() -> int:
-    """Delete sessions older than TTL. Called by the watchdog sweep."""
-    cutoff = time.time() - _TTL_S
-    conn = _get_conn()
-    try:
-        cur = conn.execute("DELETE FROM chat_sessions WHERE updated_at < ?", (cutoff,))
-        conn.commit()
-        return cur.rowcount
-    finally:
-        conn.close()
+    """Delete sessions older than TTL. Called by the retention pass.
+
+    A missing store is left missing; a locked or corrupt one raises
+    ``sqlite3.Error``.
+    """
+    return purge_sqlite_rows(
+        _DB_PATH, "chat_sessions", "updated_at < ?", (time.time() - _TTL_S,)
+    )
 
 
 def merge_history_into_body(

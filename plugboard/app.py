@@ -6,6 +6,7 @@ Endpoints:
   POST /v1/embeddings          -- embeddings from a local engine (client key)
   GET  /v1/models              -- list all available models
   GET  /health                 -- liveness check
+  GET  /health/ready           -- readiness: 200 when able to serve, else 503
   GET  /usage/me               -- token usage for the calling client (current month)
   GET  /v1/me                  -- client info + usage + spending limit
 
@@ -213,11 +214,13 @@ _reject_comment_valued_secrets(os.environ)
 #   that attackers could guess. When unset, client auth is explicitly
 #   disabled and the server screams about it.
 # * `PLUGBOARD_DEV=1` is the explicit opt-in for local development:
-#   the warning fires once at boot and the `/health` banner stays off.
+#   the warning fires once at boot and `/health/ready` reports
+#   `checks.auth: "dev"` with a 200.
 # * Any other context (no DEV flag) = treat as production: warning is
 #   promoted to CRITICAL, repeated periodically by the lifespan, and
-#   `/health` advertises `auth_disabled: true` so load balancers /
-#   deployment gates can refuse traffic to the instance.
+#   `/health/ready` answers 503 with `checks.auth: "fail"` so load
+#   balancers / deployment gates can refuse traffic to the instance.
+#   The public `/health` never shows the auth posture (PLU-31).
 _API_KEY = os.environ.get("API_KEY", "")
 _ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
 _DEV_MODE = os.environ.get("PLUGBOARD_DEV", "").strip() == "1"
@@ -440,6 +443,21 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
         _model_availability_scheduler.daily_hour_utc,
     )
 
+    # Maintenance jobs — availability snapshots and the daily retention pass.
+    from plugboard.maintenance import availability_job, retention_job
+
+    _maintenance_jobs = [availability_job(), retention_job()]
+    app.state.availability_job, app.state.retention_job = _maintenance_jobs
+    for _job in _maintenance_jobs:
+        await _job.start()
+        log.info(
+            "PeriodicJob %s started (disabled=%s, interval_s=%s, daily_hour_utc=%s)",
+            _job.name,
+            _job.disabled,
+            _job.interval_s,
+            _job.daily_hour_utc,
+        )
+
     # Boot-time internet probe — auto-refresh internet_access flags so the
     # playground dropdown displays correct 🌐/💻 icons without admin click.
     # Runs in background after schedulers are up so boot isn't blocked.
@@ -489,6 +507,8 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
 
     yield
 
+    for _job in _maintenance_jobs:
+        await _job.stop()
     await _model_availability_scheduler.stop()
     await _pricing_scheduler.stop()
     # Webhooks still being delivered get a short grace period.
@@ -3053,24 +3073,28 @@ async def models_benchmarks_v2(
 
 @app.get("/health")
 async def health():
-    providers = load_providers()
-    active = [
-        p["id"]
-        for p in providers
-        if p.get("is_active", True) and not is_removed_provider(p)
-    ]
-    payload = {
-        "ok": True,
+    """Liveness (PLU-31): always 200 while the process answers. Public, so it
+    shows the status and the version only and reads no file; the provider
+    list is on the admin `GET /providers`, the auth posture on
+    `GET /health/ready`."""
+    return {"ok": True, "version": __version__}
+
+
+@app.get("/health/ready")
+async def health_ready(request: Request):
+    """Readiness (PLU-31): 200 when this instance can serve requests, 503
+    with the same body otherwise. Public: generic states only."""
+    from plugboard import readiness
+
+    result = await readiness.evaluate(
+        request.app.state, api_key=_API_KEY, dev_mode=_DEV_MODE
+    )
+    body = {
+        "ready": result["ready"],
         "version": __version__,
-        "providers": len(active),
-        "active": active,
+        "checks": result["checks"],
     }
-    # Surface auth posture so load balancers / deploy gates can refuse
-    # traffic to an instance running with open client auth (TM-007).
-    if not _API_KEY:
-        payload["auth_disabled"] = True
-        payload["dev_mode"] = _DEV_MODE
-    return payload
+    return JSONResponse(body, status_code=200 if result["ready"] else 503)
 
 
 @app.get("/health/detailed")
@@ -5959,10 +5983,20 @@ async def admin_usage_by_key(
 
 
 @app.post("/admin/usage/purge")
-async def purge_old_usage(keep_months: int = 6, _: None = Depends(_require_admin)):
+async def purge_old_usage(
+    keep_months: int = Query(6, ge=1), _: None = Depends(_require_admin)
+):
     """Delete usage files older than `keep_months` months."""
     deleted = _usage.purge_old_usage(keep_months)
     return {"purged": deleted, "keep_months": keep_months}
+
+
+@app.get("/admin/retention")
+async def admin_retention(_: None = Depends(_require_admin)):
+    """Retention settings and the report of the last retention pass."""
+    from plugboard import retention
+
+    return {"settings": retention.settings(), "last_run": retention.last_report()}
 
 
 @app.post("/admin/usage/migrate")

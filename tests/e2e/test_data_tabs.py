@@ -16,7 +16,7 @@ async def test_overview_reflects_seeded_provider(dashboard):
     page = dashboard.page
     await dashboard.goto_tab("overview")
     await page.wait_for_selector("#overview-cards", timeout=10_000)
-    # The stat cards are appended after /health answers: wait for them.
+    # The stat cards are appended once /health and /providers answer: wait for them.
     await page.locator("#overview-cards", has_text="Providers").wait_for(timeout=10_000)
     assert dashboard.js_errors == [], dashboard.js_errors
 

@@ -33,10 +33,10 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 | Page | What you see |
 |---|---|
 | Overview | Totals and a table of requests, errors and average latency per provider since the last restart |
-| Monitoring | Health of each active provider (status, latency, error rate, uptime over 24 hours and 7 days) and the check history of the last 24 hours |
+| Monitoring | Health of each active provider (status, latency, error rate, uptime over 24 hours and 7 days) and the check history of the last 24 hours. Uptime comes from availability snapshots taken every 5 minutes, not from opening the page, which stores nothing; it shows `—` when the period (24 hours or 7 days) holds no snapshot, as before the first one |
 | Catalog history | Models each provider gained or lost, newest first, filtered by provider, period and model name ([details](#catalog-history)) |
 | Usage & billing | Requests, tokens and cost per client for a month |
-| Jobs | The price refresh, the model catalog refresh and the provider watchdog: state, last and next run, **Run now** |
+| Jobs | The price refresh, the model catalog refresh, the provider watchdog, the availability snapshots (every `PLUGBOARD_MONITORING_INTERVAL_S` seconds) and the daily data retention pass ([data retention](configuration.md#data-retention)): state, last and next run, **Run now** |
 | Playground | Per-model connectivity and internet-access indicators |
 | Tickets (`/suivi`) | Kanban of Plugboard tickets, see below |
 
@@ -51,13 +51,29 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 
 ## Health endpoints
 
-`GET /health` is public and cheap, suitable for load balancers and container health checks:
+`GET /health` is public and cheap, suitable for container and deployment health checks. It always answers `200` while the process runs, reads no file, and shows only the status and the version:
 
 ```json
-{"ok": true, "version": "4.12.0", "providers": 3, "active": ["anthropic-direct", "ollama", "claude-via-claude-cli"]}
+{"ok": true, "version": "4.12.0"}
 ```
 
-When `API_KEY` is empty it also returns `"auth_disabled": true` and `"dev_mode"`, so a deployment gate can refuse an instance whose client authentication is off.
+The list of providers is on the admin `GET /providers`. The client authentication posture is the `auth` check of `GET /health/ready`: a deployment gate that must refuse an instance whose client authentication is off reads that route, which answers `503` when `API_KEY` is empty outside dev mode.
+
+`GET /health/ready` is public too and says whether the instance can serve requests: `200` when it is ready, `503` with the same body when it is not. It never calls a provider or starts a CLI, and its result is kept for 5 seconds:
+
+```json
+{"ready": true, "version": "4.11.5", "checks": {"usage_db": "ok", "cli": "ok", "auth": "ok", "ollama": "unreachable", "background": "ok"}}
+```
+
+| Check | States | Blocks readiness |
+|---|---|---|
+| `usage_db` | `ok`: `data/usage.db` takes a write lock; `fail`: it cannot within 5 seconds, for example while the retention pass compacts it after a large purge, when billing writes can wait or fail too ([data retention](configuration.md#data-retention)) | yes, unless `ok` |
+| `cli` | `ok`: every active CLI provider finds its binary on PATH; `fail`: one does not; `none`: no active CLI provider | on `fail` |
+| `auth` | `ok`: `API_KEY` is set; `dev`: empty with `PLUGBOARD_DEV=1`; `fail`: empty outside dev mode | on `fail` |
+| `ollama` | `ok` or `unreachable` from the watchdog's last check of the active Ollama providers; `unknown` when the watchdog is stopped or its last check is older than three intervals; `not_configured` without an active Ollama provider | never |
+| `background` | `ok`: the watchdog, the availability snapshots and the retention pass run (or are turned off); `degraded` otherwise | never |
+
+The body names no provider and carries no error text: a check that raises gives its failure state (`fail`, `unknown` or `degraded`) and a warning in the server log. The dashboard and `GET /health/detailed` (admin) say which provider is affected. Container and deployment health checks stay on `/health`: use `/health/ready` to keep traffic away from an instance that cannot serve, not to restart it.
 
 `GET /health/detailed` (admin) calls `<base_url>/health` on every active HTTP provider and adds usage counters for the current month.
 
@@ -67,8 +83,9 @@ When `API_KEY` is empty it also returns `"auth_disabled": true` and `"dev_mode"`
 |---|---|
 | `GET /metrics` | JSON: per provider, request count, error count, average latency, and under `models` the per-model measures below |
 | `GET /metrics/prometheus` | Prometheus text format: request totals, error totals and average latency per provider, an `up` gauge, and the per-model histograms and counter below |
-| `GET /admin/monitoring` | Full health check of all providers with 24-hour and 7-day uptime |
-| `GET /admin/monitoring/history?provider_id=&limit=` | Stored health snapshots (`data/monitoring.db`) |
+| `GET /admin/monitoring` | Full health check of all providers with 24-hour and 7-day uptime computed from the stored snapshots; the check itself is not stored. `uptime_pct` is `null` when the period holds no snapshot |
+| `GET /admin/monitoring/history?provider_id=&limit=` | Availability snapshots (`data/monitoring.db`): one row per active provider every 5 minutes; a probe that does not answer within 30 seconds is stored as down |
+| `GET /admin/retention` | Retention settings in force (`settings`) and the report of the last retention pass (`last_run`, `null` before the first pass): when it ran, rows deleted per store, errors ([data retention](configuration.md#data-retention)) |
 | `GET /admin/circuits` | Per-model circuit breaker state |
 | `GET /admin/cache/stats` | Response cache statistics |
 

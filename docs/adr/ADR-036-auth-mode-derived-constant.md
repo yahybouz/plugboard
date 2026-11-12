@@ -37,6 +37,7 @@ Negative:
 What each mode means in the current code:
 
 - `DISABLED`: no bearer token is required. A valid client key, the admin key or an admin session is still resolved when presented, and an invalid client key is rejected with 401. With strict tenant mode on (the default), `POST /v1/chat/completions` still refuses anonymous requests with 401, and startup logs the combination as a critical misconfiguration. `/health` reports `auth_disabled: true`, and unless `PLUGBOARD_DEV=1` is set a critical message is repeated every 5 minutes.
+  - Note (2026-11-13): since PLU-31, `/health` no longer reports `auth_disabled`; the posture is read in `checks.auth` of `GET /health/ready`.
 - `LEGACY`: a valid client key, the admin key or an admin session is still required on `/v1/*`. The only difference from `ENFORCED` is that the cache layers accept an empty `client_id` with a warning instead of refusing it.
 - `ENFORCED`: a valid client key (`pb_...`), the admin key or an admin session is required, and tenant isolation is enforced in the cache layers.
 

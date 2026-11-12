@@ -22,14 +22,14 @@ def test_monitoring_history_empty(tmp_path, monkeypatch):
 
 
 def test_uptime_stats_no_data(tmp_path, monkeypatch):
-    """get_uptime_stats returns 100% when no snapshots exist."""
+    """get_uptime_stats reports an unknown uptime when no snapshots exist."""
     import plugboard.monitoring as mon
 
     monkeypatch.setattr(mon, "_DATA_DIR", tmp_path)
     monkeypatch.setattr(mon, "_DB_PATH", tmp_path / "monitoring.db")
 
     stats = mon.get_uptime_stats("test-provider", hours=24)
-    assert stats["uptime_pct"] == 100.0
+    assert stats["uptime_pct"] is None
     assert stats["checks"] == 0
 
 

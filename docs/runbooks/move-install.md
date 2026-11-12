@@ -46,8 +46,16 @@ one must show. When admin MFA is enforced, see the
 cd /path/to/plugboard
 export ADMIN_KEY=$(grep '^ADMIN_KEY=' .env | cut -d= -f2-)
 
-# Version, providers and auth posture
+# Version
 curl -s http://localhost:8765/health | python3 -m json.tool
+
+# Auth posture: checks.auth is "ok" (API_KEY set), "dev" (empty, PLUGBOARD_DEV=1)
+# or "fail" (empty outside dev mode, the route then answers 503)
+curl -s http://localhost:8765/health/ready | python3 -m json.tool
+
+# Active providers (admin route)
+curl -s -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/providers \
+  | python3 -c 'import json,sys; print(sorted(p["id"] for p in json.load(sys.stdin) if p.get("is_active") is not False))'
 
 # Client keys, usage entries of the month (probes the providers, runs no model)
 curl -s -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/health/detailed \
@@ -57,8 +65,8 @@ curl -s -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/health/detai
 grep -E '^(PLUGBOARD_DATA|ENCRYPTION_KEY|OLLAMA_URL|PLUGBOARD_REGISTRY_PATH|PLUGBOARD_DECISION_ASSETS)=' .env | cut -d= -f1,2 | sed 's/^\(ENCRYPTION_KEY=\).\+/\1(set)/'
 ```
 
-Keep the output: the same version, active providers, key count and usage
-entries are expected on the new machine. A `PLUGBOARD_REGISTRY_PATH` or
+Keep the output: the same version, auth posture (`checks.auth`), active
+providers, key count and usage entries are expected on the new machine. A `PLUGBOARD_REGISTRY_PATH` or
 `PLUGBOARD_DECISION_ASSETS` outside the data directory must be copied too
 (same path on the new machine, or update the variable).
 
@@ -248,8 +256,15 @@ docker compose up -d
 Then, with `ADMIN_KEY` exported as in the quick diagnosis:
 
 ```bash
-# Same version and active providers as recorded; "ok": true
+# Same version as recorded; "ok": true
 curl -s http://localhost:8765/health | python3 -m json.tool
+
+# Same checks.auth as recorded; "ready": true (HTTP 200)
+curl -s http://localhost:8765/health/ready | python3 -m json.tool
+
+# Same active providers as recorded
+curl -s -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/providers \
+  | python3 -c 'import json,sys; print(sorted(p["id"] for p in json.load(sys.stdin) if p.get("is_active") is not False))'
 
 # Same version, key count and usage entries; each provider "ok"
 curl -s -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/health/detailed \

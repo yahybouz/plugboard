@@ -42,6 +42,25 @@ class _StubScheduler:
         pass
 
 
+class _FakeJob:
+    """Stands in for a maintenance PeriodicJob: counts start() and stop()."""
+
+    disabled = False
+    interval_s = 300
+    daily_hour_utc = None
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self.starts = 0
+        self.stops = 0
+
+    async def start(self) -> None:
+        self.starts += 1
+
+    async def stop(self) -> None:
+        self.stops += 1
+
+
 def _boot_tasks() -> dict[str, asyncio.Task]:
     return {
         task.get_name(): task
@@ -89,6 +108,26 @@ def quiet_lifespan(monkeypatch):
     monkeypatch.setattr("plugboard.http_pool.close_session", _noop)
     monkeypatch.setenv("PLUGBOARD_INTERNET_CHECK_ON_BOOT", "1")
 
+    # No real snapshot or retention pass; the fakes leave app.state afterwards.
+    jobs: dict[str, _FakeJob] = {}
+
+    def _factory(name: str):
+        def _make() -> _FakeJob:
+            jobs[name] = _FakeJob(name)
+            return jobs[name]
+
+        return _make
+
+    monkeypatch.setattr(
+        "plugboard.maintenance.availability_job", _factory("availability_snapshots")
+    )
+    monkeypatch.setattr(
+        "plugboard.maintenance.retention_job", _factory("data_retention")
+    )
+    for attr in ("availability_job", "retention_job"):
+        monkeypatch.setattr(app_module.app.state, attr, None, raising=False)
+    return jobs
+
 
 @pytest.mark.asyncio
 async def test_boot_tasks_survive_gc_then_are_cancelled(quiet_lifespan):
@@ -107,6 +146,22 @@ async def test_boot_tasks_survive_gc_then_are_cancelled(quiet_lifespan):
         assert task.done(), f"{name} outlived the application"
         assert task.cancelled(), f"{name} was not cancelled"
     assert not _boot_tasks()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_starts_and_stops_the_maintenance_jobs(quiet_lifespan):
+    async with app_module._lifespan(app_module.app):
+        assert set(quiet_lifespan) == {"availability_snapshots", "data_retention"}
+        for job in quiet_lifespan.values():
+            assert (job.starts, job.stops) == (1, 0), job.name
+        assert (
+            app_module.app.state.availability_job
+            is quiet_lifespan["availability_snapshots"]
+        )
+        assert app_module.app.state.retention_job is quiet_lifespan["data_retention"]
+
+    for job in quiet_lifespan.values():
+        assert (job.starts, job.stops) == (1, 1), job.name
 
 
 @pytest.mark.asyncio
