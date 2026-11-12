@@ -964,6 +964,16 @@ def _missing_registry_message(registry: dict) -> str:
     )
 
 
+def _targets(prompt: dict, client_id: str) -> bool:
+    """Whether the update ``prompt`` is aimed at ``client_id``.
+
+    ``clients`` must be a list: a string typed by mistake would otherwise
+    match any substring of a client ID.
+    """
+    clients = prompt.get("clients")
+    return isinstance(clients, list) and client_id in clients
+
+
 def _client_prompt(registry: dict, prompt_id: str, client_id: str) -> dict | None:
     """The update ``prompt_id`` aimed at ``client_id``, or None.
 
@@ -973,7 +983,7 @@ def _client_prompt(registry: dict, prompt_id: str, client_id: str) -> dict | Non
         (
             p
             for p in registry["prompts"]
-            if p["id"] == prompt_id and client_id in p.get("clients", [])
+            if p["id"] == prompt_id and _targets(p, client_id)
         ),
         None,
     )
@@ -1014,7 +1024,7 @@ async def check_updates(client_id: str = "") -> str:
     pending = [
         p
         for p in registry["prompts"]
-        if client_id in p.get("clients", []) and p["id"] not in applied
+        if _targets(p, client_id) and p["id"] not in applied
     ]
 
     if not pending:
@@ -1162,9 +1172,7 @@ async def mark_applied(prompt_id: str, notes: str = "", client_id: str = "") -> 
     remaining = [
         p
         for p in registry["prompts"]
-        if client_id in p.get("clients", [])
-        and p["id"] not in applied
-        and p["id"] != prompt_id
+        if _targets(p, client_id) and p["id"] not in applied and p["id"] != prompt_id
     ]
 
     if remaining:
@@ -1225,7 +1233,7 @@ async def resource_pending_updates() -> str:
     pending = [
         p
         for p in registry["prompts"]
-        if client_id in p.get("clients", []) and p["id"] not in applied
+        if _targets(p, client_id) and p["id"] not in applied
     ]
 
     lines = [f"**Plugboard v{registry['version']}** — Pending updates\n"]

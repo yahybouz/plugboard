@@ -259,6 +259,19 @@ async def test_pending_resource_reports_a_missing_registry(
     assert "registry is missing" in out and "all up to date" not in out
 
 
+async def test_clients_written_as_a_string_targets_nobody(as_client, registry):
+    # A typo in the registry ("clients": "alphabet") must not match by substring.
+    registry.write_text(
+        json.dumps({"version": "9.9.9", "prompts": [_prompt("CP-S", "alphabet")]}),
+        encoding="utf-8",
+    )
+    assert "`CP-S`" not in await mcp_server.check_updates()
+    assert "`CP-S`" not in await mcp_server.resource_pending_updates()
+    assert (await mcp_server.get_update_prompt("CP-S")).startswith("Error:")
+    assert (await mcp_server.mark_applied("CP-S")).startswith("Error:")
+    assert _rows() == set()
+
+
 async def test_duplicate_prompt_id_resolves_to_the_callers_entry(as_client, registry):
     registry.write_text(
         json.dumps(
@@ -428,18 +441,23 @@ async def net_server(monkeypatch, fake_gateway, net_data):
         sys.modules.pop("plugboard.mcp_server", None)
 
 
+CLAIM_REFUSED = (
+    "Error: client_id 'beta' is not the client of this key ('alpha'): "
+    "leave client_id out"
+)
+NOT_FOUND_CP_B = "Error: prompt 'CP-B' not found in registry"
+
+
 async def _scenario(call, db: Path) -> None:
     """As alpha, whatever client_id is sent, beta's data stays out of reach."""
-    refused = await call("check_updates", {"client_id": "beta"})
-    assert refused.startswith("Error:") and "`CP-B`" not in refused
+    assert await call("check_updates", {"client_id": "beta"}) == CLAIM_REFUSED
     own = await call("check_updates", {})
     assert "`CP-A`" in own and "`CP-B`" not in own
-    other = await call("mark_applied", {"prompt_id": "CP-B"})
-    assert other == "Error: prompt 'CP-B' not found in registry"
+    assert await call("get_update_prompt", {"prompt_id": "CP-B"}) == NOT_FOUND_CP_B
+    assert await call("mark_applied", {"prompt_id": "CP-B"}) == NOT_FOUND_CP_B
     claimed = await call("mark_applied", {"client_id": "beta", "prompt_id": "CP-AB"})
-    assert claimed.startswith("Error:")
-    listed = await call("list_applied", {"client_id": "beta"})
-    assert listed.startswith("Error:") and "CP-B" not in listed
+    assert claimed == CLAIM_REFUSED
+    assert await call("list_applied", {"client_id": "beta"}) == CLAIM_REFUSED
     assert _db_rows(db) == {("beta", "CP-B")}
 
 
@@ -524,10 +542,14 @@ async def test_http_caller_cannot_reach_another_client(net_server, net_data):
                 )
                 assert r.status_code == 200, r.text
                 message = next(
-                    json.loads(line[len("data:") :])
-                    for line in r.text.splitlines()
-                    if line.startswith("data:")
+                    (
+                        json.loads(line[len("data:") :])
+                        for line in r.text.splitlines()
+                        if line.startswith("data:")
+                    ),
+                    None,
                 )
+                assert message is not None, r.text
                 return message["result"]["content"][0]["text"]
 
             await _scenario(call, net_data / "client_updates.db")
