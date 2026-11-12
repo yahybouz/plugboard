@@ -83,7 +83,7 @@ Then each provider takes a limited number of requests at once (**provider concur
 
 Requests made with the `ADMIN_KEY` (or from the dashboard Playground) are not subject to budgets, model restrictions, price checks or RPM limits.
 
-`POST /v1/preflight` runs the same checks for each pair before its ping, inside the same concurrency cap, and accepts at most 10 pairs (`422` beyond). Each ping counts towards the RPM limit and is billed like a chat call. A refused or failed pair answers `"ok": false` with a closed `error` code, never the provider's message: `unknown_model`, `forbidden_model`, `model_not_found`, `budget_exceeded`, `price_unavailable`, `rate_limited`, `upstream_error` (details stay in the server log) or `providers_busy` (the provider stayed at its concurrency cap; nothing was called). `model_not_found` is the chat routes' [`404 model_not_found`](../api/README.md#404-model_not_found) for that pair, for every caller, the admin key included: no provider knows `<provider>:<model>`, so it is not pinged and nothing is billed.
+`POST /v1/preflight` runs the same checks for each pair before its ping, inside the same concurrency cap, and accepts at most 10 pairs (`422` beyond). Each ping counts towards the RPM limit and is billed like a chat call. A refused or failed pair answers `"ok": false` with a closed `error` code, never the provider's message: `unknown_model`, `forbidden_model`, `model_not_found`, `budget_exceeded`, `price_unavailable`, `rate_limited`, `upstream_error` (details stay in the server log), `providers_busy` (the provider stayed at its concurrency cap; nothing was called) or `provider_disabled` (the model belongs to a provider the operator turned off, the chat routes' [`503 provider_disabled`](../api/README.md#503-provider_disabled); not pinged, nothing billed). `model_not_found` is the chat routes' [`404 model_not_found`](../api/README.md#404-model_not_found) for that pair, for every caller, the admin key included: no provider knows `<provider>:<model>`, so it is not pinged and nothing is billed.
 
 ### Which models have a known price
 
@@ -158,7 +158,7 @@ Cache hits are not billed again. Streaming responses (`"stream": true`) are serv
 | `413` | Request body larger than `MAX_BODY_BYTES` (10 MB) |
 | `429` | IP rate limit, key RPM limit or monthly budget reached, or the quota of the last provider tried exhausted (`Retry-After` when it gives a delay) |
 | `502` | The provider returned an error or could not be reached, or every candidate provider failed. A client key never gets the provider's own message or address: the `error_ref` finds it in the gateway log |
-| `503` | Server at its concurrency cap, every provider of the model at its own cap (`"code": "providers_busy"`), or a CLI provider timed out (`Retry-After` is set) |
+| `503` | Server at its concurrency cap, every provider of the model at its own cap (`"code": "providers_busy"`), or a CLI provider timed out (`Retry-After` is set); or the model belongs to a provider the operator turned off (`"code": "provider_disabled"`, no `Retry-After`: pick another model) |
 
 ## Self-service for clients
 

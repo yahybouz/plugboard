@@ -324,6 +324,15 @@ async def bootstrap_ollama() -> Optional[Dict[str, Any]]:
         log.debug("Ollama bootstrap disabled (OLLAMA_ENABLED=false)")
         return None
 
+    from plugboard.config import get_provider
+
+    registered = get_provider(_PROVIDER_ID)
+    if registered is not None and not registered.get("is_active", True):
+        # PLU-12: switched off, nothing calls the daemon. The token still
+        # follows PLUGBOARD_OLLAMA_TOKEN, for when the switch is turned on.
+        log.info("Ollama is turned off: boot check and model sync skipped")
+        return _with_current_token(registered)
+
     available = await check_available()
 
     if not available:
@@ -339,10 +348,7 @@ async def bootstrap_ollama() -> Optional[Dict[str, Any]]:
     for p in load_providers():
         if p.get("id") == _PROVIDER_ID:
             log.info("Ollama provider already registered (id=%s)", _PROVIDER_ID)
-            if _OLLAMA_TOKEN and p.get("bearer_token", "") != _OLLAMA_TOKEN:
-                from plugboard.config import update_provider
-
-                p = update_provider(_PROVIDER_ID, {"bearer_token": _OLLAMA_TOKEN}) or p
+            p = _with_current_token(p)
             # Sync models
             await _sync_models(p)
             return p
@@ -362,6 +368,17 @@ async def bootstrap_ollama() -> Optional[Dict[str, Any]]:
     await _sync_models(record)
 
     return record
+
+
+def _with_current_token(provider: Dict[str, Any]) -> Dict[str, Any]:
+    """The provider record, its bearer token updated to PLUGBOARD_OLLAMA_TOKEN."""
+    if _OLLAMA_TOKEN and provider.get("bearer_token", "") != _OLLAMA_TOKEN:
+        from plugboard.config import update_provider
+
+        return (
+            update_provider(_PROVIDER_ID, {"bearer_token": _OLLAMA_TOKEN}) or provider
+        )
+    return provider
 
 
 async def _sync_models(provider: Dict[str, Any]) -> None:
@@ -431,3 +448,69 @@ async def _sync_models(provider: Dict[str, Any]) -> None:
             )
     except Exception as exc:
         log.warning("Failed to sync Ollama models: %s", exc)
+
+
+# ── Switch (PLU-12) ──────────────────────────────────────────────────────────
+#
+# The switch is the ``is_active`` field of the ``ollama`` provider: turned
+# off, its models leave the catalogue and every request for one gets 503
+# provider_disabled without any call (router.disabled_route). It lives in
+# providers.json, so it survives restarts and needs no redeploy.
+
+
+def switch_state() -> Dict[str, Any]:
+    """Whether Ollama serves the API, the MCP server and the Playground.
+
+    ``in_flight`` and ``waiting`` count the requests running on it and
+    waiting for its slot. No call reaches the daemon.
+    """
+    from plugboard import provider_admission
+    from plugboard.config import get_provider
+
+    provider = get_provider(_PROVIDER_ID)
+    return {
+        "provider_id": _PROVIDER_ID,
+        "registered": provider is not None,
+        "enabled": bool(provider.get("is_active", True)) if provider else False,
+        "in_flight": provider_admission.in_flight(_PROVIDER_ID),
+        "waiting": provider_admission.waiting(_PROVIDER_ID),
+    }
+
+
+def set_enabled(enabled: bool) -> Dict[str, Any]:
+    """Turn Ollama on or off; ``before`` is the state it replaced.
+
+    Read and written under the provider store's lock, and not written when
+    nothing changes. No call reaches the daemon: once the change is
+    audited, the caller runs ``resync_models()`` when Ollama was turned
+    back on. Raises ``LookupError`` when no ``ollama`` provider is
+    registered.
+    """
+    from plugboard.config import modify_provider
+    from plugboard.router import invalidate_models_cache
+
+    seen: Dict[str, bool] = {}
+
+    def _flip(current: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        seen["before"] = bool(current.get("is_active", True))
+        if seen["before"] == bool(enabled):
+            return None  # unchanged: providers.json is not rewritten
+        return {"is_active": bool(enabled)}
+
+    if modify_provider(_PROVIDER_ID, _flip) is None:
+        raise LookupError(_PROVIDER_ID)
+    invalidate_models_cache()
+    return {"before": seen["before"], **switch_state()}
+
+
+async def resync_models() -> None:
+    """Sync the installed model list once, after Ollama is turned back on.
+
+    Its list may have changed while it was off. A failure is only logged
+    (``_sync_models``); without a registered provider nothing happens.
+    """
+    from plugboard.config import get_provider
+
+    provider = get_provider(_PROVIDER_ID)
+    if provider is not None:
+        await _sync_models(provider)

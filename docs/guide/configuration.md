@@ -110,7 +110,7 @@ The removed connector's `OPENCLAW_URL`, `OPENCLAW_KEY`, `OPENCLAW_MODEL` and
 |---|---|---|
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama daemon URL. |
 | `PLUGBOARD_OLLAMA_TOKEN` | empty | Bearer token for an Ollama behind an authenticating proxy: sent only to `OLLAMA_URL` (never to ollama.com) and stored, encrypted, on the `ollama` provider. `POST /v1/embeddings` sends it too when the engine is exactly `OLLAMA_URL`. |
-| `OLLAMA_ENABLED` | `auto` | `auto` registers Ollama if it answers, `true` also warns if it does not, `false` never registers it. |
+| `OLLAMA_ENABLED` | `auto` | At startup only: `auto` registers Ollama if it answers, `true` also warns if it does not, `false` never registers it. `false` does not turn off a provider already registered: use the switch on the Ollama page. |
 | `OLLAMA_TIMEOUT` | `30` | Timeout of Ollama management calls, in seconds. |
 | `OLLAMA_CLOUD_CATALOG_URL` | `https://ollama.com/api/tags` | Catalog used to add Ollama cloud models. |
 | `PLUGBOARD_OLLAMA_CLOUD_AUTOSYNC` | `1` | `0` stops adding Ollama cloud models automatically. |

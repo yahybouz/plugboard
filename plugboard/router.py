@@ -140,6 +140,18 @@ class ProvidersBusyError(RuntimeError):
         self.provider_ids = list(provider_ids)
 
 
+class ProviderDisabledError(RuntimeError):
+    """The model belongs to a provider the admin turned off (PLU-12).
+
+    Nothing was called: the request is refused, never sent to another
+    provider in its place. ``provider_id`` names the disabled provider.
+    """
+
+    def __init__(self, provider_id: str):
+        super().__init__(f"Provider '{provider_id}' is turned off")
+        self.provider_id = provider_id
+
+
 # OpenAI-style error type that blames the request (unsupported parameter...);
 # "invalid_api_key" shares the type but blames the gateway's key.
 _REQUEST_ERROR_TYPES = frozenset({"invalid_request_error"})
@@ -557,6 +569,122 @@ def is_unknown_model(model_str: str) -> bool:
     )
 
 
+def _known_native(
+    provider: Dict[str, Any],
+    model_str: str,
+    published_in: Optional[tuple] = None,
+) -> Optional[str]:
+    """The provider's own name for ``model_str``, or None if it does not know it.
+
+    The same matches as is_unknown_model: a listed model, the default model
+    or a family alias in the loose form Ollama accepts, or the
+    configured-model lookup of resolve_provider_and_model. With
+    ``published_in`` (the registered IDs, for an inactive provider), that
+    last match is the exact spelling /v1/models gave the model
+    (``Codex:gpt-6.1-sol``), never a vendor prefix guessed from its name.
+    """
+    listed = _listed_models(provider)
+    aliases = _family_aliases(provider)
+    wanted = _loose_model_name(model_str)
+    for name in listed + [provider.get("default_model") or ""] + aliases:
+        if isinstance(name, str) and name and _loose_model_name(name) == wanted:
+            return name
+    if published_in is not None:
+        spelled = model_str.strip()
+        for name in listed + aliases:
+            if published_model_id(provider["id"], name, published_in) == spelled:
+                return name
+        return None
+    requested_clean = _clean_model_id(model_str)
+    for name in listed + aliases:
+        if _clean_model_id(f"{provider['id']}:{name}") == requested_clean:
+            return name
+    return None
+
+
+def disabled_route(model_str: str) -> Optional[tuple[Dict[str, Any], str]]:
+    """(provider, native model) when only a disabled provider serves ``model_str``.
+
+    Such a request must call nobody (PLU-12): before, it was sent to every
+    other active provider in turn (BUG-44). Matched when a registered
+    provider ID prefixes it (the longest wins) and that provider is
+    inactive; or when no registered ID prefixes it, an inactive provider
+    knows the name (its own name is returned), every active provider has a
+    model list and none knows it. Never when an active provider is selected,
+    by its prefix or by a display or legacy alias (an inactive provider
+    named ``Codex`` leaves ``Codex:`` to the Codex CLI). None otherwise: the
+    request is routed, or answered 404, as before.
+
+    Called on every chat request: with no provider turned off it costs one
+    registry read, and the inactive providers are searched before the
+    active ones are checked.
+    """
+    if not isinstance(model_str, str) or not model_str.strip():
+        return None
+    registry = [p for p in load_providers() if not is_removed_provider(p)]
+    inactive = [p for p in registry if not p.get("is_active", True)]
+    if not inactive:
+        return None
+    active = [p for p in registry if p.get("is_active", True)]
+    provider_ids = tuple(p["id"] for p in registry)
+    # Surrounding spaces do not hide a prefix: " ollama:qwen3:8b" is Ollama's.
+    stripped = model_str.strip()
+    owner = registered_model_owner(stripped, provider_ids)
+    candidate: Optional[tuple[Dict[str, Any], str]] = None
+    if owner is not None:
+        provider = next(p for p in registry if p["id"] == owner)
+        if provider.get("is_active", True):
+            return None  # its active owner serves it
+        candidate = provider, stripped[len(owner) + 1 :]
+    else:
+        if any(not _listed_models(p) for p in active):
+            return None  # a provider without a list may serve any name
+        for provider in inactive:
+            native = _known_native(provider, model_str, provider_ids)
+            if native is not None:
+                candidate = provider, native
+                break
+        if candidate is None:
+            return None
+        if any(_known_native(p, model_str) is not None for p in active):
+            return None
+    if active:
+        try:
+            selected = _select_request(model_str)[1]
+        except ValueError:
+            return None  # the chat route answers these as before
+        if selected is not None and not (
+            owner is not None and stripped.startswith(selected.provider["id"] + ":")
+        ):
+            return None  # a display or legacy alias selects an active one
+        # A shorter active prefix does not take the namespace a longer
+        # disabled owner reserves (model_identity.published_model_id).
+    return candidate
+
+
+def _refuse_if_disabled(model_str: str) -> None:
+    """Raise ProviderDisabledError when only a disabled provider serves it.
+
+    The routing core's own check (PLU-12): every caller of forward() and
+    forward_stream() gets it, the chat route's admission included.
+    """
+    route = disabled_route(model_str)
+    if route is not None:
+        raise ProviderDisabledError(route[0]["id"])
+
+
+def _turned_off(provider_id: str) -> bool:
+    """Whether the registry, read again, now says this provider is off.
+
+    A provider the registry does not hold is not refused here: only an
+    explicit ``is_active: false`` (the switch) stops a call.
+    """
+    for provider in load_providers():
+        if provider.get("id") == provider_id:
+            return not provider.get("is_active", True)
+    return False
+
+
 def _extra_headers(provider: Dict[str, Any]) -> Dict[str, str]:
     """Fixed headers a provider needs on every call.
 
@@ -755,6 +883,7 @@ async def forward(
     _served_by.set(None)
     _usage_reported.set(False)
     model_str = body.get("model", "")
+    _refuse_if_disabled(model_str)
     candidates = _resolve_all_providers(model_str)
 
     # Read each route's circuit under the key its outcomes are recorded under:
@@ -800,6 +929,11 @@ async def forward(
     loop = asyncio.get_running_loop()
     deadline: Optional[float] = None
     granted: Optional[provider_admission.Lease] = None
+    # PLU-12: a provider turned off while this request waited for it, or
+    # tried another candidate, is never called; the first candidate was
+    # checked by _refuse_if_disabled, with no wait since.
+    disabled_seen: Optional[str] = None
+    recheck = False
 
     def _take(provider: Dict[str, Any]) -> Optional[provider_admission.Lease]:
         """The slot the wait granted, when it is this provider's; else a new one."""
@@ -832,6 +966,14 @@ async def forward(
                 queue.extend(c for c in busy if c[0]["id"] != pid)
                 busy.clear()
             provider, real_model = queue.popleft()
+            if recheck and _turned_off(provider["id"]):
+                # Turned off meanwhile: drop its routes; a slot the wait
+                # granted it is given back at the top of the loop.
+                disabled_seen = provider["id"]
+                queue = deque(c for c in queue if c[0]["id"] != disabled_seen)
+                busy[:] = [c for c in busy if c[0]["id"] != disabled_seen]
+                continue
+            recheck = True
             # Direct CLI providers short-circuit HTTP.
             auth_source = provider.get("auth_source", "")
             if auth_source.startswith("subprocess:"):
@@ -1113,7 +1255,15 @@ async def forward(
             log.warning("Provider %s failed, trying next...", provider["id"])
 
         if busy:
-            raise ProvidersBusyError([p["id"] for p, _ in busy])
+            # A wait that ended without a slot: a provider turned off
+            # meanwhile is off, not full (PLU-12).
+            still_on = [c for c in busy if not _turned_off(c[0]["id"])]
+            if len(still_on) < len(busy):
+                disabled_seen = next(c[0]["id"] for c in busy if c not in still_on)
+            if still_on:
+                raise ProvidersBusyError([p["id"] for p, _ in still_on])
+        if disabled_seen is not None and refused is None and last_err is None:
+            raise ProviderDisabledError(disabled_seen)
         raise refused or last_err or RuntimeError("All providers failed")
     finally:
         if granted is not None:
@@ -1136,19 +1286,26 @@ async def forward_stream(
     ``ProvidersBusyError`` before any call.
     """
     model_str = body.get("model", "")
+    _refuse_if_disabled(model_str)
     provider, real_model = resolve_provider_and_model(model_str)
     if route_guard is not None:
         route_guard(provider, real_model)
     lease = provider_admission.try_acquire(provider)
-    if lease is None:
+    waited = lease is None
+    if waited:
         _live.update(phase="waiting_provider")
         lease = await provider_admission.wait_acquire(
             [provider], provider_admission.WAIT_S
         )
         _live.update(phase="running")
     if lease is None:
+        if _turned_off(provider["id"]):
+            raise ProviderDisabledError(provider["id"])  # off, not full
         raise ProvidersBusyError([provider["id"]])
     try:
+        # Inside the try: the slot goes back whatever the registry read does.
+        if waited and _turned_off(provider["id"]):
+            raise ProviderDisabledError(provider["id"])  # off while it waited
         async with contextlib.aclosing(
             _stream_route(body, provider, real_model, timeout)
         ) as chunks:

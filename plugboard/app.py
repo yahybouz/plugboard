@@ -115,10 +115,12 @@ from plugboard.decisions import is_decision_model
 from plugboard.cli_auth import AuthError
 from plugboard.cli_subprocess import CliSubprocessError
 from plugboard.router import (
+    ProviderDisabledError,
     ProviderHTTPError,
     ProviderNetworkError,
     ProvidersBusyError,
     ProviderQuotaError,
+    disabled_route,
     discover_models,
     forward,
     forward_stream,
@@ -338,9 +340,10 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
     ollama_prov = await bootstrap_ollama()
     if ollama_prov:
         log.info(
-            "Ollama auto-registered: %s (%s)",
+            "Ollama auto-registered: %s (%s) active=%s",
             ollama_prov["id"],
             ollama_prov.get("base_url"),
+            ollama_prov.get("is_active", True),
         )
     # Warm up installed subprocess CLIs (gemini/codex/claude) so the first
     # user request saves the cold-start cost (Node.js init, OAuth read, DNS).
@@ -1649,7 +1652,17 @@ def _check_model_access(
     """Raise 403 unless the resolved effective identity is allowed."""
     guard = _model_route_guard(client_id, key_record)
     if guard is not None:
-        guard(*resolve_provider_and_model(model_str))
+        guard(*_route_for_guard(model_str))
+
+
+def _route_for_guard(model_str: str) -> tuple:
+    """(provider, native model) a key's allowed_models is checked against.
+
+    A model of a disabled provider is checked as its real owner's (PLU-12):
+    resolve_provider_and_model would name another provider, the one the
+    request used to leak to (BUG-44).
+    """
+    return disabled_route(model_str) or resolve_provider_and_model(model_str)
 
 
 def _model_route_guard(client_id, key_record=None):
@@ -1824,6 +1837,24 @@ def _providers_busy_response(
     return JSONResponse(status_code=503, content=content, headers=headers)
 
 
+def _provider_disabled_response(provider_id: str) -> JSONResponse:
+    """503 ``provider_disabled``: the model belongs to a provider the admin
+    turned off (PLU-12). Nothing was called, no other provider stands in,
+    and no ``Retry-After``: nobody knows when it comes back.
+    """
+    log.info("provider disabled: %s", provider_id)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": f"Provider '{provider_id}' is turned off by the "
+            "administrator; nothing was called.",
+            "code": "provider_disabled",
+            "hint": "Pick another model from GET /v1/models, or ask the "
+            "administrator to turn the provider back on.",
+        },
+    )
+
+
 def _provider_http_error_response(
     exc: ProviderHTTPError | ProviderNetworkError, client_id: Optional[str]
 ) -> JSONResponse:
@@ -1967,11 +1998,18 @@ def _require_chat_messages(
             )
 
 
-def _live_note(model: str, client_id: Optional[str]) -> None:
-    """Tell /v1/inflight which model, provider and caller this request is."""
+def _live_note(
+    model: str, client_id: Optional[str], disabled: Optional[tuple] = None
+) -> None:
+    """Tell /v1/inflight which model, provider and caller this request is.
+
+    ``disabled`` is the request's router.disabled_route answer, read once by
+    the caller: a model of a disabled provider is shown as its owner's.
+    """
     provider_id = None
     try:
-        provider_id = resolve_provider_and_model(model)[0].get("id")
+        route = disabled or resolve_provider_and_model(model)
+        provider_id = route[0].get("id")
     except Exception:  # unknown model: the admission checks answer it
         pass
     _live.update(client_id=client_id, model=model[:120] or None, provider=provider_id)
@@ -2006,7 +2044,9 @@ async def chat_completions(
         raise HTTPException(400, "Request body must be a JSON object")
     if not isinstance(body.get("model", ""), str):
         raise HTTPException(400, "model must be a string")
-    _live_note(body.get("model", ""), client_id)
+    # Read once per request (PLU-12): /v1/inflight and the admission share it.
+    disabled = disabled_route(body.get("model", ""))
+    _live_note(body.get("model", ""), client_id, disabled)
     providers = load_providers()
     try:
         require_supported_model(
@@ -2050,12 +2090,18 @@ async def chat_completions(
     if client_id and client_id != "admin":
         spending_total = _check_spending_limit(client_id, key_record=key_record)
 
-    # Check model access (per-key allowed_models)
+    # Check model access (per-key allowed_models). A model of a disabled
+    # provider is checked as its owner's, then refused (PLU-12).
     route_guard = _model_route_guard(client_id, key_record)
     route_options = {}
     if route_guard is not None:
-        route_guard(*resolve_provider_and_model(body.get("model", "")))
+        route_guard(*(disabled or resolve_provider_and_model(body.get("model", ""))))
         route_options["route_guard"] = route_guard
+
+    # After the key's 403, before the 404 and the 402; before the cache too,
+    # so no stored answer comes out while the provider is off.
+    if disabled is not None:
+        return _provider_disabled_response(disabled[0]["id"])
 
     # After the key's 403, so a limited key cannot probe which IDs exist;
     # before the 402, which would blame a price for a model that is not there.
@@ -2248,6 +2294,8 @@ async def chat_completions(
             except Exception as exc:
                 if isinstance(exc, ProvidersBusyError):
                     return _providers_busy_response(exc, client_id)
+                if isinstance(exc, ProviderDisabledError):
+                    return _provider_disabled_response(exc.provider_id)
                 log.error("subprocess stream forward error: %s", exc)
                 err_str = str(exc)
                 # Before the timeout test: a CLI message quotes its stderr.
@@ -2435,6 +2483,8 @@ async def chat_completions(
         except Exception as exc:
             if isinstance(exc, ProvidersBusyError):
                 return _providers_busy_response(exc, client_id)
+            if isinstance(exc, ProviderDisabledError):
+                return _provider_disabled_response(exc.provider_id)
             log.error("stream error: %s", exc)
             err_str = str(exc)
             if isinstance(exc, ProviderQuotaError):
@@ -2579,6 +2629,8 @@ async def chat_completions(
     except Exception as exc:
         if isinstance(exc, ProvidersBusyError):
             return _providers_busy_response(exc, client_id)
+        if isinstance(exc, ProviderDisabledError):
+            return _provider_disabled_response(exc.provider_id)
         log.error("forward error: %s", exc)
         err_str = str(exc)
         # Before the timeout test: a CLI message quotes its stderr.
@@ -2737,11 +2789,16 @@ def _preflight_refusal(
     """Closed error code of the first chat admission check the item fails.
 
     The chat route's checks, in its order. The key's own checks apply to a
-    client key only; ``model_not_found`` (router.is_unknown_model) applies to
-    every caller, after the key's 403 so a limited key cannot probe which IDs
-    exist, and before the 402 and the rpm count.
+    client key only; ``provider_disabled`` (router.disabled_route, PLU-12) and
+    ``model_not_found`` (router.is_unknown_model) apply to every caller, after
+    the key's 403 so a limited key cannot probe which IDs exist, and before
+    the 402 and the rpm count.
     """
     keyed = bool(client_id) and client_id != "admin"
+
+    def _enabled() -> None:
+        if disabled_route(model_str) is not None:
+            raise HTTPException(503, "provider_disabled")
 
     def _known() -> None:
         if is_unknown_model(model_str):
@@ -2758,6 +2815,7 @@ def _preflight_refusal(
             keyed,
             lambda: _check_model_access(client_id, model_str, key_record=key_record),
         ),
+        ("provider_disabled", True, _enabled),
         ("model_not_found", True, _known),
         (
             "price_unavailable",
@@ -2785,9 +2843,9 @@ async def preflight(
     """Smoke-test a batch of provider+model pairs before a long benchmark.
 
     Each ping goes through the chat admission checks (allowed_models, budget,
-    a model some provider knows, known price, rpm; the inflight cap holds for
-    the whole batch) and is billed like a chat call. Errors are closed codes,
-    never the provider's text.
+    a provider that is not turned off, a model some provider knows, known
+    price, rpm; the inflight cap holds for the whole batch) and is billed
+    like a chat call. Errors are closed codes, never the provider's text.
     """
     key_record = _get_request_key_record(request, client_id=client_id)
     key_id = getattr(request.state, "key_id", "")
@@ -2803,7 +2861,10 @@ async def preflight(
         try:
             resolve_provider_and_model(model_str)
         except Exception:
-            error = "unknown_model"
+            # With no provider on, a model of a disabled one does not
+            # resolve: _preflight_refusal names it provider_disabled.
+            if disabled_route(model_str) is None:
+                error = "unknown_model"
         if error is None:
             error = _preflight_refusal(client_id, model_str, key_record)
         if error is None:
@@ -2826,6 +2887,9 @@ async def preflight(
                 # Full, not failed: nothing was called (D-23).
                 log.info("preflight busy | model=%s | %s", model_str, exc)
                 error = "providers_busy"
+            except ProviderDisabledError:
+                # Turned off between the checks and the ping: nothing called.
+                error = "provider_disabled"
             except Exception as exc:
                 log.warning("preflight error | model=%s | %s", model_str, exc)
                 error = "upstream_error"
@@ -3837,12 +3901,29 @@ async def patch_provider(
     if record is None:
         raise HTTPException(404, f"Provider '{provider_id}' not found")
     invalidate_models_cache()
+    audit_details: Dict[str, Any] = {"fields": sorted(updates.keys())}
+    if "is_active" in updates:
+        # The switch's value, not only its name (PLU-12).
+        audit_details["is_active"] = updates["is_active"]
     _audit(
         "provider.update",
         target_type="provider",
         target_id=provider_id,
-        details=json.dumps({"fields": sorted(updates.keys())}),
+        details=json.dumps(audit_details),
     )
+    if (
+        provider_id == "ollama"
+        and before is not None
+        and not before.get("is_active", True)
+        and updates.get("is_active") is True
+    ):
+        # The Ollama switch's own field (PLU-12): turned back on here, the
+        # installed model list is synced once, as from the Ollama page.
+        from plugboard import ollama
+
+        await ollama.resync_models()
+        synced = get_provider(provider_id) or {}
+        record = {**record, "models": synced.get("models", record.get("models"))}
     if before is not None and "base_url" in updates:
         old_url = (before.get("base_url") or "").rstrip("/")
         new_url = (updates["base_url"] or "").rstrip("/")
@@ -4702,6 +4783,61 @@ async def ollama_put_settings(
         details=f"value={body.local_downloads_enabled}",
     )
     return ollama_admin.settings_payload()
+
+
+class OllamaSwitchUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    enabled: bool
+
+
+@app.get("/admin/ollama/switch")
+async def ollama_get_switch(_: None = Depends(_require_admin)):
+    """Whether Ollama serves the API, the MCP server and the Playground (PLU-12)."""
+    from plugboard import ollama
+
+    return ollama.switch_state()
+
+
+@app.put("/admin/ollama/switch")
+async def ollama_put_switch(
+    body: OllamaSwitchUpdate, _: None = Depends(_require_admin)
+):
+    """Turn Ollama on or off for every surface, at once and without a restart.
+
+    Off, its models leave the catalogue and every request for one gets 503
+    provider_disabled without any call; requests already running go to
+    their end. Persisted in providers.json (``is_active``), audited.
+    """
+    from plugboard import ollama
+
+    try:
+        state = ollama.set_enabled(body.enabled)
+    except LookupError:
+        raise HTTPException(
+            404,
+            "Ollama provider is not registered (see OLLAMA_URL and OLLAMA_ENABLED)",
+        ) from None
+    before = state.pop("before")
+    # Audited as soon as it is written, before the model sync (up to
+    # OLLAMA_TIMEOUT): concurrent switches are logged in the order they land.
+    _audit(
+        "ollama.switch",
+        target_type="provider",
+        target_id=state["provider_id"],
+        details=json.dumps(
+            {
+                "from": before,
+                "to": body.enabled,
+                "in_flight": state["in_flight"],
+                "waiting": state["waiting"],
+            }
+        ),
+    )
+    if body.enabled and not before:
+        await ollama.resync_models()
+        state = ollama.switch_state()
+    return state
 
 
 @app.get("/admin/ollama/cloud-catalog")

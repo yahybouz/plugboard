@@ -675,6 +675,10 @@ async def _embed(text: str) -> Optional[List[float]]:
     if not provider:
         log.warning("EMBED_PROVIDER_ID=%r not found in providers.json", provider_id)
         return None
+    if not provider.get("is_active", True):
+        # Turned off (PLU-12): never called; the MinHash layer still answers.
+        log.debug("embed provider %r is turned off: skipped", provider_id)
+        return None
     base_url = (provider.get("base_url") or "").rstrip("/")
     if not base_url:
         log.warning("provider %r has no base_url", provider_id)

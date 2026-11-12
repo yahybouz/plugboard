@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "1.5.0"
+CONTRACT_VERSION = "1.6.0"
 _JSON = "application/json"
 
 
@@ -360,6 +360,7 @@ class PreflightResult(BaseModel):
             "rate_limited",
             "upstream_error",
             "providers_busy",
+            "provider_disabled",
         ]
     ] = Field(
         default=None,
@@ -369,8 +370,10 @@ class PreflightResult(BaseModel):
             "provider knows it (the chat routes' 404 model_not_found; not "
             "pinged), the monthly budget is spent, the key has a budget and "
             "the model no known price, the key's rpm limit is reached, the "
-            "provider failed, or the provider stayed at its concurrency cap "
-            "(nothing was called)."
+            "provider failed, the provider stayed at its concurrency cap "
+            "(nothing was called), or the model belongs to a provider the "
+            "admin turned off (the chat routes' 503 provider_disabled; "
+            "nothing was called)."
         ),
     )
 
@@ -491,14 +494,17 @@ class ErrorResponse(_Open):
     provider gave a delay; a failing CLI provider (502) adds its exit details
     for the admin only. A chat model no provider knows (404) adds `code` and
     `hint`. A chat whose candidate providers all stayed at their concurrency
-    cap (503) adds `code` providers_busy, `retry_after` and Retry-After."""
+    cap (503) adds `code` providers_busy, `retry_after` and Retry-After. A
+    chat model of a provider the admin turned off (503) adds `code`
+    provider_disabled and `hint`, without Retry-After."""
 
     detail: Union[str, List[Any], Dict[str, Any]]
     retry_after: Optional[int] = None
     code: Optional[str] = Field(
         default=None,
         description="Stable reason for programs, when the route gives one: "
-        "model_not_found (chat, 404), providers_busy (chat, 503).",
+        "model_not_found (chat, 404), providers_busy (chat, 503), "
+        "provider_disabled (chat, 503).",
     )
     hint: Optional[str] = Field(
         default=None, description="What to do next, when the gateway knows."
@@ -576,8 +582,10 @@ _CHAT_ERRORS = {
     " model_not_found, hint says what to send; nothing was called.",
     "413": "Request body larger than MAX_BODY_BYTES (10 MB by default).",
     "502": "The provider failed or answered with an error.",
-    "503": "Provider timeout (retry_after), too many concurrent requests, or every"
-    " candidate provider at its concurrency cap (code providers_busy, Retry-After 5).",
+    "503": "Provider timeout (retry_after), too many concurrent requests, every"
+    " candidate provider at its concurrency cap (code providers_busy, Retry-After 5),"
+    " or the model belongs to a provider the admin turned off (code"
+    " provider_disabled, hint, no Retry-After); nothing was called.",
 }
 _CHAT_HEADERS = {
     "X-Cache": "HIT, MISS or SEMANTIC-HIT-<layer>.",
