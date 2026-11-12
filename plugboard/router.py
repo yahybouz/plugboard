@@ -26,13 +26,14 @@ import os
 import re
 import time as _time
 import uuid as _uuid
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Set
+from typing import Any, AsyncIterator, Callable, Dict, List, Mapping, Optional, Set
 
 import aiohttp
 
 from plugboard import envcompat, metrics, netguard, provider_admission, route_pauses
 from plugboard.alerts import record_provider_failure, record_provider_success
 from plugboard.circuit_breaker import is_request_too_long
+from plugboard.cli_limits import unsupported_on_cli
 from plugboard.cli_subprocess import MAX_RETRY_AFTER_S, CliSubprocessError
 from plugboard.config import load_providers
 from plugboard import live_requests as _live
@@ -150,6 +151,47 @@ class ProviderDisabledError(RuntimeError):
     def __init__(self, provider_id: str):
         super().__init__(f"Provider '{provider_id}' is turned off")
         self.provider_id = provider_id
+
+
+class UnsupportedOnCliError(RuntimeError):
+    """Only CLI subscription routes serve the model, and they cannot serve
+    the request (see ``plugboard.cli_limits``).
+
+    Nothing was called and no provider slot was taken. ``provider_id`` names
+    the first candidate; ``unsupported`` lists the refused fields, such as
+    ``tools`` or ``content:image_url``.
+    """
+
+    def __init__(self, provider_id: str, unsupported: List[str]):
+        super().__init__(
+            f"Provider '{provider_id}' is a CLI subscription route and cannot "
+            "serve: " + ", ".join(unsupported)
+        )
+        self.provider_id = provider_id
+        self.unsupported = list(unsupported)
+
+
+def is_cli_provider(provider: Mapping[str, Any]) -> bool:
+    """Whether ``provider`` is a CLI subscription route (``subprocess:<cli>``)."""
+    auth_source = provider.get("auth_source")
+    return isinstance(auth_source, str) and auth_source.startswith("subprocess:")
+
+
+def _drop_cli_routes(
+    body: Mapping[str, Any], candidates: List[tuple[Dict[str, Any], str]]
+) -> List[tuple[Dict[str, Any], str]]:
+    """``candidates`` without the CLI routes when ``body`` asks what they cannot serve.
+
+    Raise ``UnsupportedOnCliError`` (naming the first candidate) when only
+    CLI routes were candidates. A text-only body keeps every candidate.
+    """
+    unsupported = unsupported_on_cli(body)
+    if not unsupported or not candidates:
+        return candidates
+    kept = [route for route in candidates if not is_cli_provider(route[0])]
+    if not kept:
+        raise UnsupportedOnCliError(candidates[0][0]["id"], unsupported)
+    return kept
 
 
 # OpenAI-style error type that blames the request (unsupported parameter...);
@@ -782,6 +824,26 @@ def _resolve_all_providers(model_str: str) -> List[tuple[Dict[str, Any], str]]:
     return results
 
 
+def cli_refusal(body: Dict[str, Any]) -> Optional[UnsupportedOnCliError]:
+    """The ``UnsupportedOnCliError`` forward() would raise for ``body``, or None.
+
+    None when the body asks for nothing a CLI route cannot serve, when a
+    candidate that is not a CLI route is left, or when routing itself fails
+    (a ``ValueError``: the chat route answers it as before). Never raises.
+    """
+    if not unsupported_on_cli(body):
+        return None
+    try:
+        candidates = _resolve_all_providers(body.get("model", ""))
+    except ValueError:
+        return None
+    try:
+        _drop_cli_routes(body, candidates)
+    except UnsupportedOnCliError as exc:
+        return exc
+    return None
+
+
 # (provider, real_model) that actually answered the current request, after
 # any fallback to the next provider. Billing reads it so the price is the
 # one of the provider that served the call. Each request runs in its own
@@ -885,6 +947,10 @@ async def forward(
     model_str = body.get("model", "")
     _refuse_if_disabled(model_str)
     candidates = _resolve_all_providers(model_str)
+    # A CLI route would drop tools, a structured format or an image: it is
+    # left out, before any circuit read, guard or slot, and the request is
+    # refused when nothing else is left.
+    candidates = _drop_cli_routes(body, candidates)
 
     # Read each route's circuit under the key its outcomes are recorded under:
     # an open circuit past its cooldown goes half-open, so a success closes
@@ -1290,6 +1356,7 @@ async def forward_stream(
     provider, real_model = resolve_provider_and_model(model_str)
     if route_guard is not None:
         route_guard(provider, real_model)
+    _drop_cli_routes(body, [(provider, real_model)])  # raises on a CLI route
     lease = provider_admission.try_acquire(provider)
     waited = lease is None
     if waited:
