@@ -19,7 +19,7 @@
   `cd /srv/dev/worktrees/plugboard/mcp-identity && S=/tmp/claude-1001/-srv-dev-plugboard/a5d91e11-1edb-4748-99e2-79712c823769/scratchpad/mcp-identity && TMPDIR=$S PLUGBOARD_DATA=$S/data PLUGBOARD_SKIP_DOTENV=1 PYTHONDONTWRITEBYTECODE=1 /srv/dev/plugboard/.venv/bin/python scripts/export_contract.py --mcp`
 - `CONTRACT_VERSION` reste `1.5.0`. Ne pas toucher `VERSION` ni `plugboard/__init__.py`.
 - Messages renvoyés par les outils : en anglais, préfixe `Error: `. Textes exacts :
-  - pas de clé : `the update registry needs PLUGBOARD_API_KEY: updates are those of that key's client`
+  - pas de clé : `this tool needs PLUGBOARD_API_KEY: it acts for that key's client` (texte revu à la tâche 4, l'outil `inflight_requests` l'utilise aussi)
   - passerelle en erreur : `could not identify the client of PLUGBOARD_API_KEY (<result["error"][:120]>)`
   - pas de client : `PLUGBOARD_API_KEY does not identify a client`
   - clé admin : `PLUGBOARD_API_KEY is the admin key: give the MCP server a client key`

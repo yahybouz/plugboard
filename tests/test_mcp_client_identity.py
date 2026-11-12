@@ -97,6 +97,10 @@ def as_client(monkeypatch):
     async def fake_get(path, admin=False):
         state["calls"].append((path, admin))
         if path == "/v1/me":
+            if "raise" in state:
+                raise state["raise"]
+            if "raw" in state:
+                return state["raw"]
             if state["error"]:
                 return {"error": state["error"]}
             return {"client_id": state["client_id"]}
@@ -149,6 +153,37 @@ async def test_revoked_key_is_refused_on_the_next_call(as_client):
     with pytest.raises(mcp_server.CallerIdentityError):
         await mcp_server._caller_client_id()
     assert as_client["calls"] == [("/v1/me", False), ("/v1/me", False)]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"raw": ["not", "an", "object"]},
+        {"raise": asyncio.TimeoutError()},
+        {"raise": ValueError("Expecting value")},
+    ],
+    ids=["not-an-object", "timeout", "bad-json"],
+)
+async def test_unexpected_gateway_answer_is_refused(as_client, answer):
+    as_client.update(answer)
+    with pytest.raises(mcp_server.CallerIdentityError, match="could not identify"):
+        await mcp_server._caller_client_id()
+
+
+async def test_identity_messages_are_exact(as_client, monkeypatch):
+    as_client["error"] = "HTTP 502: " + "x" * 300
+    with pytest.raises(mcp_server.CallerIdentityError) as exc:
+        await mcp_server._caller_client_id()
+    assert str(exc.value) == (
+        "could not identify the client of PLUGBOARD_API_KEY "
+        f"({('HTTP 502: ' + 'x' * 300)[:120]})"
+    )
+    monkeypatch.setattr(mcp_server, "_API_KEY", "")
+    with pytest.raises(mcp_server.CallerIdentityError) as exc:
+        await mcp_server._caller_client_id()
+    assert str(exc.value) == (
+        "this tool needs PLUGBOARD_API_KEY: it acts for that key's client"
+    )
 
 
 @pytest.mark.parametrize("claimed", ["", "   ", "alpha", " alpha "])
@@ -209,6 +244,40 @@ async def test_pending_resource_shows_only_the_key_client(as_client, registry):
     assert "beta" not in out and "`CP-B`" not in out
 
 
+async def test_pending_resource_skips_applied_updates(as_client, registry):
+    _seed("alpha", "CP-A")
+    out = await mcp_server.resource_pending_updates()
+    assert "`CP-A`" not in out and "`CP-AB`" in out
+
+
+async def test_pending_resource_reports_a_missing_registry(
+    as_client, registry, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(mcp_server, "_REGISTRY_PATH", tmp_path / "absent.json")
+    monkeypatch.setattr(mcp_server, "_LEGACY_REGISTRY_PATH", tmp_path / "old.json")
+    out = await mcp_server.resource_pending_updates()
+    assert "registry is missing" in out and "all up to date" not in out
+
+
+async def test_duplicate_prompt_id_resolves_to_the_callers_entry(as_client, registry):
+    registry.write_text(
+        json.dumps(
+            {
+                "version": "9.9.9",
+                "prompts": [
+                    _prompt("CP-X", ["beta"], title="Beta X"),
+                    _prompt("CP-X", ["alpha"], title="Alpha X"),
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = await mcp_server.get_update_prompt("CP-X")
+    assert "Alpha X" in out and "Beta X" not in out
+    assert "Marked `CP-X`" in await mcp_server.mark_applied("CP-X")
+    assert _rows() == {("alpha", "CP-X")}
+
+
 @pytest.mark.parametrize(
     "call",
     [
@@ -216,8 +285,9 @@ async def test_pending_resource_shows_only_the_key_client(as_client, registry):
         lambda: mcp_server.list_applied(),
         lambda: mcp_server.get_update_prompt("CP-A"),
         lambda: mcp_server.resource_pending_updates(),
+        lambda: mcp_server.mark_applied("CP-A"),
     ],
-    ids=["check_updates", "list_applied", "get_update_prompt", "pending"],
+    ids=["check_updates", "list_applied", "get_update_prompt", "pending", "mark"],
 )
 async def test_refused_identity_reads_nothing(as_client, registry, monkeypatch, call):
     as_client["client_id"] = "admin"

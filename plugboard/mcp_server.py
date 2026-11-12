@@ -330,7 +330,12 @@ async def _caller_client_id() -> str:
         raise CallerIdentityError(
             "this tool needs PLUGBOARD_API_KEY: it acts for that key's client"
         )
-    result = await _api_get("/v1/me")
+    try:
+        result = await _api_get("/v1/me")
+    except (asyncio.TimeoutError, ValueError) as exc:  # timeout, invalid JSON
+        result = {"error": type(exc).__name__}
+    if not isinstance(result, dict):
+        result = {"error": "unexpected gateway answer"}
     if "error" in result:
         raise CallerIdentityError(
             "could not identify the client of PLUGBOARD_API_KEY "
@@ -740,7 +745,7 @@ async def inflight_requests() -> str:
     running. Only the calls of this key's client are listed. Refused when
     PLUGBOARD_API_KEY is the admin key.
     """
-    # The admin key would list every client's calls with their provider.
+    # The admin key would list every client's calls.
     try:
         await _caller_client_id()
     except CallerIdentityError as exc:
@@ -951,6 +956,29 @@ def _load_registry() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _missing_registry_message(registry: dict) -> str:
+    return (
+        f"The update registry is missing on the server ({registry['missing']}): "
+        "updates cannot be checked. Ask the operator to restore it "
+        "(see PLUGBOARD_REGISTRY_PATH)."
+    )
+
+
+def _client_prompt(registry: dict, prompt_id: str, client_id: str) -> dict | None:
+    """The update ``prompt_id`` aimed at ``client_id``, or None.
+
+    Another client's update answers like a missing one: no oracle on its IDs.
+    """
+    return next(
+        (
+            p
+            for p in registry["prompts"]
+            if p["id"] == prompt_id and client_id in p.get("clients", [])
+        ),
+        None,
+    )
+
+
 def _get_applied(client_id: str) -> set[str]:
     conn = _tracking_conn()
     try:
@@ -980,11 +1008,7 @@ async def check_updates(client_id: str = "") -> str:
         return f"Error: {exc}"
     registry = _load_registry()
     if registry.get("missing"):
-        return (
-            f"The update registry is missing on the server ({registry['missing']}): "
-            "updates cannot be checked. Ask the operator to restore it "
-            "(see PLUGBOARD_REGISTRY_PATH)."
-        )
+        return _missing_registry_message(registry)
     applied = _get_applied(client_id)
 
     pending = [
@@ -1049,9 +1073,8 @@ async def get_update_prompt(prompt_id: str) -> str:
         return f"Error: {exc}"
     registry = _load_registry()
 
-    prompt = next((p for p in registry["prompts"] if p["id"] == prompt_id), None)
-    # Another client's update answers like a missing one: no oracle on its IDs.
-    if not prompt or client_id not in prompt.get("clients", []):
+    prompt = _client_prompt(registry, prompt_id, client_id)
+    if not prompt:
         return f"Error: prompt '{prompt_id}' not found in registry"
 
     lines = [
@@ -1114,9 +1137,8 @@ async def mark_applied(prompt_id: str, notes: str = "", client_id: str = "") -> 
     except CallerIdentityError as exc:
         return f"Error: {exc}"
     registry = _load_registry()
-    prompt = next((p for p in registry["prompts"] if p["id"] == prompt_id), None)
-    # Another client's update answers like a missing one: no oracle on its IDs.
-    if not prompt or client_id not in prompt.get("clients", []):
+    prompt = _client_prompt(registry, prompt_id, client_id)
+    if not prompt:
         return f"Error: prompt '{prompt_id}' not found in registry"
 
     # Check if already applied
@@ -1197,6 +1219,8 @@ async def resource_pending_updates() -> str:
     except CallerIdentityError as exc:
         return f"Error: {exc}"
     registry = _load_registry()
+    if registry.get("missing"):
+        return _missing_registry_message(registry)
     applied = _get_applied(client_id)
     pending = [
         p
