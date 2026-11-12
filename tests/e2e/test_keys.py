@@ -1,4 +1,4 @@
-"""E2E — API Keys tab: full create → appears → revoke CRUD flow.
+"""E2E — API keys tab: full create → appears → revoke CRUD flow.
 
 Exercises the real ``app.js`` form logic + ``/admin/keys`` endpoints in a browser,
 against the isolated server (no real keys touched).

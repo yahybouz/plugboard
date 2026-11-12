@@ -292,7 +292,7 @@ a:hover { color: var(--accent-dark); }
 .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: var(--space-3); margin-bottom: var(--space-6); }
 .stat-card { text-align: left; padding: var(--space-5) var(--space-5) var(--space-5); position: relative; overflow: hidden; }
 .stat-card::before {
-  content: ""; position: absolute; top: 0; left: 1.35rem; right: 1.35rem; height: 1px;
+  content: ""; position: absolute; top: 0; left: var(--space-5); right: var(--space-5); height: 1px;
   background: var(--hairline);
 }
 .stat-card .stat-value {
@@ -464,7 +464,7 @@ input::placeholder { color: var(--text-muted); }
   .sidebar.open { transform: translateX(0); box-shadow: var(--shadow-lg); }
   .main-content { margin-left: 0; }
   .content { padding: var(--space-4); }
-  .topbar { padding: var(--pad-cell); }
+  .topbar { padding: var(--space-3) var(--space-4); }
   .stats-grid { grid-template-columns: 1fr 1fr; }
   .form-row { grid-template-columns: 1fr; }
   .mobile-bar {
@@ -699,9 +699,9 @@ input.pricing-new-price { width: 120px; }
 /* Playground */
 .content.pg-layout { display: flex; flex-direction: column; height: calc(100vh - 120px); }
 .pg-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
-select.pg-select { flex: 1; width: auto; min-width: 250px; padding: var(--space-2) var(--space-2); border-radius: var(--radius-sm); font-size: var(--fs-sm); }
+select.pg-select { flex: 1; width: auto; min-width: 250px; padding: var(--pad-control); border-radius: var(--radius-sm); font-size: var(--fs-sm); }
 .btn.pg-check-btn {
-  padding: var(--space-2) var(--space-2); border-radius: var(--radius-sm); font-size: var(--fs-sm);
+  padding: var(--pad-control); border-radius: var(--radius-sm); font-size: var(--fs-sm);
   background: var(--bg-card); display: flex; align-items: center; gap: var(--space-1);
 }
 .pg-option { font-size: var(--fs-xs); display: flex; align-items: center; gap: var(--space-1); }
@@ -775,7 +775,7 @@ textarea.pg-input {
 }
 .portal-head-left { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
 .portal-head h1 { font-family: var(--display); font-size: var(--fs-xl); font-weight: var(--fw-regular); line-height: 1.1; }
-.portal-main { max-width: 1320px; margin: 0 auto; padding: var(--space-6) var(--space-8) var(--space-12); }
+.portal-main { width: 100%; max-width: 1320px; margin: 0 auto; padding: var(--space-6) var(--space-8) var(--space-12); }
 .chart-card { padding: var(--space-4); }
 @media (max-width: 768px) {
   .portal-head { padding: var(--space-3) var(--space-4); }

@@ -1,8 +1,9 @@
 # Plugboard dashboard design system
 
 The admin dashboard (`static/index.html`), the client portal (`static/portal.html`) and the
-ticket board (`static/suivi.html`) share one stylesheet, `static/style.css`. Its `:root` block
-holds every value the pages use: colors, type, spacing, radii, shadows. This file documents
+ticket board (`static/suivi.html`) share one stylesheet, `static/style.css`; the ticket board
+adds its Kanban layout in `static/suivi.css`, on the same tokens. The `:root` block of
+`style.css` holds every value the pages use: colors, type, spacing, radii, shadows. This file documents
 those tokens and the rules around them.
 
 ## Principles
@@ -11,8 +12,10 @@ those tokens and the rules around them.
   raw value in a rule, an HTML `style` attribute or a script.
 - **Two themes.** Ink (dark, the default) and paper (light). `theme.js` applies the saved
   choice or follows the system setting. A new rule uses color tokens only, so it works in both.
-- **Calm and readable.** Color carries meaning (status, accent), not decoration. Every text and
-  background pair meets WCAG AA (4.5:1).
+- **Calm and readable.** Color carries meaning (status, accent), not decoration. Body text on
+  the page and card backgrounds meets WCAG AA (4.5:1) in both themes. Known gaps in the light
+  theme, kept as they are for now: `--accent` on `--accent-bg` (accent badges, about 4.2:1) and
+  `--accent` or `--green` on `--bg-secondary` (about 4.1 and 4.2:1).
 - **No behavior in the design.** Styling never changes what a control does; scripts toggle
   visibility, they do not style.
 
@@ -89,7 +92,8 @@ brand), `--mono` (JetBrains Mono, code, keys, figures in code). `html` sets `--f
 | `--fs-icon` | `2.5rem` | 37.5px | Empty-state icons |
 
 Weights: `--fw-regular` (400), `--fw-medium` (500), `--fw-semibold` (600, buttons, titles,
-labels), `--fw-bold` (700, sparingly). Inter is loaded in these four weights only.
+labels), `--fw-bold` (700, sparingly). The dashboard and the portal load Inter in these four
+weights only; the ticket board loads no web font and uses the system fallbacks of `--font`.
 
 ## Spacing
 
@@ -145,8 +149,8 @@ not surfaces. `--transition` (160ms) times every hover and focus change; under
 | Section title | `--fs-label`, uppercase, `--text-muted`, a `--border` rule after it |
 
 Shared helpers in `style.css`: `.mt-1` to `.mt-4`, `.mb-2` to `.mb-4`, `.ml-1`, `.ml-2`
-(margins on the scale), `.row`, `.row-between`, `.grow`, `.text-muted`, `.text-xs`,
-`.fw-semibold`, `.card-body`. Prefer a named component class when a block has more than two
+(margins on the scale), `.row`, `.row-between`, `.row-center`, `.grow`, `.text-muted`,
+`.text-xs`, `.fw-semibold`, `.card-body`, `.card-body-sm`, `.btn.text-red` (a red ghost button). Prefer a named component class when a block has more than two
 rules.
 
 ## Exceptions
@@ -156,8 +160,8 @@ rules.
   in `style.css`, its legend sets `--c` per item in `index.html`, and `live3d.js` keeps its own
   scene colors.
 - **Inline styles that scripts need** stay in the markup: an initial `display:none` that a
-  script toggles, a progress `width`, and the `--c` of the 3D legend. Nothing else goes in a
-  `style` attribute or in `cssText`.
+  script toggles and the `--c` of the 3D legend. Scripts may set `display` and a progress
+  `width` at run time. Nothing else goes in a `style` attribute or in `cssText`.
 - **The client portal chart** reads its colors from the tokens when it is drawn
   (`--accent`, `--sapphire`, `--text-muted`, `--border`); a theme change shows after a reload.
 
