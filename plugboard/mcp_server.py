@@ -310,6 +310,55 @@ async def _embedding_request(
         return _decision_error("invalid_response", "Invalid gateway response")
 
 
+# ── Caller identity ──────────────────────────────────────────────────────────
+
+
+class CallerIdentityError(Exception):
+    """The client of PLUGBOARD_API_KEY could not be established.
+
+    ``str(exc)`` is shown to the MCP caller, after ``Error: ``.
+    """
+
+
+async def _caller_client_id() -> str:
+    """The client of this server's key, as the gateway resolves it (/v1/me).
+
+    Asked at each call, never cached: a revoked key is refused at once. The
+    admin key is refused: per-client data needs a client key.
+    """
+    if not _API_KEY:
+        raise CallerIdentityError(
+            "the update registry needs PLUGBOARD_API_KEY: "
+            "updates are those of that key's client"
+        )
+    result = await _api_get("/v1/me")
+    if "error" in result:
+        raise CallerIdentityError(
+            "could not identify the client of PLUGBOARD_API_KEY "
+            f"({str(result['error'])[:120]})"
+        )
+    client_id = result.get("client_id")
+    if not isinstance(client_id, str) or not client_id:
+        raise CallerIdentityError("PLUGBOARD_API_KEY does not identify a client")
+    if client_id == "admin":
+        raise CallerIdentityError(
+            "PLUGBOARD_API_KEY is the admin key: give the MCP server a client key"
+        )
+    return client_id
+
+
+async def _registry_client(claimed: str = "") -> str:
+    """The calling key's client; ``claimed`` may only name that client."""
+    client_id = await _caller_client_id()
+    claimed = (claimed or "").strip()
+    if claimed and claimed != client_id:
+        raise CallerIdentityError(
+            f"client_id '{claimed}' is not the client of this key "
+            f"('{client_id}'): leave client_id out"
+        )
+    return client_id
+
+
 # ── Tools ────────────────────────────────────────────────────────────────────
 
 
