@@ -15,7 +15,7 @@ dockerfilePath = "Dockerfile"
 # run.py reads $PORT from the environment.
 startCommand = "python run.py"
 
-# Health check: /health exposes provider status, latency, etc.
+# Health check: /health answers 200 with the status and the version.
 # 180 s start period covers cold starts when the persistent volume is
 # being attached and the provider catalog is being indexed.
 healthcheckPath = "/health"

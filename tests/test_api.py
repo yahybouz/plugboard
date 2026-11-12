@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 from aioresponses import aioresponses
 
@@ -15,13 +18,34 @@ AUTH = {"Authorization": "Bearer testkey"}
 
 
 @pytest.mark.asyncio
-async def test_health_no_auth_required(client):
+async def test_health_shows_only_status_and_version(client):
+    from plugboard import __version__
+
     resp = await client.get("/health")
     assert resp.status_code == 200
-    body = resp.json()
-    assert body["ok"] is True
-    assert body["providers"] == 2
-    assert "test-provider" in body["active"]
+    assert resp.json() == {"ok": True, "version": __version__}
+
+
+@pytest.mark.asyncio
+async def test_health_reads_no_provider_file(client, monkeypatch):
+    def unreadable():
+        raise RuntimeError("providers.json must not be read by /health")
+
+    monkeypatch.setattr("plugboard.app.load_providers", unreadable)
+    resp = await client.get("/health")
+    assert resp.status_code == 200
+
+
+def test_overview_counts_providers_from_the_admin_route():
+    js = (Path(__file__).resolve().parent.parent / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    assert "health.providers" not in js
+    match = re.search(r"^async function loadOverview\(.*?^}$", js, re.M | re.S)
+    assert match, "loadOverview not found in static/app.js"
+    overview = match.group(0)
+    assert 'api("GET", "/providers")' in overview
+    assert "is_active !== false" in overview
 
 
 @pytest.mark.asyncio

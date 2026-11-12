@@ -261,13 +261,12 @@ async def test_admin_endpoints_require_auth(admin_client):
 
 @pytest.mark.asyncio
 async def test_tnr_health(client):
-    """/health returns ok:true."""
+    """/health returns ok:true and the version, nothing else."""
     resp = await client.get("/health")
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
-    assert "version" in body
-    assert "providers" in body
+    assert set(body) == {"ok", "version"}
 
 
 @pytest.mark.asyncio

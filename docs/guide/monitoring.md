@@ -51,13 +51,13 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 
 ## Health endpoints
 
-`GET /health` is public and cheap, suitable for load balancers and container health checks:
+`GET /health` is public and cheap, suitable for container and deployment health checks. It always answers `200` while the process runs, reads no file, and shows only the status and the version:
 
 ```json
-{"ok": true, "version": "4.11.5", "providers": 3, "active": ["anthropic-direct", "ollama", "claude-via-claude-cli"]}
+{"ok": true, "version": "4.11.5"}
 ```
 
-When `API_KEY` is empty it also returns `"auth_disabled": true` and `"dev_mode"`, so a deployment gate can refuse an instance whose client authentication is off.
+The list of providers is on the admin `GET /providers`. The client authentication posture is the `auth` check of `GET /health/ready`: a deployment gate that must refuse an instance whose client authentication is off reads that route, which answers `503` when `API_KEY` is empty outside dev mode.
 
 `GET /health/ready` is public too and says whether the instance can serve requests: `200` when it is ready, `503` with the same body when it is not. It never calls a provider or starts a CLI, and its result is kept for 5 seconds:
 

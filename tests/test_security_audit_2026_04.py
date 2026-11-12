@@ -564,46 +564,36 @@ def test_api_key_default_is_empty_not_the_local_sentinel():
     assert value == "''", f"API_KEY default must be empty, got {value!r}"
 
 
-def test_health_flags_auth_disabled_outside_dev_mode(monkeypatch):
-    """/health must advertise `auth_disabled: true` so a load balancer /
-    deployment gate can pull the instance out of rotation before any
-    client sends an unauthenticated request."""
+@pytest.mark.asyncio
+async def test_health_never_reports_the_auth_posture(client, monkeypatch):
+    """The public /health shows the status and the version only: with client
+    auth off it names neither `auth_disabled` nor `dev_mode` (PLU-31)."""
     monkeypatch.setattr("plugboard.app._API_KEY", "")
     monkeypatch.setattr("plugboard.app._DEV_MODE", False)
 
-    import asyncio
-    from plugboard.app import health
-
-    payload = asyncio.run(health())
-    assert payload.get("auth_disabled") is True
-    assert payload.get("dev_mode") is False
+    resp = await client.get("/health")
+    assert resp.status_code == 200
+    assert set(resp.json()) == {"ok", "version"}
 
 
-def test_health_omits_auth_flag_when_api_key_present(monkeypatch):
-    """When API_KEY is set, the banner must NOT appear — otherwise admins
-    chase a false alarm."""
-    monkeypatch.setattr("plugboard.app._API_KEY", "sk-test-xyz")
+@pytest.mark.asyncio
+async def test_ready_flags_auth_disabled_outside_dev_mode(
+    client, monkeypatch, tmp_path
+):
+    """A load balancer or a deployment gate reads the auth posture on
+    /health/ready: an empty API key outside dev mode answers 503 (TM-007)."""
+    from plugboard import readiness, usage
 
-    import asyncio
-    from plugboard.app import health
-
-    payload = asyncio.run(health())
-    assert "auth_disabled" not in payload
-    assert "dev_mode" not in payload
-
-
-def test_health_marks_dev_mode_when_flag_set(monkeypatch):
-    """In PLUGBOARD_DEV=1 mode the banner still surfaces the disabled
-    auth but signals that it's intentional local dev, not misconfig."""
+    monkeypatch.setattr(usage, "_DB_PATH", tmp_path / "usage.db")
+    monkeypatch.setattr(usage, "_schema_ready", {})
+    monkeypatch.setattr(readiness, "_cache", None)
+    monkeypatch.setattr(readiness, "_lock", None)
     monkeypatch.setattr("plugboard.app._API_KEY", "")
-    monkeypatch.setattr("plugboard.app._DEV_MODE", True)
+    monkeypatch.setattr("plugboard.app._DEV_MODE", False)
 
-    import asyncio
-    from plugboard.app import health
-
-    payload = asyncio.run(health())
-    assert payload.get("auth_disabled") is True
-    assert payload.get("dev_mode") is True
+    resp = await client.get("/health/ready")
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["checks"]["auth"] == "fail"
 
 
 # ── TM-005 — Safe defaults for new client keys ──────────────────────────────

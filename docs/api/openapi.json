@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "1.7.0",
+    "version": "2.0.0",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
@@ -1500,6 +1500,7 @@
         "type": "object"
       },
       "Health": {
+        "description": "Liveness: always 200 while the process answers. The provider list is\non the admin `GET /providers`, the auth posture on `GET /health/ready`.",
         "properties": {
           "ok": {
             "title": "Ok",
@@ -1508,51 +1509,11 @@
           "version": {
             "title": "Version",
             "type": "string"
-          },
-          "providers": {
-            "description": "Number of active providers.",
-            "title": "Providers",
-            "type": "integer"
-          },
-          "active": {
-            "description": "Ids of the active providers.",
-            "items": {
-              "type": "string"
-            },
-            "title": "Active",
-            "type": "array"
-          },
-          "auth_disabled": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "Present (true) when client auth is off.",
-            "title": "Auth Disabled"
-          },
-          "dev_mode": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Dev Mode"
           }
         },
         "required": [
           "ok",
-          "version",
-          "providers",
-          "active"
+          "version"
         ],
         "title": "Health",
         "type": "object"
@@ -2658,7 +2619,7 @@
   "paths": {
     "/health": {
       "get": {
-        "summary": "Liveness and active providers",
+        "summary": "Liveness",
         "operationId": "get_health",
         "responses": {
           "200": {

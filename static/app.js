@@ -274,17 +274,23 @@ async function loadOverview() {
       api("GET", "/health"),
       api("GET", "/admin/usage/" + currentMonth()),
       api("GET", "/metrics"),
+      api("GET", "/providers"),
     ]);
     const health = await results[0].json();
     const usage = await results[1].json();
     const metrics = await results[2].json();
+    const providers = await results[3].json();
+    // The admin route marks removed connectors is_active: false.
+    const activeProviders = (Array.isArray(providers) ? providers : []).filter(function (p) {
+      return p.is_active !== false;
+    }).length;
 
     document.getElementById("version-badge").textContent = "v" + health.version;
 
     const summary = usage.summary || {};
     container.innerHTML = "";
     container.appendChild(statCard("⬤", "Status", health.ok ? "Online" : "DOWN", health.ok ? "green" : "red"));
-    container.appendChild(statCard("⚙", "Providers", String(health.providers), "accent"));
+    container.appendChild(statCard("⚙", "Providers", String(activeProviders), "accent"));
     container.appendChild(statCard("📈", "Requests", fmt(summary.total_entries || 0), "purple"));
     container.appendChild(statCard("💰", "Cost (month)", usd(summary.total_cost_usd || 0), "orange"));
 

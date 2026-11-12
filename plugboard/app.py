@@ -211,11 +211,13 @@ _reject_comment_valued_secrets(os.environ)
 #   that attackers could guess. When unset, client auth is explicitly
 #   disabled and the server screams about it.
 # * `PLUGBOARD_DEV=1` is the explicit opt-in for local development:
-#   the warning fires once at boot and the `/health` banner stays off.
+#   the warning fires once at boot and `/health/ready` reports
+#   `checks.auth: "dev"` with a 200.
 # * Any other context (no DEV flag) = treat as production: warning is
 #   promoted to CRITICAL, repeated periodically by the lifespan, and
-#   `/health` advertises `auth_disabled: true` so load balancers /
-#   deployment gates can refuse traffic to the instance.
+#   `/health/ready` answers 503 with `checks.auth: "fail"` so load
+#   balancers / deployment gates can refuse traffic to the instance.
+#   The public `/health` never shows the auth posture (PLU-31).
 _API_KEY = os.environ.get("API_KEY", "")
 _ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
 _DEV_MODE = os.environ.get("PLUGBOARD_DEV", "").strip() == "1"
@@ -3001,24 +3003,11 @@ async def models_benchmarks_v2(
 
 @app.get("/health")
 async def health():
-    providers = load_providers()
-    active = [
-        p["id"]
-        for p in providers
-        if p.get("is_active", True) and not is_removed_provider(p)
-    ]
-    payload = {
-        "ok": True,
-        "version": __version__,
-        "providers": len(active),
-        "active": active,
-    }
-    # Surface auth posture so load balancers / deploy gates can refuse
-    # traffic to an instance running with open client auth (TM-007).
-    if not _API_KEY:
-        payload["auth_disabled"] = True
-        payload["dev_mode"] = _DEV_MODE
-    return payload
+    """Liveness (PLU-31): always 200 while the process answers. Public, so it
+    shows the status and the version only and reads no file; the provider
+    list is on the admin `GET /providers`, the auth posture on
+    `GET /health/ready`."""
+    return {"ok": True, "version": __version__}
 
 
 @app.get("/health/ready")

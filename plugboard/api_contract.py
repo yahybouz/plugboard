@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "1.7.0"
+CONTRACT_VERSION = "2.0.0"
 _JSON = "application/json"
 
 
@@ -478,14 +478,11 @@ class ClientUsage(BaseModel):
 
 
 class Health(BaseModel):
+    """Liveness: always 200 while the process answers. The provider list is
+    on the admin `GET /providers`, the auth posture on `GET /health/ready`."""
+
     ok: bool
     version: str
-    providers: int = Field(description="Number of active providers.")
-    active: List[str] = Field(description="Ids of the active providers.")
-    auth_disabled: Optional[bool] = Field(
-        default=None, description="Present (true) when client auth is off."
-    )
-    dev_mode: Optional[bool] = None
 
 
 class Ready(BaseModel):
@@ -673,7 +670,7 @@ _ROUTES: List[_Route] = [
      None, InflightResponse, _AUTH_ERRORS, True),
     ("get", "/usage/me", "The calling client's usage entries for a month",
      None, ClientUsage, _AUTH_ERRORS, True),
-    ("get", "/health", "Liveness and active providers",
+    ("get", "/health", "Liveness",
      None, Health, {}, False),
     ("get", "/health/ready", "Readiness: whether this instance can serve requests",
      None, Ready, {"503": "Not ready: same body, `ready` is false."}, False),

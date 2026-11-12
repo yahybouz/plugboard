@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **Breaking: the public `GET /health` shows only the status and the version** (PLU-31, BUG-58): its body is now exactly `{"ok": true, "version": "…"}`. The fields `providers`, `active`, `auth_disabled` and `dev_mode` are removed: the list of providers is on the admin `GET /providers`, and the client authentication posture is `checks.auth` of `GET /health/ready`, which answers `503` when `API_KEY` is empty outside dev mode. A deployment gate that read `auth_disabled` on `/health` must move to `/health/ready`. `/health` still answers `200`, so container and deployment probes are unchanged, and it no longer reads any file. The dashboard overview counts the active providers from `GET /providers`. API contract 2.0.0: `Health` keeps `ok` and `version` only ([health endpoints](docs/guide/monitoring.md#health-endpoints)).
 - **Opening the Monitoring page no longer records a snapshot** (PLU-34): `GET /admin/monitoring` used to store its own health check, so uptime measured how often an admin opened the page. It now stores nothing and computes uptime from the scheduled snapshots only; with no snapshot in the period, `uptime_pct` is `null` (shown as `—`) instead of `100`.
 
 ### Fixed
