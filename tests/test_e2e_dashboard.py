@@ -106,6 +106,7 @@ async def test_dashboard_has_no_connections_tab(admin_client):
         "/admin/direct-providers/presets",
         "/admin/oauth/connections",
         "/admin/ollama/status",
+        "/admin/catalog/history?limit=50",
     ],
 )
 async def test_dashboard_api_path_reachable(admin_client, path: str):

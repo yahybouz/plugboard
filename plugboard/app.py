@@ -50,9 +50,10 @@ import re
 import secrets
 import time
 import uuid
+from datetime import date
 from typing import Annotated, Any, Awaitable, Dict, List, Literal, Optional, TypeVar
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     JSONResponse,
@@ -5369,6 +5370,47 @@ async def auto_update_status(journal: int = 20, _: None = Depends(_require_admin
         "catalog": models_dev.status(),
         "pending_suggestions": len(pricing_suggestions.list_suggestions("pending")),
         "recent_changes": change_events.read_journal(max(1, min(journal, 200))),
+    }
+
+
+@app.get("/admin/catalog/history")
+def admin_catalog_history(
+    provider: Optional[str] = Query(None, max_length=200),
+    since: Optional[date] = None,
+    until: Optional[date] = None,
+    model: Optional[str] = Query(None, max_length=200),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    _: None = Depends(_require_admin),
+):
+    """Models added or removed per provider, newest first (PB-PROV-02).
+
+    A plain ``def``: FastAPI runs it in its thread pool, so reading the
+    journal (up to 10 000 lines) never holds the event loop.
+    """
+    from plugboard import change_events
+
+    if since and until and since > until:
+        raise HTTPException(422, "since is after until")
+    page = change_events.query_model_history(
+        provider=provider or None,
+        since=since,
+        until=until,
+        model=model or None,
+        limit=limit,
+        offset=offset,
+    )
+    return {
+        "entries": page["entries"],
+        "total": page["total"],
+        "limit": limit,
+        "offset": offset,
+        "providers": page["providers"],
+        "retention": {
+            "days": change_events.retention_days(),
+            "max_lines": change_events.JOURNAL_MAX_LINES,
+            "oldest": page["oldest"],
+        },
     }
 
 

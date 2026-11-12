@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from datetime import date, datetime, timezone
 
@@ -207,3 +208,74 @@ def test_history_without_journal(monkeypatch, tmp_path):
         "providers": [],
         "oldest": None,
     }
+
+
+# -- route -------------------------------------------------------------------------
+
+ADMIN = {"Authorization": "Bearer adminkey"}
+URL = "/admin/catalog/history"
+
+
+async def test_history_route_requires_admin(admin_client, journal):
+    assert (await admin_client.get(URL)).status_code == 401
+    client_key = {"Authorization": "Bearer testkey"}
+    assert (await admin_client.get(URL, headers=client_key)).status_code == 401
+
+
+async def test_history_route_returns_a_page(admin_client, journal):
+    resp = await admin_client.get(URL + "?limit=1", headers=ADMIN)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert set(body) == {
+        "entries",
+        "total",
+        "limit",
+        "offset",
+        "providers",
+        "retention",
+    }
+    assert body["total"] == 3 and body["limit"] == 1 and body["offset"] == 0
+    assert [e["provider"] for e in body["entries"]] == ["old-provider"]
+    assert body["retention"] == {
+        "days": 365,
+        "max_lines": 10000,
+        "oldest": "2026-01-05T10:00:00Z",
+    }
+
+
+@pytest.mark.parametrize(
+    "query, providers",
+    [
+        ("provider=provider-b", ["provider-b"]),
+        ("since=2026-07-01", ["old-provider"]),
+        ("until=2026-06-30", ["provider-b", "provider-a"]),
+        ("model=beta", ["provider-b"]),
+        ("provider=&model=", ["old-provider", "provider-b", "provider-a"]),
+        ("offset=2", ["provider-a"]),
+    ],
+)
+async def test_history_route_passes_filters(admin_client, journal, query, providers):
+    body = (await admin_client.get(f"{URL}?{query}", headers=ADMIN)).json()
+    assert [e["provider"] for e in body["entries"]] == providers
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "limit=0",
+        "limit=201",
+        "offset=-1",
+        "since=2026-13-01",
+        "until=yesterday",
+        "since=2026-07-02&until=2026-07-01",
+    ],
+)
+async def test_history_route_rejects_bad_parameters(admin_client, journal, query):
+    resp = await admin_client.get(f"{URL}?{query}", headers=ADMIN)
+    assert resp.status_code == 422
+
+
+def test_history_handler_runs_off_the_event_loop():
+    from plugboard import app as app_module
+
+    assert not inspect.iscoroutinefunction(app_module.admin_catalog_history)

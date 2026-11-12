@@ -118,6 +118,24 @@ The status groups the price scheduler, the model-list scheduler, the models.dev 
 
 Every change found by an automatic update (model added or removed, price change above `PLUGBOARD_PRICE_DRIFT_PCT`) is appended to `data/catalog/changes.jsonl`, which keeps changes for `PLUGBOARD_CHANGE_JOURNAL_DAYS` days (365) and at most 10 000 lines; older changes are no longer shown and are dropped when a new change is written.
 
+## Catalog history
+
+Which models a provider gained or lost, and when, from the same journal:
+
+```bash
+curl -s "http://localhost:8765/admin/catalog/history?provider=<provider-id>&since=2026-11-01&limit=50" \
+  -H "Authorization: Bearer $ADMIN_KEY"
+```
+
+| Parameter | Meaning |
+|---|---|
+| `provider` | One provider ID (exact). A deleted provider keeps its history. |
+| `since`, `until` | UTC days as `YYYY-MM-DD`, both included. `since` after `until` answers `422`. |
+| `model` | Part of a model name, any case. A matching change keeps all its names, the matching ones first. |
+| `limit`, `offset` | Page size (1 to 200, default 50) and position. |
+
+The answer lists `entries` newest first, each with `at` (UTC), `provider`, `added` and `removed`, then `total` (matches for these filters), `providers` (every provider in the history, for a filter list) and `retention` (`days`, `max_lines`, and `oldest`, the date of the oldest change kept). Only model-list changes are listed: prices stay in Pricing › Review and in the Monitoring card. The first model list of a new provider is not a change and is not listed. A model removed by an automatic refresh is dated when the removal is confirmed, after `PLUGBOARD_MODEL_REMOVAL_PASSES` refreshes without it (2); a removal from the **Discover** button is dated at once.
+
 ## Admin audit log
 
 Admin actions are recorded in `data/audit.db`: logins (success, failure, lockout, MFA), auto-logins and suspicious auto-login refusals, key creation, revocation, rotation and deletion, provider creation, changes and deletion (including base URL changes and refused domains), OAuth connections, pricing refreshes, cache clears, circuit resets, watchdog actions, model refreshes, Ollama pulls and deletions, job runs, and MFA enrolment.
