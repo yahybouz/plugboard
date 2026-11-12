@@ -1476,10 +1476,14 @@ function _renderOllamaSettings(d) {
 }
 
 // PLU-12: the switch is the ollama provider's is_active, for every surface.
+// True while a PUT runs (turning on waits for the model sync): a Refresh
+// meanwhile re-renders the box but leaves it locked.
+let _ollamaSwitchBusy = false;
+
 function _renderOllamaSwitch(d) {
   const box = document.getElementById("ollama-enabled");
   box.checked = !!d.enabled;
-  box.disabled = !d.registered;
+  box.disabled = !d.registered || _ollamaSwitchBusy;
   // style.display, not the hidden attribute: .alert sets display.
   document.getElementById("ollama-off-banner").style.display = d.registered && !d.enabled ? "" : "none";
   const hint = document.getElementById("ollama-enabled-hint");
@@ -1504,18 +1508,23 @@ async function loadOllamaSwitch() {
 async function saveOllamaSwitch(enabled) {
   const box = document.getElementById("ollama-enabled");
   // Locked until the gateway answers: turning on waits for the model sync.
+  _ollamaSwitchBusy = true;
   box.disabled = true;
   try {
     const res = await api("PUT", "/admin/ollama/switch", { enabled: enabled });
     if (!res.ok) throw new Error(await _errorDetail(res));
     const d = await res.json();
+    _ollamaSwitchBusy = false;
     _renderOllamaSwitch(d);
     toast("Ollama " + (d.enabled ? "on" : "off") + " for the API, MCP and Playground", "success");
   } catch (err) {
+    _ollamaSwitchBusy = false;
     toast("Switching Ollama failed: " + err.message, "error");
     box.checked = !enabled;
     box.disabled = false;
     await loadOllamaSwitch();
+  } finally {
+    _ollamaSwitchBusy = false;
   }
 }
 

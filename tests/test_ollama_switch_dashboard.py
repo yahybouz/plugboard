@@ -49,8 +49,9 @@ def test_app_js_reads_and_sets_the_switch():
     assert 'api("PUT", "/admin/ollama/switch", { enabled: enabled })' in js
     assert "await loadOllamaSwitch();" in js
     assert 'getElementById("ollama-enabled").addEventListener("change"' in js
-    # Without a registered provider the switch is greyed out.
-    assert "box.disabled = !d.registered;" in js
+    # Greyed out without a registered provider, and while a PUT runs: a
+    # Refresh during that PUT must not unlock it.
+    assert "box.disabled = !d.registered || _ollamaSwitchBusy;" in js
     assert (
         'getElementById("ollama-off-banner").style.display = '
         'd.registered && !d.enabled ? "" : "none";'
@@ -72,7 +73,9 @@ def _save_switch_body(js: str) -> str:
 def test_switch_is_locked_while_its_put_runs():
     """Turning Ollama on waits for the model sync: no second PUT meanwhile."""
     body = _save_switch_body(_js())
+    assert body.index("_ollamaSwitchBusy = true;") < body.index('api("PUT"')
     assert body.index("box.disabled = true;") < body.index('api("PUT"')
+    assert "finally {\n    _ollamaSwitchBusy = false;" in body
     # The toast says what the gateway answered, not what was asked.
     assert "d.enabled ? " in body
     # A failed PUT puts the box back before the state is read again.
