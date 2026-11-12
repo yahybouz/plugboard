@@ -7,18 +7,28 @@ first async call, never forced on sync-only users).
 
 from __future__ import annotations
 
+import http.client
 import json
 import math
+import re
 import socket
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Union
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-USER_AGENT = "plugboard-python-sdk/0.2"
+from ._version import __version__
+
+USER_AGENT = "plugboard-python-sdk/" + ".".join(__version__.split(".")[:2])
 # socket.timeout is TimeoutError from Python 3.10 on, not before.
 _TIMEOUTS = (TimeoutError, socket.timeout)
+_TIMEOUT_BASES = tuple(dict.fromkeys(_TIMEOUTS))
+# A Retry-After past a day is read as a day.
+MAX_RETRY_AFTER = 86400.0
+# An error code is a short identifier, never free text from the body.
+_CODE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
 
 class PlugboardError(Exception):
@@ -46,10 +56,22 @@ class PlugboardError(Exception):
         self.code = code
         self.retry_after = retry_after
 
+    def __reduce__(self):
+        # Rebuilt from its fields, so it survives pickling (multiprocessing).
+        fields = (self.status, self.detail, self.code, self.retry_after)
+        return (_restore_error, (type(self), *fields))
 
-class PlugboardTimeoutError(PlugboardError, TimeoutError):
+
+def _restore_error(cls, status, detail, code, retry_after):
+    err = cls.__new__(cls)
+    PlugboardError.__init__(err, status, detail, code=code, retry_after=retry_after)
+    return err
+
+
+class PlugboardTimeoutError(PlugboardError, *_TIMEOUT_BASES):
     """No answer within the client's timeout: a ``PlugboardError`` with
-    status 0 and code ``timeout``, and a ``TimeoutError`` too."""
+    status 0 and code ``timeout``, and a ``TimeoutError`` too (and a
+    ``socket.timeout`` on Python 3.9, where the two differ)."""
 
     def __init__(self, detail: str = "request timed out"):
         super().__init__(0, detail, code="timeout")
@@ -59,12 +81,15 @@ def _seconds(value: Any) -> Optional[float]:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     value = float(value)
-    return value if math.isfinite(value) and value >= 0 else None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return min(value, MAX_RETRY_AFTER)
 
 
 def _retry_after(header: Optional[str], body: Any) -> Optional[float]:
-    """Seconds from ``Retry-After`` (seconds or an HTTP date), else from the
-    body's ``retry_after``; None when neither is usable."""
+    """Seconds from ``Retry-After`` (seconds or an HTTP date, a date without
+    zone read as UTC), else from the body's ``retry_after``; at most
+    ``MAX_RETRY_AFTER``; None when neither is usable."""
     if header:
         header = header.strip()
         try:
@@ -72,8 +97,11 @@ def _retry_after(header: Optional[str], body: Any) -> Optional[float]:
         except ValueError:
             try:
                 when = parsedate_to_datetime(header)
-                seconds = max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
-            except (TypeError, ValueError, IndexError):
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=timezone.utc)
+                now = datetime.now(timezone.utc)
+                seconds = _seconds(max(0.0, (when - now).total_seconds()))
+            except (TypeError, ValueError, IndexError, OverflowError):
                 seconds = None
         if seconds is not None:
             return seconds
@@ -88,12 +116,13 @@ def _error_code(body: Any) -> Optional[str]:
     if not isinstance(body, dict):
         return None
     for holder in (body, body.get("detail"), body.get("error")):
-        if isinstance(holder, dict) and isinstance(holder.get("code"), str):
-            return holder["code"]
+        code = holder.get("code") if isinstance(holder, dict) else None
+        if isinstance(code, str) and _CODE.fullmatch(code):
+            return code
     return None
 
 
-def error_from_response(
+def _error_from_response(
     status: int, text: str, retry_after_header: Optional[str]
 ) -> PlugboardError:
     """The ``PlugboardError`` for an error answer (also used by the async client)."""
@@ -123,13 +152,42 @@ def _http_error(exc: HTTPError) -> PlugboardError:
     if 300 <= exc.code < 400:
         return PlugboardError(exc.code, "Redirect refused")
     header = exc.headers.get("Retry-After") if exc.headers is not None else None
-    return error_from_response(exc.code, exc.read().decode(errors="replace"), header)
+    return _error_from_response(exc.code, exc.read().decode(errors="replace"), header)
 
 
 def _url_error(exc: URLError) -> PlugboardError:
     if isinstance(exc.reason, _TIMEOUTS):
         return PlugboardTimeoutError()
     return PlugboardError(0, f"connection failed: {exc}", code="connection_failed")
+
+
+@contextmanager
+def _transport():
+    """Turn every failure to get an answer into a ``PlugboardError``."""
+    try:
+        yield
+    except PlugboardError:
+        raise
+    except HTTPError as exc:
+        raise _http_error(exc) from exc
+    except URLError as exc:
+        raise _url_error(exc) from exc
+    except _TIMEOUTS:
+        raise PlugboardTimeoutError() from None
+    except (OSError, http.client.HTTPException) as exc:
+        # Closed, reset or truncated after the connection was made.
+        raise PlugboardError(
+            0, f"connection failed: {type(exc).__name__}", code="connection_failed"
+        ) from None
+
+
+def _json_answer(resp: Any) -> Dict[str, Any]:
+    raw = resp.read()
+    try:
+        return json.loads(raw.decode())
+    except ValueError:
+        status = getattr(resp, "status", 200)
+        raise PlugboardError(status, "Invalid response: not JSON") from None
 
 
 class PlugboardClient:
@@ -142,7 +200,8 @@ class PlugboardClient:
     base_url:
         Base URL of Plugboard (default http://localhost:8765).
     timeout:
-        Per-request wall-clock limit in seconds.
+        Seconds to wait for each network operation (connecting, then each
+        read): a slow but steady stream never times out.
     """
 
     def __init__(
@@ -288,9 +347,10 @@ class PlugboardClient:
         try:
             return self._get_json("/v1/decisions/models").get("data", [])
         except _TIMEOUTS:
-            raise PlugboardTimeoutError("Decision request timed out") from None
+            err: PlugboardError = PlugboardTimeoutError("Decision request timed out")
         except PlugboardError as exc:
-            raise _decision_error(exc) from None
+            err = _decision_error(exc)
+        raise err  # outside the handler: the body stays out of __context__
 
     def decide(
         self,
@@ -311,9 +371,10 @@ class PlugboardClient:
                 {"model": model, "state": state, "questions": questions},
             )
         except _TIMEOUTS:
-            raise PlugboardTimeoutError("Decision request timed out") from None
+            err: PlugboardError = PlugboardTimeoutError("Decision request timed out")
         except PlugboardError as exc:
-            raise _decision_error(exc) from None
+            err = _decision_error(exc)
+        raise err  # outside the handler: the body stays out of __context__
 
     def usage(self, month: Optional[str] = None) -> Dict[str, Any]:
         path = f"/usage/me?month={month}" if month else "/usage/me"
@@ -348,15 +409,8 @@ class PlugboardClient:
 
     def _get_json(self, path: str) -> Dict[str, Any]:
         req = Request(self.base_url + path, method="GET", headers=self._headers())
-        try:
-            with urlopen(req, timeout=self.timeout) as resp:
-                return json.loads(resp.read().decode())
-        except HTTPError as exc:
-            raise _http_error(exc) from exc
-        except URLError as exc:
-            raise _url_error(exc) from exc
-        except _TIMEOUTS:
-            raise PlugboardTimeoutError() from None
+        with _transport(), urlopen(req, timeout=self.timeout) as resp:
+            return _json_answer(resp)
 
     def _post_json(self, path: str, body: Dict[str, Any]) -> Dict[str, Any]:
         data = json.dumps(body).encode()
@@ -366,39 +420,38 @@ class PlugboardClient:
             method="POST",
             headers=self._headers(),
         )
-        try:
-            with urlopen(req, timeout=self.timeout) as resp:
-                return json.loads(resp.read().decode())
-        except HTTPError as exc:
-            raise _http_error(exc) from exc
-        except URLError as exc:
-            raise _url_error(exc) from exc
-        except _TIMEOUTS:
-            raise PlugboardTimeoutError() from None
+        with _transport(), urlopen(req, timeout=self.timeout) as resp:
+            return _json_answer(resp)
 
     def _post_sse(self, path: str, body: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+        """Parsed SSE events. A stream that ends with neither ``[DONE]`` nor a
+        ``finish_reason`` was cut: it raises code ``stream_interrupted``."""
         data = json.dumps(body).encode()
         headers = {**self._headers(), "Accept": "text/event-stream"}
         req = Request(self.base_url + path, data=data, method="POST", headers=headers)
-        try:
-            with urlopen(req, timeout=self.timeout) as resp:
-                for raw_line in resp:
-                    line = raw_line.decode("utf-8", errors="replace").strip()
-                    if not line.startswith("data:"):
-                        continue
-                    payload = line[5:].strip()
-                    if payload == "[DONE]":
-                        return
-                    try:
-                        yield json.loads(payload)
-                    except json.JSONDecodeError:
-                        continue
-        except HTTPError as exc:
-            raise _http_error(exc) from exc
-        except URLError as exc:
-            raise _url_error(exc) from exc
-        except _TIMEOUTS:
-            raise PlugboardTimeoutError() from None
+        finished = False
+        with _transport(), urlopen(req, timeout=self.timeout) as resp:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    return
+                try:
+                    event = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                choices = event.get("choices") if isinstance(event, dict) else None
+                if isinstance(choices, list) and any(
+                    isinstance(c, dict) and c.get("finish_reason") for c in choices
+                ):
+                    finished = True
+                yield event
+        if not finished:
+            raise PlugboardError(
+                200, "stream ended before [DONE]", code="stream_interrupted"
+            )
 
 
 def _decision_error(exc: PlugboardError) -> PlugboardError:

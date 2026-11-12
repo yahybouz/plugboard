@@ -4,18 +4,23 @@ and Retry-After. A disposable HTTP server on 127.0.0.1, no real gateway."""
 from __future__ import annotations
 
 import json
+import pickle
 import re
+import socket
+import struct
 import threading
 import time
-from email.utils import format_datetime
 from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import URLError
 
 import pytest
 
 import plugboard_sdk
 from plugboard_sdk import PlugboardClient, PlugboardError, PlugboardTimeoutError
+from plugboard_sdk import client as sdk
 
 KEY = "pb_test_only"
 VECTORS = {
@@ -24,15 +29,23 @@ VECTORS = {
     "model": "ollama:nomic-embed-text",
     "usage": {"prompt_tokens": 2, "total_tokens": 2},
 }
+# The gateway's own answers (plugboard/app.py, plugboard/embeddings_api.py).
 BUSY = {
     "detail": "Every provider that serves this model is busy: retry in 5 seconds.",
     "code": "providers_busy",
     "retry_after": 5,
 }
+EMBEDDING_ERRORS = [
+    (429, {"detail": "Embedding engine busy, retry shortly"}),
+    (404, {"detail": "Embedding model not available"}),
+    (403, {"detail": "Embedding model not permitted for this key"}),
+    (422, {"detail": "input must hold 1 to 128 strings"}),
+]
 
 
 class Gateway:
-    """Answers each request with the next queued (status, body, headers, delay)."""
+    """Answers each request with the next queued answer: (status, body,
+    headers, delay), or a function that writes on the handler itself."""
 
     def __init__(self):
         self.seen = []
@@ -47,13 +60,19 @@ class Gateway:
                         self.path,
                         self.headers.get("Authorization"),
                         self.headers.get("User-Agent"),
-                        json.loads(raw),
+                        json.loads(raw) if raw else None,
                     )
                 )
-                status, body, headers, delay = gateway.answers.pop(0)
-                time.sleep(delay)
-                data = body if isinstance(body, bytes) else json.dumps(body).encode()
+                answer = gateway.answers.pop(0)
                 try:
+                    if callable(answer):
+                        answer(self)
+                        return
+                    status, body, headers, delay = answer
+                    time.sleep(delay)
+                    data = (
+                        body if isinstance(body, bytes) else json.dumps(body).encode()
+                    )
                     self.send_response(status)
                     self.send_header("Content-Length", str(len(data)))
                     for k, v in headers.items():
@@ -77,6 +96,9 @@ class Gateway:
             (status, {} if body is None else body, headers or {}, delay)
         )
 
+    def answer_with(self, write):
+        self.answers.append(write)
+
 
 @pytest.fixture
 def gateway():
@@ -91,6 +113,34 @@ def gateway():
         gw.server.shutdown()
         gw.server.server_close()
         worker.join()
+
+
+def _sse(handler, events, *, done=True, gap=0.0):
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/event-stream")
+    handler.end_headers()
+    for evt in events:
+        time.sleep(gap)
+        handler.wfile.write(f"data: {json.dumps(evt)}\n\n".encode())
+        handler.wfile.flush()
+    if done:
+        handler.wfile.write(b"data: [DONE]\n\n")
+    handler.close_connection = True
+
+
+def _close_without_answer(handler):
+    handler.close_connection = True
+
+
+def _reset(handler):
+    handler.connection.setsockopt(
+        socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+    )
+    handler.close_connection = True
+
+
+WORD = {"choices": [{"index": 0, "delta": {"content": "hi"}}]}
+STOP = {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
 
 
 # ── Embeddings ───────────────────────────────────────────────────────────────
@@ -123,15 +173,42 @@ def test_embeddings_refuses_a_redirect(gateway):
     with pytest.raises(PlugboardError) as error:
         PlugboardClient(KEY, base_url=gateway.url).embeddings("m", "x")
     assert (error.value.status, error.value.detail) == (307, "Redirect refused")
+    assert len(gateway.seen) == 1
+
+
+@pytest.mark.parametrize("status, body", EMBEDDING_ERRORS)
+def test_the_gateway_embedding_errors_keep_their_message(gateway, status, body):
+    """Today the embedding route gives neither a code nor a Retry-After."""
+    gateway.answer(status, body)
+    with pytest.raises(PlugboardError) as error:
+        PlugboardClient(KEY, base_url=gateway.url).embeddings("m", "x")
+    err = error.value
+    assert (err.status, err.code, err.retry_after) == (status, None, None)
+    assert body["detail"] in err.detail
+
+
+def test_a_2xx_that_is_not_json_is_a_plugboard_error(gateway):
+    gateway.answer(200, b"<html>sign in</html>")
+    with pytest.raises(PlugboardError) as error:
+        PlugboardClient(KEY, base_url=gateway.url).embeddings("m", "x")
+    assert (error.value.status, error.value.detail) == (
+        200,
+        "Invalid response: not JSON",
+    )
 
 
 # ── Errors: code and Retry-After ─────────────────────────────────────────────
 
 
-def test_a_busy_gateway_gives_code_and_retry_after(gateway):
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+def test_a_busy_chat_gives_code_and_retry_after(gateway, stream):
     gateway.answer(503, BUSY, {"Retry-After": "5"})
+    client = PlugboardClient(KEY, base_url=gateway.url)
     with pytest.raises(PlugboardError) as error:
-        PlugboardClient(KEY, base_url=gateway.url).embeddings("m", "x")
+        if stream:
+            list(client.chat_stream("m", [{"role": "user", "content": "hi"}]))
+        else:
+            client.chat("m", [{"role": "user", "content": "hi"}])
     err = error.value
     assert (err.status, err.code, err.retry_after) == (503, "providers_busy", 5.0)
     assert "busy" in err.detail  # the body, as in 0.1.0
@@ -156,8 +233,18 @@ def test_a_busy_gateway_gives_code_and_retry_after(gateway):
         ),
         (b"<html>bad gateway</html>", {"Retry-After": "soon"}, None, None),
         ({"code": 42, "retry_after": True}, {"Retry-After": "-3"}, None, None),
+        ({"retry_after": 4}, {"Retry-After": "-3"}, None, 4.0),
+        ({"code": "free text: state=SECRET"}, {"Retry-After": "1e9"}, None, 86400.0),
     ],
-    ids=["body-retry", "openai-code", "detail-code", "not-json", "invalid"],
+    ids=[
+        "body-retry",
+        "openai-code",
+        "detail-code",
+        "not-json",
+        "invalid",
+        "bad-header-body-retry",
+        "unsafe-code-capped-delay",
+    ],
 )
 def test_error_fields_are_read_from_the_body_and_headers(
     gateway, body, headers, code, retry_after
@@ -168,22 +255,33 @@ def test_error_fields_are_read_from_the_body_and_headers(
     assert (error.value.code, error.value.retry_after) == (code, retry_after)
 
 
-def test_retry_after_as_an_http_date(gateway):
-    later = datetime.now(timezone.utc) + timedelta(seconds=30)
-    gateway.answer(
-        429, {"detail": "x"}, {"Retry-After": format_datetime(later, usegmt=True)}
-    )
+@pytest.mark.parametrize(
+    "when, low, high",
+    [
+        (lambda now: format_datetime(now + timedelta(seconds=30), usegmt=True), 20, 31),
+        (lambda now: format_datetime(now - timedelta(seconds=30), usegmt=True), 0, 0),
+        (
+            lambda now: (now + timedelta(seconds=30)).strftime("%a %b %d %H:%M:%S %Y"),
+            20,
+            31,
+        ),
+        (
+            lambda now: (now + timedelta(seconds=30)).strftime(
+                "%a, %d %b %Y %H:%M:%S -0000"
+            ),
+            20,
+            31,
+        ),
+        (lambda now: "Wed, 21 Oct 2099 07:28:00 GMT", 86400, 86400),
+    ],
+    ids=["future", "past", "asctime", "no-zone", "far"],
+)
+def test_retry_after_as_an_http_date(gateway, when, low, high):
+    header = when(datetime.now(timezone.utc))
+    gateway.answer(429, {"detail": "x"}, {"Retry-After": header})
     with pytest.raises(PlugboardError) as error:
         PlugboardClient(KEY, base_url=gateway.url).chat("m", [])
-    assert 20 <= error.value.retry_after <= 31
-
-
-def test_a_streamed_chat_refused_busy_gives_the_same_fields(gateway):
-    gateway.answer(503, BUSY, {"Retry-After": "5"})
-    client = PlugboardClient(KEY, base_url=gateway.url)
-    with pytest.raises(PlugboardError) as error:
-        list(client.chat_stream("m", [{"role": "user", "content": "hi"}]))
-    assert (error.value.code, error.value.retry_after) == ("providers_busy", 5.0)
+    assert low <= error.value.retry_after <= high
 
 
 def test_decisions_keep_their_message_and_gain_the_fields(gateway):
@@ -195,6 +293,8 @@ def test_decisions_keep_their_message_and_gain_the_fields(gateway):
     err = error.value
     assert (err.status, err.detail) == (429, "Decision request failed")
     assert (err.code, err.retry_after) == ("decision_quota", 9.0)
+    # The body is nowhere on the error, not even on its context.
+    assert err.__context__ is None and err.__cause__ is None
 
 
 def test_errors_stay_positional_and_compatible():
@@ -207,6 +307,49 @@ def test_errors_stay_positional_and_compatible():
     )
     assert str(err) == "HTTP 500: boom"
     assert plugboard_sdk.LLMEnablerError is PlugboardError
+    assert plugboard_sdk.LLMEnablerClient is PlugboardClient
+
+
+@pytest.mark.parametrize(
+    "err",
+    [
+        PlugboardError(503, "busy", code="providers_busy", retry_after=5.0),
+        PlugboardTimeoutError("Decision request timed out"),
+    ],
+)
+def test_errors_survive_pickling(err):
+    back = pickle.loads(pickle.dumps(err))
+    assert type(back) is type(err)
+    assert (back.status, back.detail, back.code, back.retry_after) == (
+        err.status,
+        err.detail,
+        err.code,
+        err.retry_after,
+    )
+    assert str(back) == str(err)
+
+
+# ── Streams ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "events, done",
+    [([WORD], True), ([WORD, STOP], False)],
+    ids=["done", "finish-reason"],
+)
+def test_a_complete_stream_needs_done_or_a_finish_reason(gateway, events, done):
+    gateway.answer_with(lambda h: _sse(h, events, done=done))
+    client = PlugboardClient(KEY, base_url=gateway.url)
+    assert list(client.chat_stream("m", [])) == ["hi"]
+
+
+@pytest.mark.parametrize("events", [[WORD], []], ids=["cut", "empty"])
+def test_a_cut_stream_is_an_error(gateway, events):
+    gateway.answer_with(lambda h: _sse(h, events, done=False))
+    client = PlugboardClient(KEY, base_url=gateway.url)
+    with pytest.raises(PlugboardError) as error:
+        list(client.chat_stream("m", []))
+    assert (error.value.status, error.value.code) == (200, "stream_interrupted")
 
 
 # ── Timeouts and connection failures ─────────────────────────────────────────
@@ -229,6 +372,41 @@ def test_a_timeout_is_a_plugboard_error_and_a_timeout_error(gateway, operation):
     assert KEY not in str(err)
 
 
+def test_a_timeout_in_the_middle_of_a_stream(gateway):
+    gateway.answer_with(lambda h: _sse(h, [WORD, WORD], gap=0.6))
+    client = PlugboardClient(KEY, base_url=gateway.url, timeout=0.2)
+    with pytest.raises(PlugboardTimeoutError):
+        list(client.chat_stream("m", []))
+
+
+def test_a_connect_timeout_is_a_timeout(monkeypatch):
+    def connect_timeout(*args, **kwargs):
+        raise URLError(socket.timeout("timed out"))
+
+    monkeypatch.setattr(sdk, "urlopen", connect_timeout)
+    with pytest.raises(PlugboardTimeoutError) as error:
+        PlugboardClient(KEY).embeddings("m", "x")
+    assert error.value.code == "timeout"
+
+
+@pytest.mark.parametrize(
+    "write", [_close_without_answer, _reset], ids=["closed", "reset"]
+)
+@pytest.mark.parametrize("operation", ["embeddings", "chat_stream_raw", "decide"])
+def test_a_dropped_connection_is_connection_failed(gateway, write, operation):
+    gateway.answer_with(write)
+    client = PlugboardClient(KEY, base_url=gateway.url)
+    calls = {
+        "embeddings": lambda: client.embeddings("m", "x"),
+        "chat_stream_raw": lambda: list(client.chat_stream_raw("m", [])),
+        "decide": lambda: client.decide("jev", "s", {}),
+    }
+    with pytest.raises(PlugboardError) as error:
+        calls[operation]()
+    assert (error.value.status, error.value.code) == (0, "connection_failed")
+    assert not isinstance(error.value, TimeoutError)
+
+
 def test_a_refused_connection_has_its_code(gateway):
     url = gateway.url
     gateway.server.shutdown()
@@ -240,8 +418,6 @@ def test_a_refused_connection_has_its_code(gateway):
 
 
 def test_decision_timeouts_keep_their_message(monkeypatch):
-    from plugboard_sdk import client as sdk
-
     def hang(*args, **kwargs):
         raise TimeoutError("SYNTHETIC")
 
@@ -249,24 +425,25 @@ def test_decision_timeouts_keep_their_message(monkeypatch):
     with pytest.raises(PlugboardTimeoutError) as error:
         PlugboardClient(KEY).decide("jev", "s", {})
     assert error.value.detail == "Decision request timed out"
+    assert error.value.__context__ is None
 
 
 # ── Async client ─────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_async_embeddings_and_busy_fields(gateway):
+async def test_async_embeddings_and_error_fields(gateway):
     from plugboard_sdk import PlugboardAsyncClient
 
     gateway.answer(body=VECTORS)
-    gateway.answer(503, BUSY, {"Retry-After": "5"})
+    gateway.answer(429, {"detail": "Client rate limit exceeded"}, {"Retry-After": "3"})
     async with PlugboardAsyncClient(KEY, base_url=gateway.url) as client:
         assert await client.embeddings("m", ["a"], encoding_format="float") == VECTORS
         with pytest.raises(PlugboardError) as error:
             await client.embeddings("m", "x")
     err = error.value
-    assert (err.status, err.code, err.retry_after) == (503, "providers_busy", 5.0)
-    assert err.detail == "Embedding request failed"
+    assert (err.status, err.code, err.retry_after) == (429, None, 3.0)
+    assert "Client rate limit exceeded" in err.detail  # as the sync client
     path, auth, agent, body = gateway.seen[0]
     assert (path, auth, body) == (
         "/v1/embeddings",
@@ -280,7 +457,9 @@ async def test_async_embeddings_and_busy_fields(gateway):
 async def test_async_decisions_keep_their_messages_and_gain_the_fields(gateway):
     from plugboard_sdk import PlugboardAsyncClient
 
-    gateway.answer(429, {"code": "decision_quota"}, {"Retry-After": "9"})
+    gateway.answer(
+        429, {"code": "decision_quota", "detail": "private"}, {"Retry-After": "9"}
+    )
     async with PlugboardAsyncClient(KEY, base_url=gateway.url) as client:
         with pytest.raises(PlugboardError) as error:
             await client.decide("jev", "s", {})
@@ -293,7 +472,7 @@ async def test_async_decisions_keep_their_messages_and_gain_the_fields(gateway):
 
 
 @pytest.mark.asyncio
-async def test_async_timeout_is_a_timeout_error(gateway):
+async def test_async_timeout_and_connection_failure(gateway):
     from plugboard_sdk import PlugboardAsyncClient
 
     gateway.answer(200, VECTORS, delay=1.0)
@@ -303,6 +482,14 @@ async def test_async_timeout_is_a_timeout_error(gateway):
     assert error.value.detail == "Embedding request timed out"
     assert isinstance(error.value, TimeoutError)
 
+    url = gateway.url
+    gateway.server.shutdown()
+    gateway.server.server_close()
+    async with PlugboardAsyncClient(KEY, base_url=url) as client:
+        with pytest.raises(PlugboardError) as error:
+            await client.embeddings("m", "x")
+    assert (error.value.status, error.value.code) == (0, "connection_failed")
+
 
 # ── Version ──────────────────────────────────────────────────────────────────
 
@@ -311,3 +498,4 @@ def test_version_is_0_2_0_everywhere():
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     declared = re.search(r'^version = "([^"]+)"', pyproject.read_text(), re.M)
     assert declared.group(1) == plugboard_sdk.__version__ == "0.2.0"
+    assert sdk.USER_AGENT == "plugboard-python-sdk/0.2"

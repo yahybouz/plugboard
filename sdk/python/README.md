@@ -49,8 +49,10 @@ vectors = [item["embedding"] for item in reply["data"]]  # in input order
 ```
 
 `input` is one string or a list of strings; `encoding_format="base64"` returns
-each vector as a base64 string. The key must be allowed the embedding model.
-The async client has the same `embeddings()` method.
+each vector as a base64 string. The gateway serves only the embedding models
+its administrator lists in `PLUGBOARD_EMBEDDING_MODELS`, from a local engine
+(`GET /v1/embeddings/models` lists them), and the key must be allowed the
+model. The async client has the same `embeddings()` method.
 
 ## Sessions (PERF-1 — server keeps history)
 
@@ -128,18 +130,24 @@ async def run():
 
 ## Errors
 
-Every non-2xx response raises `PlugboardError`, and so does a gateway that
-cannot be reached. Since 0.2.0 it carries:
+Every non-2xx response raises `PlugboardError`; so do, since 0.2.0, a gateway
+that cannot be reached or drops the connection, a 2xx answer that is not JSON,
+and a stream cut before its end. It carries:
 
 | Attribute | Value |
 |---|---|
 | `status` | HTTP status; `0` when no answer came |
 | `detail` | The answer's body (sync client), or a fixed message (async client, decisions) |
-| `code` | The gateway's error code when it gave one: `providers_busy`, `model_not_found`, `provider_disabled`...; `timeout` or `connection_failed` when no answer came; else `None` |
-| `retry_after` | Seconds to wait before retrying, from the `Retry-After` header (seconds or a date) or the body's `retry_after`; else `None` |
+| `code` | The gateway's error code when it gave one: `providers_busy`, `model_not_found`, `provider_disabled`...; `timeout` or `connection_failed` when no answer came; `stream_interrupted` for a stream that ended with neither `[DONE]` nor a `finish_reason`; else `None` |
+| `retry_after` | Seconds to wait before retrying, from the `Retry-After` header (seconds or a date) or the body's `retry_after`, at most one day; else `None` |
 
 A request with no answer within `timeout` raises `PlugboardTimeoutError`, a
 `PlugboardError` (status `0`, code `timeout`) that is also a `TimeoutError`.
+`timeout` applies to each network operation (connecting, then each read), so a
+slow but steady stream never times out. The embedding route does not give a
+`code` nor a `Retry-After` yet: its `429` says "Embedding engine busy".
+The async client's embedding errors keep the answer's body in `detail`, as the
+sync client's do.
 Decision calls keep their fixed details, `Decision request timed out` and
 `Decision request failed`, and never include the answer's body or raw transport
 text; they keep `code` and `retry_after`.
@@ -152,8 +160,8 @@ from plugboard_sdk import PlugboardError
 try:
     client.chat(model, [{"role": "user", "content": "..."}])
 except PlugboardError as e:
-    if e.code == "providers_busy":  # 503: every provider of the model is full
-        time.sleep(e.retry_after or 5)
+    if e.code == "providers_busy" and e.retry_after is not None:
+        time.sleep(e.retry_after)  # 503: every provider of the model is full
     print(e.status, e.code, e.detail)
 ```
 

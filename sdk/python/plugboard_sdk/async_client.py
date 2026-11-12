@@ -8,7 +8,7 @@ from .client import (
     USER_AGENT,
     PlugboardError,
     PlugboardTimeoutError,
-    error_from_response,
+    _error_from_response,
 )
 
 
@@ -16,8 +16,9 @@ class PlugboardAsyncClient:
     """Async client for decisions and embeddings. Install
     ``plugboard-sdk[async]`` to use it.
 
-    Errors carry the status, the gateway's ``code`` and ``retry_after``,
-    never the answer's body.
+    Errors carry the status, the gateway's ``code`` and ``retry_after``;
+    decision errors never carry the answer's body, embedding errors do (as
+    the sync client's).
 
     Use ``async with`` or call :meth:`aclose` to close the HTTP connection pool.
     """
@@ -52,7 +53,13 @@ class PlugboardAsyncClient:
         await self._client.aclose()
 
     async def _request(
-        self, method: str, path: str, *, what: str = "Decision", **kwargs
+        self,
+        method: str,
+        path: str,
+        *,
+        what: str = "Decision",
+        keep_body: bool = False,
+        **kwargs,
     ) -> Dict[str, Any]:
         import httpx
 
@@ -66,12 +73,12 @@ class PlugboardAsyncClient:
             ) from None
         if not response.is_success:
             # The body stays out of the message; its code and delay are kept.
-            found = error_from_response(
+            found = _error_from_response(
                 response.status_code, response.text, response.headers.get("Retry-After")
             )
             raise PlugboardError(
                 response.status_code,
-                f"{what} request failed",
+                found.detail if keep_body else f"{what} request failed",
                 code=found.code,
                 retry_after=found.retry_after,
             )
@@ -98,7 +105,7 @@ class PlugboardAsyncClient:
         if user is not None:
             body["user"] = user
         return await self._request(
-            "POST", "/v1/embeddings", what="Embedding", json=body
+            "POST", "/v1/embeddings", what="Embedding", keep_body=True, json=body
         )
 
     async def list_decision_models(self) -> List[Dict[str, Any]]:

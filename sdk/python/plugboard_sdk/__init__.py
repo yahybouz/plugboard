@@ -18,12 +18,15 @@ And streaming:
     for chunk in client.chat_stream(model, [...]):
         print(chunk, end="", flush=True)
 
-Embeddings, and errors that say when to retry:
+Embeddings:
+    vectors = client.embeddings("ollama:nomic-embed-text", ["a", "b"])
+
+Errors that say when to retry (503 providers_busy: every provider is full):
     try:
-        vectors = client.embeddings("ollama:nomic-embed-text", ["a", "b"])
+        reply = client.chat(model, messages)
     except PlugboardError as exc:
-        if exc.code == "providers_busy":
-            time.sleep(exc.retry_after or 5)
+        if exc.code == "providers_busy" and exc.retry_after is not None:
+            time.sleep(exc.retry_after)
 """
 
 from __future__ import annotations
@@ -36,6 +39,7 @@ from .client import (
     PlugboardTimeoutError,
 )
 from .async_client import PlugboardAsyncClient
+from ._version import __version__ as __version__
 
 __all__ = [
     "PlugboardClient",
@@ -46,4 +50,3 @@ __all__ = [
     "LLMEnablerClient",
     "LLMEnablerError",
 ]
-__version__ = "0.2.0"
