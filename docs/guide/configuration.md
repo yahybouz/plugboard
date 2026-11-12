@@ -251,6 +251,19 @@ See [typed decisions](decisions.md) and the [local decision runtime](decisions-r
 | `PLUGBOARD_JOB_PYTHON` | the server's interpreter | Python used by scheduled jobs (pricing, model refresh). |
 | `GEMINI_OAUTH_CLIENT_ID`, `GEMINI_OAUTH_CLIENT_SECRET` | empty | Google OAuth desktop client used to sign in to Gemini from the dashboard and to refresh Gemini CLI tokens. Not shipped with Plugboard. |
 
+## Data retention
+
+A retention pass deletes the rows older than each store's retention, then compacts the store when at least 20 % of its pages are free. Its last report is written to `data/retention.json`, and a pass that deleted rows records a `retention.run` line in the audit trail. For the four retentions below, `0` keeps every row, and a value that is negative or not a whole number gives the default. Chat sessions are purged after `PLUGBOARD_SESSION_TTL_S` ([client keys](#client-keys)).
+
+| Variable | Default | Description |
+|---|---|---|
+| `PLUGBOARD_USAGE_RETENTION_MONTHS` | `13` | Whole months of usage entries kept before the current month (`data/usage.db`): with `13`, in November 2026 the oldest month kept is October 2025. Lowering it deletes the older months, and their cost history, for good. |
+| `PLUGBOARD_AUDIT_RETENTION_DAYS` | `365` | Days an audit entry is kept (`data/audit.db`). |
+| `PLUGBOARD_WATCHDOG_RETENTION_DAYS` | `14` | Days a watchdog event is kept (`data/watchdog.db`). |
+| `PLUGBOARD_MONITORING_RETENTION_DAYS` | `90` | Days a monitoring snapshot is kept (`data/monitoring.db`). |
+| `PLUGBOARD_RETENTION_HOUR_UTC` | `4` | Hour (UTC, `0` to `23`) of the daily pass; a value above `23` gives `23`. |
+| `PLUGBOARD_RETENTION_DISABLED` | empty | `1`, `true` or `yes` turns the daily pass off: nothing is deleted. |
+
 ## MCP server and scripts
 
 These are read by `scripts/run_mcp.py` and the maintenance scripts, not by the server.
