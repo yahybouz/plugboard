@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.11.2] — 2026-11-12
+
 ### Fixed
 
 - **A client key could have a blank `client_id`** (BUG-64): `POST /admin/keys` accepted the `client_id` `""`, and the chat routes read an empty `client_id` as "no caller": with such a key, `POST /v1/preflight` skipped the key's `allowed_models`, `monthly_limit_usd`, `rpm_limit` and the `402` for a model without a known price, and recorded no usage; `POST /v1/chat/completions` did the same when `PLUGBOARD_ALLOW_PERMISSIVE=1`, and shared its cached answers with every caller without a client ID (in the default strict mode it answered `401`); `GET /v1/models` listed every model whatever the key's `allowed_models`. An empty `client_id` or one made only of spaces is now refused with `422`, like `admin`; nothing is written. The dashboard form never sent it. Existing keys are not changed: a key created this way keeps its empty `client_id`, also when rotated, and keeps escaping those limits on these routes; find it in `GET /admin/keys` (empty `client_id`), revoke it and issue a new one under a real client ID. A `client_id` made only of spaces escaped nothing.
