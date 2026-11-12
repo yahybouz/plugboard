@@ -31,7 +31,7 @@ body.suivi { padding: var(--space-4); max-width: 100%; overflow-x: hidden; }
 .suivi-col-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-height: 44px; cursor: pointer; list-style: none; padding: 0 var(--space-1); }
 .suivi-col-head::-webkit-details-marker { display: none; }
 .suivi-col-head h2 { font-size: var(--fs-md); margin: 0; }
-.suivi-count { font-size: var(--fs-xs); color: var(--text-muted); background: var(--bg-card); border-radius: var(--radius-pill); padding: var(--pad-badge); }
+.suivi-count { font-size: var(--fs-xs); color: var(--text-muted); background: var(--bg-card); border-radius: var(--radius-pill); padding: 0 var(--space-2); }
 .suivi-col[data-statut="bloque"] .suivi-col-head h2 { color: var(--red); }
 
 .suivi-col-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
