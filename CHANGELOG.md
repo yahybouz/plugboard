@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Post-deployment smoke `scripts/smoke_consumers.py`** (PLU-18): checks, within 60 s by default, what the consumer applications use, with a dedicated client key read from `PLUGBOARD_SMOKE_KEY` (never printed, masked if a server echoes it): `/health` (ok, not running with client auth disabled, optionally `--expect-version`), the model listed by `/v1/models`, one chat completion, the same call streamed up to `data: [DONE]`, a `response_format` `json_schema` answer, and `/v1/embeddings` only when the key may use a declared embedding model (none is a `SKIP`, not a failure, unless `--require-embeddings`). Read-only: no admin route, no quarantine write; chat calls send `"cache": false` and at most `--max-tokens` (64). Standard library only: it runs on the host or in the container. Exit 0 when every check passes, 1 otherwise, 2 without a key or model.
+
 ### Changed
 
 - **The CI builds the image that is deployed** (PLU-20): the image step of the local CI (`ci/pipeline.json`, `docker-build`) and of `.gitlab-ci.yml` built the slim `api` target, while the UAT and `deploy/ovh/compose.yml` deploy `full`. It now builds `full`, then runs `gemini --version`, `claude --version`, `codex --version` and `gh --version` in the image as the user `app`, without network (`agy --version` too on amd64); the local CI then removes the image. `ci/ci_outils.py image-docker` gains `--verifier`, `--verifier-amd64` and `--delai-verifier` (seconds per check, 120 by default) for these checks, keeps the full build log (`--progress=plain` instead of `-q`) and first removes what a killed run left behind. The step takes longer, measured on the UAT: about 180 s from a cold cache and about 150 s for a commit that changes the code (the CLI layers come after it), against about 10 s for `api`.

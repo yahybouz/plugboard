@@ -267,5 +267,8 @@ These are read by `scripts/run_mcp.py` and the maintenance scripts, not by the s
 | `MCP_PORT` | `8766` | Port of the MCP server in SSE or HTTP mode. |
 | `PLUGBOARD_MCP_ALLOWED_HOSTS`, `PLUGBOARD_MCP_ALLOWED_ORIGINS` | loopback | Comma-separated `Host` and `Origin` values the MCP server accepts in SSE or HTTP mode. |
 | `SETUP_ANTHROPIC_API_KEY`, `SETUP_OPENAI_API_KEY`, `SETUP_GEMINI_API_KEY`, `SETUP_GITHUB_PAT` | empty | Keys that `scripts/setup_railway_providers.py` turns into providers. |
+| `PLUGBOARD_SMOKE_KEY` | empty | Client key used by the post-deployment smoke `scripts/smoke_consumers.py`. Use a dedicated key limited to a local model; it is never printed. |
+| `PLUGBOARD_SMOKE_MODEL` | empty | Chat model the smoke calls, as `/v1/models` lists it for that key (`--model` overrides it). |
+| `PLUGBOARD_SMOKE_EMBEDDING_MODEL` | empty | Embedding model the smoke checks. Empty: the first one the key may use; when there is none, the embeddings check is skipped. |
 
 
