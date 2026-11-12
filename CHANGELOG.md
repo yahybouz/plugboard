@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **A client key could be named `admin`** (BUG-60): `POST /admin/keys` accepted the `client_id` `admin`, and the gateway takes a key's `client_id` as the caller's identity, so such a key was treated as the administrator in places (every call in `GET /v1/inflight`, no `allowed_models` restriction). `admin`, in any case and with surrounding spaces, is now refused with `422`, like the route's other invalid fields; nothing is written. Existing keys are not changed.
 - **A provider could be saved with an empty id** (BUG-61): the id is made from the name's letters and digits (a-z, 0-9), so a name such as `!!!`, blank or written only in another script gave the id `""`, and `POST /providers` saved it. Such a name is now refused with `400` before anything is written, like the route's other refusals; the MCP `add_provider` tool shows that refusal.
+- **An invalid provider address got a `500` from the egress guard** (BUG-62): with *Public addresses only* ticked, a `base_url` whose host name is not valid IDNA (a label over 63 characters, an empty label, a forbidden character), whose port is out of range or whose IPv6 bracket is not closed raised an error the guard did not catch: `500`, and no `provider.egress.rejected` line in the audit. It is now refused with `422` *Provider base_url refused* and audited, like an internal address; the same holds for catalog presets checked before a test or a creation.
 
 ## [4.11.0] — 2026-11-12
 

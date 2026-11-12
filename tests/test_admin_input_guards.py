@@ -76,3 +76,65 @@ async def test_post_provider_without_id_is_400(client, _providers_file, name):
     assert "letter or digit" in r.json()["detail"]
     assert _providers_file.read_text() == before
     assert config.get_provider("") is None
+
+
+# -- BUG-62: a provider address the guard cannot parse ------------------------
+
+
+@pytest.fixture
+def idna_resolver(monkeypatch):
+    """socket.getaddrinfo as far as CPython goes before any lookup.
+
+    CPython encodes a str host with the "idna" codec first and raises its
+    UnicodeError; any name that gets past it is refused here, so no test
+    sends a DNS query.
+    """
+    import socket
+
+    def _getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+        host.encode("idna")
+        raise socket.gaierror(socket.EAI_NONAME, f"unexpected lookup of {host}")
+
+    monkeypatch.setattr(socket, "getaddrinfo", _getaddrinfo)
+
+
+@pytest.fixture
+def audit_db(monkeypatch, tmp_path):
+    from plugboard import audit as audit_mod
+
+    monkeypatch.setattr(audit_mod, "_DB_PATH", tmp_path / "audit.db")
+    return audit_mod
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://" + "a" * 64 + ".test/v1",  # IDNA: label too long
+        "https://a..test/v1",  # IDNA: empty label
+        "https://ex ample.test/v1",  # IDNA: forbidden character
+        "https://api.acme.test:99999/v1",  # port out of range
+        "https://[api.acme.test/v1",  # unclosed IPv6 bracket
+    ],
+)
+async def test_guarded_provider_with_invalid_address_is_refused_and_audited(
+    client, _providers_file, idna_resolver, audit_db, base_url
+):
+    import json
+
+    before = _providers_file.read_text()
+    r = await client.post(
+        "/providers",
+        headers={"Authorization": "Bearer testkey"},
+        json={
+            "name": "Bad",
+            "base_url": base_url,
+            "bearer_token": "k",
+            "egress_guard": True,
+        },
+    )
+    # Same refusal as an address that resolves inside the network.
+    assert r.status_code == 422
+    assert r.json()["detail"].startswith("Provider base_url refused:")
+    assert _providers_file.read_text() == before
+    [event] = audit_db.get_audit_log(action="provider.egress.rejected")
+    assert json.loads(event["details"])["base_url"] == base_url
