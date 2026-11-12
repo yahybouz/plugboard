@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Old data is now purged automatically** (PLU-32): a retention pass runs inside the server every day at `PLUGBOARD_RETENTION_HOUR_UTC` (`4`, UTC) and deletes the usage entries older than `PLUGBOARD_USAGE_RETENTION_MONTHS` whole months (`13`), audit entries older than `PLUGBOARD_AUDIT_RETENTION_DAYS` (`365`), watchdog events older than `PLUGBOARD_WATCHDOG_RETENTION_DAYS` (`14`), availability snapshots older than `PLUGBOARD_MONITORING_RETENTION_DAYS` (`90`) and chat sessions expired after `PLUGBOARD_SESSION_TTL_S`, then compacts each store when at least 20 % of its pages are free. `0` keeps a store's rows for ever; a negative value or one that is not a whole number gives the default. `PLUGBOARD_RETENTION_DISABLED=1` turns the daily pass off. The last report is written to `data/retention.json` and returned by `GET /admin/retention` (admin) with the settings in force; a pass that deleted rows records a `retention.run` audit line. The Jobs page lists the pass as *Data retention*, with **Run now**. **Before upgrading**, back up `data/`: rows older than the retention are deleted for good at the first pass, so with the defaults usage older than 13 months and audit entries older than a year disappear the first night ([data retention](docs/guide/configuration.md#data-retention)).
+- **Availability snapshots are taken on a schedule** (PLU-34): every active provider is probed every `PLUGBOARD_MONITORING_INTERVAL_S` seconds (`300`) and the result is stored in `data/monitoring.db`, where the Monitoring page computes uptime; a probe that does not answer within 30 seconds counts as down. `0` turns the snapshots off and a value from `1` to `59` gives `60`. The Jobs page lists them as *Availability snapshots*, with **Run now**.
+
+### Changed
+
+- **Opening the Monitoring page no longer records a snapshot** (PLU-34): `GET /admin/monitoring` used to store its own health check, so uptime measured how often an admin opened the page. It now stores nothing and computes uptime from the scheduled snapshots only; with no snapshot in the period, `uptime_pct` is `null` (shown as `—`) instead of `100`.
+
 ### Fixed
 
 - **A manual usage purge can no longer reach the current month** (PLU-32): `POST /admin/usage/purge` accepted `keep_months=0` or a negative value, and a negative value deleted the current month's usage along with every older month. A `keep_months` below 1 is now refused with `422` and nothing is deleted; `plugboard.usage.purge_old_usage` raises `ValueError` for such a value.

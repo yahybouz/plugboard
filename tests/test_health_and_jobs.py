@@ -243,3 +243,31 @@ async def test_scheduler_jobs_listed_with_a_known_state(admin_client):
             "stale",
             "disabled",
         )
+
+
+async def test_maintenance_jobs_are_listed(admin_client, monkeypatch):
+    """The availability snapshots and the retention pass appear on the Jobs page."""
+    from plugboard.app import app
+    from plugboard.maintenance import PeriodicJob
+
+    async def _work():
+        return {}
+
+    snapshots = PeriodicJob("availability_snapshots", _work, interval_s=300)
+    snapshots.last_run_at = "2026-11-12T10:00:00+00:00"
+    purge = PeriodicJob("data_retention", _work, daily_hour_utc=4)
+    monkeypatch.setattr(app.state, "availability_job", snapshots, raising=False)
+    monkeypatch.setattr(app.state, "retention_job", purge, raising=False)
+
+    res = await admin_client.get(
+        "/admin/jobs",
+        headers={"Authorization": "Bearer adminkey"},
+    )
+    assert res.status_code == 200
+    jobs = {j["id"]: j for j in res.json()}
+    assert jobs["availability_snapshots"]["name"] == "Availability snapshots"
+    assert jobs["availability_snapshots"]["schedule"] == "every 5 min (in-process)"
+    assert jobs["availability_snapshots"]["next_run"] == "2026-11-12 10:05 UTC"
+    assert jobs["data_retention"]["name"] == "Data retention"
+    assert jobs["data_retention"]["schedule"] == "daily at 04:00 UTC (in-process)"
+    assert jobs["data_retention"]["last_status"] == "never_run"

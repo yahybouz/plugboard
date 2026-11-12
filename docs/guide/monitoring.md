@@ -36,7 +36,7 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 | Monitoring | Health of each active provider (status, latency, error rate, uptime over 24 hours and 7 days) and the check history of the last 24 hours. Uptime comes from availability snapshots taken every 5 minutes, not from opening the page, which stores nothing; it shows `—` until a first snapshot exists |
 | Catalog history | Models each provider gained or lost, newest first, filtered by provider, period and model name ([details](#catalog-history)) |
 | Usage & billing | Requests, tokens and cost per client for a month |
-| Jobs | The price refresh, the model catalog refresh and the provider watchdog: state, last and next run, **Run now** |
+| Jobs | The price refresh, the model catalog refresh, the provider watchdog, the availability snapshots (every `PLUGBOARD_MONITORING_INTERVAL_S` seconds) and the daily data retention pass ([data retention](configuration.md#data-retention)): state, last and next run, **Run now** |
 | Playground | Per-model connectivity and internet-access indicators |
 | Tickets (`/suivi`) | Kanban of Plugboard tickets, see below |
 
@@ -69,6 +69,7 @@ When `API_KEY` is empty it also returns `"auth_disabled": true` and `"dev_mode"`
 | `GET /metrics/prometheus` | Prometheus text format: request totals, error totals and average latency per provider, and an `up` gauge |
 | `GET /admin/monitoring` | Full health check of all providers with 24-hour and 7-day uptime computed from the stored snapshots; the check itself is not stored. `uptime_pct` is `null` when the period holds no snapshot |
 | `GET /admin/monitoring/history?provider_id=&limit=` | Availability snapshots (`data/monitoring.db`): one row per active provider every 5 minutes; a probe that does not answer within 30 seconds is stored as down |
+| `GET /admin/retention` | Retention settings in force (`settings`) and the report of the last retention pass (`last_run`, `null` before the first pass): when it ran, rows deleted per store, errors ([data retention](configuration.md#data-retention)) |
 | `GET /admin/circuits` | Per-model circuit breaker state |
 | `GET /admin/cache/stats` | Response cache statistics |
 

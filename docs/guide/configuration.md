@@ -220,6 +220,12 @@ The catalog is downloaded with each price update. A download that fails, is inva
 | `WATCHDOG_DEEP_TIMEOUT` | `60` | Timeout of a deep check (real completion). |
 | `WATCHDOG_DEEP_INTERVAL` | `3` | Run a deep check every N checks. |
 
+## Availability snapshots
+
+| Variable | Default | Description |
+|---|---|---|
+| `PLUGBOARD_MONITORING_INTERVAL_S` | `300` | Seconds between two availability snapshots (one probe of every active provider, stored in `data/monitoring.db`), from which the Monitoring page computes uptime. `0` turns the snapshots off; a value from `1` to `59` gives `60`. The job is listed on the Jobs page ([monitoring](monitoring.md#dashboard-pages)). |
+
 ## Alerts and webhooks
 
 | Variable | Default | Description |
@@ -254,6 +260,8 @@ See [typed decisions](decisions.md) and the [local decision runtime](decisions-r
 ## Data retention
 
 A retention pass deletes the rows older than each store's retention, then compacts the store when at least 20 % of its pages are free. Its last report is written to `data/retention.json`, and a pass that deleted rows records a `retention.run` line in the audit trail. For the four retentions below, `0` keeps every row, and a value that is negative or not a whole number gives the default. Chat sessions are purged after `PLUGBOARD_SESSION_TTL_S` ([client keys](#client-keys)).
+
+The pass runs inside the server once a day, as the *Data retention* job of the Jobs page, where **Run now** starts it at once, even when the daily pass is turned off. `GET /admin/retention` (admin) returns the settings in force and the last report. Back up `data/` before you shorten a retention: the rows it no longer covers are deleted for good at the next pass.
 
 | Variable | Default | Description |
 |---|---|---|

@@ -437,6 +437,21 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
         _model_availability_scheduler.daily_hour_utc,
     )
 
+    # Maintenance jobs — availability snapshots and the daily retention pass.
+    from plugboard.maintenance import availability_job, retention_job
+
+    _maintenance_jobs = [availability_job(), retention_job()]
+    app.state.availability_job, app.state.retention_job = _maintenance_jobs
+    for _job in _maintenance_jobs:
+        await _job.start()
+        log.info(
+            "PeriodicJob %s started (disabled=%s, interval_s=%s, daily_hour_utc=%s)",
+            _job.name,
+            _job.disabled,
+            _job.interval_s,
+            _job.daily_hour_utc,
+        )
+
     # Boot-time internet probe — auto-refresh internet_access flags so the
     # playground dropdown displays correct 🌐/💻 icons without admin click.
     # Runs in background after schedulers are up so boot isn't blocked.
@@ -483,6 +498,8 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
 
     yield
 
+    for _job in _maintenance_jobs:
+        await _job.stop()
     await _model_availability_scheduler.stop()
     await _pricing_scheduler.stop()
     # Webhooks still being delivered get a short grace period.
@@ -5877,6 +5894,14 @@ async def purge_old_usage(
     """Delete usage files older than `keep_months` months."""
     deleted = _usage.purge_old_usage(keep_months)
     return {"purged": deleted, "keep_months": keep_months}
+
+
+@app.get("/admin/retention")
+async def admin_retention(_: None = Depends(_require_admin)):
+    """Retention settings and the report of the last retention pass."""
+    from plugboard import retention
+
+    return {"settings": retention.settings(), "last_run": retention.last_report()}
 
 
 @app.post("/admin/usage/migrate")

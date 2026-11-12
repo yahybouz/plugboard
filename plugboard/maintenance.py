@@ -7,6 +7,12 @@ at a given UTC hour. The Jobs page reads it like the pricing schedulers:
 
 A failing run is recorded in ``last_error`` and the loop goes on; a
 cancellation (``stop()``) propagates and is never recorded as an error.
+
+Two jobs are built here and started with the server:
+
+- ``availability_job()``: availability snapshots every
+  ``PLUGBOARD_MONITORING_INTERVAL_S`` seconds;
+- ``retention_job()``: the daily data retention pass.
 """
 
 from __future__ import annotations
@@ -16,12 +22,17 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, Optional
 
+from plugboard import envcompat, monitoring, retention, storage
+
 log = logging.getLogger(__name__)
 
 SleepFn = Callable[[float], Awaitable[None]]
 WorkFn = Callable[[], Awaitable[Dict[str, Any]]]
 
 _ERROR_MAX_CHARS = 300
+
+DEFAULT_MONITORING_INTERVAL_S = 300
+MIN_MONITORING_INTERVAL_S = 60
 
 
 class PeriodicJob:
@@ -175,3 +186,46 @@ class PeriodicJob:
                 self.running_since = None
             self.runs += 1
             self.last_run_at = self._now().isoformat()
+
+
+def availability_job() -> PeriodicJob:
+    """Availability snapshots every ``PLUGBOARD_MONITORING_INTERVAL_S`` seconds.
+
+    ``0`` turns the snapshots off; 1 to 59 gives 60, so that probing every
+    provider cannot run back to back.
+    """
+    interval = envcompat.get_int(
+        "PLUGBOARD_MONITORING_INTERVAL_S",
+        default=DEFAULT_MONITORING_INTERVAL_S,
+        minimum=0,
+    )
+    disabled = interval == 0
+    if disabled:
+        interval = DEFAULT_MONITORING_INTERVAL_S
+    return PeriodicJob(
+        "availability_snapshots",
+        monitoring.record_snapshot,
+        interval_s=max(interval, MIN_MONITORING_INTERVAL_S),
+        disabled=disabled,
+    )
+
+
+async def _retention_pass() -> Dict[str, Any]:
+    # The pass blocks on SQLite: it runs in a worker thread, which a stop()
+    # cannot interrupt, so the job waits for it before letting the
+    # cancellation go on.
+    report, cancelled = await storage.to_thread_to_the_end(retention.run_retention)
+    if cancelled is not None:
+        raise cancelled
+    return report
+
+
+def retention_job() -> PeriodicJob:
+    """The data retention pass, daily at ``PLUGBOARD_RETENTION_HOUR_UTC``."""
+    settings = retention.settings()
+    return PeriodicJob(
+        "data_retention",
+        _retention_pass,
+        daily_hour_utc=settings["hour_utc"],
+        disabled=settings["disabled"],
+    )
