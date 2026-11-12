@@ -384,7 +384,12 @@ def delete_usage(month: str) -> bool:
 
 
 def purge_old_usage(keep_months: int = 6) -> List[str]:
-    """Delete entries older than `keep_months`. Returns list of deleted months."""
+    """Delete entries older than `keep_months`. Returns list of deleted months.
+
+    `keep_months` below 1 is refused: it would reach the current month.
+    """
+    if keep_months < 1:
+        raise ValueError("keep_months must be at least 1")
     now = datetime.now(timezone.utc)
     conn = _get_conn()
     try:

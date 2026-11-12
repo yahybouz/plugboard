@@ -917,6 +917,56 @@ async def test_purge_endpoint(client, tmp_path, monkeypatch):
     assert "2020_01" in body["purged"]
 
 
+def _current_usage_month() -> str:
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    return f"{now.year:04d}_{now.month:02d}"
+
+
+def test_purge_old_usage_refuses_zero_and_negative(tmp_path, monkeypatch):
+    """keep_months below 1 would delete the current month: refused."""
+    import plugboard.usage as u
+    import plugboard.billing as b
+
+    monkeypatch.setattr(u, "_DATA_DIR", tmp_path)
+    monkeypatch.setattr(u, "_DB_PATH", tmp_path / "usage.db")
+    current = _current_usage_month()
+    monkeypatch.setattr(b, "current_pricing_month", lambda: current)
+    u.append_usage("c", "m", "p", 10, 5, current, 0.0)
+
+    for value in (0, -1):
+        with pytest.raises(ValueError, match="keep_months must be at least 1"):
+            u.purge_old_usage(keep_months=value)
+
+    assert len(u.get_usage(current)) == 1
+
+
+@pytest.mark.asyncio
+async def test_admin_purge_refuses_keep_months_below_one(client, tmp_path, monkeypatch):
+    """POST /admin/usage/purge answers 422 for keep_months below 1."""
+    import plugboard.usage as u
+    import plugboard.billing as b
+
+    monkeypatch.setattr(u, "_DATA_DIR", tmp_path)
+    monkeypatch.setattr(u, "_DB_PATH", tmp_path / "usage.db")
+    current = _current_usage_month()
+    monkeypatch.setattr(b, "current_pricing_month", lambda: current)
+    u.append_usage("c", "m", "p", 10, 5, current, 0.0)
+
+    for value in (0, -1):
+        resp = await client.post(
+            f"/admin/usage/purge?keep_months={value}", headers=AUTH
+        )
+        assert resp.status_code == 422
+        assert len(u.get_usage(current)) == 1
+
+    resp = await client.post("/admin/usage/purge?keep_months=1", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["purged"] == []
+    assert len(u.get_usage(current)) == 1
+
+
 # ── Phase 6: key rotation ──────────────────────────────────────────────────
 
 

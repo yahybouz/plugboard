@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A manual usage purge can no longer reach the current month** (PLU-32): `POST /admin/usage/purge` accepted `keep_months=0` or a negative value, and a negative value deleted the current month's usage along with every older month. A `keep_months` below 1 is now refused with `422` and nothing is deleted; `plugboard.usage.purge_old_usage` raises `ValueError` for such a value.
+
 ## [4.11.5] — 2026-11-12
 
 ### Security

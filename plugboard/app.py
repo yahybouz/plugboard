@@ -5871,7 +5871,9 @@ async def admin_usage_by_key(
 
 
 @app.post("/admin/usage/purge")
-async def purge_old_usage(keep_months: int = 6, _: None = Depends(_require_admin)):
+async def purge_old_usage(
+    keep_months: int = Query(6, ge=1), _: None = Depends(_require_admin)
+):
     """Delete usage files older than `keep_months` months."""
     deleted = _usage.purge_old_usage(keep_months)
     return {"purged": deleted, "keep_months": keep_months}
