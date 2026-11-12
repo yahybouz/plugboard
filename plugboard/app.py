@@ -4689,9 +4689,15 @@ async def test_direct_provider(
     if not base_url.startswith(("http://", "https://")):
         raise HTTPException(422, "Give a preset_key or an http(s) base_url")
     try:
-        # Reading the port parses the whole address: an unclosed IPv6
-        # bracket, a bracketed name or a bad port raised a 500 (BUG-63).
-        urlsplit(base_url).port
+        # An unclosed IPv6 bracket, a bracketed name or a bad port (urlsplit,
+        # .port), or an empty or over-long label in an ASCII host (the IDNA
+        # step of getaddrinfo, which aiohttp lets through) raised a 500
+        # (BUG-63). A non-ASCII host is encoded by aiohttp, which reports it.
+        parts = urlsplit(base_url)
+        parts.port  # parsed on read
+        host = parts.hostname or ""
+        if host.isascii():
+            host.encode("idna")
     except ValueError as exc:
         raise HTTPException(422, f"base_url refused: not a valid address ({exc})")
     try:
