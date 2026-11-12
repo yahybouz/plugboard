@@ -62,7 +62,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from contextlib import asynccontextmanager
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -4443,8 +4443,8 @@ async def _require_public_host(base_url: str, *, label: str = "Catalog preset") 
 
     from plugboard.llm_pricing import UnsafeURL, _resolve_public
 
-    parts = urlsplit(base_url)
     try:
+        parts = urlsplit(base_url)
         # The checked addresses are returned so the caller connects to them
         # and nothing else (no second lookup that DNS rebinding could change).
         return await _resolve_public(parts.hostname or "", parts.port or 443)
@@ -4452,6 +4452,10 @@ async def _require_public_host(base_url: str, *, label: str = "Catalog preset") 
         if str(exc).startswith("cannot resolve"):
             raise HTTPException(503, f"{label} host unreachable: {exc}")
         raise HTTPException(422, f"{label} refused: {exc}")
+    except ValueError as exc:
+        # A host the IDNA codec rejects (UnicodeError from the lookup), a bad
+        # port or an unclosed IPv6 bracket: refused, not a 500 (BUG-62).
+        raise HTTPException(422, f"{label} refused: not a valid address ({exc})")
 
 
 async def _check_guard_on_edit(
@@ -5096,6 +5100,15 @@ class KeyCreate(BaseModel):
     ] = None
     rpm_limit: Optional[int] = None  # requests per minute
     org_id: str = ""  # organisation (empty = no org)
+
+    @field_validator("client_id")
+    @classmethod
+    def _not_the_admin(cls, value: str) -> str:
+        # A key resolves to its client_id, and "admin" is the admin's identity
+        # (every in-flight call, no model restriction): never issue it (BUG-60).
+        if value.strip().lower() == "admin":
+            raise ValueError("client_id 'admin' is reserved for the administrator")
+        return value
 
 
 def _default_rpm_limit() -> int:

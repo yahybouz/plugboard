@@ -6,7 +6,7 @@ Every application that calls Plugboard gets its own key. Keys carry the limits, 
 
 | Term | Meaning |
 |---|---|
-| Client ID | A slug for the calling application, for example `billing-service`. Several keys can share one client ID (rotation, environments). |
+| Client ID | A slug for the calling application, for example `billing-service`. Several keys can share one client ID (rotation, environments). `admin` is the administrator's identity: a key cannot be created under it. |
 | Key | A secret of the form `pb_` followed by 64 hex characters. Older keys starting with `lle_` keep working. |
 | Label | Free text, for example `production` or `staging`. |
 | Organisation | Optional `org_id` grouping several clients for reporting. |

@@ -52,3 +52,20 @@ async def test_create_then_revoke_key(dashboard):
     assert await revoked_row.locator(".badge-red", has_text="revoked").count() == 1
 
     assert dashboard.js_errors == [], dashboard.js_errors
+
+
+async def test_refused_key_is_reported_as_an_error(dashboard):
+    """A key the API refuses (422) is never shown as created (BUG-60)."""
+    page = dashboard.page
+    await dashboard.goto_tab("keys")
+    await page.click("#btn-create-key")
+    await page.wait_for_selector("#create-key-form:not(.hidden)")
+    await page.fill("#key-client-id", "admin")
+    await page.click("#btn-submit-key")
+
+    toast = page.locator("#toast-container .toast.error", has_text="reserved")
+    await toast.wait_for(timeout=10_000)
+    assert await page.locator("#new-key-alert").is_hidden()
+    assert await page.locator("#create-key-form").is_visible()
+    assert await page.input_value("#key-client-id") == "admin"
+    assert dashboard.js_errors == [], dashboard.js_errors

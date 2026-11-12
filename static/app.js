@@ -336,6 +336,7 @@ document.getElementById("btn-submit-key").addEventListener("click", async functi
   const rpm = parseInt(document.getElementById("key-rpm").value) || 0;
   try {
     const res = await api("POST", "/admin/keys", { client_id: clientId, label: label, monthly_limit_usd: limit, rpm_limit: rpm });
+    if (!res.ok) { toast("Failed to create key: " + await _errorDetail(res), "error"); return; }
     const body = await res.json();
     document.getElementById("new-key-value").textContent = body.key;
     newKeyAlert.classList.remove("hidden");

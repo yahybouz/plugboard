@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A client key could be named `admin`** (BUG-60): `POST /admin/keys` accepted the `client_id` `admin`, and the gateway takes a key's `client_id` as the caller's identity, so such a key was treated as the administrator on the chat routes: no monthly budget, no `402` for an unknown price, no `rpm_limit`, no `allowed_models`; the administrator's response cache; provider error details, busy provider IDs and `X-Price-Key`; every call in `GET /v1/inflight`. `admin`, in any case and with surrounding spaces, is now refused with `422`, like the route's other invalid fields; nothing is written, and the dashboard's **Create key** form shows the refusal instead of reporting a key created. Existing keys are not changed, and rotating one keeps its `client_id`: look for them with `GET /admin/keys/client/admin`, revoke them and create keys under another client ID.
+- **A provider could be saved with an empty id** (BUG-61): the id is made from the name's letters and digits (a-z, 0-9), so a name such as `!!!`, blank or written only in another script gave the id `""`, and `POST /providers` saved it. Such a name is now refused with `400` before anything is written, like the route's other refusals; the MCP `add_provider` tool shows that refusal.
+- **An invalid provider address got a `500` from the egress guard** (BUG-62): with *Public addresses only* ticked, a `base_url` whose host name the IDNA codec rejects (a label over 63 characters, an empty label, a non-ASCII character it forbids), whose port is out of range or whose IPv6 bracket is not closed raised an error the guard did not catch: `500`, and no `provider.egress.rejected` line in the audit. On `POST` and `PUT /providers` it is now refused with `422` *Provider base_url refused* and audited, like an internal address. A catalog preset with such an address now gets `422` *Catalog preset refused* before a connection test or a creation (these routes write no audit line).
+
 ## [4.11.0] — 2026-11-12
 
 ### Added
