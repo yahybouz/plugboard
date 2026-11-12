@@ -3,24 +3,41 @@
 
 Sends streamed chats to ``<url>/v1/chat/completions`` from 1, 2, 4 then 8
 clients at once (``--clients``), ``--rounds`` chats each, one level after
-the other, and prints per level: status codes, time to the response status,
-time to the first word, total time and tokens per second.
+the other, and prints per level: status codes, time to the status of the
+served chats and of the refusals, time to the first word (the first
+generated chunk: text, reasoning or a tool call), total time and tokens per
+second (after the first word).
 
-The key is read from an environment variable (``--key-env``, default
-``PLUGBOARD_BENCH_KEY``) and is never printed nor written. Each chat asks
-for no cached answer and carries a distinct prompt.
+A chat is served when it gets a 200 event stream that carries at least one
+word and ends (``[DONE]`` or a ``finish_reason``); any other 200 is a
+``200 stream error``. The key is read from an environment variable
+(``--key-env``, default ``PLUGBOARD_BENCH_KEY``) and is never printed nor
+written; it is never sent over plain http to another machine without
+``--allow-http``. Each chat asks for no cached answer and carries a distinct
+prompt.
 
-``--check`` exits 1 unless every answer is a 200 or a 503
-``providers_busy``, and every 503 came within ``--max-refusal-s`` seconds
-(10.5: the 10 s admission wait, plus margin). The D-26 thresholds are
-optional checks: ``--first-word-p95-max 5`` and ``--tps-median-min 5``.
-Exit codes: 0 done (and checks passed), 1 a check failed, 2 bad usage.
+``--check`` (PLU-17): every answer is a 200 or a 503 ``providers_busy``;
+every 503 comes within ``--max-wait-s`` (10.5: the gateway's 10 s admission
+wait plus a margin) and every 200 within ``--max-wait-s`` plus
+``--max-first-chunk-s`` (the gateway sends a 200 with the provider's first
+chunk, after the wait).
 
-Example (D-26 at 4 clients, 3 chats each):
+D-26 targets, checked at the levels of ``--targets-at`` (default 4 clients):
+every chat served, ``--first-word-p95-max`` seconds (nearest rank, the max
+for up to 20 chats) and ``--tps-min`` tokens per second for each client
+(the median of its rounds).
+
+To measure what a provider holds, its ``max_concurrency`` must be at least
+the level: a local provider takes one chat at a time by default.
+
+Exit codes: 0 done (checks passed), 1 a check failed, 2 bad usage,
+3 the bench itself failed.
+
+Example (D-26 at 4 clients, 3 chats each, after one warm-up chat):
   PLUGBOARD_BENCH_KEY=... python scripts/bench_concurrency.py \\
       --url https://gateway.example --model ollama:qwen2.5:7b \\
-      --clients 1,2,4,8 --rounds 3 --check \\
-      --first-word-p95-max 5 --tps-median-min 5 --json bench.json
+      --clients 1,2,4,8 --rounds 3 --warmup 1 --check \\
+      --first-word-p95-max 5 --tps-min 5 --json bench.json
 """
 
 from __future__ import annotations
@@ -34,15 +51,19 @@ import os
 import statistics
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TextIO
 from urllib.parse import urlsplit
 
 import aiohttp
 
 BUSY = "503 providers_busy"
+STREAM_ERROR = "200 stream error"
 DEFAULT_PROMPT = (
     "Write a short paragraph, about eighty words, on why the sea looks blue."
 )
+# A rate is kept only when the words came over this long, in 3 reads at least.
+MIN_RATE_SPAN_S = 0.05
+MIN_RATE_EVENTS = 3
 
 
 def percentile(values: List[float], q: float) -> Optional[float]:
@@ -61,8 +82,8 @@ def _stats(values: List[float]) -> Dict[str, Optional[float]]:
     }
 
 
-def _scrub(text: str, key: str) -> str:
-    return text.replace(key, "***") if key else text
+def _scrub(text: Optional[str], key: str) -> Optional[str]:
+    return text.replace(key, "***") if text and key else text
 
 
 def _generated(delta: Any) -> bool:
@@ -99,6 +120,7 @@ async def one_chat(
     t0 = time.perf_counter()
     first = last = None
     events = 0
+    done = False
     usage_tokens = None
     try:
         async with session.post(
@@ -110,15 +132,18 @@ async def one_chat(
         ) as resp:
             out["status"] = resp.status
             out["status_s"] = time.perf_counter() - t0
-            out["retry_after"] = resp.headers.get("Retry-After")
+            out["retry_after"] = _scrub(resp.headers.get("Retry-After"), key)
             if resp.status != 200:
-                raw = await resp.text()
+                raw = await resp.text(errors="replace")
                 try:
                     data = json.loads(raw)
                 except ValueError:
                     data = None
                 if isinstance(data, dict) and isinstance(data.get("code"), str):
-                    out["code"] = data["code"]
+                    out["code"] = _scrub(data["code"], key)
+                return out
+            if resp.content_type != "text/event-stream":
+                out["error"] = "200 without an event stream"
                 return out
             async for raw_line in resp.content:
                 line = raw_line.strip()
@@ -126,6 +151,7 @@ async def one_chat(
                     continue
                 payload = line[5:].strip()
                 if payload == b"[DONE]":
+                    done = True
                     break
                 try:
                     evt = json.loads(payload)
@@ -143,9 +169,10 @@ async def one_chat(
                 choices = evt.get("choices")
                 if not isinstance(choices, list):
                     continue
-                if any(
-                    _generated(c.get("delta")) for c in choices if isinstance(c, dict)
-                ):
+                choices = [c for c in choices if isinstance(c, dict)]
+                if any(c.get("finish_reason") for c in choices):
+                    done = True
+                if any(_generated(c.get("delta")) for c in choices):
                     now = time.perf_counter() - t0
                     first = now if first is None else first
                     last = now
@@ -154,157 +181,200 @@ async def one_chat(
         out["error"] = f"timeout after {timeout} s"
     except aiohttp.ClientError as exc:
         out["error"] = f"connection failed: {type(exc).__name__}"
+    except Exception as exc:  # never lose the bench for one chat
+        out["error"] = f"unexpected error: {type(exc).__name__}"
     out["total_s"] = time.perf_counter() - t0
+    if out["status"] != 200:
+        return out
+    if out["error"] is None and first is None:
+        out["error"] = "no word generated"
+    elif out["error"] is None and not done:
+        out["error"] = "stream ended without [DONE]"
     out["first_word_s"] = first
     tokens = usage_tokens if usage_tokens and usage_tokens > 0 else events
     out["completion_tokens"] = tokens if first is not None else None
-    if first is not None and last is not None and tokens >= 2 and last > first:
+    if (
+        first is not None
+        and last is not None
+        and events >= MIN_RATE_EVENTS
+        and tokens >= 2
+        and last - first >= MIN_RATE_SPAN_S
+    ):
         out["tokens_per_second"] = (tokens - 1) / (last - first)
     return out
+
+
+def _served(result: Dict[str, Any]) -> bool:
+    return result["status"] == 200 and not result["error"]
 
 
 def _label(result: Dict[str, Any]) -> str:
     if result["status"] == 503 and result["code"] == "providers_busy":
         return BUSY
-    if result["status"] == 200 and result["error"]:
-        return "200 stream error"
+    if result["status"] == 200:
+        return "200" if not result["error"] else STREAM_ERROR
     if result["status"] == 0:
         return "no answer"
     return str(result["status"])
 
 
-async def run_level(
-    url: str, key: str, args: argparse.Namespace, clients: int
-) -> Dict[str, Any]:
-    start = asyncio.Event()
-    stamp = time.strftime("%H%M%S")
+def _body(args: argparse.Namespace, tag: str) -> Dict[str, Any]:
+    return {
+        "model": args.model,
+        "messages": [{"role": "user", "content": f"{args.prompt} ({tag})"}],
+        "stream": True,
+        "cache": False,
+        "max_tokens": args.max_tokens,
+    }
 
-    async def client(session: aiohttp.ClientSession, n: int) -> List[Dict[str, Any]]:
-        await start.wait()
+
+async def run_level(
+    session: aiohttp.ClientSession,
+    url: str,
+    key: str,
+    args: argparse.Namespace,
+    clients: int,
+    stamp: str,
+) -> Dict[str, Any]:
+    async def client(n: int) -> List[Dict[str, Any]]:
         results = []
-        for r in range(args.rounds):
-            body = {
-                "model": args.model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": f"{args.prompt} (bench {stamp}, "
-                        f"{clients} clients, client {n}, round {r + 1})",
-                    }
-                ],
-                "stream": True,
-                "cache": False,
-                "max_tokens": args.max_tokens,
-            }
-            results.append(await one_chat(session, url, key, body, args.timeout))
+        for r in range(1, args.rounds + 1):
+            tag = f"bench {stamp}, {clients} clients, client {n}, round {r}"
+            res = await one_chat(session, url, key, _body(args, tag), args.timeout)
+            results.append({"client": n, "round": r, **res})
         return results
 
-    connector = aiohttp.TCPConnector(limit=0)
-    async with aiohttp.ClientSession(connector=connector, trust_env=False) as session:
-        tasks = [asyncio.create_task(client(session, n + 1)) for n in range(clients)]
-        start.set()
-        requests = [res for batch in await asyncio.gather(*tasks) for res in batch]
+    # The tasks start together: none awaits anything before its request.
+    batches = await asyncio.gather(*(client(n) for n in range(1, clients + 1)))
+    requests = [res for batch in batches for res in batch]
 
     codes: Dict[str, int] = {}
     for res in requests:
         codes[_label(res)] = codes.get(_label(res), 0) + 1
-    ok = [r for r in requests if r["status"] == 200 and not r["error"]]
+    ok = [r for r in requests if _served(r)]
     tps = [r["tokens_per_second"] for r in ok if r["tokens_per_second"] is not None]
     return {
         "clients": clients,
         "codes": codes,
-        "status_s": _stats(
-            [r["status_s"] for r in requests if r["status_s"] is not None]
+        "status_200_s": _stats(
+            [
+                r["status_s"]
+                for r in requests
+                if r["status"] == 200 and r["status_s"] is not None
+            ]
         ),
-        "first_word_s": _stats(
-            [r["first_word_s"] for r in ok if r["first_word_s"] is not None]
-        ),
+        "refusal_s": _stats([r["status_s"] for r in requests if _label(r) == BUSY]),
+        "first_word_s": _stats([r["first_word_s"] for r in ok]),
         "total_s": _stats([r["total_s"] for r in ok]),
         "tokens_per_second": {
-            "median": statistics.median(tps) if tps else None,
             "min": min(tps) if tps else None,
+            "median": statistics.median(tps) if tps else None,
         },
-        "refusal_max_s": max(
-            (r["status_s"] for r in requests if _label(r) == BUSY), default=None
-        ),
         "requests": requests,
     }
 
 
 def check(levels: List[Dict[str, Any]], args: argparse.Namespace) -> List[str]:
-    failures = []
-    for lvl in levels:
-        n = lvl["clients"]
-        if args.check:
+    failures: List[str] = []
+    if args.check:
+        bound_200 = args.max_wait_s + args.max_first_chunk_s
+        for lvl in levels:
+            n = lvl["clients"]
             other = {c: k for c, k in lvl["codes"].items() if c not in ("200", BUSY)}
             if other:
                 failures.append(
                     f"{n} clients: answers other than 200 and {BUSY}: {other}"
                 )
-            slow = lvl["refusal_max_s"]
-            if slow is not None and slow > args.max_refusal_s:
+            slow = lvl["refusal_s"]["max"]
+            if slow is not None and slow > args.max_wait_s:
                 failures.append(
                     f"{n} clients: a {BUSY} came after {slow:.2f} s "
-                    f"(bound {args.max_refusal_s} s)"
+                    f"(bound {args.max_wait_s} s)"
                 )
-        p95 = lvl["first_word_s"]["p95"]
-        if args.first_word_p95_max is not None and p95 is not None:
-            if p95 > args.first_word_p95_max:
+            slow = lvl["status_200_s"]["max"]
+            if slow is not None and slow > bound_200:
+                failures.append(
+                    f"{n} clients: a 200 came after {slow:.2f} s (bound {bound_200} s)"
+                )
+    if args.first_word_p95_max is None and args.tps_min is None:
+        return failures
+    by_clients = {lvl["clients"]: lvl for lvl in levels}
+    for n in args.targets_at:
+        lvl = by_clients.get(n)
+        if lvl is None:
+            failures.append(f"targets: no level at {n} clients")
+            continue
+        requests = lvl["requests"]
+        missed = sum(1 for r in requests if not _served(r))
+        if missed:
+            failures.append(f"{n} clients: {missed}/{len(requests)} chats not served")
+        if args.first_word_p95_max is not None:
+            p95 = lvl["first_word_s"]["p95"]
+            if p95 is None:
+                failures.append(f"{n} clients: no first word measured")
+            elif p95 > args.first_word_p95_max:
                 failures.append(
                     f"{n} clients: first word p95 {p95:.2f} s "
                     f"> {args.first_word_p95_max} s"
                 )
-        median = lvl["tokens_per_second"]["median"]
-        if args.tps_median_min is not None and median is not None:
-            if median < args.tps_median_min:
-                failures.append(
-                    f"{n} clients: median {median:.1f} tok/s < {args.tps_median_min} tok/s"
-                )
+        if args.tps_min is not None:
+            for c in range(1, n + 1):
+                rates = [
+                    r["tokens_per_second"]
+                    for r in requests
+                    if r["client"] == c and r["tokens_per_second"] is not None
+                ]
+                if not rates:
+                    failures.append(f"{n} clients: client {c} has no rate measured")
+                elif statistics.median(rates) < args.tps_min:
+                    failures.append(
+                        f"{n} clients: client {c} at {statistics.median(rates):.1f} "
+                        f"tok/s < {args.tps_min} tok/s"
+                    )
     return failures
 
 
-def _fmt(stats: Dict[str, Optional[float]]) -> str:
-    return "/".join("-" if v is None else f"{v:.2f}" for v in stats.values())
+def _fmt(values: Dict[str, Optional[float]], digits: int = 2) -> str:
+    return "/".join("-" if v is None else f"{v:.{digits}f}" for v in values.values())
 
 
 def print_report(levels: List[Dict[str, Any]], failures: List[str], args) -> None:
     print(
         f"Plugboard bench: model {args.model}, {args.rounds} chat(s) per client, "
-        "streamed, times in seconds (p50/p95/max)"
+        "streamed; seconds as p50/p95/max"
     )
-    head = ("clients", "codes", "status", "first word", "total", "tok/s med/min")
-    rows = []
+    head = (
+        "clients",
+        "codes",
+        "200 status",
+        "refusal",
+        "first word",
+        "total",
+        "tok/s min/med",
+    )
+    rows = [head]
     for lvl in levels:
         codes = ", ".join(f"{c} x{k}" for c, k in sorted(lvl["codes"].items()))
-        tps = lvl["tokens_per_second"]
         rows.append(
             (
                 str(lvl["clients"]),
                 codes,
-                _fmt(lvl["status_s"]),
+                _fmt(lvl["status_200_s"]),
+                _fmt(lvl["refusal_s"]),
                 _fmt(lvl["first_word_s"]),
                 _fmt(lvl["total_s"]),
-                "/".join("-" if v is None else f"{v:.1f}" for v in tps.values()),
+                _fmt(lvl["tokens_per_second"], 1),
             )
         )
-    widths = [max(len(r[i]) for r in [head, *rows]) for i in range(len(head))]
-    for row in [head, *rows]:
+    widths = [max(len(r[i]) for r in rows) for i in range(len(head))]
+    for row in rows:
         print("  ".join(cell.ljust(w) for cell, w in zip(row, widths)).rstrip())
     errors = sorted(
-        {
-            r["error"]
-            for lvl in levels
-            for r in lvl["requests"]
-            if r["error"] is not None
-        }
+        {r["error"] for lvl in levels for r in lvl["requests"] if r["error"]}
     )
     for err in errors:
         print(f"error: {err}")
-    if (
-        args.check
-        or args.first_word_p95_max is not None
-        or args.tps_median_min is not None
-    ):
+    if args.check or args.first_word_p95_max is not None or args.tps_min is not None:
         print("check: passed" if not failures else "check: FAILED")
         for line in failures:
             print(f"  - {line}")
@@ -333,14 +403,37 @@ def _is_loopback(host: str) -> bool:
 
 
 def _levels(text: str) -> List[int]:
-    values = [int(v) for v in text.split(",") if v.strip()]
+    try:
+        values = [int(v) for v in text.split(",") if v.strip()]
+    except ValueError:
+        raise argparse.ArgumentTypeError("comma-separated client counts") from None
     if not values or any(v < 1 or v > 64 for v in values):
         raise argparse.ArgumentTypeError("1 to 64 clients per level")
     return values
 
 
+def _positive(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("a number") from None
+    if not math.isfinite(value) or value <= 0:
+        raise argparse.ArgumentTypeError("a finite number above 0")
+    return value
+
+
+def _count(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("a whole number") from None
+    if value < 0:
+        raise argparse.ArgumentTypeError("0 or more")
+    return value
+
+
 def parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    p = argparse.ArgumentParser(description=(__doc__ or "").split("\n")[0])
     p.add_argument("--url", required=True, help="gateway base URL, e.g. https://host")
     p.add_argument("--model", required=True, help="model id, as in GET /v1/models")
     p.add_argument(
@@ -348,20 +441,37 @@ def parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
         default="PLUGBOARD_BENCH_KEY",
         help="environment variable holding the client key (never printed)",
     )
+    p.add_argument(
+        "--allow-http", action="store_true", help="plain http to a remote host"
+    )
     p.add_argument("--clients", type=_levels, default=[1, 2, 4, 8])
-    p.add_argument("--rounds", type=int, default=1, help="chats per client")
-    p.add_argument("--max-tokens", type=int, default=128)
+    p.add_argument("--rounds", type=_count, default=1, help="chats per client")
+    p.add_argument("--warmup", type=_count, default=0, help="unmeasured chats first")
+    p.add_argument("--max-tokens", type=_count, default=128)
     p.add_argument("--prompt", default=DEFAULT_PROMPT)
-    p.add_argument("--timeout", type=float, default=180.0, help="per chat, seconds")
-    p.add_argument("--check", action="store_true", help="PLU-17 criterion")
-    p.add_argument("--max-refusal-s", type=float, default=10.5)
-    p.add_argument("--first-word-p95-max", type=float, default=None)
-    p.add_argument("--tps-median-min", type=float, default=None)
+    p.add_argument("--timeout", type=_positive, default=180.0, help="per chat, seconds")
+    p.add_argument("--check", action="store_true", help="the PLU-17 criterion")
+    p.add_argument("--max-wait-s", type=_positive, default=10.5)
+    p.add_argument("--max-first-chunk-s", type=_positive, default=5.0)
+    p.add_argument("--targets-at", type=_levels, default=[4], help="D-26 levels")
+    p.add_argument("--first-word-p95-max", type=_positive, default=None)
+    p.add_argument("--tps-min", type=_positive, default=None)
     p.add_argument("--json", default=None, help="write the full results there")
     args = p.parse_args(argv)
-    if args.rounds < 1 or args.max_tokens < 1 or args.timeout <= 0:
-        p.error("--rounds, --max-tokens and --timeout must be positive")
+    if args.rounds < 1 or args.max_tokens < 1:
+        p.error("--rounds and --max-tokens must be at least 1")
     return args
+
+
+async def _bench(url: str, key: str, args: argparse.Namespace) -> List[Dict[str, Any]]:
+    stamp = time.strftime("%H%M%S")
+    connector = aiohttp.TCPConnector(limit=0)
+    async with aiohttp.ClientSession(connector=connector, trust_env=False) as session:
+        for w in range(1, args.warmup + 1):
+            await one_chat(session, url, key, _body(args, f"warm-up {w}"), args.timeout)
+        return [
+            await run_level(session, url, key, args, n, stamp) for n in args.clients
+        ]
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -377,28 +487,45 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not key:
         print(f"error: set the client key in ${args.key_env}", file=sys.stderr)
         return 2
-    host = urlsplit(url).hostname or ""
-    if urlsplit(url).scheme == "http" and not _is_loopback(host):
-        print(f"warning: the key goes to {host} over plain http", file=sys.stderr)
-
-    async def run_all() -> List[Dict[str, Any]]:
-        return [await run_level(url, key, args, n) for n in args.clients]
-
-    levels = asyncio.run(run_all())
-    failures = check(levels, args)
-    print_report(levels, failures, args)
-    if args.json:
-        report = {
-            "url": args.url,
-            "model": args.model,
-            "rounds": args.rounds,
-            "max_tokens": args.max_tokens,
-            "levels": levels,
-            "check": {"passed": not failures, "failures": failures},
-        }
-        text = _scrub(json.dumps(report, indent=2), key)
-        with open(args.json, "w", encoding="utf-8") as fh:
-            fh.write(text + "\n")
+    parts = urlsplit(url)
+    if parts.scheme == "http" and not _is_loopback(parts.hostname or ""):
+        if not args.allow_http:
+            print(
+                f"error: the key would go to {parts.hostname} over plain http; "
+                "use https, or --allow-http",
+                file=sys.stderr,
+            )
+            return 2
+        print(
+            f"warning: the key goes to {parts.hostname} over plain http",
+            file=sys.stderr,
+        )
+    out: Optional[TextIO] = None
+    try:
+        if args.json:
+            out = open(args.json, "w", encoding="utf-8")  # fail before the bench
+        levels = asyncio.run(_bench(url, key, args))
+        failures = check(levels, args)
+        print_report(levels, failures, args)
+        if out is not None:
+            report = {
+                "url": args.url,
+                "model": args.model,
+                "rounds": args.rounds,
+                "max_tokens": args.max_tokens,
+                "levels": levels,
+                "check": {"passed": not failures, "failures": failures},
+            }
+            out.write(_scrub(json.dumps(report, indent=2), key) + "\n")
+    except KeyboardInterrupt:
+        print("interrupted: no report", file=sys.stderr)
+        return 3
+    except Exception as exc:
+        print(f"error: the bench failed ({type(exc).__name__})", file=sys.stderr)
+        return 3
+    finally:
+        if out is not None:
+            out.close()
     return 1 if failures else 0
 
 

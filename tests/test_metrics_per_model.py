@@ -252,6 +252,15 @@ def test_stream_meter_counts_tool_calls_as_generated(monkeypatch):
     assert _model()["ttft_sum"] == 0.5
 
 
+def test_words_in_a_burst_give_no_rate(monkeypatch):
+    monkeypatch.setattr(metrics, "_clock", FakeClock(0.0, 1.0, 1.001))
+    meter = metrics.StreamMeter("p", "m")
+    meter.feed(_sse({"content": "a"}))
+    meter.feed(_sse({"content": "b"}) + _sse(usage={"completion_tokens": 9}))
+    meter.finish()
+    assert _model()["ttft_count"] == 1 and _model()["tokens_per_second_count"] == 0
+
+
 def test_one_read_or_one_token_gives_no_rate(monkeypatch):
     monkeypatch.setattr(metrics, "_clock", FakeClock(0.0, 1.0, 2.0))
     meter = metrics.StreamMeter("p", "m")

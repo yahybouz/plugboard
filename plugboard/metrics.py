@@ -9,8 +9,9 @@ succeeded (``record``). Per provider and model (PLU-16, D-26):
   The admission wait is not in it; it has its own measure.
 - ``tokens_per_second``: completion tokens after the first one, divided by
   the time from the first generated chunk to the last (the decode rate a
-  reader sees). Streamed answers only, when the words came in at least two
-  reads; the provider's ``usage`` is used, else a tiktoken estimate.
+  reader sees). Streamed answers only, when the words came over at least
+  ``MIN_RATE_SPAN_S``; the provider's ``usage`` is used, else a tiktoken
+  estimate.
 - ``admission_wait``: seconds a request waited for each slot it took on a
   provider (0 when the slot was free).
 - ``busy_refusals``: chats answered 503 ``providers_busy``, one per answer.
@@ -49,6 +50,8 @@ OTHER_MODEL = "(other)"
 UNLISTED_MODEL = "(unlisted)"
 # A stream line longer than this (no newline) is dropped, never buffered.
 MAX_LINE_BYTES = 1 << 20
+# Words spread over less than this give no rate: a burst says nothing of it.
+MIN_RATE_SPAN_S = 0.05
 
 _BASE = {"requests": 0, "errors": 0, "latency_sum": 0.0, "latency_avg": 0.0}
 
@@ -243,7 +246,7 @@ class StreamMeter:
             if not tokens or tokens < 0:  # none, or a zero some proxies send
                 tokens = count_tokens("".join(self._parts))
             span = self._last - self._first
-            if tokens >= 2 and span > 0:
+            if tokens >= 2 and span >= MIN_RATE_SPAN_S:
                 record_tokens_per_second(self._pid, self._model, (tokens - 1) / span)
         except Exception as exc:
             log.debug("stream meter: %s", exc)
