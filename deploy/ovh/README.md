@@ -98,3 +98,7 @@ Native Ollama stays bound to host loopback `127.0.0.1:11434`. `install-ollama-br
 8. Before scheduling backups, stop every data writer; archive data, CLI home and the runtime secret configuration using a root read-only helper. Encrypt and export off-host. Resume on errors with a trap. Prove restoration in isolated volumes with populated SQLite databases and `PRAGMA integrity_check` before claiming backups ready.
 
 `verify.sh` intentionally does not create keys, enroll MFA, call models, alter providers or touch user data.
+
+## Upgrades
+
+Move this host to a new release with the ordered commands of [the production gate](../../docs/runbooks/prod-gate.md): data check, backup and its check, build, CLI versions, smoke, rehearsed rollback, then 24 hours of observation. Going back is described in [the rollback runbook](../../docs/runbooks/rollback-release.md#4b-private-host-deployovh).

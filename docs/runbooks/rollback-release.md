@@ -403,4 +403,5 @@ After the incident, write a short post-mortem (timeline, root cause, impact,
 follow-up actions) and add a test that would have caught the regression
 before release.
 
-See also: [deployment guide](../guide/deployment.md).
+See also: [deployment guide](../guide/deployment.md),
+[production gate](prod-gate.md).
