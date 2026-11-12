@@ -15,7 +15,7 @@ import httpx
 import pytest
 from aiohttp import web
 
-from plugboard import ollama, router
+from plugboard import embeddings_api, ollama
 from tests.test_model_not_found import ACME, _isolated_providers
 from tests.test_ollama_switch import ADMIN_KEY, BETA, OLLAMA, _chat, _preflight
 
@@ -54,14 +54,27 @@ async def app_client(tmp_path, monkeypatch):
         calls.append(body.get("model"))
         return dict(FAKE_COMPLETION)
 
+    async def _forward_stream(body, **_kwargs):
+        calls.append("stream:" + str(body.get("model")))
+        raise RuntimeError("streams are not served in this test")
+        yield b""  # pragma: no cover - makes this an async generator
+
+    async def _engine_call(*_args, **_kwargs):
+        # Any embedding request to an engine is recorded, whatever it answers.
+        calls.append("embeddings._call")
+        raise embeddings_api.EngineError(502, "fake engine", "test")
+
     async def _daemon_list():
         calls.append("ollama.list_models")
         return [{"name": "qwen3:8b"}, {"name": "llama3:latest"}]
 
     async def _no_daemon(*_args, **_kwargs):
+        calls.append("ollama.check_available")  # recorded even if swallowed
         raise AssertionError("no real Ollama call")
 
     monkeypatch.setattr(app_module, "forward", _forward)
+    monkeypatch.setattr(app_module, "forward_stream", _forward_stream)
+    monkeypatch.setattr(embeddings_api, "_call", _engine_call)
     monkeypatch.setattr(ollama, "list_models", _daemon_list)
     monkeypatch.setattr(ollama, "check_available", _no_daemon)
     async with httpx.AsyncClient(
@@ -147,7 +160,9 @@ async def test_switch_off_then_on_without_restart(app_client, mcp_tools):
     resp = await client.post(
         "/v1/embeddings", headers=auth, json={"model": EMBEDDING_MODEL, "input": "hi"}
     )
+    # The route's own refusal, not an engine that failed to answer.
     assert resp.status_code == 503, resp.text
+    assert resp.json()["detail"] == "Embedding provider unavailable"
     emb = (await client.get("/v1/embeddings/models", headers=auth)).json()["data"]
     assert [(m["id"], m["available"]) for m in emb] == [(EMBEDDING_MODEL, False)]
 
@@ -155,11 +170,13 @@ async def test_switch_off_then_on_without_restart(app_client, mcp_tools):
         "error"
     ] == "provider_disabled"
 
-    assert "ollama:" not in await mcp_tools.list_models()
+    listed = await mcp_tools.list_models()
+    assert "acme-direct:" in listed and "ollama:" not in listed
     out = await mcp_tools.chat(model="ollama:qwen3:8b", message="hi")
     assert "HTTP 503" in out and "provider_disabled" in out
     out = json.loads(await mcp_tools.embed(input="hi", model=EMBEDDING_MODEL))
     assert out["error"]["code"] == "engine_unavailable"
+    assert "Embedding provider unavailable" in out["error"]["message"]
 
     assert calls == [], "while off, nothing is called"
 
@@ -168,7 +185,6 @@ async def test_switch_off_then_on_without_restart(app_client, mcp_tools):
     assert state["enabled"] is True
     assert calls == ["ollama.list_models"], "one model sync when turned back on"
     calls.clear()
-    router.invalidate_models_cache()
 
     assert "ollama:qwen3:8b" in await _model_ids(client, auth)
     assert "ollama:qwen3:8b" in await mcp_tools.list_models()
@@ -181,4 +197,9 @@ async def test_switch_off_then_on_without_restart(app_client, mcp_tools):
     assert calls == ["ollama:qwen3:8b", "ollama:qwen3:8b"]
     emb = (await client.get("/v1/embeddings/models", headers=auth)).json()["data"]
     assert [(m["id"], m["available"]) for m in emb] == [(EMBEDDING_MODEL, True)]
+    resp = await client.post(
+        "/v1/embeddings", headers=auth, json={"model": EMBEDDING_MODEL, "input": "hi"}
+    )
+    assert resp.status_code == 502, resp.text  # reached the (fake) engine
+    assert calls[-1] == "embeddings._call", "the recorder sees engine calls"
     assert (await _preflight(client, auth, "ollama", "qwen3:8b"))["ok"] is True
