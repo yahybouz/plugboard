@@ -29,12 +29,11 @@ EMBED = "ollama:qwen3-embedding:0.6b"
 
 def _default_behavior() -> dict:
     return {
-        "health": {
-            "ok": True,
-            "version": "9.9.9",
-            "providers": 1,
-            "active": ["ollama"],
-        },
+        # /health as 4.12.0 publishes it: the status and the version only.
+        "health": {"ok": True, "version": "9.9.9"},
+        # /health/ready (4.12.0); None: an older gateway without the route.
+        "ready": {"ready": True, "checks": {"auth": "ok", "usage": "ok"}},
+        "ready_status": 200,
         "models": [MODEL, "ollama:other"],
         # account_compatible per model, as 4.4.0 publishes it (absent: not sent)
         "compatible": {},
@@ -85,6 +84,10 @@ class _Gateway(BaseHTTPRequestHandler):
         self.seen.append(("GET", self.path, None))
         if self.path == "/health":
             return self._send(200, b["health"])
+        if self.path == "/health/ready":
+            if b["ready"] is None:
+                return self._send(404, {"detail": "Not Found"})
+            return self._send(b["ready_status"], b["ready"])
         if b["redirect_to"] and self.path == "/v1/models":
             self.send_response(302)
             self.send_header("Location", b["redirect_to"] + self.path)
@@ -369,7 +372,18 @@ def test_a_missing_embeddings_route_fails(gateway):
         ({"me_client": "admin"}, ["models"]),
         ({"health": {"ok": False, "version": "9.9.9"}}, ["health"]),
         (
-            {"health": {"ok": True, "version": "9.9.9", "auth_disabled": True}},
+            {
+                "ready": {"ready": False, "checks": {"auth": "error"}},
+                "ready_status": 503,
+            },
+            ["health"],
+        ),
+        # A gateway before 4.12.0 has no /health/ready: its /health field.
+        (
+            {
+                "ready": None,
+                "health": {"ok": True, "version": "9.9.9", "auth_disabled": True},
+            },
             ["health"],
         ),
     ],

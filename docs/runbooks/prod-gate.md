@@ -197,7 +197,11 @@ on. A key is fixed by revoking it and creating a new one with a correct
 handing the new key to its client. Run the check again until it prints
 `READY`. Read the `WARN` lines too (`--strict` makes them fail).
 
-Then take a cold backup (the gateway stops for a few seconds) and check it:
+Then take a cold backup (the gateway stops for a few seconds) and check it.
+This backup is mandatory: from 4.12.0 the first daily retention pass (04:00
+UTC) deletes old usage, audit, watchdog, monitoring and session rows for good
+(see [monitoring](../guide/monitoring.md)), and this archive is then the only
+copy of them.
 
 ```bash
 cd /opt/plugboard

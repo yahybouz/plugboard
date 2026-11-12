@@ -220,14 +220,26 @@ def build_checks(smoke: Smoke, args) -> list[tuple[str, Callable[[], str]]]:
         payload = smoke.get_json("/health", auth=False)
         if not isinstance(payload, dict) or payload.get("ok") is not True:
             raise CheckFailed(f"/health is not ok: {json.dumps(payload)[:200]}")
-        if payload.get("auth_disabled"):
-            raise CheckFailed(
-                "client auth is disabled on this instance (API_KEY empty)"
-            )
         version = str(payload.get("version", "?"))
         if args.expect_version and version != args.expect_version:
             raise CheckFailed(f"version {version}, expected {args.expect_version}")
-        return f"version {version}, {payload.get('providers', '?')} active provider(s)"
+        # Since 4.12.0 /health shows only the status and the version; whether
+        # the instance can serve (client auth on, usage writable, CLIs present)
+        # is on /health/ready, which answers 503 when it cannot.
+        try:
+            ready = smoke.get_json("/health/ready", auth=False)
+        except CheckFailed as exc:
+            if "HTTP 404" not in str(exc):
+                raise
+            # A gateway before 4.12.0: read the field its /health still had.
+            if payload.get("auth_disabled"):
+                raise CheckFailed(
+                    "client auth is disabled on this instance (API_KEY empty)"
+                ) from None
+            return f"version {version} (no /health/ready before 4.12.0)"
+        if not isinstance(ready, dict) or ready.get("ready") is not True:
+            raise CheckFailed(f"/health/ready is not ready: {json.dumps(ready)[:200]}")
+        return f"version {version}, ready"
 
     def models() -> str:
         payload = smoke.get_json("/v1/models")
