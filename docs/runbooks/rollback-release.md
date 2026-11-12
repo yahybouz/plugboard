@@ -241,8 +241,11 @@ sudo env PLUGBOARD_IMAGE=plugboard:rollback-<previous-version> \
 In every case, [step 6](#6-verify) must report `<previous-version>`: the
 image name alone does not prove which version runs.
 
-Going forward again is the same `up -d --no-build` command with
-`PLUGBOARD_IMAGE=plugboard:private-full-v<new-version>`.
+Going forward again: if you checked out the previous release, run
+`git checkout v<new-version>` first (an older compose file ignores
+`PLUGBOARD_IMAGE`), then the same `up -d --no-build` command with
+`PLUGBOARD_IMAGE=plugboard:private-full-v<new-version>`, and the smoke with
+`--expect-version <new-version>`.
 
 ### 4c. Source install and other Docker deployments
 
@@ -351,6 +354,9 @@ python3 ~/plugboard-tools/smoke_consumers.py --url http://127.0.0.1:8765 \
   --model <model-of-the-smoke-key> --expect-version <previous-version>
 echo "exit $?"   # 0: every check passed
 ```
+
+When the smoke key holds the embedding identity, add `--require-embeddings`
+so that a missing embedding route or model fails instead of being skipped.
 
 On the UAT host the gateway listens on `http://127.0.0.1:18765`. On the
 private host also run `bash deploy/ovh/verify.sh` (authentication answers,

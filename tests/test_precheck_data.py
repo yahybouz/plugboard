@@ -259,7 +259,7 @@ def test_faults_of_a_revoked_key_are_warnings(tmp_path):
         ),
         ("pricing/2026_11.json", "[1, 2", "unreadable"),
         ("pricing/2026_11.json", ["not", "an", "object"], "bad-shape"),
-        ("pricing/2026_11.json", {"models": []}, "bad-shape"),
+        ("pricing/2026_11.json", {"models": [1]}, "bad-shape"),
         (
             "pricing/2026_11.json",
             {"models": {"m": {"input_price": "3.0", "output_price": 1}}},
@@ -284,7 +284,7 @@ def test_faults_of_a_revoked_key_are_warnings(tmp_path):
             {"models_by_provider": {"p": {"m": {"input_price": "3.0"}}}},
             "price-invalid",
         ),
-        ("pricing/2026_11.json", {"models_by_provider": []}, "bad-shape"),
+        ("pricing/2026_11.json", {"models_by_provider": [1]}, "bad-shape"),
     ],
 )
 def test_unreadable_or_incoherent_stores_fail(tmp_path, name, content, code):
@@ -428,13 +428,32 @@ def test_registry_clients_that_reach_nobody_are_a_warning(tmp_path):
     assert "registry-clients" in _codes(proc, "WARN")
 
 
-def test_a_null_models_table_reads_as_empty(tmp_path):
+@pytest.mark.parametrize(
+    "grid",
+    [
+        {"models": None},
+        {"models": []},
+        {"models": {}, "models_by_provider": None},
+        {"models_by_provider": []},
+    ],
+)
+def test_empty_tables_read_as_empty_like_the_server(tmp_path, grid):
     files = _clean()
-    files["pricing/2026_11.json"] = {"month": "2026_11", "models": None}
+    files["pricing/2026_11.json"] = {"month": "2026_11", **grid}
 
     proc = _precheck(_write(tmp_path, files))
 
     assert proc.returncode == 0, proc.stdout
+
+
+def test_a_provider_space_the_server_skips_is_a_warning(tmp_path):
+    files = _clean()
+    files["pricing/2026_11.json"] = {"models_by_provider": {"p": ["x"]}}
+
+    proc = _precheck(_write(tmp_path, files))
+
+    assert proc.returncode == 0, proc.stdout
+    assert "pricing-space-ignored" in _codes(proc, "WARN")
 
 
 # ── The meaning changes the script reports, checked against the code ─────

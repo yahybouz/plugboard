@@ -107,6 +107,18 @@ def test_cli_versions_are_pinned_to_the_ovh_build_args():
         assert default == build_args[name], name
 
 
+def test_the_ovh_default_image_names_this_release():
+    """A plain `docker compose up -d` on the private host must never start an
+    older image: bump the default of deploy/ovh/compose.yml with VERSION."""
+    compose = yaml.safe_load(
+        (ROOT / "deploy/ovh/compose.yml").read_text(encoding="utf-8")
+    )
+    image = compose["services"]["gateway"]["image"]
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+
+    assert image == f"${{PLUGBOARD_IMAGE:-plugboard:private-full-v{version}}}"
+
+
 def test_a_failed_cli_install_fails_the_build():
     installs = [r for r in _runs(_full_stage()) if r.startswith("RUN npm install -g")]
 

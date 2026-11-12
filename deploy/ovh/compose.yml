@@ -10,9 +10,11 @@ services:
         GEMINI_CLI_VERSION: "0.65.0"
         CLAUDE_CODE_VERSION: "2.1.306"
         CODEX_VERSION: "0.163.0"
-    # PLUGBOARD_IMAGE picks another tag: a new one for an upgrade, the kept
-    # previous one for a rollback (docs/runbooks/rollback-release.md).
-    image: ${PLUGBOARD_IMAGE:-plugboard:private-full-v4.4.0}
+    # The default names this release (VERSION; tests/test_ci_image_full.py
+    # keeps them equal), so a plain `up -d` never starts an older image.
+    # PLUGBOARD_IMAGE picks another tag, such as the previous image kept for
+    # a rollback (docs/runbooks/rollback-release.md).
+    image: ${PLUGBOARD_IMAGE:-plugboard:private-full-v4.11.5}
     restart: unless-stopped
     env_file:
       - ${PLUGBOARD_ENV_FILE:-/etc/plugboard/runtime.env}

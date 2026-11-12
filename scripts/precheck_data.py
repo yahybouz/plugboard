@@ -33,7 +33,8 @@ server:
   registry-invalid, bad-shape, unreadable
 
 WARN (exit 0, exit 1 with --strict): decision-rights, legacy-key-prefix
-(``lle_`` keys), removed-connector, plaintext-token, registry-clients, a
+(``lle_`` keys), removed-connector, plaintext-token, registry-clients,
+pricing-space-ignored, a
 published CLI ID whose CLI is not registered (grants nothing yet), missing
 stores, and the key faults above on a revoked key. NOTE: active CLI
 providers, broker credentials, catalog presets, keys without model
@@ -403,20 +404,28 @@ def check_pricing(data: Path, report: Report) -> None:
         if not isinstance(doc, dict):
             report.add("ERROR", "bad-shape", name, "expected a JSON object")
             continue
-        # The server reads `models` and each `models_by_provider` space, a
-        # missing or null table as empty (billing.match_in_grid).
-        tables = [("model", doc.get("models"))]
-        by_provider = doc.get("models_by_provider")
-        if by_provider is not None and not isinstance(by_provider, dict):
+        # As billing.match_in_grid reads them: an empty or null `models` or
+        # `models_by_provider` is {}; a provider space that is not an object
+        # is skipped; any other non-object table breaks the price lookup.
+        tables = [("model", doc.get("models") or {})]
+        by_provider = doc.get("models_by_provider") or {}
+        if not isinstance(by_provider, dict):
             report.add(
                 "ERROR", "bad-shape", name, "models_by_provider is not an object"
             )
-            by_provider = None
-        for space_index, space in enumerate(by_provider or {}):
-            tables.append((f"provider space #{space_index} model", by_provider[space]))
-        for label, table in tables:
-            if table is None:
+            by_provider = {}
+        for space_index, space in enumerate(by_provider):
+            label = f"provider space #{space_index} model"
+            if not isinstance(by_provider[space], dict):
+                report.add(
+                    "WARN",
+                    "pricing-space-ignored",
+                    f"{name} provider space #{space_index}",
+                    "not an object: ignored by the server",
+                )
                 continue
+            tables.append((label, by_provider[space]))
+        for label, table in tables:
             if not isinstance(table, dict):
                 report.add(
                     "ERROR", "bad-shape", name, f"a {label} table is not an object"

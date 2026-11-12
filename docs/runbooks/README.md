@@ -33,6 +33,9 @@ New runbooks use these sections, in this order:
 5. **Mitigation and rollback**: what to do when there is no quick fix.
 6. **Escalation**: when to escalate, and what to hand over.
 
+Planned procedures, such as [prod-gate.md](prod-gate.md), list their steps
+instead of these sections.
+
 Rules:
 
 - Every command must work as written: copy, paste, replace the `<placeholders>`.
