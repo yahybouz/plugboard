@@ -17,19 +17,33 @@ The SDK also understands PERF-1 sessions:
 And streaming:
     for chunk in client.chat_stream(model, [...]):
         print(chunk, end="", flush=True)
+
+Embeddings, and errors that say when to retry:
+    try:
+        vectors = client.embeddings("ollama:nomic-embed-text", ["a", "b"])
+    except PlugboardError as exc:
+        if exc.code == "providers_busy":
+            time.sleep(exc.retry_after or 5)
 """
 
 from __future__ import annotations
 
-from .client import LLMEnablerClient, LLMEnablerError, PlugboardClient, PlugboardError
+from .client import (
+    LLMEnablerClient,
+    LLMEnablerError,
+    PlugboardClient,
+    PlugboardError,
+    PlugboardTimeoutError,
+)
 from .async_client import PlugboardAsyncClient
 
 __all__ = [
     "PlugboardClient",
     "PlugboardAsyncClient",
     "PlugboardError",
+    "PlugboardTimeoutError",
     # Deprecated aliases from before the rename.
     "LLMEnablerClient",
     "LLMEnablerError",
 ]
-__version__ = "0.1.0"
+__version__ = "0.2.0"

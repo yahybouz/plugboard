@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "plugboard-sdk"
-version = "0.1.0"
+version = "0.2.0"
 description = "Official Python SDK for Plugboard, the self-hosted LLM gateway for every provider"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -28,3 +28,8 @@ test = ["pytest>=8", "pytest-asyncio>=0.23"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["plugboard_sdk"]
+
+[tool.pytest.ini_options]
+# From the repository root: python -m pytest -c sdk/python/pyproject.toml sdk/python/tests
+pythonpath = ["."]
+asyncio_mode = "auto"

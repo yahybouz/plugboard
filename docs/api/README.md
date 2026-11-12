@@ -60,7 +60,7 @@ curl http://localhost:8765/v1/chat/completions \
 
 The repository also ships a small Python client, [`sdk/python`](../../sdk/python/README.md).
 
-**SDK status:** version `0.1.0`, beta, shipped in this repository only and not published on PyPI: install it from a checkout with `pip install ./sdk/python`.
+**SDK status:** version `0.2.0`, beta, shipped in this repository only and not published on PyPI: install it from a checkout with `pip install ./sdk/python`.
 
 To generate a typed client in another language, feed `openapi.json` to a generator such as [OpenAPI Generator](https://openapi-generator.tech).
 
