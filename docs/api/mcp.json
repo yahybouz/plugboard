@@ -9,7 +9,7 @@
   "tools": [
     {
       "name": "add_provider",
-      "description": "Add an OpenAI-compatible provider to the gateway (admin, stdio only).\n\n    The provider is created inactive, with \"Public addresses only\" on, so an\n    internal or private address is refused. The gateway checks it exactly\n    as POST /providers does. Then run refresh_catalog to list its models;\n    an admin activates it in the dashboard. Needs PLUGBOARD_MCP_ADMIN_TOOLS=1\n    and PLUGBOARD_ADMIN_KEY; at most 5 calls per hour. api_key is sent to\n    the gateway only and never shown back.",
+      "description": "Add an OpenAI-compatible provider to the gateway (admin, stdio only).\n\n    The provider is created inactive, with \"Public addresses only\" on, so an\n    internal or private address is refused; the gateway checks the rest as\n    POST /providers does. Then run refresh_catalog with the id this tool\n    answers; an admin activates the provider in the dashboard.\n\n    Needs PLUGBOARD_MCP_ADMIN_TOOLS=1 and PLUGBOARD_ADMIN_KEY. At most 5\n    calls per hour, refused ones included. If the answer says the provider\n    may have been created, check the dashboard instead of retrying.\n\n    Args:\n        name: Display name; the gateway derives the id from it (a taken id\n            gets a suffix such as \"-1\": use the id in the answer).\n        base_url: OpenAI-compatible root URL, usually ending in /v1.\n        api_key: The provider's API key; sent to the gateway only, never\n            shown back.\n        default_model: Optional model ID used when none is given.",
       "inputSchema": {
         "properties": {
           "name": {

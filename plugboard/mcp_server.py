@@ -384,6 +384,9 @@ _CREATE_WINDOW_S = 3600.0
 _REFRESH_COOLDOWN_S = 60.0
 _DETAIL_LIMIT = 300
 _MFA_DETAIL = "Admin MFA required"
+_MAYBE_CREATED = (
+    ": the provider may have been created, check the dashboard before retrying"
+)
 
 _clock = time.monotonic
 # Times of the add_provider calls of the last hour (refusals included).
@@ -437,6 +440,7 @@ async def _admin_request(
     """
     session = await _get_http_session()
     raw = bytearray()
+    status: int | None = None
     try:
         async with session.request(
             method,
@@ -452,11 +456,18 @@ async def _admin_request(
                 if len(raw) > _ADMIN_RESPONSE_LIMIT:
                     break
     except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-        # Only the exception type: its text could quote the request.
-        maybe = isinstance(exc, (asyncio.TimeoutError, aiohttp.ServerDisconnectedError))
+        # Only the exception type: its text could quote the request. Only a
+        # failed connection is sure to come before the request was sent.
+        name = type(exc).__name__
+        if status is not None:
+            raise AdminToolError(
+                f"the gateway answer was cut off ({name})", maybe_applied=True
+            ) from None
+        unsent = isinstance(
+            exc, (aiohttp.ClientConnectorError, aiohttp.ConnectionTimeoutError)
+        )
         raise AdminToolError(
-            f"could not reach the gateway ({type(exc).__name__})",
-            maybe_applied=maybe,
+            f"could not reach the gateway ({name})", maybe_applied=not unsent
         ) from None
     if len(raw) > _ADMIN_RESPONSE_LIMIT:
         return status, {"detail": "gateway answer too large"}
@@ -1048,11 +1059,21 @@ async def add_provider(
     """Add an OpenAI-compatible provider to the gateway (admin, stdio only).
 
     The provider is created inactive, with "Public addresses only" on, so an
-    internal or private address is refused. The gateway checks it exactly
-    as POST /providers does. Then run refresh_catalog to list its models;
-    an admin activates it in the dashboard. Needs PLUGBOARD_MCP_ADMIN_TOOLS=1
-    and PLUGBOARD_ADMIN_KEY; at most 5 calls per hour. api_key is sent to
-    the gateway only and never shown back.
+    internal or private address is refused; the gateway checks the rest as
+    POST /providers does. Then run refresh_catalog with the id this tool
+    answers; an admin activates the provider in the dashboard.
+
+    Needs PLUGBOARD_MCP_ADMIN_TOOLS=1 and PLUGBOARD_ADMIN_KEY. At most 5
+    calls per hour, refused ones included. If the answer says the provider
+    may have been created, check the dashboard instead of retrying.
+
+    Args:
+        name: Display name; the gateway derives the id from it (a taken id
+            gets a suffix such as "-1": use the id in the answer).
+        base_url: OpenAI-compatible root URL, usually ending in /v1.
+        api_key: The provider's API key; sent to the gateway only, never
+            shown back.
+        default_model: Optional model ID used when none is given.
     """
     try:
         _admin_gate("add_provider")
@@ -1072,22 +1093,30 @@ async def add_provider(
     except AdminToolError as exc:
         message = str(exc)
         if exc.maybe_applied:
-            message += (
-                ": the provider may have been created, check the dashboard "
-                "before retrying"
-            )
+            message += _MAYBE_CREATED
         return "Error: " + _scrub(message, api_key)
     if status != 201:
-        return "Error: " + _gateway_error(status, payload, api_key)
-    if not isinstance(payload, dict) or not isinstance(payload.get("id"), str):
-        return f"Error: unexpected gateway answer (HTTP {status})"
-    provider_id = payload["id"]
-    text = (
+        message = _gateway_error(status, payload, api_key)
+        if status in (500, 502, 504):
+            message += _MAYBE_CREATED
+        return "Error: " + message
+    provider_id = payload.get("id") if isinstance(payload, dict) else None
+    if not isinstance(provider_id, str) or not provider_id:
+        return f"Error: unexpected gateway answer (HTTP {status}){_MAYBE_CREATED}"
+    if payload.get("egress_guard") is not True or payload.get("is_active") is not False:
+        # A gateway older than 4.9.0 ignores egress_guard: say so, never
+        # claim a protection the gateway did not apply.
+        return (
+            f"Error: provider '{provider_id}' was created, but the gateway did "
+            'not apply "inactive, public addresses only" (gateway older than '
+            "4.9.0?): check it in the dashboard"
+        )
+    shown_url = _scrub(str(payload.get("base_url", "")), api_key)
+    return (
         f"Provider '{provider_id}' created, inactive, public addresses only "
-        f"({payload.get('base_url', '')}). Run refresh_catalog('{provider_id}'), "
-        "then activate it in the dashboard (Providers)."
+        f"({shown_url}). Run refresh_catalog('{provider_id}'), then activate it "
+        "in the dashboard (Providers)."
     )
-    return _scrub(text, api_key)
 
 
 # ── Resources ────────────────────────────────────────────────────────────────

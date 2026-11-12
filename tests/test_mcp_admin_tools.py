@@ -382,7 +382,7 @@ async def test_add_provider_creates_an_inactive_guarded_provider(
     from plugboard import config
 
     text = await mcp_server.add_provider(
-        "Acme", "https://api.acme.test/v1/", PROVIDER_KEY
+        "Acme", "https://api.acme.test/v1/", PROVIDER_KEY, default_model="m1"
     )
     assert text == (
         "Provider 'acme' created, inactive, public addresses only "
@@ -391,6 +391,7 @@ async def test_add_provider_creates_an_inactive_guarded_provider(
     )
     p = config.get_provider("acme")
     assert p["is_active"] is False and p["egress_guard"] is True
+    assert p["default_model"] == "m1"
     assert p["bearer_token"] == PROVIDER_KEY  # reached the gateway intact
     assert PROVIDER_KEY not in _empty_providers_file.read_text()  # encrypted
     [entry] = audit_mod.get_audit_log(action="provider.create")
@@ -513,7 +514,10 @@ async def test_unexpected_success_answer_is_an_error(admin_on, monkeypatch):
 
     monkeypatch.setattr(mcp_server, "_admin_request", odd)
     text = await mcp_server.add_provider("A", "https://a.test", PROVIDER_KEY)
-    assert text == "Error: unexpected gateway answer (HTTP 201)"
+    assert text == (
+        "Error: unexpected gateway answer (HTTP 201): the provider may have "
+        "been created, check the dashboard before retrying"
+    )
 
 
 async def test_sixth_add_provider_is_refused_before_the_gateway(gateway, private):
@@ -523,3 +527,79 @@ async def test_sixth_add_provider_is_refused_before_the_gateway(gateway, private
     text = await mcp_server.add_provider("P5", "http://10.0.0.5", PROVIDER_KEY)
     assert text == "Error: add_provider limit reached (5 per hour): retry in 3600s"
     assert len(gateway["calls"]) == 5
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"id": "in", "base_url": "http://10.0.0.5/v1", "is_active": False},
+        {"id": "in", "base_url": "http://10.0.0.5/v1", "egress_guard": False},
+        {"id": "in", "base_url": "http://10.0.0.5/v1", "egress_guard": True},
+    ],
+)
+async def test_unapplied_protection_is_never_claimed(admin_on, monkeypatch, answer):
+    async def older_gateway(method, path, body=None):
+        return 201, answer
+
+    monkeypatch.setattr(mcp_server, "_admin_request", older_gateway)
+    text = await mcp_server.add_provider("In", "http://10.0.0.5/v1", PROVIDER_KEY)
+    assert text == (
+        "Error: provider 'in' was created, but the gateway did not apply "
+        '"inactive, public addresses only" (gateway older than 4.9.0?): '
+        "check it in the dashboard"
+    )
+
+
+@pytest.mark.parametrize("status", [500, 502, 504])
+async def test_server_error_says_it_may_exist(admin_on, monkeypatch, status):
+    async def failed(method, path, body=None):
+        return status, {"detail": "boom"}
+
+    monkeypatch.setattr(mcp_server, "_admin_request", failed)
+    text = await mcp_server.add_provider("A", "https://a.test", PROVIDER_KEY)
+    assert text == (
+        f"Error: HTTP {status}: boom: the provider may have been created, "
+        "check the dashboard before retrying"
+    )
+
+
+async def test_answer_cut_after_the_status_says_it_may_exist(admin_on, monkeypatch):
+    async def cut(reader, writer):
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(
+            b"HTTP/1.1 201 Created\r\nContent-Type: application/json\r\n"
+            b'Content-Length: 100\r\n\r\n{"id": "ac'
+        )
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(cut, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    monkeypatch.setattr(mcp_server, "_BASE_URL", f"http://127.0.0.1:{port}")
+    monkeypatch.setattr(mcp_server, "_HTTP_SESSION", None)
+    try:
+        text = await mcp_server.add_provider("Acme", "https://a.test", PROVIDER_KEY)
+    finally:
+        if mcp_server._HTTP_SESSION is not None:
+            await mcp_server._HTTP_SESSION.close()
+        server.close()
+        await server.wait_closed()
+    assert text == (
+        "Error: the gateway answer was cut off (ClientPayloadError): the provider "
+        "may have been created, check the dashboard before retrying"
+    )
+
+
+async def test_a_short_key_does_not_change_the_id(admin_on, monkeypatch):
+    async def created(method, path, body=None):
+        return 201, {
+            "id": "test-provider",
+            "base_url": "https://api.test-llm.test/v1",
+            "is_active": False,
+            "egress_guard": True,
+        }
+
+    monkeypatch.setattr(mcp_server, "_admin_request", created)
+    text = await mcp_server.add_provider("Test Provider", "https://x.test", "test")
+    assert "Provider 'test-provider' created" in text
+    assert "refresh_catalog('test-provider')" in text
