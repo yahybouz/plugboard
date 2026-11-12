@@ -35,7 +35,8 @@ def test_ollama_page_has_the_off_banner():
     html = _html()
     # Hidden by style: the hidden attribute loses to .alert's display rule.
     tag = re.search(r'<div [^>]*id="ollama-off-banner"[^>]*>', html).group(0)
-    assert 'class="alert alert-warning"' in tag
+    classes = re.search(r'class="([^"]*)"', tag).group(1).split()
+    assert "alert" in classes and "alert-warning" in classes
     assert re.search(r'style="[^"]*display:none;', tag)
     assert (
         "Ollama is off: the API, the MCP server and the Playground do not use it."
