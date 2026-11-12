@@ -117,6 +117,33 @@ def test_longer_active_prefix_wins(tmp_path, monkeypatch):
     assert router.disabled_route("qwen3:8b") is None  # an active provider lists it
 
 
+def test_a_longer_disabled_owner_keeps_its_namespace(tmp_path, monkeypatch):
+    """'acme:eu' off: 'acme:eu:m1' is its model, not 'eu:m1' of active 'acme'."""
+    nested = {
+        **ACME,
+        "id": "acme:eu",
+        "name": "Acme EU",
+        "models": [{"id": "m1"}],
+        "is_active": False,
+    }
+    _isolated_providers(tmp_path, monkeypatch, [{**ACME, "id": "acme"}, nested])
+    provider, native = router.disabled_route("acme:eu:m1")
+    assert (provider["id"], native) == ("acme:eu", "m1")
+    assert router.disabled_route("acme:acme-large") is None
+
+
+def test_a_shorter_disabled_owner_does_not_take_a_longer_active_one(
+    tmp_path, monkeypatch
+):
+    nested = {**ACME, "id": "acme:eu", "name": "Acme EU", "models": [{"id": "m1"}]}
+    _isolated_providers(
+        tmp_path, monkeypatch, [{**ACME, "id": "acme", "is_active": False}, nested]
+    )
+    assert router.disabled_route("acme:eu:m1") is None
+    provider, _native = router.disabled_route("acme:acme-large")
+    assert provider["id"] == "acme"
+
+
 def test_the_only_provider_disabled(tmp_path, monkeypatch):
     _isolated_providers(tmp_path, monkeypatch, [OLLAMA])
     for model in ("ollama:qwen3:8b", "qwen3:8b"):
@@ -178,6 +205,13 @@ async def http(tmp_path, monkeypatch):
     monkeypatch.setattr(rl, "_LIMIT", 0)
     monkeypatch.setattr(apikeys, "KEYS_FILE", tmp_path / "keys.json")
     monkeypatch.setattr(apikeys, "KEYS_LOCK", tmp_path / "keys.lock")
+    from plugboard import audit, live_requests, session_store, usage
+
+    monkeypatch.setattr(usage, "_DB_PATH", tmp_path / "usage.db")
+    monkeypatch.setattr(usage, "_schema_ready", {})
+    monkeypatch.setattr(audit, "_DB_PATH", tmp_path / "audit.db")
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "sessions.db")
+    live_requests.reset()
     key = apikeys.create_key("acme", "switch")["key"]
 
     calls: list = []
@@ -268,6 +302,45 @@ async def test_allowed_key_gets_503_not_403(off, http, model):
     assert resp.status_code == 503, resp.text
     assert resp.json()["code"] == "provider_disabled"
     assert calls == []
+
+
+async def test_limited_key_gets_403_first_for_a_bare_name(off, http):
+    client, _auth, calls = http
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=_key(allowed_models=["acme-direct:acme-large"]),
+        json=_chat("qwen3:8b"),
+    )
+    assert resp.status_code == 403, resp.text
+    assert calls == []
+
+
+async def test_session_turn_gets_503_and_stores_nothing(off, http):
+    from plugboard import session_store
+
+    client, auth, calls = http
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers={**auth, "X-LLM-Session-ID": "switch-session"},
+        json=_chat("ollama:qwen3:8b"),
+    )
+    assert resp.status_code == 503, resp.text
+    assert calls == []
+    assert session_store.load_session("acme", "switch-session") == []
+
+
+async def test_inflight_names_the_disabled_owner(off, http):
+    from plugboard import live_requests
+
+    client, _auth, _calls = http
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        json=_chat("ollama:qwen3:8b"),
+    )
+    assert resp.status_code == 503, resp.text
+    (entry,) = live_requests.snapshot(admin=True)["recent"]
+    assert (entry["provider"], entry["status"]) == ("ollama", 503)
 
 
 async def test_budgeted_key_gets_503_not_402(off, http):

@@ -576,17 +576,14 @@ def _known_native(provider: Dict[str, Any], model_str: str) -> Optional[str]:
     or a family alias in the loose form Ollama accepts, or the
     configured-model lookup of resolve_provider_and_model.
     """
-    names = (
-        _listed_models(provider)
-        + [provider.get("default_model") or ""]
-        + _family_aliases(provider)
-    )
+    listed = _listed_models(provider)
+    aliases = _family_aliases(provider)
     wanted = _loose_model_name(model_str)
-    for name in names:
+    for name in listed + [provider.get("default_model") or ""] + aliases:
         if isinstance(name, str) and name and _loose_model_name(name) == wanted:
             return name
     requested_clean = _clean_model_id(model_str)
-    for name in _listed_models(provider) + _family_aliases(provider):
+    for name in listed + aliases:
         if _clean_model_id(f"{provider['id']}:{name}") == requested_clean:
             return name
     return None
@@ -596,42 +593,57 @@ def disabled_route(model_str: str) -> Optional[tuple[Dict[str, Any], str]]:
     """(provider, native model) when only a disabled provider serves ``model_str``.
 
     Such a request must call nobody (PLU-12): before, it was sent to every
-    other active provider in turn (BUG-44). Never when an active provider is
-    selected: by its registered prefix, or by a display or legacy alias (an
-    inactive provider named ``Codex`` leaves ``Codex:`` to the Codex CLI).
-    Otherwise matched, in order: a registered provider ID prefixes it (the
-    longest wins) and that provider is inactive; or no registered ID
-    prefixes it, every active provider has a model list and none knows the
-    name, and an inactive provider knows it (its own name is returned).
-    None otherwise: the request is routed, or answered 404, as before.
+    other active provider in turn (BUG-44). Matched when a registered
+    provider ID prefixes it (the longest wins) and that provider is
+    inactive; or when no registered ID prefixes it, an inactive provider
+    knows the name (its own name is returned), every active provider has a
+    model list and none knows it. Never when an active provider is selected,
+    by its prefix or by a display or legacy alias (an inactive provider
+    named ``Codex`` leaves ``Codex:`` to the Codex CLI). None otherwise: the
+    request is routed, or answered 404, as before.
+
+    Called on every chat request: with no provider turned off it costs one
+    registry read, and the inactive providers are searched before the
+    active ones are checked.
     """
     if not isinstance(model_str, str) or not model_str.strip():
         return None
     registry = [p for p in load_providers() if not is_removed_provider(p)]
+    inactive = [p for p in registry if not p.get("is_active", True)]
+    if not inactive:
+        return None
     active = [p for p in registry if p.get("is_active", True)]
-    if active:
-        try:
-            if _select_request(model_str)[1] is not None:
-                return None  # an active owner or alias serves it
-        except ValueError:
-            return None  # the chat route answers these as before
     owner = registered_model_owner(model_str, (p["id"] for p in registry))
+    candidate: Optional[tuple[Dict[str, Any], str]] = None
     if owner is not None:
         provider = next(p for p in registry if p["id"] == owner)
         if provider.get("is_active", True):
+            return None  # its active owner serves it
+        candidate = provider, model_str[len(owner) + 1 :]
+    else:
+        if any(not _listed_models(p) for p in active):
+            return None  # a provider without a list may serve any name
+        for provider in inactive:
+            native = _known_native(provider, model_str)
+            if native is not None:
+                candidate = provider, native
+                break
+        if candidate is None:
             return None
-        return provider, model_str[len(owner) + 1 :]
-    if any(not _listed_models(p) for p in active):
-        return None  # a provider without a list may serve any name
-    if any(_known_native(p, model_str) is not None for p in active):
-        return None
-    for provider in registry:
-        if provider.get("is_active", True):
-            continue
-        native = _known_native(provider, model_str)
-        if native is not None:
-            return provider, native
-    return None
+        if any(_known_native(p, model_str) is not None for p in active):
+            return None
+    if active:
+        try:
+            selected = _select_request(model_str)[1]
+        except ValueError:
+            return None  # the chat route answers these as before
+        if selected is not None and not (
+            owner is not None and model_str.startswith(selected.provider["id"] + ":")
+        ):
+            return None  # a display or legacy alias selects an active one
+        # A shorter active prefix does not take the namespace a longer
+        # disabled owner reserves (model_identity.published_model_id).
+    return candidate
 
 
 def _refuse_if_disabled(model_str: str) -> None:
@@ -1227,7 +1239,13 @@ async def forward(
             log.warning("Provider %s failed, trying next...", provider["id"])
 
         if busy:
-            raise ProvidersBusyError([p["id"] for p, _ in busy])
+            # A wait that ended without a slot: a provider turned off
+            # meanwhile is off, not full (PLU-12).
+            still_on = [c for c in busy if not _turned_off(c[0]["id"])]
+            if len(still_on) < len(busy):
+                disabled_seen = next(c[0]["id"] for c in busy if c not in still_on)
+            if still_on:
+                raise ProvidersBusyError([p["id"] for p, _ in still_on])
         if disabled_seen is not None and refused is None and last_err is None:
             raise ProviderDisabledError(disabled_seen)
         raise refused or last_err or RuntimeError("All providers failed")
@@ -1257,18 +1275,21 @@ async def forward_stream(
     if route_guard is not None:
         route_guard(provider, real_model)
     lease = provider_admission.try_acquire(provider)
-    if lease is None:
+    waited = lease is None
+    if waited:
         _live.update(phase="waiting_provider")
         lease = await provider_admission.wait_acquire(
             [provider], provider_admission.WAIT_S
         )
         _live.update(phase="running")
-        if lease is not None and _turned_off(provider["id"]):
-            lease.release()  # turned off while this request waited (PLU-12)
-            raise ProviderDisabledError(provider["id"])
     if lease is None:
+        if _turned_off(provider["id"]):
+            raise ProviderDisabledError(provider["id"])  # off, not full
         raise ProvidersBusyError([provider["id"]])
     try:
+        # Inside the try: the slot goes back whatever the registry read does.
+        if waited and _turned_off(provider["id"]):
+            raise ProviderDisabledError(provider["id"])  # off while it waited
         async with contextlib.aclosing(
             _stream_route(body, provider, real_model, timeout)
         ) as chunks:

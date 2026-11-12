@@ -1997,11 +1997,18 @@ def _require_chat_messages(
             )
 
 
-def _live_note(model: str, client_id: Optional[str]) -> None:
-    """Tell /v1/inflight which model, provider and caller this request is."""
+def _live_note(
+    model: str, client_id: Optional[str], disabled: Optional[tuple] = None
+) -> None:
+    """Tell /v1/inflight which model, provider and caller this request is.
+
+    ``disabled`` is the request's router.disabled_route answer, read once by
+    the caller: a model of a disabled provider is shown as its owner's.
+    """
     provider_id = None
     try:
-        provider_id = _route_for_guard(model)[0].get("id")
+        route = disabled or resolve_provider_and_model(model)
+        provider_id = route[0].get("id")
     except Exception:  # unknown model: the admission checks answer it
         pass
     _live.update(client_id=client_id, model=model[:120] or None, provider=provider_id)
@@ -2036,7 +2043,9 @@ async def chat_completions(
         raise HTTPException(400, "Request body must be a JSON object")
     if not isinstance(body.get("model", ""), str):
         raise HTTPException(400, "model must be a string")
-    _live_note(body.get("model", ""), client_id)
+    # Read once per request (PLU-12): /v1/inflight and the admission share it.
+    disabled = disabled_route(body.get("model", ""))
+    _live_note(body.get("model", ""), client_id, disabled)
     providers = load_providers()
     try:
         require_supported_model(
@@ -2082,7 +2091,6 @@ async def chat_completions(
 
     # Check model access (per-key allowed_models). A model of a disabled
     # provider is checked as its owner's, then refused (PLU-12).
-    disabled = disabled_route(body.get("model", ""))
     route_guard = _model_route_guard(client_id, key_record)
     route_options = {}
     if route_guard is not None:
