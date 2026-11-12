@@ -569,12 +569,19 @@ def is_unknown_model(model_str: str) -> bool:
     )
 
 
-def _known_native(provider: Dict[str, Any], model_str: str) -> Optional[str]:
+def _known_native(
+    provider: Dict[str, Any],
+    model_str: str,
+    published_in: Optional[tuple] = None,
+) -> Optional[str]:
     """The provider's own name for ``model_str``, or None if it does not know it.
 
     The same matches as is_unknown_model: a listed model, the default model
     or a family alias in the loose form Ollama accepts, or the
-    configured-model lookup of resolve_provider_and_model.
+    configured-model lookup of resolve_provider_and_model. With
+    ``published_in`` (the registered IDs, for an inactive provider), that
+    last match is the exact spelling /v1/models gave the model
+    (``Codex:gpt-6.1-sol``), never a vendor prefix guessed from its name.
     """
     listed = _listed_models(provider)
     aliases = _family_aliases(provider)
@@ -582,6 +589,12 @@ def _known_native(provider: Dict[str, Any], model_str: str) -> Optional[str]:
     for name in listed + [provider.get("default_model") or ""] + aliases:
         if isinstance(name, str) and name and _loose_model_name(name) == wanted:
             return name
+    if published_in is not None:
+        spelled = model_str.strip()
+        for name in listed + aliases:
+            if published_model_id(provider["id"], name, published_in) == spelled:
+                return name
+        return None
     requested_clean = _clean_model_id(model_str)
     for name in listed + aliases:
         if _clean_model_id(f"{provider['id']}:{name}") == requested_clean:
@@ -613,18 +626,21 @@ def disabled_route(model_str: str) -> Optional[tuple[Dict[str, Any], str]]:
     if not inactive:
         return None
     active = [p for p in registry if p.get("is_active", True)]
-    owner = registered_model_owner(model_str, (p["id"] for p in registry))
+    provider_ids = tuple(p["id"] for p in registry)
+    # Surrounding spaces do not hide a prefix: " ollama:qwen3:8b" is Ollama's.
+    stripped = model_str.strip()
+    owner = registered_model_owner(stripped, provider_ids)
     candidate: Optional[tuple[Dict[str, Any], str]] = None
     if owner is not None:
         provider = next(p for p in registry if p["id"] == owner)
         if provider.get("is_active", True):
             return None  # its active owner serves it
-        candidate = provider, model_str[len(owner) + 1 :]
+        candidate = provider, stripped[len(owner) + 1 :]
     else:
         if any(not _listed_models(p) for p in active):
             return None  # a provider without a list may serve any name
         for provider in inactive:
-            native = _known_native(provider, model_str)
+            native = _known_native(provider, model_str, provider_ids)
             if native is not None:
                 candidate = provider, native
                 break
@@ -638,7 +654,7 @@ def disabled_route(model_str: str) -> Optional[tuple[Dict[str, Any], str]]:
         except ValueError:
             return None  # the chat route answers these as before
         if selected is not None and not (
-            owner is not None and model_str.startswith(selected.provider["id"] + ":")
+            owner is not None and stripped.startswith(selected.provider["id"] + ":")
         ):
             return None  # a display or legacy alias selects an active one
         # A shorter active prefix does not take the namespace a longer

@@ -151,13 +151,37 @@ def test_the_only_provider_disabled(tmp_path, monkeypatch):
         assert (provider["id"], native) == ("ollama", "qwen3:8b")
 
 
-@pytest.mark.parametrize("model", ["Codex:gpt-6.1-sol", "openai:gpt-6.1-sol"])
-def test_a_display_alias_of_a_disabled_cli_is_recognised(tmp_path, monkeypatch, model):
+def test_a_display_alias_of_a_disabled_cli_is_recognised(tmp_path, monkeypatch):
     _isolated_providers(
         tmp_path, monkeypatch, [{**CODEX, "is_active": False}, ACME, BETA]
     )
-    provider, native = router.disabled_route(model)
+    provider, native = router.disabled_route("Codex:gpt-6.1-sol")
     assert (provider["id"], native) == ("chatgpt-via-codex-cli", "gpt-6.1-sol")
+    # A vendor prefix guessed from the name is not its spelling: 404 as before.
+    assert router.disabled_route("openai:gpt-6.1-sol") is None
+    assert router.is_unknown_model("openai:gpt-6.1-sol") is True
+
+
+def test_a_guessed_vendor_prefix_is_not_a_disabled_provider(tmp_path, monkeypatch):
+    """An inactive provider whose ID is 'openai' owns 'openai:', nothing else."""
+    openai = {
+        **ACME,
+        "id": "openai",
+        "name": "OpenAI",
+        "models": [{"id": "gpt-4o"}],
+        "is_active": False,
+    }
+    _isolated_providers(tmp_path, monkeypatch, [openai, ACME, BETA])
+    assert router.disabled_route("Codex:gpt-4o") is None
+    assert router.disabled_route("chatgpt:gpt-4o") is None
+    provider, native = router.disabled_route("openai:gpt-4o")
+    assert (provider["id"], native) == ("openai", "gpt-4o")
+
+
+def test_surrounding_spaces_do_not_hide_the_prefix(tmp_path, monkeypatch):
+    _isolated_providers(tmp_path, monkeypatch, [OLLAMA, ACME, OPEN])
+    provider, native = router.disabled_route(" ollama:qwen3:8b\t")
+    assert (provider["id"], native) == ("ollama", "qwen3:8b")
 
 
 @pytest.mark.parametrize("model", ["Codex:gpt-6.1-sol", "gpt-6.1-sol"])
