@@ -571,32 +571,61 @@ async def test_another_cli_is_not_blocked(client, two_clis):
     assert (await first).status_code == 200
 
 
+def _answer(text):
+    return {
+        **FAKE_COMPLETION,
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": text},
+            }
+        ],
+    }
+
+
 async def test_internet_check_calls_only_the_provider_it_checks(
     client, _providers_file, monkeypatch
 ):
     """The probe names its provider: checking an HTTP model never runs a CLI
     (which, capped at one request, would also answer the bulk check "busy"),
-    and the result belongs to the model that was asked."""
+    and with persist the result recorded is the checked provider's answer."""
     from plugboard import cli_subprocess, router
+    from plugboard.config import get_provider
+    from plugboard.probes.internet import (
+        build_yesterday_variants,
+        today_iso,
+        today_weekdays,
+    )
 
     listed = {**PROVIDER_A, "models": [{"id": "fake:model-v1", "name": "V1"}]}
-    _providers_file.write_text(
-        json.dumps({"providers": [_cli_provider("claude"), listed]})
-    )
+    cli = {**_cli_provider("claude"), "models": [{"id": "fake:model-v1"}]}
+    _providers_file.write_text(json.dumps({"providers": [cli, listed]}))
     router.invalidate_models_cache()
     cli_runs = []
 
     async def fake_complete(kind, body, *, timeout_s=None):
         cli_runs.append(body["model"])
-        return {**FAKE_COMPLETION}
+        return _answer("I cannot browse the web.")  # offline, if ever asked
 
     monkeypatch.setattr(cli_subprocess, "complete", fake_complete)
+    online = (
+        f"Today is {today_iso()}, {today_weekdays()[0]}; "
+        f"yesterday was {build_yesterday_variants()[0]}."
+    )
     with aioresponses() as mock:
-        mock.post(URL_A, payload=FAKE_COMPLETION, repeat=True)
+        mock.post(URL_A, payload=_answer(online), repeat=True)
         resp = await client.post(
-            "/admin/models/check-internet", headers=AUTH, json={"model_id": ONLY_A}
+            "/admin/models/check-internet",
+            headers=AUTH,
+            json={"model_id": ONLY_A, "persist": True},
         )
         http_calls = sum(len(v) for k, v in mock.requests.items() if k[0] == "POST")
     assert resp.status_code == 200, resp.text
     assert cli_runs == []
-    assert http_calls >= 1
+    assert http_calls == 1
+    assert resp.json()["internet_access"] is True
+    [checked] = get_provider(PROVIDER_A["id"])["models"]
+    assert checked["internet_access"] is True
+    [untouched] = get_provider("pbtest-claude")["models"]
+    assert "internet_access" not in untouched
