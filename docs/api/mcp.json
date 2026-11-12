@@ -93,17 +93,15 @@
     },
     {
       "name": "check_updates",
-      "description": "Check for pending Plugboard updates that need to be applied to your project.\n\n    Call this at the START of every session to see if there are breaking changes\n    or new features to integrate. CRITIQUE updates must be applied immediately.\n\n    Args:\n        client_id: Your project identifier, as listed in the registry (e.g. my-app)",
+      "description": "Check for pending Plugboard updates that need to be applied to your project.\n\n    Call this at the START of every session to see if there are breaking changes\n    or new features to integrate. CRITIQUE updates must be applied immediately.\n    The project is the client of this server's key (PLUGBOARD_API_KEY).\n\n    Args:\n        client_id: Optional; if given, it must be the client of this server's key",
       "inputSchema": {
         "properties": {
           "client_id": {
+            "default": "",
             "title": "Client Id",
             "type": "string"
           }
         },
-        "required": [
-          "client_id"
-        ],
         "title": "check_updatesArguments",
         "type": "object"
       }
@@ -192,7 +190,7 @@
     },
     {
       "name": "get_update_prompt",
-      "description": "Get the full technical prompt for a specific update.\n\n    Returns the complete instructions: what changed in Plugboard,\n    which files to modify in your project, exact code changes,\n    and how to verify it works.\n\n    Apply the changes, then call mark_applied(client_id, prompt_id).\n\n    Args:\n        prompt_id: The update ID (e.g. CP-001, CP-002)",
+      "description": "Get the full technical prompt for a specific update.\n\n    Returns the complete instructions: what changed in Plugboard,\n    which files to modify in your project, exact code changes,\n    and how to verify it works.\n\n    Apply the changes, then call mark_applied(prompt_id). Only the updates\n    for the client of this server's key (PLUGBOARD_API_KEY) can be read.\n\n    Args:\n        prompt_id: The update ID (e.g. CP-001, CP-002)",
       "inputSchema": {
         "properties": {
           "prompt_id": {
@@ -209,7 +207,7 @@
     },
     {
       "name": "inflight_requests",
-      "description": "Show the chat calls running right now and the last results.\n\n    Use it when a call is slow, to tell \"still running\" from \"broken\": each\n    running call shows its model, how long it has run and its phase (queued,\n    calling the provider, CLI running...). A call flagged slow is still\n    running. Only the calls made with this client's key are listed.",
+      "description": "Show the chat calls running right now and the last results.\n\n    Use it when a call is slow, to tell \"still running\" from \"broken\": each\n    running call shows its model, how long it has run and its phase (queued,\n    calling the provider, CLI running...). A call flagged slow is still\n    running. Only the calls of this key's client are listed. Refused when\n    PLUGBOARD_API_KEY is the admin key.",
       "inputSchema": {
         "properties": {},
         "title": "inflight_requestsArguments",
@@ -218,17 +216,15 @@
     },
     {
       "name": "list_applied",
-      "description": "List all updates that have been applied for a client.\n\n    Args:\n        client_id: Your project identifier, as listed in the registry (e.g. my-app)",
+      "description": "List all updates that have been applied for your project.\n\n    The project is the client of this server's key (PLUGBOARD_API_KEY).\n\n    Args:\n        client_id: Optional; if given, it must be the client of this server's key",
       "inputSchema": {
         "properties": {
           "client_id": {
+            "default": "",
             "title": "Client Id",
             "type": "string"
           }
         },
-        "required": [
-          "client_id"
-        ],
         "title": "list_appliedArguments",
         "type": "object"
       }
@@ -262,13 +258,9 @@
     },
     {
       "name": "mark_applied",
-      "description": "Mark an update as applied for your project. This prevents it from showing up again.\n\n    Call this AFTER you have successfully applied and tested the changes.\n\n    Args:\n        client_id: Your project identifier, as listed in the registry (e.g. my-app)\n        prompt_id: The update ID that was applied (e.g. CP-001)\n        notes: Optional notes about the application (e.g. 'applied with minor adaptation')",
+      "description": "Mark an update as applied for your project. This prevents it from showing up again.\n\n    Call this AFTER you have successfully applied and tested the changes.\n    The project is the client of this server's key (PLUGBOARD_API_KEY).\n\n    Args:\n        prompt_id: The update ID that was applied (e.g. CP-001)\n        notes: Optional notes about the application (e.g. 'applied with minor adaptation')\n        client_id: Optional; if given, it must be the client of this server's key",
       "inputSchema": {
         "properties": {
-          "client_id": {
-            "title": "Client Id",
-            "type": "string"
-          },
           "prompt_id": {
             "title": "Prompt Id",
             "type": "string"
@@ -277,10 +269,14 @@
             "default": "",
             "title": "Notes",
             "type": "string"
+          },
+          "client_id": {
+            "default": "",
+            "title": "Client Id",
+            "type": "string"
           }
         },
         "required": [
-          "client_id",
           "prompt_id"
         ],
         "title": "mark_appliedArguments",
@@ -313,7 +309,7 @@
     {
       "uri": "updates://pending",
       "name": "resource_pending_updates",
-      "description": "All pending updates across all clients.",
+      "description": "Pending updates for the client of this server's key.",
       "mimeType": "text/plain"
     },
     {

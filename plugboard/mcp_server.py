@@ -310,6 +310,59 @@ async def _embedding_request(
         return _decision_error("invalid_response", "Invalid gateway response")
 
 
+# ── Caller identity ──────────────────────────────────────────────────────────
+
+
+class CallerIdentityError(Exception):
+    """The client of PLUGBOARD_API_KEY could not be established.
+
+    ``str(exc)`` is shown to the MCP caller, after ``Error: ``.
+    """
+
+
+async def _caller_client_id() -> str:
+    """The client of this server's key, as the gateway resolves it (/v1/me).
+
+    Asked at each call, never cached: a revoked key is refused at once. The
+    admin key is refused: per-client data needs a client key.
+    """
+    if not _API_KEY:
+        raise CallerIdentityError(
+            "this tool needs PLUGBOARD_API_KEY: it acts for that key's client"
+        )
+    try:
+        result = await _api_get("/v1/me")
+    except (asyncio.TimeoutError, ValueError) as exc:  # timeout, invalid JSON
+        result = {"error": type(exc).__name__}
+    if not isinstance(result, dict):
+        result = {"error": "unexpected gateway answer"}
+    if "error" in result:
+        raise CallerIdentityError(
+            "could not identify the client of PLUGBOARD_API_KEY "
+            f"({str(result['error'])[:120]})"
+        )
+    client_id = result.get("client_id")
+    if not isinstance(client_id, str) or not client_id:
+        raise CallerIdentityError("PLUGBOARD_API_KEY does not identify a client")
+    if client_id == "admin":
+        raise CallerIdentityError(
+            "PLUGBOARD_API_KEY is the admin key: give the MCP server a client key"
+        )
+    return client_id
+
+
+async def _registry_client(claimed: str = "") -> str:
+    """The calling key's client; ``claimed`` may only name that client."""
+    client_id = await _caller_client_id()
+    claimed = (claimed or "").strip()
+    if claimed and claimed != client_id:
+        raise CallerIdentityError(
+            f"client_id '{claimed}' is not the client of this key "
+            f"('{client_id}'): leave client_id out"
+        )
+    return client_id
+
+
 # ── Tools ────────────────────────────────────────────────────────────────────
 
 
@@ -689,8 +742,14 @@ async def inflight_requests() -> str:
     Use it when a call is slow, to tell "still running" from "broken": each
     running call shows its model, how long it has run and its phase (queued,
     calling the provider, CLI running...). A call flagged slow is still
-    running. Only the calls made with this client's key are listed.
+    running. Only the calls of this key's client are listed. Refused when
+    PLUGBOARD_API_KEY is the admin key.
     """
+    # The admin key would list every client's calls.
+    try:
+        await _caller_client_id()
+    except CallerIdentityError as exc:
+        return f"Error: {exc}"
     data = await _api_get("/v1/inflight")
     if "error" in data:
         return f"Error: {data['error']}"
@@ -897,6 +956,39 @@ def _load_registry() -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _missing_registry_message(registry: dict) -> str:
+    return (
+        f"The update registry is missing on the server ({registry['missing']}): "
+        "updates cannot be checked. Ask the operator to restore it "
+        "(see PLUGBOARD_REGISTRY_PATH)."
+    )
+
+
+def _targets(prompt: dict, client_id: str) -> bool:
+    """Whether the update ``prompt`` is aimed at ``client_id``.
+
+    ``clients`` must be a list: a string typed by mistake would otherwise
+    match any substring of a client ID.
+    """
+    clients = prompt.get("clients")
+    return isinstance(clients, list) and client_id in clients
+
+
+def _client_prompt(registry: dict, prompt_id: str, client_id: str) -> dict | None:
+    """The update ``prompt_id`` aimed at ``client_id``, or None.
+
+    Another client's update answers like a missing one: no oracle on its IDs.
+    """
+    return next(
+        (
+            p
+            for p in registry["prompts"]
+            if p["id"] == prompt_id and _targets(p, client_id)
+        ),
+        None,
+    )
+
+
 def _get_applied(client_id: str) -> set[str]:
     conn = _tracking_conn()
     try:
@@ -910,28 +1002,29 @@ def _get_applied(client_id: str) -> set[str]:
 
 
 @mcp.tool()
-async def check_updates(client_id: str) -> str:
+async def check_updates(client_id: str = "") -> str:
     """Check for pending Plugboard updates that need to be applied to your project.
 
     Call this at the START of every session to see if there are breaking changes
     or new features to integrate. CRITIQUE updates must be applied immediately.
+    The project is the client of this server's key (PLUGBOARD_API_KEY).
 
     Args:
-        client_id: Your project identifier, as listed in the registry (e.g. my-app)
+        client_id: Optional; if given, it must be the client of this server's key
     """
+    try:
+        client_id = await _registry_client(client_id)
+    except CallerIdentityError as exc:
+        return f"Error: {exc}"
     registry = _load_registry()
     if registry.get("missing"):
-        return (
-            f"The update registry is missing on the server ({registry['missing']}): "
-            "updates cannot be checked. Ask the operator to restore it "
-            "(see PLUGBOARD_REGISTRY_PATH)."
-        )
+        return _missing_registry_message(registry)
     applied = _get_applied(client_id)
 
     pending = [
         p
         for p in registry["prompts"]
-        if client_id in p.get("clients", []) and p["id"] not in applied
+        if _targets(p, client_id) and p["id"] not in applied
     ]
 
     if not pending:
@@ -978,14 +1071,19 @@ async def get_update_prompt(prompt_id: str) -> str:
     which files to modify in your project, exact code changes,
     and how to verify it works.
 
-    Apply the changes, then call mark_applied(client_id, prompt_id).
+    Apply the changes, then call mark_applied(prompt_id). Only the updates
+    for the client of this server's key (PLUGBOARD_API_KEY) can be read.
 
     Args:
         prompt_id: The update ID (e.g. CP-001, CP-002)
     """
+    try:
+        client_id = await _caller_client_id()
+    except CallerIdentityError as exc:
+        return f"Error: {exc}"
     registry = _load_registry()
 
-    prompt = next((p for p in registry["prompts"] if p["id"] == prompt_id), None)
+    prompt = _client_prompt(registry, prompt_id, client_id)
     if not prompt:
         return f"Error: prompt '{prompt_id}' not found in registry"
 
@@ -994,7 +1092,7 @@ async def get_update_prompt(prompt_id: str) -> str:
         f"**Impact:** {prompt['impact']}",
         f"**Version:** Plugboard {prompt['version']}",
         f"**Date:** {prompt['date']}",
-        f"**Clients:** {', '.join(prompt['clients'])}",
+        f"**Client:** {client_id}",
         "",
         "## Summary",
         prompt["summary"],
@@ -1027,29 +1125,31 @@ async def get_update_prompt(prompt_id: str) -> str:
         lines.append(prompt["verification"])
 
     lines.append("\n---")
-    lines.append(f'After applying, call: `mark_applied(client_id, "{prompt_id}")`')
+    lines.append(f'After applying, call: `mark_applied("{prompt_id}")`')
 
     return "\n".join(lines)
 
 
 @mcp.tool()
-async def mark_applied(client_id: str, prompt_id: str, notes: str = "") -> str:
+async def mark_applied(prompt_id: str, notes: str = "", client_id: str = "") -> str:
     """Mark an update as applied for your project. This prevents it from showing up again.
 
     Call this AFTER you have successfully applied and tested the changes.
+    The project is the client of this server's key (PLUGBOARD_API_KEY).
 
     Args:
-        client_id: Your project identifier, as listed in the registry (e.g. my-app)
         prompt_id: The update ID that was applied (e.g. CP-001)
         notes: Optional notes about the application (e.g. 'applied with minor adaptation')
+        client_id: Optional; if given, it must be the client of this server's key
     """
-    # Verify prompt exists
+    try:
+        client_id = await _registry_client(client_id)
+    except CallerIdentityError as exc:
+        return f"Error: {exc}"
     registry = _load_registry()
-    prompt = next((p for p in registry["prompts"] if p["id"] == prompt_id), None)
+    prompt = _client_prompt(registry, prompt_id, client_id)
     if not prompt:
         return f"Error: prompt '{prompt_id}' not found in registry"
-    if client_id not in prompt.get("clients", []):
-        return f"Error: prompt '{prompt_id}' does not target client '{client_id}'"
 
     # Check if already applied
     applied = _get_applied(client_id)
@@ -1072,27 +1172,31 @@ async def mark_applied(client_id: str, prompt_id: str, notes: str = "") -> str:
     remaining = [
         p
         for p in registry["prompts"]
-        if client_id in p.get("clients", [])
-        and p["id"] not in applied
-        and p["id"] != prompt_id
+        if _targets(p, client_id) and p["id"] not in applied and p["id"] != prompt_id
     ]
 
     if remaining:
         return (
             f"Marked `{prompt_id}` as applied for '{client_id}'.\n"
             f"**{len(remaining)} update(s) still pending.** "
-            f'Use `check_updates("{client_id}")` to see them.'
+            "Use `check_updates()` to see them."
         )
     return f"Marked `{prompt_id}` as applied for '{client_id}'. All updates are now applied!"
 
 
 @mcp.tool()
-async def list_applied(client_id: str) -> str:
-    """List all updates that have been applied for a client.
+async def list_applied(client_id: str = "") -> str:
+    """List all updates that have been applied for your project.
+
+    The project is the client of this server's key (PLUGBOARD_API_KEY).
 
     Args:
-        client_id: Your project identifier, as listed in the registry (e.g. my-app)
+        client_id: Optional; if given, it must be the client of this server's key
     """
+    try:
+        client_id = await _registry_client(client_id)
+    except CallerIdentityError as exc:
+        return f"Error: {exc}"
     conn = _tracking_conn()
     try:
         rows = conn.execute(
@@ -1117,28 +1221,29 @@ async def list_applied(client_id: str) -> str:
 
 @mcp.resource("updates://pending")
 async def resource_pending_updates() -> str:
-    """All pending updates across all clients."""
+    """Pending updates for the client of this server's key."""
+    try:
+        client_id = await _caller_client_id()
+    except CallerIdentityError as exc:
+        return f"Error: {exc}"
     registry = _load_registry()
-    clients = set()
-    for p in registry["prompts"]:
-        clients.update(p.get("clients", []))
+    if registry.get("missing"):
+        return _missing_registry_message(registry)
+    applied = _get_applied(client_id)
+    pending = [
+        p
+        for p in registry["prompts"]
+        if _targets(p, client_id) and p["id"] not in applied
+    ]
 
     lines = [f"**Plugboard v{registry['version']}** — Pending updates\n"]
-    for cid in sorted(clients):
-        applied = _get_applied(cid)
-        pending = [
-            p
-            for p in registry["prompts"]
-            if cid in p.get("clients", []) and p["id"] not in applied
-        ]
-        if pending:
-            lines.append(f"**{cid}** — {len(pending)} pending:")
-            for p in pending:
-                lines.append(f"  [{p['impact']}] `{p['id']}` — {p['title']}")
-        else:
-            lines.append(f"**{cid}** — all up to date")
-        lines.append("")
-
+    if pending:
+        lines.append(f"**{client_id}** — {len(pending)} pending:")
+        for p in pending:
+            lines.append(f"  [{p['impact']}] `{p['id']}` — {p['title']}")
+    else:
+        lines.append(f"**{client_id}** — all up to date")
+    lines.append("")
     return "\n".join(lines)
 
 

@@ -108,18 +108,6 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 
 ## MCP
 
-### MCP client identity from the key
-
-**What:** Derive `client_id` from the MCP caller's key instead of trusting the `client_id` argument.
-
-**Why:** A caller could read another client's pending prompts.
-
-**Context:** Needs a key to client mapping in the registry; transport authentication ships first.
-
-**Effort:** M
-**Priority:** P2
-**Depends on:** MCP network transport authentication
-
 ### MCP admin tools for providers and catalog
 
 **What:** MCP tools `add_provider` and `refresh_catalog`.
