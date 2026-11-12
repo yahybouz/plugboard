@@ -651,15 +651,71 @@ def _get_inflight_sem() -> Optional["_asyncio.Semaphore"]:
     return _inflight_chat_sem
 
 
-def _chat_overloaded() -> HTTPException:
-    return HTTPException(
-        status_code=503,
-        detail=(
-            "Server overloaded: the limit of concurrent chat requests is "
-            f"reached, retry in {_INFLIGHT_RETRY_AFTER_S} s"
-        ),
-        headers={"Retry-After": str(_INFLIGHT_RETRY_AFTER_S)},
-    )
+class _ChatOverloaded(HTTPException):
+    """503 ``server_busy``: the global chat cap stayed full for the whole wait.
+
+    An HTTPException, so the handlers that let an HTTPException raised by the
+    router through do the same with this one (a slot taken back after a
+    provider's wait, BUG-77); its own handler adds ``code`` and
+    ``retry_after``.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=503,
+            detail=(
+                "Server overloaded: the limit of concurrent chat requests is "
+                f"reached, retry in {_INFLIGHT_RETRY_AFTER_S} s"
+            ),
+            headers={"Retry-After": str(_INFLIGHT_RETRY_AFTER_S)},
+        )
+
+
+@app.exception_handler(_ChatOverloaded)
+async def _chat_overloaded_handler(request: Request, exc: _ChatOverloaded):
+    content: Dict[str, Any] = {"detail": exc.detail, "code": "server_busy"}
+    headers = _retry_after_headers(content, _INFLIGHT_RETRY_AFTER_S)
+    return JSONResponse(status_code=503, content=content, headers=headers)
+
+
+class _ChatSlot:
+    """A request's slot under the global cap (``request_wait.ChatSlot``).
+
+    The request gives it back while it waits for a provider or for its
+    session's turn, and takes it back to go on (BUG-77): requests waiting for
+    a full provider no longer keep out the requests for the other ones.
+    """
+
+    __slots__ = ("sem", "rid", "held", "wait_s")
+
+    def __init__(self, sem: "_asyncio.Semaphore", rid: str) -> None:
+        self.sem = sem
+        self.rid = rid
+        self.held = False
+        self.wait_s = _INFLIGHT_WAIT_S
+
+    async def take(self, wait_s: float) -> None:
+        global _inflight_chat_active
+        if self.sem.locked():
+            if wait_s <= 0:
+                raise _ChatOverloaded()
+            _live.update(self.rid, phase="waiting_slot")
+            try:
+                await _asyncio.wait_for(self.sem.acquire(), timeout=wait_s)
+            except _asyncio.TimeoutError:
+                raise _ChatOverloaded() from None
+            _live.update(self.rid, phase="running")
+        else:
+            await self.sem.acquire()  # free: taken at once, without suspending
+        self.held = True
+        _inflight_chat_active += 1
+
+    def release(self) -> None:
+        global _inflight_chat_active
+        if self.held:
+            self.held = False
+            _inflight_chat_active -= 1
+            self.sem.release()
 
 
 async def _inflight_chat_dep(request: Request):
@@ -675,36 +731,26 @@ async def _inflight_chat_dep(request: Request):
     so a call without a valid key gets its 401 without taking or waiting for
     a slot. The request's wait budget (``request_wait``) starts here: the
     waits for a slot, for the session's turn and for a provider share it.
+    BUG-77: the slot is given back while the request waits for a provider or
+    for its session's turn, and taken back after (``_ChatSlot``).
     """
     # PLU-13: every chat call is listed in /v1/inflight, cap or not.
     rid = _request_id_var.get()
     _live.begin(rid, request.url.path, request.headers.get(_live.SURFACE_HEADER))
+    slot: Optional[_ChatSlot] = None
     try:
-        _request_wait.start(max(_INFLIGHT_WAIT_S, _provider_admission.WAIT_S))
         sem = _get_inflight_sem()
-        if sem is None:
-            yield
-            return
-        if sem.locked():
+        slot = _ChatSlot(sem, rid) if sem is not None else None
+        _request_wait.start(
+            max(_INFLIGHT_WAIT_S, _provider_admission.WAIT_S), slot=slot
+        )
+        if slot is not None:
             with _request_wait.waiting(_INFLIGHT_WAIT_S) as wait_s:
-                if wait_s <= 0:
-                    raise _chat_overloaded()
-                _live.update(rid, phase="waiting_slot")
-                try:
-                    await _asyncio.wait_for(sem.acquire(), timeout=wait_s)
-                except _asyncio.TimeoutError:
-                    raise _chat_overloaded() from None
-        else:
-            await sem.acquire()  # free: taken at once, without suspending
-        _live.update(rid, phase="running")
-        global _inflight_chat_active
-        _inflight_chat_active += 1
-        try:
-            yield
-        finally:
-            _inflight_chat_active -= 1
-            sem.release()
+                await slot.take(wait_s)
+        yield
     finally:
+        if slot is not None:
+            slot.release()
         _live.finish(rid)
 
 
@@ -806,15 +852,22 @@ async def _take_session_turn(request: Request, client_id: str, session_id: str) 
     The release is stored as soon as the turn is obtained, so a hang-up that
     comes later (``_ClientGone``) cannot lose it. The wait takes what is left
     of the request's wait budget (PLU-15): then 503 with Retry-After, out of
-    the queue. A free turn is taken at once, even with no budget left.
+    the queue. A free turn is taken at once, even with no budget left. While
+    the turn runs elsewhere, the request gives its global slot back (BUG-77).
     """
     from plugboard import session_turns
 
+    if not session_turns.busy(client_id, session_id):
+        request.state.session_turn_release = await session_turns.acquire(
+            client_id, session_id
+        )
+        return
     try:
-        with _request_wait.waiting() as timeout:
-            request.state.session_turn_release = await session_turns.acquire(
-                client_id, session_id, timeout=timeout
-            )
+        async with _request_wait.slot_released():
+            with _request_wait.waiting() as timeout:
+                request.state.session_turn_release = await session_turns.acquire(
+                    client_id, session_id, timeout=timeout
+                )
     except TimeoutError:
         log.info("session turn busy: the request's wait ended")
         raise HTTPException(
@@ -3005,6 +3058,9 @@ async def preflight(
                 "messages": [{"role": "user", "content": "ping"}],
                 "max_tokens": 1,
             }
+            # BUG-77: a ping refused after a provider's wait left the global
+            # slot; the batch takes it back before its next ping.
+            await _request_wait.slot_back()
             try:
                 result = await _unless_client_gone(
                     request, forward(ping_body, timeout=10.0, **route_options)
@@ -3012,6 +3068,8 @@ async def preflight(
             except _ClientGone:
                 # Nobody waits for the rest of the batch: stop here.
                 return _client_gone_response(model_str)
+            except _ChatOverloaded:
+                raise  # the global cap, not this pair: 503 server_busy
             except HTTPException:
                 error = "forbidden_model"
             except ProvidersBusyError as exc:

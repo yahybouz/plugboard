@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "2.0.0"
+CONTRACT_VERSION = "2.1.0"
 _JSON = "application/json"
 
 
@@ -534,7 +534,9 @@ class ErrorResponse(_Open):
     provider gave a delay; a failing CLI provider (502) adds its exit details
     for the admin only. A chat model no provider knows (404) adds `code` and
     `hint`. A chat whose candidate providers all stayed at their concurrency
-    cap (503) adds `code` providers_busy, `retry_after` and Retry-After. A
+    cap (503) adds `code` providers_busy, `retry_after` and Retry-After; one
+    the global chat cap kept waiting for a slot (503) adds `code`
+    server_busy, `retry_after` and Retry-After. A
     chat model of a provider the admin turned off (503) adds `code`
     provider_disabled and `hint`, without Retry-After. A chat request only
     CLI subscription routes could serve, asking for what they cannot serve
@@ -550,7 +552,7 @@ class ErrorResponse(_Open):
         description="Stable reason for programs, when the route gives one: "
         "unsupported_on_cli (chat, 400), context_length_exceeded (chat, 400), "
         "model_not_found (chat, 404), providers_busy (chat, 503), "
-        "provider_disabled (chat, 503).",
+        "server_busy (chat and preflight, 503), provider_disabled (chat, 503).",
     )
     unsupported: Optional[List[str]] = Field(
         default=None,
@@ -649,7 +651,8 @@ _CHAT_ERRORS = {
     " model_not_found, hint says what to send; nothing was called.",
     "413": "Request body larger than MAX_BODY_BYTES (10 MB by default).",
     "502": "The provider failed or answered with an error.",
-    "503": "Provider timeout (retry_after), too many concurrent requests, every"
+    "503": "Provider timeout (retry_after), the global cap of concurrent chat"
+    " requests full for the whole wait (code server_busy, Retry-After 5), every"
     " candidate provider at its concurrency cap (code providers_busy, Retry-After 5),"
     " or the model belongs to a provider the admin turned off (code"
     " provider_disabled, hint, no Retry-After); nothing was called.",
@@ -716,7 +719,8 @@ _ROUTES: List[_Route] = [
      PreflightRequest, PreflightResponse,
      {**_AUTH_ERRORS,
       "422": "More than 10 items, or an invalid item.",
-      "503": "Too many concurrent chat requests."}, True),
+      "503": "The global cap of concurrent chat requests stayed full for the"
+      " whole wait (code server_busy, Retry-After 5)."}, True),
     ("get", "/v1/me", "The calling key: limits and this month's usage",
      None, ClientInfo, _AUTH_ERRORS, True),
     ("get", "/v1/me/keys", "The calling client's keys (masked)",

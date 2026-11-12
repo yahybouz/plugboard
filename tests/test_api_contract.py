@@ -309,3 +309,14 @@ def test_contract_states_what_a_cli_subscription_route_refuses():
     error_doc = schemas["ErrorResponse"]
     assert "unsupported_on_cli" in error_doc["properties"]["code"]["description"]
     assert "context_length_exceeded" in error_doc["properties"]["code"]["description"]
+
+
+def test_committed_contract_names_server_busy():
+    """BUG-77: the global cap's 503 carries code server_busy (contract 2.1.0)."""
+    doc = json.loads((ROOT / "docs" / "api" / "openapi.json").read_text("utf-8"))
+    assert tuple(map(int, doc["info"]["version"].split("."))) >= (2, 1, 0)
+    for path in ("/v1/chat/completions", "/v2/chat/completions", "/v1/preflight"):
+        unavailable = doc["paths"][path]["post"]["responses"]["503"]["description"]
+        assert "server_busy" in unavailable, path
+    code = doc["components"]["schemas"]["ErrorResponse"]["properties"]["code"]
+    assert "server_busy" in code["description"]

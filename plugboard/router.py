@@ -1079,11 +1079,15 @@ async def forward(
                     deadline = loop.time() + provider_admission.WAIT_S
                 _live.update(phase="waiting_provider")
                 wait_t0 = loop.time()
-                with request_wait.waiting(deadline - loop.time()) as wait_s:
-                    granted = await provider_admission.wait_acquire(
-                        [p for p, _ in busy], wait_s
-                    )
-                pending_wait += loop.time() - wait_t0
+                # BUG-77: the global chat slot is given back while the request
+                # waits, and taken back when it got a provider's slot.
+                async with request_wait.slot_released() as step:
+                    with request_wait.waiting(deadline - loop.time()) as wait_s:
+                        granted = await provider_admission.wait_acquire(
+                            [p for p, _ in busy], wait_s
+                        )
+                    pending_wait += loop.time() - wait_t0
+                    step.come_back = granted is not None
                 _live.update(phase="running")
                 if granted is None:
                     break
@@ -1430,8 +1434,16 @@ async def forward_stream(
     wait_t0 = _time.perf_counter()
     if waited:
         _live.update(phase="waiting_provider")
-        with request_wait.waiting(provider_admission.WAIT_S) as wait_s:
-            lease = await provider_admission.wait_acquire([provider], wait_s)
+        try:
+            # BUG-77: no global chat slot held while the request waits.
+            async with request_wait.slot_released() as step:
+                with request_wait.waiting(provider_admission.WAIT_S) as wait_s:
+                    lease = await provider_admission.wait_acquire([provider], wait_s)
+                step.come_back = lease is not None
+        except BaseException:
+            if lease is not None:
+                lease.release()  # granted, but the global slot was not
+            raise
         _live.update(phase="running")
     if lease is None:
         if _turned_off(provider["id"]):

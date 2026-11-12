@@ -29,6 +29,11 @@ def _leave(key: Tuple[str, str], entry: List) -> None:
         del _turns[key]
 
 
+def busy(client_id: str, session_id: str) -> bool:
+    """A turn of this session runs or waits: the next one would wait."""
+    return (client_id, session_id) in _turns
+
+
 async def acquire(
     client_id: str, session_id: str, timeout: Optional[float] = None
 ) -> Callable[[], None]:
