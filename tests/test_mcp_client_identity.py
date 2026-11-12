@@ -269,3 +269,12 @@ async def test_old_by_name_call_with_own_client_id_still_works(as_client, regist
     assert "Marked `CP-A`" in out and _rows() == {("alpha", "CP-A")}
     refused = await _call("mark_applied", {"client_id": "beta", "prompt_id": "CP-AB"})
     assert refused.startswith("Error:") and _rows() == {("alpha", "CP-A")}
+
+
+# ── Task 4: inflight_requests ────────────────────────────────────────────────
+
+
+async def test_inflight_refuses_the_admin_identity(as_client):
+    as_client["client_id"] = "admin"
+    assert (await mcp_server.inflight_requests()).startswith("Error:")
+    assert as_client["calls"] == [("/v1/me", False)]

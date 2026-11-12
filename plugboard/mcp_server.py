@@ -328,8 +328,7 @@ async def _caller_client_id() -> str:
     """
     if not _API_KEY:
         raise CallerIdentityError(
-            "the update registry needs PLUGBOARD_API_KEY: "
-            "updates are those of that key's client"
+            "this tool needs PLUGBOARD_API_KEY: it acts for that key's client"
         )
     result = await _api_get("/v1/me")
     if "error" in result:
@@ -738,8 +737,14 @@ async def inflight_requests() -> str:
     Use it when a call is slow, to tell "still running" from "broken": each
     running call shows its model, how long it has run and its phase (queued,
     calling the provider, CLI running...). A call flagged slow is still
-    running. Only the calls made with this client's key are listed.
+    running. Only the calls of this key's client are listed. Refused when
+    PLUGBOARD_API_KEY is the admin key.
     """
+    # The admin key would list every client's calls with their provider.
+    try:
+        await _caller_client_id()
+    except CallerIdentityError as exc:
+        return f"Error: {exc}"
     data = await _api_get("/v1/inflight")
     if "error" in data:
         return f"Error: {data['error']}"

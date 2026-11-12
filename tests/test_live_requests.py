@@ -266,6 +266,8 @@ async def test_mcp_tool_shows_running_and_finished_calls(monkeypatch):
 
     async def fake_get(path, admin=False):
         seen.append((path, admin))
+        if path == "/v1/me":
+            return {"client_id": "c1"}
         return {
             "active_count": 1,
             "active": [
@@ -289,8 +291,11 @@ async def test_mcp_tool_shows_running_and_finished_calls(monkeypatch):
         }
 
     monkeypatch.setattr(mcp_server, "_api_get", fake_get)
+    monkeypatch.setattr(mcp_server, "_API_KEY", "pb_synthetic_client")
     out = await mcp_server.inflight_requests()
-    assert seen == [("/v1/inflight", False)]  # client key, never the admin key
+    # The key's client first (an admin key is refused), then its calls;
+    # always with the client key, never the admin key.
+    assert seen == [("/v1/me", False), ("/v1/inflight", False)]
     assert "In flight:** 1" in out and "41.0s, cli_running" in out
     assert "error 502" in out
 
