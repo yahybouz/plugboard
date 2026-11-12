@@ -9,7 +9,10 @@
 (function () {
   "use strict";
 
-  var POLL_MS = 3000;
+  // The gateway allows 60 requests a minute per client address, for every route:
+  // idle polling stays at 6 a minute, a running Playground call adds 20.
+  var POLL_MS = 10000;
+  var BUSY_POLL_MS = 3000;
   var PHASES = {
     waiting_slot: "queued (gateway busy)",
     running: "calling the provider",
@@ -123,10 +126,11 @@
     var poll2 = setInterval(async function () {
       try {
         var d = await fetchLive();
+        last = d; render();
         var mine = d.active.filter(function (e) { return e.surface === "playground" && e.model === model; })[0];
         if (mine) { phase = phaseLabel(mine.phase) + (mine.slow ? " (slow, still running)" : ""); provider = mine.provider || ""; }
       } catch (e) { /* the status line keeps counting */ }
-    }, 1500);
+    }, BUSY_POLL_MS);
   }
 
   window.plugboardLive = { ticker: ticker, phaseLabel: phaseLabel };
