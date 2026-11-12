@@ -98,7 +98,8 @@ FROM base AS full
 # CLI versions are pinned: the CI, the UAT and deploy/ovh/compose.yml build
 # the same CLIs. Override one at build time if needed, e.g.
 #   docker build --target full --build-arg CLAUDE_CODE_VERSION=2.1.306 .
-# Keep these defaults equal to the build args of deploy/ovh/compose.yml.
+# Keep these defaults equal to the build args of deploy/ovh/compose.yml and
+# of the UAT deployer (its apps.json passes them too, outside this repo).
 ARG GEMINI_CLI_VERSION=0.65.0
 ARG CLAUDE_CODE_VERSION=2.1.306
 ARG CODEX_VERSION=0.163.0

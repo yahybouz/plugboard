@@ -30,6 +30,29 @@ def _full_stage() -> str:
     return re.search(r"^FROM base AS full$(.*)", DOCKERFILE, re.M | re.S).group(1)
 
 
+def _runs(stage: str) -> list:
+    """Each RUN instruction of a stage, its continuation lines joined."""
+    joined = re.sub(r"\\\n\s*", " ", stage)
+    return [line for line in joined.splitlines() if line.startswith("RUN ")]
+
+
+# Ways a shell step can swallow a failure. Each one would bring BUG-50 back.
+SWALLOWS = (
+    "||",
+    "|",
+    "; true",
+    "&& true",
+    "exit 0",
+    "set +e",
+    "command -v",
+    "2>/dev/null",
+)
+
+
+def _swallowed(run: str) -> list:
+    return [s for s in SWALLOWS if s in run]
+
+
 def _image_step() -> dict:
     pipeline = json.loads((ROOT / "ci/pipeline.json").read_text(encoding="utf-8"))
     return next(s for s in pipeline["steps"] if s["id"] == "docker-build")
@@ -62,6 +85,13 @@ def test_gitlab_pipeline_builds_the_same_target():
 
     assert "--target full" in script
     assert "--target api" not in script
+    loop = re.search(r"for cli in ([a-z ]+); do\n(.*?)\n\s*done", script, re.S)
+    assert loop, "the CLI check loop is missing"
+    assert loop.group(1).split() == ["gemini", "claude", "codex", "gh"]
+    assert '--network none "plugboard:ci-$CI_COMMIT_SHORT_SHA" "$cli" --version' in (
+        loop.group(2)
+    )
+    assert re.search(r"--network none \S+ agy --version", script)
 
 
 def test_cli_versions_are_pinned_to_the_ovh_build_args():
@@ -78,31 +108,41 @@ def test_cli_versions_are_pinned_to_the_ovh_build_args():
 
 
 def test_a_failed_cli_install_fails_the_build():
-    stage = _full_stage()
-    installs = [
-        line for line in stage.splitlines() if line.startswith("RUN npm install -g")
-    ]
+    installs = [r for r in _runs(_full_stage()) if r.startswith("RUN npm install -g")]
 
     assert len(installs) == 4  # npm itself, then the three CLIs
-    assert not [line for line in installs if "||" in line]
-    assert "[WARN]" not in stage.replace(
+    for run in installs:
+        assert _swallowed(run) == [], run
+    assert "[WARN]" not in _full_stage().replace(
         'echo "[WARN] agy: no official archive for', ""
     )
 
 
 def test_the_cli_check_step_fails_on_a_missing_cli():
-    stage = _full_stage()
-    check = re.search(
-        r"^RUN set -e; .*?Installed CLI binaries.*?\n(?!\s)", stage, re.M | re.S
-    )
+    checks = [r for r in _runs(_full_stage()) if "Installed CLI binaries" in r]
 
-    assert check, "the CLI check step is missing"
-    body = check.group(0)
-    for cli in ("gemini", "claude", "codex", "gh", "agy"):
-        assert f"{cli} --version" in body
-    # A pipe or an `|| echo` would hide a failing CLI.
-    assert "|" not in body
-    assert "not installed" not in body
+    assert len(checks) == 1, "the CLI check step is missing"
+    run = checks[0]
+    assert run.startswith("RUN set -e; ")
+    assert _swallowed(run) == []
+    assert "not installed" not in run
+    # Each CLI is run as a bare command (start of a statement), so its exit
+    # status reaches `set -e`; agy only under the amd64 test.
+    for cli in ("gemini", "claude", "codex", "gh"):
+        assert re.search(rf"(?:; |^RUN )\s*{cli} --version;", run), cli
+    assert re.search(r"= \"amd64\" \]; then agy --version; fi$", run)
+
+
+def test_the_swallow_detector_sees_the_known_bypasses():
+    bypasses = [
+        'RUN npm install -g "@openai/codex@1" \\\n    || true',
+        'RUN npm install -g "@openai/codex@1"; exit 0',
+        "RUN set -e; set +e; gemini --version;",
+        "RUN set -e; if command -v gemini; then gemini --version; fi",
+        "RUN set -e; gemini --version 2>/dev/null | head -1;",
+    ]
+    for text in bypasses:
+        assert _swallowed(_runs(text)[0]), text
 
 
 # ── ci/ci_outils.py image-docker, against a fake docker ──────────────────
@@ -121,7 +161,13 @@ if argv[:2] == ["image", "inspect"]:
     elif "Architecture" in fmt:
         print(os.environ.get("FAKE_ARCH", "amd64"))
     sys.exit(0)
+if argv and argv[0] == "ps":
+    print(os.environ.get("FAKE_LEFTOVER", ""))
+    sys.exit(0)
 if argv and argv[0] == "run":
+    if os.environ.get("FAKE_SLEEP"):
+        import time
+        time.sleep(float(os.environ["FAKE_SLEEP"]))
     if os.environ.get("FAKE_FAIL") and os.environ["FAKE_FAIL"] in argv:
         sys.exit(127)
     sys.exit(0)
@@ -174,7 +220,7 @@ def fake_docker(tmp_path):
     return run
 
 
-def _runs(calls):
+def _docker_runs(calls):
     return [c for c in calls if c and c[0] == "run"]
 
 
@@ -184,7 +230,7 @@ def test_image_docker_runs_each_check_without_network(fake_docker):
     )
 
     assert proc.returncode == 0, proc.stderr
-    runs = _runs(calls)
+    runs = _docker_runs(calls)
     assert [r[-2:] for r in runs] == [["claude", "--version"], ["codex", "--version"]]
     for r in runs:
         assert "--rm" in r
@@ -211,12 +257,74 @@ def test_amd64_only_checks_run_on_amd64(fake_docker):
     proc, calls = fake_docker("--verifier-amd64", "agy --version", FAKE_ARCH="amd64")
 
     assert proc.returncode == 0, proc.stderr
-    assert [r[-2:] for r in _runs(calls)] == [["agy", "--version"]]
+    assert [r[-2:] for r in _docker_runs(calls)] == [["agy", "--version"]]
 
 
 def test_amd64_only_checks_are_skipped_elsewhere(fake_docker):
     proc, calls = fake_docker("--verifier-amd64", "agy --version", FAKE_ARCH="arm64")
 
     assert proc.returncode == 0, proc.stderr
-    assert _runs(calls) == []
+    assert _docker_runs(calls) == []
     assert "agy --version" in proc.stdout
+
+
+def test_the_build_log_is_kept_and_each_check_is_labelled(fake_docker):
+    proc, calls = fake_docker("--verifier", "gh --version")
+
+    assert proc.returncode == 0, proc.stderr
+    build = next(c for c in calls if c[0] == "build")
+    # A failing RUN must show its cause (npm ETARGET, 429...), so no -q.
+    assert "-q" not in build
+    assert "--progress=plain" in build
+    run = _docker_runs(calls)[0]
+    assert (
+        run[run.index("--label") + 1]
+        == "ci.locale.image=ci-locale/plugboard:0123456789ab"
+    )
+
+
+def test_leftovers_of_a_killed_run_are_removed_first(fake_docker):
+    proc, calls = fake_docker(FAKE_LEFTOVER="c0ffee1 c0ffee2")
+
+    assert proc.returncode == 0, proc.stderr
+    build_at = next(i for i, c in enumerate(calls) if c[0] == "build")
+    before = calls[:build_at]
+    assert ["rm", "-f", "c0ffee1", "c0ffee2"] in before
+    assert ["image", "rm", "-f", "ci-locale/plugboard:0123456789ab"] in before
+    ps = next(c for c in before if c[0] == "ps")
+    assert "label=ci.locale.image=ci-locale/plugboard:0123456789ab" in ps
+
+
+def test_a_check_that_hangs_is_killed_and_fails(fake_docker):
+    proc, calls = fake_docker(
+        "--verifier", "gemini --version", "--delai-verifier", "1", FAKE_SLEEP="5"
+    )
+
+    assert proc.returncode != 0
+    assert "gemini --version" in proc.stderr
+    name = _docker_runs(calls)[0][_docker_runs(calls)[0].index("--name") + 1]
+    assert ["rm", "-f", name] in calls
+    assert calls[-1][:2] == ["image", "rm"]
+
+
+def test_an_unreadable_architecture_fails_the_amd64_checks(fake_docker):
+    proc, calls = fake_docker("--verifier-amd64", "agy --version", FAKE_ARCH="")
+
+    assert proc.returncode != 0
+    assert _docker_runs(calls) == []
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ("--verifier", ""),
+        ("--verifier", "   "),
+        ("--verifier-amd64", 'agy "--version'),
+        ("--delai-verifier", "0"),
+    ],
+)
+def test_invalid_check_options_are_refused_before_any_build(fake_docker, extra):
+    proc, calls = fake_docker(*extra)
+
+    assert proc.returncode == 2
+    assert calls == []
