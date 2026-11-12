@@ -3768,10 +3768,23 @@ async def get_providers(_: None = Depends(_require_admin)):
     return [_mask(p) for p in load_providers()]
 
 
+def _admin_actor(request: Request) -> str:
+    """Audit actor of an admin call: ``mcp`` from the MCP server, else ``admin``.
+
+    The surface header is declarative (any admin can send it): it tells the
+    MCP server's calls apart, it proves nothing (PB-MCP-02).
+    """
+    surface = _live.normalize_surface(request.headers.get(_live.SURFACE_HEADER))
+    return "mcp" if surface == "mcp" else "admin"
+
+
 @app.post("/providers", status_code=201)
-async def add_provider(body: ProviderCreate, _: None = Depends(_require_admin)):
+async def add_provider(
+    body: ProviderCreate, request: Request, _: None = Depends(_require_admin)
+):
+    actor = _admin_actor(request)
     if body.egress_guard:
-        await _require_guard_allows("", body.base_url)
+        await _require_guard_allows("", body.base_url, actor=actor)
     try:
         record = create_provider(
             name=body.name,
@@ -3788,6 +3801,7 @@ async def add_provider(body: ProviderCreate, _: None = Depends(_require_admin)):
     except _cfg_mod.ProviderDomainNotAllowed as exc:
         _audit(
             "provider.domain.rejected",
+            actor=actor,
             target_type="provider",
             target_id="",  # provider was never created
             details=json.dumps(
@@ -3800,10 +3814,25 @@ async def add_provider(body: ProviderCreate, _: None = Depends(_require_admin)):
         )
         raise HTTPException(400, str(exc))
     except ValueError as exc:
+        if actor == "mcp":
+            _audit(
+                "provider.create.refused",
+                actor=actor,
+                target_type="provider",
+                details=json.dumps(
+                    {
+                        "name": body.name,
+                        "base_url": body.base_url,
+                        "status": 400,
+                        "reason": str(exc),
+                    }
+                ),
+            )
         raise HTTPException(400, str(exc)) from None
     invalidate_models_cache()
     _audit(
         "provider.create",
+        actor=actor,
         target_type="provider",
         target_id=record["id"],
         details=body.name,
@@ -3917,13 +3946,35 @@ def _no_models_detail(
 
 @app.post("/providers/{provider_id}/discover")
 async def discover_provider_models(
-    provider_id: str, dry_run: bool = False, _: None = Depends(_require_admin)
+    provider_id: str,
+    request: Request,
+    dry_run: bool = False,
+    _: None = Depends(_require_admin),
 ):
     """Discover a provider's models and write them; removals apply at once.
 
     ``dry_run=true`` returns what would be added and removed without writing,
-    so the dashboard can ask for confirmation first.
+    so the dashboard can ask for confirmation first. A call from the MCP
+    server is audited with its refusals and previews (PB-MCP-02).
     """
+    actor = _admin_actor(request)
+    try:
+        return await _discover_provider(provider_id, dry_run, actor)
+    except HTTPException as exc:
+        if actor == "mcp":
+            _audit(
+                "provider.discover.refused",
+                actor=actor,
+                target_type="provider",
+                target_id=provider_id,
+                details=json.dumps({"status": exc.status_code, "reason": exc.detail}),
+            )
+        raise
+
+
+async def _discover_provider(
+    provider_id: str, dry_run: bool, actor: str
+) -> Dict[str, Any]:
     from plugboard import change_events, model_diff
 
     provider = get_provider(provider_id)
@@ -3994,6 +4045,15 @@ async def discover_provider_models(
             batch.flush_in_background()
         _audit(
             "provider.discover",
+            actor=actor,
+            target_type="provider",
+            target_id=provider_id,
+            details=f"added={len(diff.added)} removed={len(diff.removed)}",
+        )
+    elif actor == "mcp":
+        _audit(
+            "provider.discover.preview",
+            actor=actor,
             target_type="provider",
             target_id=provider_id,
             details=f"added={len(diff.added)} removed={len(diff.removed)}",
@@ -4340,12 +4400,14 @@ async def _check_guard_on_edit(
         await _require_guard_allows(provider_id, new_url)
 
 
-async def _require_guard_allows(provider_id: str, base_url: str) -> None:
+async def _require_guard_allows(
+    provider_id: str, base_url: str, *, actor: str = "admin"
+) -> None:
     """Refuse to guard a provider whose base_url is not a public http(s) URL.
 
     The egress guard would refuse every connection of such a provider, so it
     is refused up front (D-18 c, D-19). Every refusal is audited as
-    ``provider.egress.rejected`` before it is raised.
+    ``provider.egress.rejected`` (by ``actor``) before it is raised.
     """
     try:
         if not base_url.lower().startswith(("http://", "https://")):
@@ -4354,6 +4416,7 @@ async def _require_guard_allows(provider_id: str, base_url: str) -> None:
     except HTTPException as exc:
         _audit(
             "provider.egress.rejected",
+            actor=actor,
             target_type="provider",
             target_id=provider_id,
             details=json.dumps({"base_url": base_url, "reason": exc.detail}),
