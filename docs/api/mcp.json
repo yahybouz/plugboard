@@ -1,6 +1,6 @@
 {
   "server": "plugboard",
-  "contract_version": "1.4.0",
+  "contract_version": "1.5.0",
   "transport": [
     "stdio",
     "sse",
@@ -204,6 +204,15 @@
           "prompt_id"
         ],
         "title": "get_update_promptArguments",
+        "type": "object"
+      }
+    },
+    {
+      "name": "inflight_requests",
+      "description": "Show the chat calls running right now and the last results.\n\n    Use it when a call is slow, to tell \"still running\" from \"broken\": each\n    running call shows its model, how long it has run and its phase (queued,\n    calling the provider, CLI running...). A call flagged slow is still\n    running. Only the calls made with this client's key are listed.",
+      "inputSchema": {
+        "properties": {},
+        "title": "inflight_requestsArguments",
         "type": "object"
       }
     },

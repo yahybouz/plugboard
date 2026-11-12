@@ -78,6 +78,7 @@ Example client configuration (stdio):
 | `list_decision_models` | none | Permitted decision engines, availability, capabilities and confidence semantics |
 | `decide` | `model`, `state`, `questions` | Named typed questions through `/v1/decisions`; no chat fallback |
 | `check_usage` | none | Usage, spend and limits of the key (`/v1/me`) |
+| `inflight_requests` | none | Chat calls of the key running now (model, time, phase, "slow" flag) and their last results: tells a slow call from a broken one (`/v1/inflight`) |
 | `provider_status` | none | Watchdog state and provider health (admin key required) |
 | `check_updates` | `client_id` | Pending updates for a client project |
 | `get_update_prompt` | `prompt_id` | Full instructions of one update |

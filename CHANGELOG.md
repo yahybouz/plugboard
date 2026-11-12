@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **A running chat call is visible on every surface**: a slow call (a CLI starting for 5 to 13 s, a large Ollama model for minutes) looked the same as a hung one. `GET /v1/inflight` lists the calling key's chat calls in flight, each with its model, the surface that sent it (`api`, `playground` or `mcp`, from the `X-Plugboard-Surface` header), the time elapsed, its phase (`waiting_slot`, `running`, `waiting_provider`, `cli_queue`, `cli_running`, `cli_parse`) and a `slow` flag after 60 s, then the last 20 results with their HTTP status. The MCP server gets an `inflight_requests` tool, and the dashboard a corner pill (calls in flight, click for the list) and a ticking status line in the Playground. The admin sees every call with its provider through `GET /admin/inflight`; a client key never sees another key's calls or the routing. Nothing is stored: the list lives in memory and holds no prompt or answer. API contract 1.5.0.
+
 ## [4.9.0] — 2026-11-11
 
 ### Security

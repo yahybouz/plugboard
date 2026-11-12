@@ -16,7 +16,7 @@ function toast(msg, type) {
 // ── API client ──────────────────────────────────────────────────────────────
 
 async function api(method, path, body) {
-  const opts = { method: method, headers: {} };
+  const opts = { method: method, headers: { "X-Plugboard-Surface": "playground" } };
   if (body !== undefined) opts.headers["Content-Type"] = "application/json";
   if (body !== undefined) opts.body = JSON.stringify(body);
   const res = await fetch(path, opts);
@@ -1949,6 +1949,7 @@ async function _pgSend() {
   assistantBubble.title = "Answer from " + model;
   statusEl.textContent = "Sending to " + model + "...";
   statusEl.dataset.state = "sending";  // live-test completion hook (C9)
+  if (window.plugboardLive) window.plugboardLive.ticker(statusEl, model);  // PLU-13
 
   const body = {
     model: model,
@@ -1965,7 +1966,7 @@ async function _pgSend() {
     try {
       const res = await fetch("/v1/chat/completions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Plugboard-Surface": "playground" },
         body: JSON.stringify(body),
       });
       if (res.status === 401) { logout(); throw new Error("Unauthorized"); }

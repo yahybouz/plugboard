@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "1.4.0"
+CONTRACT_VERSION = "1.5.0"
 _JSON = "application/json"
 
 
@@ -412,6 +412,43 @@ class ClientInfo(_Open):
     )
 
 
+class InflightCall(_Open):
+    """One chat call: running, or finished (then `outcome` is set)."""
+
+    id: str = Field(description="The call's X-Request-ID.")
+    surface: Literal["api", "playground", "mcp"]
+    model: Optional[str] = None
+    phase: str = Field(
+        description=(
+            "waiting_slot, running, waiting_provider, cli_queue, cli_running, cli_parse, "
+            "or done once finished."
+        )
+    )
+    status: Optional[int] = Field(
+        default=None, description="HTTP status of the answer; null while it runs."
+    )
+    elapsed_s: float
+    phase_elapsed_s: Optional[float] = Field(
+        default=None, description="Time in the current phase; running calls only."
+    )
+    slow: Optional[bool] = Field(
+        default=None,
+        description="True after 60 s. A slow call is still running, not broken.",
+    )
+    outcome: Optional[Literal["ok", "error", "unknown"]] = Field(
+        default=None, description="Finished calls only."
+    )
+
+
+class InflightResponse(BaseModel):
+    """The calling key's chat calls running now and its last results."""
+
+    active_count: int
+    active: List[InflightCall]
+    recent: List[InflightCall] = Field(description="At most 20, newest first.")
+    server_time: float
+
+
 class ClientKey(BaseModel):
     key_id: str
     key_display: str = Field(description="Prefix of the key followed by ***.")
@@ -609,6 +646,9 @@ _ROUTES: List[_Route] = [
      None, ClientInfo, _AUTH_ERRORS, True),
     ("get", "/v1/me/keys", "The calling client's keys (masked)",
      None, ClientKey, _AUTH_ERRORS, True),
+    ("get", "/v1/inflight",
+     "The calling key's chat calls running now, with their phase, and the last results",
+     None, InflightResponse, _AUTH_ERRORS, True),
     ("get", "/usage/me", "The calling client's usage entries for a month",
      None, ClientUsage, _AUTH_ERRORS, True),
     ("get", "/health", "Liveness and active providers",
