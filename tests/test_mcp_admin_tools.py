@@ -38,13 +38,15 @@ def admin_on(monkeypatch):
 @pytest.fixture
 async def fake_gateway(monkeypatch):
     """Loopback aiohttp gateway: records the requests, answers {"ok": true}."""
-    state = {"headers": {}, "hits": [], "redirect": None}
+    state = {"headers": {}, "hits": [], "redirect": None, "respond": None}
 
     async def handle(request):
         state["hits"].append(request.path)
         state["headers"] = dict(request.headers)
         if state["redirect"]:
             raise web.HTTPFound(state["redirect"])
+        if state["respond"]:
+            return await state["respond"](request)
         return web.json_response({"ok": True})
 
     app = web.Application()
@@ -168,20 +170,130 @@ def test_refresh_slot_is_per_provider_and_mode(admin_on):
     mcp_server._take_refresh_slot("p", dry_run=False)
 
 
-@pytest.mark.parametrize(
-    "before,after",
-    [
-        (logging.DEBUG, logging.INFO),
-        (logging.NOTSET, logging.INFO),
-        (logging.WARNING, logging.WARNING),
-    ],
-)
-def test_sdk_message_logging_is_capped(before, after):
-    lg = logging.getLogger("mcp.server.lowlevel.server")
+async def test_admin_request_reads_a_body_sent_in_pieces(admin_on, fake_gateway):
+    async def in_pieces(request):
+        resp = web.StreamResponse(headers={"Content-Type": "application/json"})
+        await resp.prepare(request)
+        await resp.write(b'[{"id": "cli-x", "au')
+        await asyncio.sleep(0.05)
+        await resp.write(b'th_source": "subprocess:agy"}]')
+        await resp.write_eof()
+        return resp
+
+    fake_gateway["respond"] = in_pieces
+    assert await mcp_server._admin_request("GET", "/providers") == (
+        200,
+        [{"id": "cli-x", "auth_source": "subprocess:agy"}],
+    )
+
+
+async def test_admin_request_reads_a_large_body(admin_on, fake_gateway):
+    providers = [{"id": f"p{i}", "models": [{"id": "m" * 60}] * 5} for i in range(800)]
+
+    async def large(request):
+        return web.json_response(providers)
+
+    fake_gateway["respond"] = large
+    status, payload = await mcp_server._admin_request("GET", "/providers")
+    assert status == 200 and payload == providers
+
+
+async def test_admin_request_caps_the_body(admin_on, fake_gateway):
+    async def huge(request):
+        return web.Response(body=b"x" * (mcp_server._ADMIN_RESPONSE_LIMIT + 10))
+
+    fake_gateway["respond"] = huge
+    assert await mcp_server._admin_request("GET", "/providers") == (
+        200,
+        {"detail": "gateway answer too large"},
+    )
+
+
+async def test_admin_request_wraps_a_non_json_body(admin_on, fake_gateway):
+    async def text(request):
+        return web.Response(status=502, text="Bad Gateway")
+
+    fake_gateway["respond"] = text
+    assert await mcp_server._admin_request("GET", "/providers") == (
+        502,
+        {"detail": "Bad Gateway"},
+    )
+
+
+async def test_admin_request_timeout_may_have_been_applied(
+    admin_on, fake_gateway, monkeypatch
+):
+    async def slow(request):
+        await asyncio.sleep(1)
+        return web.json_response({})
+
+    fake_gateway["respond"] = slow
+    monkeypatch.setattr(mcp_server, "_ADMIN_TIMEOUT", 0.2)
+    with pytest.raises(
+        mcp_server.AdminToolError, match=r"could not reach the gateway \(TimeoutError\)"
+    ) as exc:
+        await mcp_server._admin_request("POST", "/providers", {})
+    assert exc.value.maybe_applied is True
+
+
+async def test_refused_connection_was_not_applied(admin_on, monkeypatch):
+    monkeypatch.setattr(mcp_server, "_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setattr(mcp_server, "_HTTP_SESSION", None)
+    try:
+        with pytest.raises(mcp_server.AdminToolError) as exc:
+            await mcp_server._admin_request("POST", "/providers", {})
+        assert exc.value.maybe_applied is False
+    finally:
+        if mcp_server._HTTP_SESSION is not None:
+            await mcp_server._HTTP_SESSION.close()
+
+
+def test_gateway_error_reads_the_error_message_shape():
+    payload = {"error": {"type": "value_error", "message": "bad value"}}
+    assert mcp_server._gateway_error(500, payload) == "HTTP 500: bad value"
+    assert mcp_server._gateway_error(500, {"x": 1}) == 'HTTP 500: {"x": 1}'
+
+
+def test_gateway_error_scrubs_before_cutting():
+    key = "sk-" + "s" * 40
+    detail = "x" * 290 + key
+    text = mcp_server._gateway_error(400, {"detail": detail}, key)
+    assert "sk-" not in text and text.endswith("***")
+
+
+def test_scrub_removes_the_json_escaped_key():
+    key = 'sk-"quoted"'
+    shown = mcp_server._gateway_error(422, {"detail": [{"input": key}]}, key)
+    assert "quoted" not in shown and "***" in shown
+
+
+def test_old_refresh_entries_are_pruned(admin_on):
+    mcp_server._take_refresh_slot("p", dry_run=False)
+    admin_on["now"] += 61
+    mcp_server._take_refresh_slot("q", dry_run=False)
+    assert list(mcp_server._refresh_last) == [("q", False)]
+
+
+@pytest.mark.parametrize("name", mcp_server._SDK_MESSAGE_LOGGERS)
+def test_sdk_message_logging_drops_debug_whatever_the_level(name, caplog):
+    lg = logging.getLogger(name)
     old = lg.level
     try:
-        lg.setLevel(before)
-        mcp_server._cap_sdk_message_logging()
-        assert lg.level == after
+        lg.setLevel(logging.DEBUG)
+        with caplog.at_level(logging.DEBUG, logger=name):
+            lg.debug("Received message: %s", PROVIDER_KEY)
+            lg.info("kept")
+        assert [r.getMessage() for r in caplog.records if r.name == name] == ["kept"]
     finally:
         lg.setLevel(old)
+
+
+def test_sdk_message_logging_is_capped_at_import_once():
+    # The module installs the filter when it is imported, switch on or off.
+    for name in mcp_server._SDK_MESSAGE_LOGGERS:
+        filters = logging.getLogger(name).filters
+        assert sum(isinstance(f, mcp_server._DropDebug) for f in filters) == 1
+    mcp_server._cap_sdk_message_logging()
+    for name in mcp_server._SDK_MESSAGE_LOGGERS:
+        filters = logging.getLogger(name).filters
+        assert sum(isinstance(f, mcp_server._DropDebug) for f in filters) == 1

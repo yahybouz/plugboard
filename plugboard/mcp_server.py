@@ -396,7 +396,13 @@ class AdminToolError(Exception):
     """An admin tool call refused or failed.
 
     ``str(exc)`` is shown to the MCP caller, after ``Error: ``.
+    ``maybe_applied``: the request may have reached the gateway (timeout,
+    connection lost mid-answer), so it may have taken effect.
     """
+
+    def __init__(self, message: str, *, maybe_applied: bool = False) -> None:
+        super().__init__(message)
+        self.maybe_applied = maybe_applied
 
 
 def _admin_gate(tool: str) -> None:
@@ -425,9 +431,11 @@ async def _admin_request(
 
     Sends the admin key and the ``mcp`` surface, follows no redirect and
     reads at most 1 MiB. A body that is not JSON comes back as
-    ``{"detail": <text>}``.
+    ``{"detail": <text>}``; a larger one as
+    ``{"detail": "gateway answer too large"}``.
     """
     session = await _get_http_session()
+    raw = bytearray()
     try:
         async with session.request(
             method,
@@ -437,26 +445,48 @@ async def _admin_request(
             timeout=aiohttp.ClientTimeout(total=_ADMIN_TIMEOUT),
             allow_redirects=False,
         ) as resp:
-            raw = await resp.content.read(_ADMIN_RESPONSE_LIMIT + 1)
             status = resp.status
+            async for chunk in resp.content.iter_chunked(65536):
+                raw.extend(chunk)
+                if len(raw) > _ADMIN_RESPONSE_LIMIT:
+                    break
     except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        # Only the exception type: its text could quote the request.
+        maybe = isinstance(exc, (asyncio.TimeoutError, aiohttp.ServerDisconnectedError))
         raise AdminToolError(
-            f"could not reach the gateway ({type(exc).__name__})"
+            f"could not reach the gateway ({type(exc).__name__})",
+            maybe_applied=maybe,
         ) from None
     if len(raw) > _ADMIN_RESPONSE_LIMIT:
         return status, {"detail": "gateway answer too large"}
     text = raw.decode("utf-8", errors="replace")
     try:
         return status, json.loads(text)
-    except ValueError:
-        return status, {"detail": text[:_DETAIL_LIMIT]}
+    except (ValueError, RecursionError):
+        return status, {"detail": text}
 
 
-def _gateway_error(status: int, payload: Any) -> str:
-    """The message for a refused admin call (without ``Error: ``)."""
-    detail = payload.get("detail") if isinstance(payload, dict) else payload
-    if not isinstance(detail, str):
-        detail = json.dumps(detail)
+def _error_detail(payload: Any) -> str:
+    """The gateway's reason: ``detail``, else ``error.message``, else the body."""
+    if isinstance(payload, dict):
+        if "detail" in payload:
+            detail = payload["detail"]
+        elif isinstance(payload.get("error"), dict) and "message" in payload["error"]:
+            detail = payload["error"]["message"]
+        else:
+            detail = payload
+    else:
+        detail = payload
+    return detail if isinstance(detail, str) else json.dumps(detail)
+
+
+def _gateway_error(status: int, payload: Any, secret: str = "") -> str:
+    """The message for a refused admin call (without ``Error: ``).
+
+    ``secret`` is removed before the detail is cut to 300 characters, so a
+    cut cannot leave part of it behind.
+    """
+    detail = _scrub(_error_detail(payload), secret)
     if status == 401:
         if detail.startswith(_MFA_DETAIL):
             return (
@@ -468,8 +498,16 @@ def _gateway_error(status: int, payload: Any) -> str:
 
 
 def _scrub(text: str, secret: str) -> str:
-    """``text`` with every copy of ``secret`` replaced by ``***``."""
-    return text.replace(secret, "***") if secret else text
+    """``text`` with every copy of ``secret`` replaced by ``***``.
+
+    The JSON-escaped spelling is replaced too: a detail that is a list or a
+    mapping is shown through ``json.dumps``.
+    """
+    if not secret:
+        return text
+    text = text.replace(secret, "***")
+    escaped = json.dumps(secret)[1:-1]
+    return text.replace(escaped, "***") if escaped != secret else text
 
 
 def _retry_in(remaining: float, window: float) -> int:
@@ -492,6 +530,8 @@ def _take_create_slot() -> None:
 def _take_refresh_slot(provider_id: str, dry_run: bool) -> None:
     """Count one refresh; refuse the same provider and mode within 60 s."""
     now = _clock()
+    for old in [k for k, t in _refresh_last.items() if now - t >= _REFRESH_COOLDOWN_S]:
+        del _refresh_last[old]
     key = (provider_id, dry_run)
     last = _refresh_last.get(key)
     if last is not None and now - last < _REFRESH_COOLDOWN_S:
@@ -503,19 +543,37 @@ def _take_refresh_slot(provider_id: str, dry_run: bool) -> None:
     _refresh_last[key] = now
 
 
+# Loggers of the MCP SDK that log whole received messages at DEBUG
+# (tool arguments, so a provider key): stdio, SSE and streamable HTTP.
+_SDK_MESSAGE_LOGGERS = (
+    "mcp.server.lowlevel.server",
+    "mcp.server.sse",
+    "mcp.server.streamable_http",
+)
+
+
+class _DropDebug(logging.Filter):
+    """Drop the DEBUG records of a logger, whatever level it is set to."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno > logging.DEBUG
+
+
 def _cap_sdk_message_logging() -> None:
     """Keep the MCP SDK from logging whole messages (tool arguments, keys).
 
-    At DEBUG, ``mcp.server.lowlevel.server`` logs every message it receives,
-    so an add_provider call would write the provider key to the log.
+    At DEBUG these loggers write every message they receive, so an
+    add_provider call would put the provider key in the log, even when the
+    tool then refuses. A filter survives a later ``setLevel`` and does not
+    loosen a stricter level set by the operator. Idempotent.
     """
-    sdk = logging.getLogger("mcp.server.lowlevel.server")
-    if sdk.level < logging.INFO:  # NOTSET (0) inherits the root level
-        sdk.setLevel(logging.INFO)
+    for name in _SDK_MESSAGE_LOGGERS:
+        sdk = logging.getLogger(name)
+        if not any(isinstance(f, _DropDebug) for f in sdk.filters):
+            sdk.addFilter(_DropDebug())
 
 
-if _ADMIN_TOOLS:
-    _cap_sdk_message_logging()
+_cap_sdk_message_logging()
 
 
 # ── Tools ────────────────────────────────────────────────────────────────────
