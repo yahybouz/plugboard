@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **Per-model load measures in `/metrics` and `/metrics/prometheus`** (PLU-16, D-26): for each provider and model, the time to first token and the tokens per second of a streamed answer from an HTTP provider, the wait for a slot on the provider, and the number of `503 providers_busy` refusals. `GET /metrics` keeps its per-provider counters and adds them under `models`; Prometheus gets the histograms `plugboard_ttft_seconds`, `plugboard_tokens_per_second`, `plugboard_admission_wait_seconds` and the counter `plugboard_providers_busy_total`, labelled by `provider` and `model` only. See [monitoring](docs/guide/monitoring.md#per-model-measures).
+- **Per-model load measures in `/metrics` and `/metrics/prometheus`** (PLU-16, D-26): for each provider and model, the time to first token and the tokens per second of a streamed answer from an HTTP provider, the wait for a slot on the provider, and the number of `503 providers_busy` refusals. `GET /metrics` keeps its per-provider counters and adds them under `models`, with an estimated 95th percentile; Prometheus gets the histograms `plugboard_ttft_seconds`, `plugboard_tokens_per_second`, `plugboard_admission_wait_seconds` and the counter `plugboard_providers_busy_total`, labelled by `provider` and `model` only (a model the provider does not list is labelled `(unlisted)`). See [monitoring](docs/guide/monitoring.md#per-model-measures).
 
 ## [4.11.5] — 2026-11-12
 

@@ -4,21 +4,23 @@
 Per provider: requests, errors and the mean latency of the calls that
 succeeded (``record``). Per provider and model (PLU-16, D-26):
 
-- ``ttft``: seconds from sending a streamed chat to its provider to the
-  first generated chunk (text, reasoning or a tool call). The admission
-  wait is not in it; it has its own measure.
+- ``ttft``: seconds from the slot granted on an HTTP provider to the first
+  generated chunk of its streamed answer (text, reasoning or a tool call).
+  The admission wait is not in it; it has its own measure.
 - ``tokens_per_second``: completion tokens after the first one, divided by
   the time from the first generated chunk to the last (the decode rate a
   reader sees). Streamed answers only, when the words came in at least two
   reads; the provider's ``usage`` is used, else a tiktoken estimate.
-- ``admission_wait``: seconds a request waited for a slot on its provider
-  before being sent (0 when a slot was free).
-- ``busy_refusals``: requests refused with 503 ``providers_busy``, counted
-  on each full candidate route.
+- ``admission_wait``: seconds a request waited for each slot it took on a
+  provider (0 when the slot was free).
+- ``busy_refusals``: chats answered 503 ``providers_busy``, one per answer.
 
-Labels are a provider id and a model name, never a client, a key or any
-request content. The number of (provider, model) series is capped: past
-``MAX_SERIES`` a new model is counted under ``OTHER_MODEL``.
+Labels are a provider id and a model name the caller vouches for (the
+router passes a model its provider lists, else ``UNLISTED_MODEL``), never a
+client, a key or any request content. The number of (provider, model)
+series is capped: past ``MAX_SERIES``, a provider's new models are counted
+under its ``OTHER_MODEL`` series. Recording never raises: a metric never
+breaks a request.
 """
 
 from __future__ import annotations
@@ -44,6 +46,7 @@ WAIT_BUCKETS = (0.01, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0)
 MAX_SERIES = 256
 MAX_LABEL = 128
 OTHER_MODEL = "(other)"
+UNLISTED_MODEL = "(unlisted)"
 # A stream line longer than this (no newline) is dropped, never buffered.
 MAX_LINE_BYTES = 1 << 20
 
@@ -66,7 +69,7 @@ def record(provider_id: str, latency: float, *, error: bool = False) -> None:
 
 class _Histogram:
     """Observations of one measure: bucket counts (not cumulative), sum,
-    count, min and max."""
+    count, min and max; the 95th percentile is estimated from the buckets."""
 
     __slots__ = ("bounds", "buckets", "count", "sum", "min", "max")
 
@@ -88,6 +91,21 @@ class _Histogram:
                 self.buckets[i] += 1
                 break
 
+    def quantile(self, q: float) -> Optional[float]:
+        """Estimate, as Prometheus' ``histogram_quantile`` does (linear within
+        the bucket, the first one starting at 0), kept within [min, max]."""
+        if not self.count or self.min is None or self.max is None:
+            return None
+        rank = q * self.count
+        seen, lower = 0, 0.0
+        for bound, n in zip(self.bounds, self.buckets):
+            if n and seen + n >= rank:
+                value = lower + (bound - lower) * (rank - seen) / n
+                return min(max(value, self.min), self.max)
+            seen += n
+            lower = bound
+        return self.max  # in the +Inf bucket
+
     def as_dict(self, name: str) -> Dict[str, Any]:
         def r(v: Optional[float]) -> Optional[float]:
             return None if v is None else round(v, 3)
@@ -95,9 +113,10 @@ class _Histogram:
         return {
             f"{name}_count": self.count,
             f"{name}_sum": round(self.sum, 6),
-            f"{name}_avg": round(self.sum / self.count, 3) if self.count else 0.0,
+            f"{name}_avg": r(self.sum / self.count) if self.count else None,
             f"{name}_min": r(self.min),
             f"{name}_max": r(self.max),
+            f"{name}_p95": r(self.quantile(0.95)),
         }
 
 
@@ -144,23 +163,31 @@ def _valid(value: Any) -> bool:
     )
 
 
+def _observe(provider_id: str, model: str, measure: str, value: Any) -> None:
+    try:
+        if _valid(value):
+            getattr(_series(provider_id, model), measure).observe(float(value))
+    except Exception as exc:  # a metric never breaks a request
+        log.debug("metrics: %s", exc)
+
+
 def record_ttft(provider_id: str, model: str, seconds: float) -> None:
-    if _valid(seconds):
-        _series(provider_id, model).ttft.observe(float(seconds))
+    _observe(provider_id, model, "ttft", seconds)
 
 
 def record_tokens_per_second(provider_id: str, model: str, rate: float) -> None:
-    if _valid(rate):
-        _series(provider_id, model).tokens_per_second.observe(float(rate))
+    _observe(provider_id, model, "tokens_per_second", rate)
 
 
 def record_admission_wait(provider_id: str, model: str, seconds: float) -> None:
-    if _valid(seconds):
-        _series(provider_id, model).admission_wait.observe(float(seconds))
+    _observe(provider_id, model, "admission_wait", seconds)
 
 
 def record_busy_refusal(provider_id: str, model: str) -> None:
-    _series(provider_id, model).busy_refusals += 1
+    try:
+        _series(provider_id, model).busy_refusals += 1
+    except Exception as exc:
+        log.debug("metrics: %s", exc)
 
 
 class StreamMeter:
@@ -213,7 +240,7 @@ class StreamMeter:
             if self._first is None or self._last is None:
                 return
             tokens = self._tokens
-            if tokens is None:
+            if not tokens or tokens < 0:  # none, or a zero some proxies send
                 tokens = count_tokens("".join(self._parts))
             span = self._last - self._first
             if tokens >= 2 and span > 0:
@@ -282,12 +309,6 @@ def get_stats(*, per_model: bool = False) -> Dict[str, Any]:
     return out
 
 
-def reset() -> None:
-    """Forget every metric (tests)."""
-    _stats.clear()
-    _models.clear()
-
-
 def _label(value: Any) -> str:
     return str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
@@ -345,8 +366,8 @@ def format_prometheus() -> str:
     _histogram_lines(
         lines,
         "plugboard_ttft_seconds",
-        "Seconds from sending a streamed chat to its provider to the first "
-        "generated chunk (admission wait excluded)",
+        "Seconds from the slot granted on an HTTP provider to the first "
+        "generated chunk of its streamed answer (admission wait excluded)",
         "ttft",
     )
     _histogram_lines(
@@ -358,12 +379,13 @@ def format_prometheus() -> str:
     _histogram_lines(
         lines,
         "plugboard_admission_wait_seconds",
-        "Seconds a request waited for a slot on its provider (0 when one was free)",
+        "Seconds a request waited for each slot it took on a provider "
+        "(0 when the slot was free)",
         "admission_wait",
     )
     lines.append(
-        "# HELP plugboard_providers_busy_total Requests refused with 503 "
-        "providers_busy, counted on each full candidate route"
+        "# HELP plugboard_providers_busy_total Chats answered 503 "
+        "providers_busy, under the first full candidate route"
     )
     lines.append("# TYPE plugboard_providers_busy_total counter")
     for (pid, model), stats in _models.items():

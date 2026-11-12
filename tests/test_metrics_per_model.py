@@ -11,12 +11,31 @@ import re
 import pytest
 from aioresponses import aioresponses
 
-from plugboard import circuit_breaker, metrics, provider_admission, router
+from plugboard import (
+    circuit_breaker,
+    cli_subprocess,
+    metrics,
+    provider_admission,
+    router,
+)
 from tests.factories import FAKE_COMPLETION, FAKE_STREAM_BODY, PROVIDER_A, PROVIDER_B
 
 AUTH = {"Authorization": "Bearer testkey"}
 URL_A = "http://fake-llm.test/v1/chat/completions"
+URL_B = "http://other-llm.test/v1/chat/completions"
 ONLY_A = "test-provider:fake:model-v1"
+BARE = "fake:model-v1"  # both providers are candidates
+LABEL_A = "fake:model-v1"  # test-provider's default model
+CLI = {
+    "id": "pbtest-cli",
+    "name": "CLI test",
+    "base_url": "subprocess://claude",
+    "bearer_token": "(via CLI)",
+    "default_model": "model-x",
+    "auth_source": "subprocess:claude",
+    "is_active": True,
+    "created_at": "2026-01-01T00:00:00+00:00",
+}
 BASE_KEYS = {"requests", "errors", "latency_sum", "latency_avg"}
 
 
@@ -68,8 +87,8 @@ def test_wait_and_busy_refusals_are_kept_per_provider_and_model():
     assert m["admission_wait_avg"] == 1.0
     assert (m["admission_wait_min"], m["admission_wait_max"]) == (0.0, 2.0)
     assert m["busy_refusals"] == 1
-    assert m["ttft_count"] == 0 and m["ttft_avg"] == 0.0
-    assert m["ttft_min"] is None and m["ttft_max"] is None
+    assert m["ttft_count"] == 0
+    assert m["ttft_avg"] is m["ttft_min"] is m["ttft_max"] is m["ttft_p95"] is None
     assert _model(model="other")["busy_refusals"] == 1
     # A provider seen only through its models still has the base counters.
     assert BASE_KEYS <= set(metrics.get_stats(per_model=True)["p"])
@@ -113,6 +132,38 @@ def test_model_series_are_capped(monkeypatch):
     models = metrics.get_stats(per_model=True)["p"]["models"]
     assert set(models) == {"a", "b", metrics.OTHER_MODEL}
     assert models[metrics.OTHER_MODEL]["busy_refusals"] == 2
+
+
+def test_other_series_past_the_cap_is_one_per_provider(monkeypatch):
+    monkeypatch.setattr(metrics, "MAX_SERIES", 1)
+    for pid in ("p", "q", "r"):
+        metrics.record_busy_refusal(pid, "a")
+        metrics.record_busy_refusal(pid, "b")
+    keys = set(metrics._models)
+    assert keys == {("p", "a"), ("p", metrics.OTHER_MODEL)} | {
+        (pid, metrics.OTHER_MODEL) for pid in ("q", "r")
+    }
+
+
+def test_p95_is_estimated_from_the_buckets():
+    for v in [0.1] * 18 + [4.0, 4.5]:  # 18 under 0.25 s, 2 between 3 and 5 s
+        metrics.record_ttft("p", "m", v)
+    m = _model()
+    # Rank 19 of 20 falls in the (3, 5] bucket, halfway: 3 + 2 * 1/2.
+    assert m["ttft_p95"] == 4.0
+    metrics.record_ttft("p", "big", 100.0)  # past the last bound: the max
+    assert _model(model="big")["ttft_p95"] == 100.0
+
+
+def test_recording_never_raises(monkeypatch):
+    def boom(*_a):
+        raise RuntimeError("store bug")
+
+    monkeypatch.setattr(metrics, "_series", boom)
+    metrics.record_ttft("p", "m", 1.0)
+    metrics.record_tokens_per_second("p", "m", 1.0)
+    metrics.record_admission_wait("p", "m", 1.0)
+    metrics.record_busy_refusal("p", "m")
 
 
 def test_long_model_names_are_cut():
@@ -165,6 +216,18 @@ def test_stream_meter_estimates_tokens_without_usage(monkeypatch):
     assert m["ttft_sum"] == 1.0
     # 5 words estimated, 4 after the first, over 2 seconds.
     assert m["tokens_per_second_avg"] == 2.0
+
+
+@pytest.mark.parametrize("reported", [0, -3])
+def test_stream_meter_estimates_when_usage_reports_no_tokens(monkeypatch, reported):
+    monkeypatch.setattr(metrics, "_clock", FakeClock(0.0, 1.0, 2.0, 3.0))
+    monkeypatch.setattr(metrics, "count_tokens", lambda text: len(text.split()))
+    meter = metrics.StreamMeter("p", "m")
+    meter.feed(_sse({"content": "one two "}))
+    meter.feed(_sse({"content": "three"}))
+    meter.feed(_sse(usage={"completion_tokens": reported}))
+    meter.finish()
+    assert _model()["tokens_per_second_avg"] == 2.0  # 2 tokens after the first, 1 s
 
 
 def test_stream_meter_reads_lines_split_across_chunks(monkeypatch):
@@ -328,9 +391,10 @@ def _body(model, **extra):
     return {"model": model, "messages": [{"role": "user", "content": "hi"}], **extra}
 
 
-def _only_model(provider="test-provider"):
-    (m,) = metrics.get_stats(per_model=True)[provider]["models"].values()
-    return m
+def _only_model(provider="test-provider", label=LABEL_A):
+    models = metrics.get_stats(per_model=True)[provider]["models"]
+    assert set(models) == {label}
+    return models[label]
 
 
 async def _until(predicate, timeout=2.0):
@@ -380,18 +444,123 @@ async def test_a_queued_stream_records_its_wait(capped_a, monkeypatch):
     assert 0.15 <= _only_model()["admission_wait_max"] < 2.0
 
 
-async def test_busy_refusals_are_counted_for_plain_and_streamed_chats(capped_a):
+async def test_a_busy_refusal_carries_its_label_and_is_not_counted_yet(capped_a):
+    """The router names the model; the 503 answer counts it (internal callers
+    of forward(), such as the preflight, never do)."""
     held = provider_admission.try_acquire(capped_a)
-    with pytest.raises(router.ProvidersBusyError):
+    with pytest.raises(router.ProvidersBusyError) as plain:
         await router.forward(_body(ONLY_A))
-    with pytest.raises(router.ProvidersBusyError):
+    with pytest.raises(router.ProvidersBusyError) as streamed:
         await router.forward_stream(_body(ONLY_A, stream=True)).__anext__()
     held.release()
-    m = _only_model()
-    assert m["busy_refusals"] == 2
-    assert m["admission_wait_count"] == 0  # refused, never admitted
-    # Full is not an error: the provider's error counter stays untouched.
-    assert metrics.get_stats().get("test-provider", {}).get("errors", 0) == 0
+    assert plain.value.model == streamed.value.model == LABEL_A
+    assert metrics.get_stats(per_model=True) == {}  # refused, never admitted
+
+
+async def test_a_client_model_name_never_becomes_a_label(capped_a):
+    """test-provider lists no model: any name reaches it, but only its
+    default model is a label; other-provider's listed models are."""
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION, repeat=True)
+        mock.post(URL_B, payload=FAKE_COMPLETION, repeat=True)
+        for name in ("jean.dupont@example.com", "junk-2"):
+            await router.forward(_body(f"test-provider:{name}"))
+        await router.forward(_body("other-provider:other:model-v3"))
+    models = metrics.get_stats(per_model=True)
+    assert set(models["test-provider"]["models"]) == {metrics.UNLISTED_MODEL}
+    assert set(models["other-provider"]["models"]) == {"other:model-v3"}
+    assert "jean.dupont" not in metrics.format_prometheus()
+
+
+async def test_a_fallback_records_one_wait_per_provider(capped_a):
+    with aioresponses() as mock:
+        mock.post(URL_A, status=500, body="down")
+        mock.post(URL_B, payload=FAKE_COMPLETION)
+        await router.forward(_body(BARE))
+    stats = metrics.get_stats(per_model=True)
+    waits = [
+        m["admission_wait_count"]
+        for pid in ("test-provider", "other-provider")
+        for m in stats[pid]["models"].values()
+    ]
+    assert waits == [1, 1]
+
+
+async def test_a_wait_is_kept_when_the_granted_slot_goes_unused(
+    capped_a, _providers_file, monkeypatch
+):
+    """Both providers full; test-provider's slot comes first but its auth
+    fails, and other-provider frees its slot then: the wait goes with the
+    slot the request did take."""
+    b = {**PROVIDER_B, "max_concurrency": 1}
+    _providers_file.write_text(json.dumps({"providers": [capped_a, b]}))
+    router.invalidate_models_cache()
+    monkeypatch.setattr(provider_admission, "WAIT_S", 2.0)
+    held_a = provider_admission.try_acquire(capped_a)
+    held_b = provider_admission.try_acquire(b)
+    real = router._build_auth_header_async
+    a_calls = []
+
+    async def auth(provider):
+        if provider["id"] == "test-provider":
+            a_calls.append(1)
+            if len(a_calls) == 2:  # once its slot has come
+                held_b.release()
+                raise RuntimeError("token expired")
+        return await real(provider)
+
+    monkeypatch.setattr(router, "_build_auth_header_async", auth)
+    with aioresponses() as mock:
+        mock.post(URL_B, payload=FAKE_COMPLETION)
+        task = asyncio.create_task(router.forward(_body(BARE)))
+        await _until(lambda: provider_admission.waiting("test-provider") == 1)
+        await asyncio.sleep(0.15)
+        held_a.release()
+        await asyncio.wait_for(task, 2)
+    (m,) = metrics.get_stats(per_model=True)["other-provider"]["models"].values()
+    assert m["admission_wait_count"] == 1
+    assert 0.15 <= m["admission_wait_max"] < 2.0
+    assert "test-provider" not in metrics.get_stats(per_model=True)
+    assert provider_admission._active == {}
+
+
+async def test_a_failing_metric_never_breaks_a_request_nor_keeps_its_slot(
+    capped_a, monkeypatch
+):
+    def boom(*_a):
+        raise RuntimeError("store bug")
+
+    monkeypatch.setattr(metrics, "_series", boom)
+    monkeypatch.setattr(router, "_listed_models", boom)
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION)
+        mock.post(URL_A, body=FAKE_STREAM_BODY)
+        assert (await router.forward(_body(ONLY_A)))["choices"]
+        chunks = [c async for c in router.forward_stream(_body(ONLY_A, stream=True))]
+    assert b"".join(chunks) == FAKE_STREAM_BODY
+    assert provider_admission._active == {}
+
+
+@pytest.fixture
+def with_cli(capped_a, _providers_file, monkeypatch):
+    _providers_file.write_text(json.dumps({"providers": [capped_a, PROVIDER_B, CLI]}))
+    router.invalidate_models_cache()
+
+    async def fake_complete(kind, body, *, timeout_s=None):
+        return json.loads(json.dumps(FAKE_COMPLETION))
+
+    monkeypatch.setattr(cli_subprocess, "complete", fake_complete)
+
+
+async def test_a_cli_call_records_its_wait_but_no_first_token(with_cli):
+    await router.forward(_body("pbtest-cli:model-x"))
+    chunks = [
+        c async for c in router.forward_stream(_body("pbtest-cli:model-x", stream=True))
+    ]
+    assert chunks
+    m = _only_model("pbtest-cli", "model-x")
+    assert m["admission_wait_count"] == 2
+    assert m["ttft_count"] == m["tokens_per_second_count"] == 0
 
 
 class _Content:
@@ -476,6 +645,23 @@ async def test_a_stream_closed_early_keeps_its_ttft_but_no_rate(capped_a, monkey
 # ── The endpoints ────────────────────────────────────────────────────────────
 
 
+async def test_chat_endpoint_records_ttft_and_rate(client, capped_a, monkeypatch):
+    chunks = [_sse({"content": "Hel"}), _sse({"content": "lo"}), b"data: [DONE]\n\n"]
+    _fake_provider_stream(monkeypatch, chunks)
+    monkeypatch.setattr(metrics, "count_tokens", lambda text: 3)
+    monkeypatch.setattr(metrics, "_clock", FakeClock(0.0, 0.5, 1.5, 1.6))
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=AUTH,
+        json=_body(ONLY_A, stream=True, cache=False),
+    )
+    assert resp.status_code == 200 and "Hel" in resp.text
+    m = (await client.get("/metrics", headers=AUTH)).json()["test-provider"]["models"][
+        LABEL_A
+    ]
+    assert (m["ttft_sum"], m["tokens_per_second_avg"]) == (0.5, 2.0)
+
+
 async def test_metrics_lists_models_under_their_provider(client, capped_a):
     with aioresponses() as mock:
         mock.post(URL_A, body=FAKE_STREAM_BODY)
@@ -495,13 +681,47 @@ async def test_metrics_lists_models_under_their_provider(client, capped_a):
     assert 'plugboard_ttft_seconds_count{provider="test-provider",model=' in prom
 
 
-async def test_busy_chat_answer_is_counted(client, capped_a):
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v2/chat/completions"])
+async def test_each_busy_answer_counts_once(client, capped_a, path):
+    held = provider_admission.try_acquire(capped_a)
+    for stream in (False, True):
+        resp = await client.post(
+            path, headers=AUTH, json=_body(ONLY_A, stream=stream, cache=False)
+        )
+        assert resp.status_code == 503 and resp.json()["code"] == "providers_busy"
+    held.release()
+    body = (await client.get("/metrics", headers=AUTH)).json()
+    assert body["test-provider"]["models"][LABEL_A]["busy_refusals"] == 2
+
+
+async def test_a_503_with_two_full_routes_counts_once(
+    client, capped_a, _providers_file
+):
+    b = {**PROVIDER_B, "max_concurrency": 1}
+    _providers_file.write_text(json.dumps({"providers": [capped_a, b]}))
+    router.invalidate_models_cache()
+    held = [provider_admission.try_acquire(p) for p in (capped_a, b)]
+    resp = await client.post(
+        "/v1/chat/completions", headers=AUTH, json=_body(BARE, cache=False)
+    )
+    for lease in held:
+        lease.release()
+    assert resp.status_code == 503
+    refusals = [
+        m["busy_refusals"]
+        for entry in (await client.get("/metrics", headers=AUTH)).json().values()
+        for m in entry.get("models", {}).values()
+    ]
+    assert refusals == [1]
+
+
+async def test_a_busy_preflight_is_no_refusal(client, capped_a):
     held = provider_admission.try_acquire(capped_a)
     resp = await client.post(
-        "/v1/chat/completions", headers=AUTH, json=_body(ONLY_A, cache=False)
+        "/v1/preflight",
+        headers=AUTH,
+        json={"items": [{"provider": "test-provider", "model": BARE}]},
     )
     held.release()
-    assert resp.status_code == 503
-    body = (await client.get("/metrics", headers=AUTH)).json()
-    (m,) = body["test-provider"]["models"].values()
-    assert m["busy_refusals"] == 1
+    assert resp.json()["results"][0]["error"] == "providers_busy"
+    assert metrics.get_stats(per_model=True) == {}

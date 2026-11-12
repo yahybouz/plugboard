@@ -76,16 +76,16 @@ Request metrics live in memory and restart from zero with the server. Prometheus
 
 ### Per-model measures
 
-Each provider entry of `GET /metrics` gains a `models` object once one of its models has a measure. For each model, the time to first token (`ttft`), tokens per second (`tokens_per_second`) and admission wait (`admission_wait`) give `_count`, `_sum`, `_avg`, `_min` and `_max` (`null` until the first value), and `busy_refusals` counts the `503 providers_busy` answers.
+Each provider entry of `GET /metrics` gains a `models` object once one of its models has a measure (a provider seen only there gets zeroed request counters). For each model, the time to first token (`ttft`), tokens per second (`tokens_per_second`) and admission wait (`admission_wait`) give `_count`, `_sum`, `_avg`, `_min`, `_max` and `_p95` (estimated from the histogram buckets); all but `_count` and `_sum` are `null` until the first value. `busy_refusals` counts the `503 providers_busy` answers.
 
 | Measure | Prometheus | What it counts |
 |---|---|---|
-| Time to first token | `plugboard_ttft_seconds` (histogram) | Seconds from sending a streamed chat to its provider to the first generated chunk: text, reasoning or a tool call. The admission wait is not included |
-| Tokens per second | `plugboard_tokens_per_second` (histogram) | Completion tokens after the first one, divided by the time from the first generated chunk to the last. Uses the provider's `usage`, else a tiktoken estimate. Only when the words arrived in at least two reads |
-| Admission wait | `plugboard_admission_wait_seconds` (histogram) | Seconds a chat waited for a slot on its provider (`PLUGBOARD_PROVIDER_WAIT_S`); `0` when a slot was free |
-| Busy refusals | `plugboard_providers_busy_total` (counter) | Chats refused with `503 providers_busy`, counted on each full candidate route |
+| Time to first token | `plugboard_ttft_seconds` (histogram) | Seconds from the slot granted on the provider to the first generated chunk of the streamed answer: text, reasoning or a tool call. The admission wait is not included: the first word a user sees comes after both |
+| Tokens per second | `plugboard_tokens_per_second` (histogram) | Completion tokens after the first one, divided by the time from the first generated chunk to the last. Uses the provider's `usage`, else a tiktoken estimate. Only when the words arrived in at least two reads. A provider that counts hidden reasoning in `usage` reads higher than what the reader sees |
+| Admission wait | `plugboard_admission_wait_seconds` (histogram) | Seconds a request waited for each slot it took on a provider (`PLUGBOARD_PROVIDER_WAIT_S`); `0` when the slot was free. A request that falls back to another provider records one value per provider; internal calls through the router (preflight, internet check) count too |
+| Busy refusals | `plugboard_providers_busy_total` (counter) | Chats answered `503 providers_busy`, one per answer, under the first full candidate route |
 
-The time to first token and tokens per second are measured on streamed answers from HTTP providers: a non-streamed answer has no first token to time, and a CLI provider's stream is replayed from its complete answer. The admission wait and busy refusals cover streamed and non-streamed chats. Labels are `provider` and `model` only, never a client or a key. At most 256 (provider, model) series are kept; past that, new models are counted under the model `(other)`.
+The time to first token and tokens per second are measured on streamed answers from HTTP providers: a non-streamed answer has no first token to time, and a CLI provider's stream is replayed from its complete answer. Labels are `provider` and `model` only, never a client or a key; a model the provider does not list (nor has as its default model) is labelled `(unlisted)`, so a name a client typed never becomes a label. At most 256 (provider, model) series are kept; past that, each provider's new models are counted under one `(other)` series of that provider.
 
 ## Provider watchdog
 
