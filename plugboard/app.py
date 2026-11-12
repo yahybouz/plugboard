@@ -115,6 +115,7 @@ from plugboard.decisions import is_decision_model
 from plugboard.cli_auth import AuthError
 from plugboard.cli_subprocess import CliSubprocessError
 from plugboard.router import (
+    ProviderDisabledError,
     ProviderHTTPError,
     ProviderNetworkError,
     ProvidersBusyError,
@@ -2284,6 +2285,8 @@ async def chat_completions(
             except Exception as exc:
                 if isinstance(exc, ProvidersBusyError):
                     return _providers_busy_response(exc, client_id)
+                if isinstance(exc, ProviderDisabledError):
+                    return _provider_disabled_response(exc.provider_id)
                 log.error("subprocess stream forward error: %s", exc)
                 err_str = str(exc)
                 # Before the timeout test: a CLI message quotes its stderr.
@@ -2471,6 +2474,8 @@ async def chat_completions(
         except Exception as exc:
             if isinstance(exc, ProvidersBusyError):
                 return _providers_busy_response(exc, client_id)
+            if isinstance(exc, ProviderDisabledError):
+                return _provider_disabled_response(exc.provider_id)
             log.error("stream error: %s", exc)
             err_str = str(exc)
             if isinstance(exc, ProviderQuotaError):
@@ -2615,6 +2620,8 @@ async def chat_completions(
     except Exception as exc:
         if isinstance(exc, ProvidersBusyError):
             return _providers_busy_response(exc, client_id)
+        if isinstance(exc, ProviderDisabledError):
+            return _provider_disabled_response(exc.provider_id)
         log.error("forward error: %s", exc)
         err_str = str(exc)
         # Before the timeout test: a CLI message quotes its stderr.

@@ -634,6 +634,29 @@ def disabled_route(model_str: str) -> Optional[tuple[Dict[str, Any], str]]:
     return None
 
 
+def _refuse_if_disabled(model_str: str) -> None:
+    """Raise ProviderDisabledError when only a disabled provider serves it.
+
+    The routing core's own check (PLU-12): every caller of forward() and
+    forward_stream() gets it, the chat route's admission included.
+    """
+    route = disabled_route(model_str)
+    if route is not None:
+        raise ProviderDisabledError(route[0]["id"])
+
+
+def _turned_off(provider_id: str) -> bool:
+    """Whether the registry, read again, now says this provider is off.
+
+    A provider the registry does not hold is not refused here: only an
+    explicit ``is_active: false`` (the switch) stops a call.
+    """
+    for provider in load_providers():
+        if provider.get("id") == provider_id:
+            return not provider.get("is_active", True)
+    return False
+
+
 def _extra_headers(provider: Dict[str, Any]) -> Dict[str, str]:
     """Fixed headers a provider needs on every call.
 
@@ -832,6 +855,7 @@ async def forward(
     _served_by.set(None)
     _usage_reported.set(False)
     model_str = body.get("model", "")
+    _refuse_if_disabled(model_str)
     candidates = _resolve_all_providers(model_str)
 
     # Read each route's circuit under the key its outcomes are recorded under:
@@ -877,6 +901,11 @@ async def forward(
     loop = asyncio.get_running_loop()
     deadline: Optional[float] = None
     granted: Optional[provider_admission.Lease] = None
+    # PLU-12: a provider turned off while this request waited for it, or
+    # tried another candidate, is never called; the first candidate was
+    # checked by _refuse_if_disabled, with no wait since.
+    disabled_seen: Optional[str] = None
+    recheck = False
 
     def _take(provider: Dict[str, Any]) -> Optional[provider_admission.Lease]:
         """The slot the wait granted, when it is this provider's; else a new one."""
@@ -909,6 +938,14 @@ async def forward(
                 queue.extend(c for c in busy if c[0]["id"] != pid)
                 busy.clear()
             provider, real_model = queue.popleft()
+            if recheck and _turned_off(provider["id"]):
+                # Turned off meanwhile: drop its routes; a slot the wait
+                # granted it is given back at the top of the loop.
+                disabled_seen = provider["id"]
+                queue = deque(c for c in queue if c[0]["id"] != disabled_seen)
+                busy[:] = [c for c in busy if c[0]["id"] != disabled_seen]
+                continue
+            recheck = True
             # Direct CLI providers short-circuit HTTP.
             auth_source = provider.get("auth_source", "")
             if auth_source.startswith("subprocess:"):
@@ -1191,6 +1228,8 @@ async def forward(
 
         if busy:
             raise ProvidersBusyError([p["id"] for p, _ in busy])
+        if disabled_seen is not None and refused is None and last_err is None:
+            raise ProviderDisabledError(disabled_seen)
         raise refused or last_err or RuntimeError("All providers failed")
     finally:
         if granted is not None:
@@ -1213,6 +1252,7 @@ async def forward_stream(
     ``ProvidersBusyError`` before any call.
     """
     model_str = body.get("model", "")
+    _refuse_if_disabled(model_str)
     provider, real_model = resolve_provider_and_model(model_str)
     if route_guard is not None:
         route_guard(provider, real_model)
@@ -1223,6 +1263,9 @@ async def forward_stream(
             [provider], provider_admission.WAIT_S
         )
         _live.update(phase="running")
+        if lease is not None and _turned_off(provider["id"]):
+            lease.release()  # turned off while this request waited (PLU-12)
+            raise ProviderDisabledError(provider["id"])
     if lease is None:
         raise ProvidersBusyError([provider["id"]])
     try:
