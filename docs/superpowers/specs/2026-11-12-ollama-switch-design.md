@@ -1,6 +1,6 @@
 # Interrupteur Ollama (PLU-12) — conception
 
-**Statut : À VALIDER par YB.** Base : `dde9e53` (`sprint/recette-uat`, 4.9.0 + PLU-13).
+**Statut : VALIDÉE par YB le 2026-11-12 (D-38 : recommandations 1 de Q1 à Q8 ; corrige aussi BUG-44).** Base : `dde9e53` (`sprint/recette-uat`, 4.9.0 + PLU-13).
 Plan : `docs/superpowers/plans/2026-11-12-ollama-switch.md` (écrit à partir des réponses recommandées).
 
 ## Demande

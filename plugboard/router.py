@@ -140,6 +140,18 @@ class ProvidersBusyError(RuntimeError):
         self.provider_ids = list(provider_ids)
 
 
+class ProviderDisabledError(RuntimeError):
+    """The model belongs to a provider the admin turned off (PLU-12).
+
+    Nothing was called: the request is refused, never sent to another
+    provider in its place. ``provider_id`` names the disabled provider.
+    """
+
+    def __init__(self, provider_id: str):
+        super().__init__(f"Provider '{provider_id}' is turned off")
+        self.provider_id = provider_id
+
+
 # OpenAI-style error type that blames the request (unsupported parameter...);
 # "invalid_api_key" shares the type but blames the gateway's key.
 _REQUEST_ERROR_TYPES = frozenset({"invalid_request_error"})
@@ -555,6 +567,69 @@ def is_unknown_model(model_str: str) -> bool:
         for p in active
         for native in _listed_models(p) + _family_aliases(p)
     )
+
+
+def _known_native(provider: Dict[str, Any], model_str: str) -> Optional[str]:
+    """The provider's own name for ``model_str``, or None if it does not know it.
+
+    The same matches as is_unknown_model: a listed model, the default model
+    or a family alias in the loose form Ollama accepts, or the
+    configured-model lookup of resolve_provider_and_model.
+    """
+    names = (
+        _listed_models(provider)
+        + [provider.get("default_model") or ""]
+        + _family_aliases(provider)
+    )
+    wanted = _loose_model_name(model_str)
+    for name in names:
+        if isinstance(name, str) and name and _loose_model_name(name) == wanted:
+            return name
+    requested_clean = _clean_model_id(model_str)
+    for name in _listed_models(provider) + _family_aliases(provider):
+        if _clean_model_id(f"{provider['id']}:{name}") == requested_clean:
+            return name
+    return None
+
+
+def disabled_route(model_str: str) -> Optional[tuple[Dict[str, Any], str]]:
+    """(provider, native model) when only a disabled provider serves ``model_str``.
+
+    Such a request must call nobody (PLU-12): before, it was sent to every
+    other active provider in turn (BUG-44). Matched, in order: a registered
+    provider ID prefixes it (the longest wins) and that provider is
+    inactive; or no registered ID prefixes it, no alias selects an active
+    provider, every active provider has a model list and none knows the
+    name, and an inactive provider knows it (its own name is returned).
+    None otherwise: the request is routed, or answered 404, as before.
+    """
+    if not isinstance(model_str, str) or not model_str.strip():
+        return None
+    registry = [p for p in load_providers() if not is_removed_provider(p)]
+    owner = registered_model_owner(model_str, (p["id"] for p in registry))
+    if owner is not None:
+        provider = next(p for p in registry if p["id"] == owner)
+        if provider.get("is_active", True):
+            return None
+        return provider, model_str[len(owner) + 1 :]
+    active = [p for p in registry if p.get("is_active", True)]
+    if any(not _listed_models(p) for p in active):
+        return None  # a provider without a list may serve any name
+    if any(_known_native(p, model_str) is not None for p in active):
+        return None
+    if active:
+        try:
+            if _select_request(model_str)[1] is not None:
+                return None  # a display or legacy alias selects an active one
+        except ValueError:
+            return None  # the chat route answers these as before
+    for provider in registry:
+        if provider.get("is_active", True):
+            continue
+        native = _known_native(provider, model_str)
+        if native is not None:
+            return provider, native
+    return None
 
 
 def _extra_headers(provider: Dict[str, Any]) -> Dict[str, str]:
