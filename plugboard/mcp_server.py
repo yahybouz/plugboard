@@ -25,11 +25,13 @@ Prompts:
 from __future__ import annotations
 
 import asyncio
+import collections
 import hmac
 import json
 import logging
 import os
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Literal
@@ -51,7 +53,13 @@ log = logging.getLogger(__name__)
 _BASE_URL = os.environ.get("PLUGBOARD_URL", "http://localhost:8765")
 _API_KEY = os.environ.get("PLUGBOARD_API_KEY", "")
 _ADMIN_KEY = os.environ.get("PLUGBOARD_ADMIN_KEY", "")
+# PB-MCP-02: the admin tools (add_provider, refresh_catalog) are off unless
+# the operator turns them on; an admin key set for provider_status alone
+# never grants them.
+_ADMIN_TOOLS = os.environ.get("PLUGBOARD_MCP_ADMIN_TOOLS", "").strip() == "1"
 _TIMEOUT = envcompat.get_int("PLUGBOARD_MCP_TIMEOUT", default=900)
+_ADMIN_TIMEOUT = max(1, min(_TIMEOUT, 120))
+_ADMIN_RESPONSE_LIMIT = 1024 * 1024
 _DECISION_TIMEOUT = max(1, min(_TIMEOUT, 45))
 _DECISION_RESPONSE_LIMIT = 512 * 1024
 _EMBEDDING_TIMEOUT = max(1, min(_TIMEOUT, 120))
@@ -361,6 +369,153 @@ async def _registry_client(claimed: str = "") -> str:
             f"('{client_id}'): leave client_id out"
         )
     return client_id
+
+
+# ── Admin tools (PB-MCP-02) ──────────────────────────────────────────────────
+#
+# add_provider and refresh_catalog call the gateway's admin routes with the
+# admin key: validation, DNS pinning, audit and webhooks are the gateway's.
+# This process only gates them (stdio, switch, key) and limits an agent that
+# loops; anyone holding the admin key can still call the routes directly.
+
+_CREATE_LIMIT = 5
+_CREATE_WINDOW_S = 3600.0
+_REFRESH_COOLDOWN_S = 60.0
+_DETAIL_LIMIT = 300
+_MFA_DETAIL = "Admin MFA required"
+
+_clock = time.monotonic
+# Times of the add_provider calls of the last hour (refusals included).
+_create_calls: collections.deque[float] = collections.deque()
+# (provider_id, dry_run) -> time of the last refresh_catalog call.
+_refresh_last: dict[tuple[str, bool], float] = {}
+_refresh_lock = asyncio.Lock()
+
+
+class AdminToolError(Exception):
+    """An admin tool call refused or failed.
+
+    ``str(exc)`` is shown to the MCP caller, after ``Error: ``.
+    """
+
+
+def _admin_gate(tool: str) -> None:
+    """Refuse an admin tool unless it runs over stdio, switched on, with a key.
+
+    No HTTP call is made: the refusal comes before anything else.
+    """
+    if _NETWORK_TRANSPORT:
+        raise AdminToolError(
+            f"{tool} is not available over a network MCP transport: "
+            "PLUGBOARD_ADMIN_KEY is only loaded for stdio."
+        )
+    if not _ADMIN_TOOLS:
+        raise AdminToolError(
+            "MCP admin tools are off: set PLUGBOARD_MCP_ADMIN_TOOLS=1 and "
+            "PLUGBOARD_ADMIN_KEY (stdio only)"
+        )
+    if not _ADMIN_KEY:
+        raise AdminToolError(f"{tool} needs PLUGBOARD_ADMIN_KEY (stdio only)")
+
+
+async def _admin_request(
+    method: str, path: str, body: dict[str, Any] | None = None
+) -> tuple[int, Any]:
+    """One admin call to the gateway: ``(status, JSON body)``.
+
+    Sends the admin key and the ``mcp`` surface, follows no redirect and
+    reads at most 1 MiB. A body that is not JSON comes back as
+    ``{"detail": <text>}``.
+    """
+    session = await _get_http_session()
+    try:
+        async with session.request(
+            method,
+            f"{_BASE_URL}{path}",
+            headers=_auth_headers(admin=True, json_body=body is not None),
+            json=body,
+            timeout=aiohttp.ClientTimeout(total=_ADMIN_TIMEOUT),
+            allow_redirects=False,
+        ) as resp:
+            raw = await resp.content.read(_ADMIN_RESPONSE_LIMIT + 1)
+            status = resp.status
+    except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+        raise AdminToolError(
+            f"could not reach the gateway ({type(exc).__name__})"
+        ) from None
+    if len(raw) > _ADMIN_RESPONSE_LIMIT:
+        return status, {"detail": "gateway answer too large"}
+    text = raw.decode("utf-8", errors="replace")
+    try:
+        return status, json.loads(text)
+    except ValueError:
+        return status, {"detail": text[:_DETAIL_LIMIT]}
+
+
+def _gateway_error(status: int, payload: Any) -> str:
+    """The message for a refused admin call (without ``Error: ``)."""
+    detail = payload.get("detail") if isinstance(payload, dict) else payload
+    if not isinstance(detail, str):
+        detail = json.dumps(detail)
+    if status == 401:
+        if detail.startswith(_MFA_DETAIL):
+            return (
+                "the gateway enforces admin MFA: MCP admin tools cannot sign in, "
+                "use the dashboard"
+            )
+        return "the gateway refused PLUGBOARD_ADMIN_KEY"
+    return f"HTTP {status}: {detail[:_DETAIL_LIMIT]}"
+
+
+def _scrub(text: str, secret: str) -> str:
+    """``text`` with every copy of ``secret`` replaced by ``***``."""
+    return text.replace(secret, "***") if secret else text
+
+
+def _retry_in(remaining: float, window: float) -> int:
+    return min(int(remaining) + 1, int(window))
+
+
+def _take_create_slot() -> None:
+    """Count one add_provider call; refuse a sixth within an hour."""
+    now = _clock()
+    while _create_calls and now - _create_calls[0] >= _CREATE_WINDOW_S:
+        _create_calls.popleft()
+    if len(_create_calls) >= _CREATE_LIMIT:
+        wait = _retry_in(_CREATE_WINDOW_S - (now - _create_calls[0]), _CREATE_WINDOW_S)
+        raise AdminToolError(
+            f"add_provider limit reached ({_CREATE_LIMIT} per hour): retry in {wait}s"
+        )
+    _create_calls.append(now)
+
+
+def _take_refresh_slot(provider_id: str, dry_run: bool) -> None:
+    """Count one refresh; refuse the same provider and mode within 60 s."""
+    now = _clock()
+    key = (provider_id, dry_run)
+    last = _refresh_last.get(key)
+    if last is not None and now - last < _REFRESH_COOLDOWN_S:
+        wait = _retry_in(_REFRESH_COOLDOWN_S - (now - last), _REFRESH_COOLDOWN_S)
+        raise AdminToolError(
+            f"catalog of '{provider_id}' was refreshed less than "
+            f"{int(_REFRESH_COOLDOWN_S)} s ago: retry in {wait}s"
+        )
+    _refresh_last[key] = now
+
+
+def _cap_sdk_message_logging() -> None:
+    """Keep the MCP SDK from logging whole messages (tool arguments, keys).
+
+    At DEBUG, ``mcp.server.lowlevel.server`` logs every message it receives,
+    so an add_provider call would write the provider key to the log.
+    """
+    sdk = logging.getLogger("mcp.server.lowlevel.server")
+    if sdk.level < logging.INFO:  # NOTSET (0) inherits the root level
+        sdk.setLevel(logging.INFO)
+
+
+if _ADMIN_TOOLS:
+    _cap_sdk_message_logging()
 
 
 # ── Tools ────────────────────────────────────────────────────────────────────
