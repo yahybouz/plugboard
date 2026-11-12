@@ -437,6 +437,7 @@ async def test_add_provider_refused_without_rights_and_without_a_call(
         ("Gone", "https://gone.test", "unresolvable", "", 503),
         ("Out", "https://api.other.test", "public", "api.acme.test", 400),
         ("OpenClaw", "https://x.test", "public", "", 400),
+        ("!!!", "https://x.test", "public", "", 400),  # BUG-61: no id
     ],
 )
 async def test_add_provider_gives_the_admin_api_refusal(

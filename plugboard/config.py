@@ -328,6 +328,11 @@ def create_provider(
     egress_guard: bool = False,
 ) -> Dict[str, Any]:
     provider_id = _slugify(name)
+    if not provider_id:
+        # "!!!" or a name in another script leaves no a-z/0-9 (BUG-61).
+        raise ValueError(
+            "Provider name needs a letter or digit (a-z, 0-9): its id is made from it"
+        )
     require_supported_provider(
         {"id": provider_id, "provider_type": provider_type, "auth_source": auth_source}
     )

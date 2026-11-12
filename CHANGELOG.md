@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **A client key could be named `admin`** (BUG-60): `POST /admin/keys` accepted the `client_id` `admin`, and the gateway takes a key's `client_id` as the caller's identity, so such a key was treated as the administrator in places (every call in `GET /v1/inflight`, no `allowed_models` restriction). `admin`, in any case and with surrounding spaces, is now refused with `422`, like the route's other invalid fields; nothing is written. Existing keys are not changed.
+- **A provider could be saved with an empty id** (BUG-61): the id is made from the name's letters and digits (a-z, 0-9), so a name such as `!!!`, blank or written only in another script gave the id `""`, and `POST /providers` saved it. Such a name is now refused with `400` before anything is written, like the route's other refusals; the MCP `add_provider` tool shows that refusal.
 
 ## [4.11.0] — 2026-11-12
 
