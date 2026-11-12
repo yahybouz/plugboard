@@ -48,9 +48,10 @@ sans filtre ni suite.
 
 1. **Conservation** : 365 jours (`PLUGBOARD_CHANGE_JOURNAL_DAYS`, `0` = sans limite d'âge)
    et 10 000 lignes au plus, en filet. Une ligne sans date lisible n'est retirée que par
-   le plafond. La purge a lieu à l'écriture d'un changement (mon choix : sans nouveau
-   changement, une ligne plus vieille reste visible jusqu'au suivant). Monitoring et
-   webhooks ne changent pas.
+   le plafond. La limite d'âge s'applique à l'écriture (purge du fichier) **et** à la
+   lecture (une ligne trop vieille n'est plus montrée, même sans nouveau changement).
+   `JOURNAL_MAX_LINES` reste la constante du plafond (`tests/test_auto_refresh.py:272`
+   la remplace). Monitoring et webhooks ne changent pas.
 2. **Route** `GET /admin/catalog/history`, admin seulement (`Depends(_require_admin)`),
    gestionnaire synchrone (pool de threads, comme `suivi_api.py`).
    - Paramètres : `provider` (id exact), `since`, `until` (dates `AAAA-MM-JJ` UTC, bornes

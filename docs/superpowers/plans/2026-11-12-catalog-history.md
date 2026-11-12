@@ -15,7 +15,7 @@
 - Atelier `/srv/dev/worktrees/plugboard/catalog-history`, branche `feat/catalog-history`. Rien hors de l'atelier.
 - Tests ciblés seulement, un pytest à la fois, jamais tout `tests/`. Commande, depuis l'atelier :
   `PYTEST="env TMPDIR=/tmp/claude-1001/-srv-dev-plugboard/a5d91e11-1edb-4748-99e2-79712c823769/scratchpad/catalog-history PLUGBOARD_SKIP_DOTENV=1 PYTHONDONTWRITEBYTECODE=1 /srv/dev/plugboard/.venv/bin/python -m pytest -q -p no:cacheprovider"`
-- Chaque test qui lit ou écrit le journal pointe `PLUGBOARD_DATA` vers `tmp_path` (monkeypatch) et retire `PLUGBOARD_CHANGE_JOURNAL_DAYS` de l'environnement s'il ne le fixe pas.
+- Chaque test qui lit ou écrit le journal pointe `PLUGBOARD_DATA` vers `tmp_path` (monkeypatch), retire `PLUGBOARD_CHANGE_JOURNAL_DAYS` de l'environnement s'il ne le fixe pas, et fige l'horloge (`change_events._utcnow`) dès qu'il dépend de dates fixes.
 - Valeurs : `PLUGBOARD_CHANGE_JOURNAL_DAYS` défaut `365`, `0` = sans limite d'âge, valeur invalide ou négative = défaut ; `JOURNAL_MAX_LINES = 10000` ; `limit` 1–200, défaut 50 ; `offset` ≥ 0 ; dates `AAAA-MM-JJ` UTC, bornes incluses.
 - Seul l'événement `models.changed` entre dans l'historique ; une entrée exposée n'a que `at`, `provider`, `added`, `removed`.
 - Interface et doc en anglais. Libellés exacts : onglet et titre `Catalog history` ; filtres `Provider` (`All providers` + liste), `Period` (`All time`, `Last 7 days`, `Last 30 days`, `Last 90 days`, `Last year`), `Model` (placeholder `Search a model name`) ; lien Monitoring `Full history` ; bouton `Load more` ; vides `No model change recorded yet.` / `No model change matches these filters.` ; erreur `Catalog history unavailable: <message>`.
@@ -45,7 +45,9 @@
 **Interfaces — Produces:**
 - `JOURNAL_MAX_LINES = 10000`
 - `retention_days() -> int` : `envcompat.get_int("PLUGBOARD_CHANGE_JOURNAL_DAYS", default=365, minimum=0)`.
-- `append_journal(entries: List[Dict[str, Any]], now: Optional[datetime] = None) -> None` : avant la coupe au plafond, retire les lignes dont `at` est lisible et antérieur à `now - retention_days()` jours (`now` par défaut : UTC courant). Une ligne sans `at` lisible n'est retirée que par le plafond. `retention_days() == 0` : aucune purge par âge. Les appelants actuels ne changent pas.
+- `_utcnow() -> datetime` : horloge UTC du module, la seule à lire l'heure ; les tests la remplacent (monkeypatch) pour que leurs dates fixes restent valables dans le temps.
+- `cutoff() -> Optional[datetime]` : `_utcnow() - timedelta(days=retention_days())`, `None` si `retention_days() == 0`. Utilisée à l'écriture (ici) et à la lecture (Task 2).
+- `append_journal(entries: List[Dict[str, Any]], now: Optional[datetime] = None) -> None` : avant la coupe au plafond, retire les lignes dont `at` est lisible et antérieur à la limite (`now` donné : `now - retention_days()` jours ; sinon `cutoff()`). Une ligne sans `at` lisible n'est retirée que par le plafond. `retention_days() == 0` : aucune purge par âge. Les appelants actuels ne changent pas.
 - `_parse_at(value: Any) -> Optional[datetime]` (UTC, `None` si illisible), réutilisée en Task 2.
 
 - [ ] **Step 1: Write the failing tests**
@@ -85,7 +87,7 @@ def test_retention_defaults_to_365_days_and_10000_lines(monkeypatch, value):
 
 - [ ] **Step 2: Run, expect FAIL** — `$PYTEST tests/test_catalog_history.py` → `TypeError: append_journal() got an unexpected keyword argument 'now'` et `AttributeError: ... 'retention_days'`.
 - [ ] **Step 3: Implement** `retention_days`, `_parse_at` (`datetime.fromisoformat`, `Z` accepté, sans fuseau = UTC) et la purge dans `append_journal` ; docstring du module : « kept for `PLUGBOARD_CHANGE_JOURNAL_DAYS` days (365), at most 10 000 lines ».
-- [ ] **Step 4: Docs** — `configuration.md` : ligne `| \`PLUGBOARD_CHANGE_JOURNAL_DAYS\` | \`365\` | Days the change journal (\`data/catalog/changes.jsonl\`) keeps a change; \`0\` keeps them until the 10 000-line cap. |` ; `monitoring.md:119` : « … which keeps changes for `PLUGBOARD_CHANGE_JOURNAL_DAYS` days (365) and at most 10 000 lines; old lines are dropped when a new change is written. »
+- [ ] **Step 4: Docs** — `configuration.md` : ligne `| \`PLUGBOARD_CHANGE_JOURNAL_DAYS\` | \`365\` | Days the change journal (\`data/catalog/changes.jsonl\`) keeps a change; \`0\` keeps them until the 10 000-line cap. |` ; `monitoring.md:119` : « … which keeps changes for `PLUGBOARD_CHANGE_JOURNAL_DAYS` days (365) and at most 10 000 lines; older changes are no longer shown and are dropped when a new change is written. »
 - [ ] **Step 5: Run, expect PASS** — `$PYTEST tests/test_catalog_history.py tests/test_auto_refresh.py` → tout passe (`test_journal_is_bounded` compris).
 - [ ] **Step 6: Commit** — `feat(catalog): keep the change journal for 365 days`
 
@@ -96,15 +98,15 @@ def test_retention_defaults_to_365_days_and_10000_lines(monkeypatch, value):
 - Test: `tests/test_catalog_history.py`
 
 **Interfaces:**
-- Consumes: `_parse_at` (Task 1).
+- Consumes: `_parse_at`, `cutoff` (Task 1).
 - Produces: `query_model_history(*, provider: Optional[str] = None, since: Optional[date] = None, until: Optional[date] = None, model: Optional[str] = None, limit: int = 50, offset: int = 0) -> Dict[str, Any]` → `{"entries": List[{"at": str, "provider": str, "added": List[str], "removed": List[str]}], "total": int, "providers": List[str], "oldest": Optional[str]}`.
   - Lit tout le fichier ; garde les lignes JSON objet avec `event == "models.changed"` et `provider` chaîne non vide ; `added`/`removed` non listes → `[]`, éléments convertis en `str`.
-  - `providers` (triés, uniques) et `oldest` (plus petite `at` lisible) portent sur toutes ces lignes, **sans** les filtres.
+  - Limite d'âge à la lecture : une ligne dont `at` est lisible et antérieure à `cutoff()` est ignorée partout (`entries`, `total`, `providers`, `oldest`), même si le fichier ne l'a pas encore purgée.
+  - `providers` (triés, uniques, tirés des seules lignes `models.changed` retenues) et `oldest` (plus petite `at` lisible) portent sur toutes ces lignes, **sans** les filtres.
   - Filtres : `provider` égalité exacte ; `since` → `at >= since 00:00:00Z` ; `until` → `at < (until + 1 jour) 00:00:00Z` ; une `at` illisible est exclue dès qu'un filtre de date est donné ; `model` → sous-chaîne sans casse dans `added + removed`. L'entrée sort entière (Q6) : `added` et `removed` gardent tous leurs noms, ceux qui correspondent placés en tête (ordre d'origine conservé de part et d'autre). Sans `model`, ordre d'origine.
-  - Pas de filtre d'âge à la lecture : la purge reste à l'écriture (Task 1).
   - Ordre : plus récent d'abord = ordre inverse du fichier. `total` = nombre après filtres ; `entries` = tranche `[offset : offset + limit]`.
 
-- [ ] **Step 1: Write the failing tests** — fixture `journal(monkeypatch, tmp_path)` qui écrit, dans cet ordre, ces lignes (plus une ligne `not json` et `{"event": "models.changed"}`) dans `tmp_path / "catalog" / "changes.jsonl"` :
+- [ ] **Step 1: Write the failing tests** — fixture `journal(monkeypatch, tmp_path)` qui pointe `PLUGBOARD_DATA` vers `tmp_path`, retire `PLUGBOARD_CHANGE_JOURNAL_DAYS`, remplace `change_events._utcnow` par `lambda: NOW` (`NOW` de Task 1), puis écrit, dans cet ordre, ces lignes (plus une ligne `not json` et `{"event": "models.changed"}`) dans `tmp_path / "catalog" / "changes.jsonl"` :
 
 ```python
 LINES = [
@@ -145,6 +147,13 @@ def test_history_puts_matching_names_first(journal):
     assert change_events.query_model_history()["entries"][0]["removed"] == ["zeta", "alpha-1"]
     first = change_events.query_model_history(model="alpha")["entries"][0]
     assert first["removed"] == ["alpha-1", "zeta"] and first["added"] == ["gamma"]
+
+def test_history_hides_lines_past_retention(journal, monkeypatch):
+    monkeypatch.setenv("PLUGBOARD_CHANGE_JOURNAL_DAYS", "140")  # limite : 2026-06-25
+    out = change_events.query_model_history()
+    assert [e["provider"] for e in out["entries"]] == ["old-provider", "provider-b"]
+    assert out["providers"] == ["old-provider", "provider-b"]
+    assert out["oldest"] == "2026-06-30T23:59:59Z"
 
 def test_history_paginates(journal):
     out = change_events.query_model_history(limit=1, offset=1)
