@@ -868,7 +868,8 @@ async def forward(
     Forward a /v1/chat/completions request to the resolved provider.
     Retries on transient errors per provider, then falls back to next provider.
     An error saying the context is too long is not retried: the same request
-    would fail again, so it goes straight to the next provider.
+    would fail again, so it goes straight to the next provider. Neither is a
+    timeout: the request already waited the whole delay (BUG-47).
     A provider at its concurrency cap is skipped; when every candidate left
     is, the request waits up to ``PLUGBOARD_PROVIDER_WAIT_S`` for the first
     freed slot, then raises ``ProvidersBusyError``.
@@ -1179,14 +1180,14 @@ async def forward(
                         )
                         provider_fault = True
                         log.warning(
-                            "Timeout on %s (attempt %d/%d)",
+                            "Timeout on %s after %ss: not replayed, next provider",
                             provider["id"],
-                            attempt + 1,
-                            len(_DELAYS) + 1,
+                            effective_timeout,
                         )
-                        # Continue retries — don't break on timeout, the backend
-                        # may have been temporarily overloaded (agents/sub-agents)
-                        continue
+                        # The request already waited the whole timeout (up to
+                        # 900 s): replaying it here multiplied that wait. The
+                        # next provider is tried at once (BUG-47).
+                        provider_failed = True
                     except (aiohttp.ClientError, ValueError) as exc:
                         # Refused or dropped connection, truncated body, or a 200
                         # whose body is not JSON. The request may already have
