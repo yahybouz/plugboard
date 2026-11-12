@@ -145,9 +145,15 @@ def _delete_batch(
     params: Tuple[Any, ...],
     limit: int,
 ) -> int:
-    """Delete at most ``limit`` matching rows in one committed transaction."""
+    """Delete at most ``limit`` matching rows in one committed transaction.
+
+    ``table`` and ``where`` are constants of the callers (retention.py,
+    session_store.py), never request input; the values go as parameters.
+    """
+    if not table.isidentifier():
+        raise ValueError(f"not a table name: {table!r}")
     cursor = conn.execute(
-        f"DELETE FROM {table} WHERE rowid IN "
+        f"DELETE FROM {table} WHERE rowid IN "  # nosec B608
         f"(SELECT rowid FROM {table} WHERE {where} LIMIT ?)",
         (*params, limit),
     )
