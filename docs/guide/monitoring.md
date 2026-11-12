@@ -34,6 +34,7 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 |---|---|
 | Overview | Totals and a table of requests, errors and average latency per provider since the last restart |
 | Monitoring | Health of each active provider (status, latency, error rate, uptime over 24 hours and 7 days) and the check history of the last 24 hours |
+| Catalog history | Models each provider gained or lost, newest first, filtered by provider, period and model name ([details](#catalog-history)) |
 | Usage & Billing | Requests, tokens and cost per client for a month |
 | Jobs | The price refresh, the model catalog refresh and the provider watchdog: state, last and next run, **Run now** |
 | Playground | Per-model connectivity and internet-access indicators |
@@ -120,7 +121,7 @@ Every change found by an automatic update (model added or removed, price change 
 
 ## Catalog history
 
-Which models a provider gained or lost, and when, from the same journal:
+Which models a provider gained or lost, and when, from the same journal. The dashboard shows it on the **Catalog history** page (also linked as **Full history** under Monitoring › Recent automatic changes); the API answers the same:
 
 ```bash
 curl -s "http://localhost:8765/admin/catalog/history?provider=<provider-id>&since=2026-11-01&limit=50" \

@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -279,3 +280,29 @@ def test_history_handler_runs_off_the_event_loop():
     from plugboard import app as app_module
 
     assert not inspect.iscoroutinefunction(app_module.admin_catalog_history)
+
+
+# -- dashboard tab -----------------------------------------------------------------
+
+STATIC = Path(__file__).resolve().parent.parent / "static"
+
+
+async def test_dashboard_has_the_catalog_history_tab(admin_client):
+    await admin_client.post("/auth/admin/login", json={"key": "adminkey"})
+    shell = (await admin_client.get("/dashboard")).text
+    assert 'data-tab="catalog-history"' in shell
+    assert 'id="page-catalog-history"' in shell
+    assert shell.count('href="#catalog-history"') >= 2  # nav + Monitoring link
+    assert "/dashboard/catalog_history.js" in shell
+    js = await admin_client.get("/dashboard/catalog_history.js")
+    assert js.status_code == 200 and "/admin/catalog/history" in js.text
+
+
+def test_app_js_routes_the_tab():
+    assert '"catalog-history": loadCatalogHistory' in (STATIC / "app.js").read_text()
+
+
+def test_catalog_history_js_writes_text_only():
+    js = (STATIC / "catalog_history.js").read_text()
+    for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
+        assert sink not in js, sink
