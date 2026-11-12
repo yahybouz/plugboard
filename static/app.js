@@ -1444,10 +1444,14 @@ function _initOllamaEvents() {
   document.getElementById("ollama-local-downloads").addEventListener("change", function (ev) {
     saveOllamaSettings(ev.target.checked);
   });
+  document.getElementById("ollama-enabled").addEventListener("change", function (ev) {
+    saveOllamaSwitch(ev.target.checked);
+  });
 }
 
 async function loadOllama() {
   _initOllamaEvents();
+  await loadOllamaSwitch();
   await loadOllamaStatus();
   await loadOllamaSettings();
   await loadOllamaModels();
@@ -1469,6 +1473,44 @@ function _renderOllamaSettings(d) {
   document.getElementById("ollama-model-name").placeholder = d.local_downloads_enabled
     ? "e.g. llama3, mistral:7b, gpt-oss:120b-cloud"
     : "e.g. gpt-oss:120b-cloud, nemotron-3-super:cloud";
+}
+
+// PLU-12: the switch is the ollama provider's is_active, for every surface.
+function _renderOllamaSwitch(d) {
+  const box = document.getElementById("ollama-enabled");
+  box.checked = !!d.enabled;
+  box.disabled = !d.registered;
+  // style.display, not the hidden attribute: .alert sets display.
+  document.getElementById("ollama-off-banner").style.display = d.registered && !d.enabled ? "" : "none";
+  const hint = document.getElementById("ollama-enabled-hint");
+  if (!d.registered) {
+    hint.textContent = "No Ollama provider is registered (see OLLAMA_URL and OLLAMA_ENABLED).";
+    return;
+  }
+  hint.textContent = "Off: requests for an Ollama model get 503 provider_disabled and nothing is called. " +
+    "Calls already running finish. Now: " + d.in_flight + " running, " + d.waiting + " waiting.";
+}
+
+async function loadOllamaSwitch() {
+  try {
+    const res = await api("GET", "/admin/ollama/switch");
+    if (!res.ok) throw new Error(await _errorDetail(res));
+    _renderOllamaSwitch(await res.json());
+  } catch (err) {
+    document.getElementById("ollama-enabled-hint").textContent = "Failed to load the Ollama switch: " + err.message;
+  }
+}
+
+async function saveOllamaSwitch(enabled) {
+  try {
+    const res = await api("PUT", "/admin/ollama/switch", { enabled: enabled });
+    if (!res.ok) throw new Error(await _errorDetail(res));
+    _renderOllamaSwitch(await res.json());
+    toast("Ollama " + (enabled ? "on" : "off") + " for the API, MCP and Playground", "success");
+  } catch (err) {
+    toast("Switching Ollama failed: " + err.message, "error");
+    await loadOllamaSwitch();
+  }
 }
 
 async function _errorDetail(res) {
