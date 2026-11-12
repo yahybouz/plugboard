@@ -324,7 +324,7 @@ _WAIT_DONE_JS = (
     " return !!(s && (s.dataset.state === 'done' || s.dataset.state === 'error')); }"
 )
 
-# The dropdown ships a single disabled "Loading models..." option (value="").
+# The dropdown ships a single disabled "Loading models…" option (value="").
 # It is "populated" once at least one option carries a non-empty value. Waiting
 # for this BEFORE select_option means a slow /v1/models load times out as a
 # genuine timeout, not as a false "model unavailable" (Council C9 MINOR-2).

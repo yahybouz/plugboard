@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Plugboard — Admin Dashboard</title>
+  <title>Plugboard — Admin dashboard</title>
   <link rel="icon" href="/dashboard/favicon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <script src="/dashboard/theme.js?v=2"></script>
-  <link rel="stylesheet" href="/dashboard/style.css?v=13">
+  <link rel="stylesheet" href="/dashboard/style.css?v=14">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -32,17 +32,17 @@
 <!-- Login modal -->
 <div id="login-modal" class="modal hidden">
   <div class="modal-box">
-    <div style="text-align:center;margin-bottom:1.5rem;">
-      <div class="modal-logo" style="width:52px;height:52px;border-radius:14px;"><svg width="30" height="30" aria-hidden="true"><use href="#i-logo"/></svg></div>
+    <div class="login-head">
+      <div class="modal-logo"><svg width="30" height="30" aria-hidden="true"><use href="#i-logo"/></svg></div>
       <h2>Plugboard</h2>
       <p class="muted">Enter your admin key to continue</p>
     </div>
     <form id="login-form">
       <div class="form-group">
-        <input type="password" id="login-key" placeholder="Admin Key" autocomplete="off" required>
+        <input type="password" id="login-key" placeholder="Admin key" autocomplete="off" required>
       </div>
       <div id="login-error" class="error hidden"></div>
-      <button type="submit" class="btn btn-primary btn-block" style="margin-top:0.5rem;padding:0.65rem;">Sign in</button>
+      <button type="submit" class="btn btn-primary btn-block btn-login">Sign in</button>
     </form>
   </div>
 </div>
@@ -67,10 +67,10 @@
 
       <div class="nav-section">Management</div>
       <a href="#keys" class="nav-link" data-tab="keys">
-        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-key"/></svg></span> API Keys
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-key"/></svg></span> API keys
       </a>
       <a href="#usage" class="nav-link" data-tab="usage">
-        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-usage"/></svg></span> Usage &amp; Billing
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-usage"/></svg></span> Usage &amp; billing
       </a>
       <a href="#providers" class="nav-link" data-tab="providers">
         <span class="nav-icon" aria-hidden="true"><svg><use href="#i-providers"/></svg></span> Providers
@@ -100,12 +100,12 @@
         <span class="nav-icon" aria-hidden="true"><svg><use href="#i-clock"/></svg></span> Jobs
       </a>
       <a href="/suivi" class="nav-link">
-        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-overview"/></svg></span> Suivi
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-overview"/></svg></span> Tickets
       </a>
     </nav>
     <div class="sidebar-footer">
       <button type="button" id="theme-toggle" class="btn btn-ghost btn-sm theme-toggle" aria-label="Switch theme"><svg aria-hidden="true"><use href="#i-theme"/></svg><span>Theme</span></button>
-      <button id="logout-btn" class="btn btn-ghost btn-sm">Logout</button>
+      <button id="logout-btn" class="btn btn-ghost btn-sm">Log out</button>
       <button type="button" id="logout-all-btn" class="btn btn-ghost btn-sm">Log out everywhere</button>
     </div>
   </aside>
@@ -154,17 +154,17 @@
           <p class="live3d-fallback">The 3D view needs WebGL, which this browser does not provide.</p>
         </section>
         <div class="stats-grid" id="overview-cards"></div>
-        <div class="section-title">Metrics by Provider</div>
+        <div class="section-title">Metrics by provider</div>
         <div id="metrics-table-container"></div>
       </div>
     </section>
 
-    <!-- API Keys -->
+    <!-- API keys -->
     <section id="page-keys" class="page">
       <div class="topbar">
-        <h2>API Keys</h2>
+        <h2>API keys</h2>
         <div class="topbar-actions">
-          <button class="btn btn-primary btn-sm" id="btn-create-key">+ New Key</button>
+          <button class="btn btn-primary btn-sm" id="btn-create-key">+ New key</button>
         </div>
       </div>
       <div class="content">
@@ -178,17 +178,17 @@
           </div>
         </div>
         <div id="create-key-form" class="card form-card hidden">
-          <div class="card-header"><span class="card-title">Create API Key</span></div>
+          <div class="card-header"><span class="card-title">Create API key</span></div>
           <div class="form-row">
             <div class="form-group"><label for="key-client-id">Client ID</label><input type="text" id="key-client-id" placeholder="e.g. acme-corp" required></div>
             <div class="form-group"><label for="key-label">Label</label><input type="text" id="key-label" placeholder="e.g. Production"></div>
           </div>
           <div class="form-row">
-            <div class="form-group"><label for="key-limit">Monthly Limit ($)</label><input type="number" id="key-limit" placeholder="0 = unlimited" step="0.01" min="0"></div>
-            <div class="form-group"><label for="key-rpm">RPM Limit</label><input type="number" id="key-rpm" placeholder="0 = unlimited" step="1" min="0"></div>
+            <div class="form-group"><label for="key-limit">Monthly limit ($)</label><input type="number" id="key-limit" placeholder="0 = unlimited" step="0.01" min="0"></div>
+            <div class="form-group"><label for="key-rpm">RPM limit</label><input type="number" id="key-rpm" placeholder="0 = unlimited" step="1" min="0"></div>
           </div>
           <div class="form-actions">
-            <button class="btn btn-primary" id="btn-submit-key">Create Key</button>
+            <button class="btn btn-primary" id="btn-submit-key">Create key</button>
             <button class="btn btn-ghost" id="btn-cancel-key">Cancel</button>
           </div>
         </div>
@@ -196,10 +196,10 @@
       </div>
     </section>
 
-    <!-- Usage & Billing -->
+    <!-- Usage & billing -->
     <section id="page-usage" class="page">
       <div class="topbar">
-        <h2>Usage &amp; Billing</h2>
+        <h2>Usage &amp; billing</h2>
         <div class="topbar-actions">
           <input type="month" id="usage-month" class="input-month" aria-label="Usage month">
           <button class="btn btn-sm" id="btn-export-csv">Export CSV</button>
@@ -207,9 +207,9 @@
       </div>
       <div class="content">
         <div class="stats-grid" id="usage-summary-cards"></div>
-        <div class="section-title">By Client</div>
+        <div class="section-title">By client</div>
         <div id="usage-by-client"></div>
-        <div class="section-title">By Model</div>
+        <div class="section-title">By model</div>
         <div id="usage-by-model"></div>
         <div class="section-title">Recent requests</div>
         <p class="muted small">The price key says which grid entry priced the call: a provider price (<code>provider|model</code>) or the vendor price.</p>
@@ -222,50 +222,50 @@
       <div class="topbar">
         <h2>Providers</h2>
         <div class="topbar-actions">
-          <button class="btn btn-primary btn-sm" id="btn-add-direct-provider">+ Add Direct Provider</button>
-          <button class="btn btn-sm" id="btn-add-provider">+ Add Custom Provider</button>
+          <button class="btn btn-primary btn-sm" id="btn-add-direct-provider">+ Add direct provider</button>
+          <button class="btn btn-sm" id="btn-add-provider">+ Add custom provider</button>
         </div>
       </div>
       <div class="content">
         <!-- Direct provider preset wizard -->
-        <div id="direct-provider-form" class="card" style="display:none; margin-bottom:1rem;">
-          <div style="padding:1.25rem;">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
-              <div style="font-weight:600; font-size:1.05rem;">Add Direct Provider</div>
+        <div id="direct-provider-form" class="card mb-4" style="display:none">
+          <div class="card-body">
+            <div class="row row-between mb-4">
+              <div class="wizard-title">Add direct provider</div>
               <button class="btn btn-ghost btn-sm" id="btn-dp-cancel">&times; Close</button>
             </div>
             <!-- Preset selector -->
-            <div style="margin-bottom:1rem;">
-              <label for="dp-search" style="display:block; font-size:0.8rem; color:var(--text-secondary); margin-bottom:0.25rem;">Choose a provider</label>
-              <input type="search" id="dp-search" placeholder="Search providers (OpenRouter, Groq, Kimi...)" aria-describedby="dp-search-count" style="width:100%; margin-bottom:0.4rem;">
+            <div class="mb-4">
+              <label for="dp-search" class="field-label">Choose a provider</label>
+              <input type="search" id="dp-search" placeholder="Search providers (OpenRouter, Groq, Kimi…)" aria-describedby="dp-search-count" class="mb-2">
               <select id="dp-preset" aria-label="Provider preset"></select>
               <div id="dp-search-count" class="muted small" aria-live="polite"></div>
             </div>
             <!-- Setup guide (steps) -->
-            <div id="dp-setup-guide" style="margin-bottom:1rem;"></div>
+            <div id="dp-setup-guide" class="mb-4"></div>
             <!-- Input + actions -->
-            <div id="dp-input-row" style="display:flex; gap:0.5rem; align-items:center;">
-              <input type="password" id="dp-api-key" placeholder="API key" autocomplete="off" style="flex:1; padding:0.5rem 0.75rem; border:1px solid var(--border-strong); border-radius:6px;">
+            <div id="dp-input-row" class="row">
+              <input type="password" id="dp-api-key" placeholder="API key" autocomplete="off" class="grow">
               <button class="btn btn-sm" id="btn-dp-check" style="display:none;">Check CLI</button>
               <button class="btn btn-sm" id="btn-dp-test" style="display:none;">Test connection</button>
               <button class="btn btn-primary" id="btn-dp-create">Create</button>
             </div>
-            <label class="check small" id="dp-test-token-row" style="display:none; margin-top:0.4rem;">
+            <label class="check small mt-2" id="dp-test-token-row" style="display:none">
               <input type="checkbox" id="dp-test-token"> Also send one test token (billed by the provider)
             </label>
-            <output id="dp-status" aria-live="polite" style="display:block; margin-top:0.5rem; font-size:0.85rem;"></output>
+            <output id="dp-status" class="dp-status mt-2" aria-live="polite"></output>
           </div>
         </div>
         <div id="provider-form-container" class="hidden">
           <form id="provider-form" class="card form-card">
-            <div class="card-header"><span class="card-title" id="pf-form-title">Add Provider</span></div>
+            <div class="card-header"><span class="card-title" id="pf-form-title">Add provider</span></div>
             <div class="form-row">
               <div class="form-group"><label for="pf-name">Name</label><input type="text" id="pf-name" required></div>
               <div class="form-group"><label for="pf-url">Base URL</label><input type="url" id="pf-url" required></div>
             </div>
             <div class="form-row">
-              <div class="form-group"><label for="pf-token">Bearer Token</label><input type="password" id="pf-token"></div>
-              <div class="form-group"><label for="pf-model">Default Model</label><input type="text" id="pf-model"></div>
+              <div class="form-group"><label for="pf-token">Bearer token</label><input type="password" id="pf-token"></div>
+              <div class="form-group"><label for="pf-model">Default model</label><input type="text" id="pf-model"></div>
             </div>
             <div class="form-row">
               <div class="form-group"><label for="pf-timeout">Timeout (s)</label><input type="number" id="pf-timeout" value="60" step="1"></div>
@@ -299,17 +299,17 @@
     </section>
 
     <!-- Device Flow modal (GitHub) -->
-    <div id="device-flow-modal" class="modal hidden" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); z-index:1000; align-items:center; justify-content:center;">
-      <div style="background:var(--bg-card); border-radius:12px; padding:2rem; max-width:440px; text-align:center; box-shadow:0 4px 20px rgba(0,0,0,0.15);">
-        <h3 style="margin:0 0 0.5rem;">Connect via GitHub Device Flow</h3>
-        <p style="color:var(--text-muted); font-size:0.9rem; margin:0 0 1rem;">Enter the code below on GitHub to authorize this dashboard.</p>
-        <div id="device-code" style="font-size:1.75rem; font-family:var(--mono); font-weight:700; letter-spacing:0.1em; background:var(--bg-secondary); padding:1rem; border-radius:8px; margin-bottom:1rem;">----</div>
-        <div style="display:flex; gap:0.5rem; justify-content:center; margin-bottom:1rem;">
+    <div id="device-flow-modal" class="modal device-flow-modal hidden" style="display:none">
+      <div class="modal-box device-flow-box">
+        <h3>Connect via GitHub device flow</h3>
+        <p>Enter the code below on GitHub to authorize this dashboard.</p>
+        <div id="device-code" class="device-code">----</div>
+        <div class="row row-center mb-4">
           <button class="btn btn-primary btn-sm" id="device-open-btn">Open GitHub page</button>
           <button class="btn btn-sm" id="device-copy-btn">Copy code</button>
         </div>
-        <div id="device-status" style="color:var(--text-muted); font-size:0.85rem;">Waiting for authorization...</div>
-        <div style="margin-top:1rem;">
+        <div id="device-status" class="device-status">Waiting for authorization…</div>
+        <div class="mt-4">
           <button class="btn btn-ghost btn-sm" id="device-cancel-btn">Cancel</button>
         </div>
       </div>
@@ -351,16 +351,16 @@
         <div id="pricing-note" class="muted"></div>
         <div id="pricing-table-container"></div>
         <div id="pricing-pager" class="pager"></div>
-        <div id="pricing-actions" class="hidden" style="margin-top:1rem;">
+        <div id="pricing-actions" class="hidden mt-4">
           <div class="form-inline">
-            <input type="text" id="new-model-name" placeholder="Model name" aria-label="New model name" style="width:200px;">
-            <input type="text" id="new-model-provider" placeholder="Provider (optional)" aria-label="Provider price space (optional)" style="width:170px;">
-            <input type="number" id="new-model-input" placeholder="Input $/1M" aria-label="Input price per million tokens" step="0.01" min="0" style="width:120px;">
-            <input type="number" id="new-model-output" placeholder="Output $/1M" aria-label="Output price per million tokens" step="0.01" min="0" style="width:120px;">
+            <input type="text" id="new-model-name" placeholder="Model name" aria-label="New model name" class="pricing-new-name">
+            <input type="text" id="new-model-provider" placeholder="Provider (optional)" aria-label="Provider price space (optional)" class="pricing-new-provider">
+            <input type="number" id="new-model-input" placeholder="Input $/1M" aria-label="Input price per million tokens" step="0.01" min="0" class="pricing-new-price">
+            <input type="number" id="new-model-output" placeholder="Output $/1M" aria-label="Output price per million tokens" step="0.01" min="0" class="pricing-new-price">
             <button class="btn btn-sm" id="btn-add-pricing-row">+ Add</button>
           </div>
-          <button class="btn btn-primary" id="btn-save-pricing" style="margin-top:0.75rem;" disabled>Save changes</button>
-          <span id="pricing-save-status" class="muted" aria-live="polite" style="margin-left:0.5rem;"></span>
+          <button class="btn btn-primary mt-3" id="btn-save-pricing" disabled>Save changes</button>
+          <span id="pricing-save-status" class="muted ml-2" aria-live="polite"></span>
         </div>
       </div>
     </section>
@@ -372,7 +372,7 @@
       </div>
       <div class="content">
         <div id="jobs-list"></div>
-        <div class="section-title">Job Log</div>
+        <div class="section-title">Job log</div>
         <div id="job-log-container"></div>
       </div>
     </section>
@@ -380,53 +380,53 @@
     <!-- Ollama -->
     <section id="page-ollama" class="page">
       <div class="topbar">
-        <h2>Ollama — Sovereign Provider</h2>
+        <h2>Ollama — sovereign provider</h2>
         <div class="topbar-actions">
-          <button class="btn btn-primary btn-sm" id="btn-pull-model">+ Pull Model</button>
+          <button class="btn btn-primary btn-sm" id="btn-pull-model">+ Pull model</button>
           <button class="btn btn-sm" id="btn-refresh-ollama">Refresh</button>
         </div>
       </div>
       <div class="content">
-        <div class="card" id="ollama-switch" style="margin-bottom:1rem;">
-          <div style="padding:1rem;">
+        <div class="card mb-4" id="ollama-switch">
+          <div class="card-body-sm">
             <label class="check" for="ollama-enabled">
-              <input type="checkbox" id="ollama-enabled" data-testid="ollama-enabled" aria-describedby="ollama-enabled-hint" disabled> <span style="font-weight:600; color:var(--text);">Available to the API, MCP and Playground</span>
+              <input type="checkbox" id="ollama-enabled" data-testid="ollama-enabled" aria-describedby="ollama-enabled-hint" disabled> <span class="check-title">Available to the API, MCP and Playground</span>
             </label>
-            <div class="muted" id="ollama-enabled-hint" style="font-size:0.8rem; margin-top:0.25rem;">Off: requests for an Ollama model get 503 provider_disabled and nothing is called. Calls already running finish.</div>
+            <div class="muted text-xs mt-1" id="ollama-enabled-hint">Off: requests for an Ollama model get 503 provider_disabled and nothing is called. Calls already running finish.</div>
           </div>
         </div>
-        <div class="alert alert-warning" id="ollama-off-banner" role="status" style="margin-bottom:1rem; display:none;">Ollama is off: the API, the MCP server and the Playground do not use it.</div>
+        <div class="alert alert-warning mb-4" id="ollama-off-banner" role="status" style="display:none;">Ollama is off: the API, the MCP server and the Playground do not use it.</div>
         <div class="stats-grid" id="ollama-status"></div>
-        <div class="card" id="ollama-settings" style="margin-bottom:1rem;">
-          <div style="padding:1rem;">
+        <div class="card mb-4" id="ollama-settings">
+          <div class="card-body-sm">
             <label class="check" for="ollama-local-downloads">
-              <input type="checkbox" id="ollama-local-downloads" data-testid="ollama-local-downloads"> <span style="font-weight:600; color:var(--text);">Local model downloads</span>
+              <input type="checkbox" id="ollama-local-downloads" data-testid="ollama-local-downloads"> <span class="check-title">Local model downloads</span>
             </label>
-            <div class="muted" style="font-size:0.8rem; margin-top:0.25rem;">Off: only cloud models (:cloud) can be added — recommended on small VMs.</div>
-            <div class="muted" id="ollama-disk" style="font-size:0.8rem; margin-top:0.25rem;"></div>
+            <div class="muted text-xs mt-1">Off: only cloud models (:cloud) can be added — recommended on small VMs.</div>
+            <div class="muted text-xs mt-1" id="ollama-disk"></div>
           </div>
         </div>
-        <div id="ollama-pull-form" class="card" style="display:none; margin-bottom:1rem;">
-          <div style="padding:1rem;">
-            <div style="font-weight:600; margin-bottom:0.5rem;">Pull Model</div>
-            <div style="display:flex; gap:0.5rem; align-items:center;">
-              <input type="text" id="ollama-model-name" placeholder="e.g. llama3, mistral:7b, phi3" style="flex:1; padding:0.4rem 0.6rem; border:1px solid var(--border-strong); border-radius:6px;">
+        <div id="ollama-pull-form" class="card mb-4" style="display:none">
+          <div class="card-body-sm">
+            <div class="fw-semibold mb-2">Pull model</div>
+            <div class="row">
+              <input type="text" id="ollama-model-name" placeholder="e.g. llama3, mistral:7b, phi3" class="grow">
               <button class="btn btn-primary btn-sm" id="btn-start-pull">Pull</button>
               <button class="btn btn-ghost btn-sm" id="btn-cancel-pull">Cancel</button>
             </div>
-            <div class="muted" id="ollama-pull-hint" style="font-size:0.75rem; margin-top:0.35rem;"></div>
-            <div id="ollama-pull-progress" style="display:none; margin-top:0.5rem;">
-              <div style="background:var(--bg-secondary); border-radius:4px; height:8px; overflow:hidden;">
-                <div id="ollama-progress-fill" style="background:var(--accent); height:100%; width:0%; transition:width 0.3s;"></div>
+            <div class="muted text-xs mt-1" id="ollama-pull-hint"></div>
+            <div id="ollama-pull-progress" class="mt-2" style="display:none">
+              <div class="progress">
+                <div id="ollama-progress-fill" class="progress-fill"></div>
               </div>
-              <div class="muted" id="ollama-pull-status" style="font-size:0.75rem; margin-top:0.25rem;"></div>
+              <div class="muted text-xs mt-1" id="ollama-pull-status"></div>
             </div>
           </div>
         </div>
-        <div class="section-title">Installed Models</div>
+        <div class="section-title">Installed models</div>
         <div id="ollama-models-container"></div>
-        <div class="section-title">Cloud Catalogue</div>
-        <div class="muted" style="font-size:0.8rem; margin-bottom:0.5rem;">Ollama Cloud models are manifest-only (a few KB on disk). Some need a paid Ollama plan: the free plan returns an error when they are used.</div>
+        <div class="section-title">Cloud catalog</div>
+        <div class="muted text-xs mb-2">Ollama Cloud models are manifest-only (a few KB on disk). Some need a paid Ollama plan: the free plan returns an error when they are used.</div>
         <div id="ollama-cloud-container"></div>
       </div>
     </section>
@@ -439,38 +439,38 @@
           <button class="btn btn-sm" id="btn-clear-chat">Clear</button>
         </div>
       </div>
-      <div class="content" style="display:flex; flex-direction:column; height:calc(100vh - 120px);">
+      <div class="content pg-layout">
         <!-- Model selector -->
-        <div style="display:flex; gap:0.5rem; align-items:center; margin-bottom:0.75rem; flex-wrap:wrap;">
-          <select id="pg-model" data-testid="pg-model" aria-label="Model" style="flex:1; min-width:250px; padding:0.4rem 0.6rem; border:1px solid var(--border-strong); border-radius:6px; font-size:0.85rem;">
-            <option value="">Loading models...</option>
+        <div class="pg-toolbar">
+          <select id="pg-model" data-testid="pg-model" aria-label="Model" class="pg-select">
+            <option value="">Loading models…</option>
           </select>
-          <button id="btn-check-internet" class="btn" style="padding: 0.4rem 0.6rem; border:1px solid var(--border-strong); border-radius: 6px; font-size: 0.85rem; background:var(--bg-card); cursor: pointer; display: flex; align-items: center; gap: 0.25rem;" title="Check the currently selected model only">
-            🔍 Check Internet
+          <button id="btn-check-internet" class="btn pg-check-btn" title="Check the currently selected model only">
+            🔍 Check internet
           </button>
-          <button id="btn-check-internet-all" class="btn" style="padding: 0.4rem 0.6rem; border:1px solid var(--border-strong); border-radius: 6px; font-size: 0.85rem; background:var(--bg-card); cursor: pointer; display: flex; align-items: center; gap: 0.25rem;" title="Probe ALL models for internet access (sequential, may take a few minutes)">
-            🌐 Check All
+          <button id="btn-check-internet-all" class="btn pg-check-btn" title="Probe ALL models for internet access (sequential, may take a few minutes)">
+            🌐 Check all
           </button>
-          <label style="font-size:0.8rem; display:flex; align-items:center; gap:0.25rem;">
+          <label class="pg-option">
             <input type="checkbox" id="pg-stream" data-testid="pg-stream" checked> Stream
           </label>
-          <label style="font-size:0.8rem; display:flex; align-items:center; gap:0.25rem;">
-            Temp: <input type="number" id="pg-temp" data-testid="pg-temp" value="0.7" min="0" max="2" step="0.1" style="width:55px; padding:0.3rem; border:1px solid var(--border-strong); border-radius:4px;">
+          <label class="pg-option">
+            Temp: <input type="number" id="pg-temp" data-testid="pg-temp" value="0.7" min="0" max="2" step="0.1" class="pg-num">
           </label>
-          <label style="font-size:0.8rem; display:flex; align-items:center; gap:0.25rem;">
-            Max: <input type="number" id="pg-max-tokens" data-testid="pg-max-tokens" value="2048" min="1" max="32768" step="256" style="width:70px; padding:0.3rem; border:1px solid var(--border-strong); border-radius:4px;">
+          <label class="pg-option">
+            Max: <input type="number" id="pg-max-tokens" data-testid="pg-max-tokens" value="2048" min="1" max="32768" step="256" class="pg-num pg-num-wide">
           </label>
         </div>
         <!-- Chat messages -->
-        <div id="pg-messages" data-testid="pg-messages" style="flex:1; overflow-y:auto; border:1px solid var(--border-strong); border-radius:8px; padding:1rem; background:var(--bg-secondary); display:flex; flex-direction:column; gap:0.75rem;">
-          <div class="muted" style="text-align:center; padding:2rem;">Select a model and start chatting.</div>
+        <div id="pg-messages" data-testid="pg-messages" class="pg-messages">
+          <div class="muted pg-empty">Select a model and start chatting.</div>
         </div>
         <!-- Input -->
-        <div style="display:flex; gap:0.5rem; margin-top:0.75rem;">
-          <textarea id="pg-input" data-testid="pg-input" rows="2" placeholder="Type your message..." style="flex:1; padding:0.5rem 0.75rem; border:1px solid var(--border-strong); border-radius:8px; resize:none; font-size:0.9rem; font-family:inherit;"></textarea>
-          <button class="btn btn-primary" id="btn-send-chat" data-testid="pg-send" style="align-self:flex-end; padding:0.5rem 1.25rem;">Send</button>
+        <div class="pg-composer">
+          <textarea id="pg-input" data-testid="pg-input" rows="2" placeholder="Type your message…" class="pg-input"></textarea>
+          <button class="btn btn-primary pg-send" id="btn-send-chat" data-testid="pg-send">Send</button>
         </div>
-        <div id="pg-status" data-testid="pg-status" class="muted" style="font-size:0.75rem; margin-top:0.25rem;"></div>
+        <div id="pg-status" data-testid="pg-status" class="muted pg-status"></div>
       </div>
     </section>
 
@@ -533,10 +533,10 @@
 </div>
 
 <div class="toast-container" id="toast-container"></div>
-<script src="/dashboard/app.js?v=23"></script>
-<script src="/dashboard/auto_update.js?v=5"></script>
+<script src="/dashboard/app.js?v=24"></script>
+<script src="/dashboard/auto_update.js?v=7"></script>
 <script src="/dashboard/catalog_history.js?v=2"></script>
-<script src="/dashboard/live_requests.js?v=2"></script>
+<script src="/dashboard/live_requests.js?v=4"></script>
 <script type="module" src="/dashboard/live3d.js?v=5"></script>
 </body>
 </html>

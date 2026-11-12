@@ -262,7 +262,7 @@
           h("button", { className: "btn btn-sm", type: "button", onClick: function () { act([s.id], "reject"); } }, "Reject"))));
     });
     function chosen() { return Object.keys(selected).filter(function (k) { return selected[k]; }); }
-    const bulk = h("div", { className: "btn-group", style: "margin-top:0.5rem;" },
+    const bulk = h("div", { className: "btn-group mt-2" },
       h("button", { className: "btn btn-sm", type: "button", onClick: function () {
         const ids = chosen(); if (!ids.length) { status.textContent = "Select at least one row."; return; } act(ids, "apply");
       } }, "Apply selected"),

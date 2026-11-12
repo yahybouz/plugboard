@@ -161,7 +161,7 @@ A rejected price is not asked again until the model's catalog entry changes. **P
 
 ## Why was I billed this price?
 
-1. **Find the request.** In **Usage & Billing → Recent requests** (or `GET /admin/usage/{month}`), each entry has `provider_id` (the provider that served the call, after any fallback), `price_key` and `price_source`.
+1. **Find the request.** In **Usage & billing → Recent requests** (or `GET /admin/usage/{month}`), each entry has `provider_id` (the provider that served the call, after any fallback), `price_key` and `price_source`.
 2. **Read the price key.** `gpt-4o` is a vendor price from `models`; `openrouter|openai/gpt-4o` is the price of the `openrouter` space in `models_by_provider`. An empty key means no price matched and the call was recorded at $0 (see `GET /admin/coverage/pricing`).
 3. **Read the source.** `manual` is an admin edit; `external`, `official`, `provider_native`, `models_dev`, `litellm` and `known` are the automatic sources above; `llm` is a suggestion applied by an admin.
 4. **Check the grid.** `GET /admin/pricing/{month}` shows the entry. A price change waiting in the review queue was not used: the previous price was.

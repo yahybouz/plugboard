@@ -65,8 +65,8 @@ Check that `.env` contains `HOST=127.0.0.1` (set by `.env.example`; without it `
 
 Then, in the dashboard:
 
-1. **Providers → + Add Direct Provider**: pick a preset (for example *Anthropic Direct*) and paste your API key. If Ollama is running on `http://localhost:11434`, it is registered automatically at startup.
-2. **API Keys → + New Key**: enter a client ID (for example `my-app`), optionally a monthly limit and an RPM limit, and copy the `pb_...` key. It is displayed only once.
+1. **Providers → + Add direct provider**: pick a preset (for example *Anthropic Direct*) and paste your API key. If Ollama is running on `http://localhost:11434`, it is registered automatically at startup.
+2. **API keys → + New key**: enter a client ID (for example `my-app`), optionally a monthly limit and an RPM limit, and copy the `pb_...` key. It is displayed only once.
 3. **Playground**: send a test message to any listed model.
 
 Next steps: [Getting started](docs/guide/getting-started.md) · [Providers and subscriptions](docs/guide/providers-and-subscriptions.md) · [Deployment](docs/guide/deployment.md).

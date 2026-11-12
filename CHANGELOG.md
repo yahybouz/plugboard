@@ -20,6 +20,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **A disabled provider's model went to the other providers** (BUG-44): a request for a model of a provider turned off (`ollama:qwen3:8b`, or a name only that provider lists) was sent to every other active provider in turn, so a prompt meant for the local model reached cloud providers, and a preflight pinged and billed them. It now gets `503` `provider_disabled` and nothing is called, on the chat routes (v1, v2, streamed or not, MCP and Playground included) and the preflight; the routing core refuses it for every other caller too. A key's `allowed_models` is checked against the real owner; no cached answer is served for such a model. One exception remains: while an active provider has no model list (a custom endpoint never discovered), a bare name such as `qwen3:8b` is still sent to the active providers, since that one may serve any name; the `ollama:` prefix is always refused.
 
+### Changed
+
+- **The dashboard follows a written design system**: [DESIGN.md](DESIGN.md) lists the color, type, spacing and radius tokens shared by the admin dashboard, the client portal and the ticket board, and every page now uses only these tokens: 27 font sizes become 7, 32 spacings a 9-step scale, and inline styles become named classes (the ones scripts toggle stay). `tests/test_dashboard_design_tokens.py` keeps raw values, undefined variables and old labels out. Labels follow one rule: US English, sentence case (*API keys*, *Usage & billing*, *Add direct provider*), *Log out*, and `…` for work in progress. `/suivi` is now in English, with the sidebar link **Tickets**; the status and type values of its API do not change and its server error messages are still in French. The client portal gets the dashboard layout (its header and key figures had none), follows the light or dark system setting instead of forcing dark, and draws its chart with the palette. The Ollama **Delete** button is red as intended. No behavior changes.
+
 ## [4.9.0] — 2026-11-11
 
 ### Security

@@ -1,4 +1,4 @@
-/* ── Plugboard Admin Dashboard ──────────────────────────────────────────── */
+/* ── Plugboard admin dashboard ──────────────────────────────────────────── */
 "use strict";
 
 // ── Toast notifications ─────────────────────────────────────────────────────
@@ -201,7 +201,7 @@ function table(headers, rows) {
 
 function skeleton(count) {
   const els = [];
-  for (let i = 0; i < count; i++) els.push(h("div", { className: "skeleton skeleton-card", style: "margin-bottom:0.75rem;" }));
+  for (let i = 0; i < count; i++) els.push(h("div", { className: "skeleton skeleton-card mb-3" }));
   return h("div", null, els);
 }
 
@@ -299,7 +299,7 @@ async function loadOverview() {
           h("td", null, (metrics[pid].latency_avg || 0).toFixed(3) + "s"),
         );
       });
-      metricsContainer.appendChild(table(["Provider", "Requests", "Errors", "Avg Latency"], rows));
+      metricsContainer.appendChild(table(["Provider", "Requests", "Errors", "Avg latency"], rows));
     } else {
       metricsContainer.appendChild(emptyState("—", "No metrics recorded yet."));
     }
@@ -317,7 +317,7 @@ function statCard(icon, label, value, color) {
   return card;
 }
 
-// ── API Keys ────────────────────────────────────────────────────────────────
+// ── API keys ────────────────────────────────────────────────────────────────
 
 const createKeyForm = document.getElementById("create-key-form");
 const newKeyAlert = document.getElementById("new-key-alert");
@@ -397,7 +397,7 @@ async function deleteKey(keyId) {
   loadKeys();
 }
 
-// ── Usage & Billing ─────────────────────────────────────────────────────────
+// ── Usage & billing ─────────────────────────────────────────────────────────
 
 const usageMonthInput = document.getElementById("usage-month");
 usageMonthInput.value = toHtmlMonth(currentMonth());
@@ -432,9 +432,9 @@ async function loadUsage() {
 
     cardsEl.innerHTML = "";
     cardsEl.appendChild(statCard("📈", "Requests", fmt(s.total_entries || 0), "accent"));
-    cardsEl.appendChild(statCard("💬", "Prompt Tokens", fmt(s.total_prompt_tokens || 0), ""));
-    cardsEl.appendChild(statCard("💬", "Completion Tokens", fmt(s.total_completion_tokens || 0), ""));
-    cardsEl.appendChild(statCard("💰", "Total Cost", usd(s.total_cost_usd || 0), "orange"));
+    cardsEl.appendChild(statCard("💬", "Prompt tokens", fmt(s.total_prompt_tokens || 0), ""));
+    cardsEl.appendChild(statCard("💬", "Completion tokens", fmt(s.total_completion_tokens || 0), ""));
+    cardsEl.appendChild(statCard("💰", "Total cost", usd(s.total_cost_usd || 0), "orange"));
 
     // By client
     const byClient = {};
@@ -515,7 +515,7 @@ document.getElementById("btn-add-provider").addEventListener("click", function (
   document.getElementById("pf-timeout").value = "60";
   document.getElementById("pf-edit-id").value = "";
   document.getElementById("pf-submit-btn").textContent = "Create";
-  document.getElementById("pf-form-title").textContent = "Add Provider";
+  document.getElementById("pf-form-title").textContent = "Add provider";
   document.getElementById("pf-token").placeholder = "Bearer token";
   document.getElementById("pf-token").required = true;
   document.getElementById("pf-auto-discover").checked = false;
@@ -579,7 +579,7 @@ function _fillPresetSelect(query) {
   count.textContent = query ? shown + " provider" + plural + " match" : _directPresets.length + " providers available";
   if (previous && Array.prototype.some.call(select.options, function (o) { return o.value === previous; })) select.value = previous;
   if (!shown) {
-    document.getElementById("dp-setup-guide").innerHTML = '<p class="muted">No provider matches. Add it as a custom endpoint with <strong>+ Add Custom Provider</strong>.</p>';
+    document.getElementById("dp-setup-guide").innerHTML = '<p class="muted">No provider matches. Add it as a custom endpoint with <strong>+ Add custom provider</strong>.</p>';
     document.getElementById("btn-dp-create").disabled = true;
     document.getElementById("btn-dp-test").disabled = true;
     return;
@@ -614,23 +614,23 @@ function _copyToClipboard(text, btn) {
 
 function _renderSetupSteps(preset) {
   if (!preset.setup_steps?.length) return "";
-  let html = '<div style="background:var(--bg-secondary); border:1px solid var(--border-strong); border-radius:8px; padding:0.75rem 1rem;">';
-  html += '<div style="font-weight:600; font-size:0.85rem; margin-bottom:0.5rem; color:var(--text);">Setup guide</div>';
-  html += '<ol style="margin:0; padding-left:1.25rem; font-size:0.85rem; line-height:1.5;">';
+  let html = '<div class="setup-guide">';
+  html += '<div class="setup-guide-title">Setup guide</div>';
+  html += '<ol class="setup-guide-steps">';
   preset.setup_steps.forEach(function (step, i) {
-    html += '<li style="margin-bottom:0.6rem;">';
+    html += '<li class="setup-guide-step">';
     html += '<strong>' + _escape(step.title) + '</strong>';
     if (step.description) {
-      html += '<div style="color:var(--text-muted); font-size:0.8rem; margin-top:0.15rem;">' + _escape(step.description) + '</div>';
+      html += '<div class="setup-guide-desc">' + _escape(step.description) + '</div>';
     }
     if (step.link) {
-      html += '<div style="margin-top:0.2rem;"><a href="' + _escape(_safeHref(step.link)) + '" target="_blank" rel="noopener noreferrer" style="color:var(--accent-dark); font-size:0.8rem;">' + _escape(step.link) + ' →</a></div>';
+      html += '<div class="setup-guide-link"><a href="' + _escape(_safeHref(step.link)) + '" target="_blank" rel="noopener noreferrer">' + _escape(step.link) + ' →</a></div>';
     }
     if (step.command) {
       const cmdId = "dp-cmd-" + i;
-      html += '<div style="margin-top:0.3rem; display:flex; gap:0.4rem; align-items:center;">';
-      html += '<code id="' + cmdId + '" style="flex:1; background:var(--code-bg); color:var(--code-text); padding:0.35rem 0.6rem; border-radius:4px; font-size:0.78rem; font-family:var(--mono);">' + _escape(step.command) + '</code>';
-      html += '<button type="button" data-cmd="' + _escape(step.command) + '" class="btn btn-ghost btn-sm dp-copy-btn" style="font-size:0.75rem; padding:0.2rem 0.5rem;">Copy</button>';
+      html += '<div class="row mt-1">';
+      html += '<code id="' + cmdId + '" class="setup-guide-cmd">' + _escape(step.command) + '</code>';
+      html += '<button type="button" data-cmd="' + _escape(step.command) + '" class="btn btn-ghost btn-sm dp-copy-btn setup-guide-copy">Copy</button>';
       html += '</div>';
     }
     html += '</li>';
@@ -700,10 +700,10 @@ async function _renderPresetView() {
 
   // Header info
   let header = '';
-  if (preset.base_url) header += '<div style="font-size:0.75rem; color:var(--text-muted); margin-bottom:0.5rem;">Endpoint : <code>' + _escape(preset.base_url) + '</code>';
-  if (preset.default_model) header += ' · Default model : <code>' + _escape(preset.default_model) + '</code>';
+  if (preset.base_url) header += '<div class="preset-endpoint">Endpoint: <code>' + _escape(preset.base_url) + '</code>';
+  if (preset.default_model) header += ' · Default model: <code>' + _escape(preset.default_model) + '</code>';
   if (preset.base_url) header += '</div>';
-  if (preset.reason) header += '<div style="background:var(--orange-bg); border:1px solid var(--orange-border); color:var(--orange-text); padding:0.5rem 0.75rem; border-radius:6px; margin-bottom:0.5rem; font-size:0.85rem;">⚠️ ' + _escape(preset.reason) + '</div>';
+  if (preset.reason) header += '<div class="alert alert-warning small mb-2">⚠️ ' + _escape(preset.reason) + '</div>';
 
   // Setup steps
   guideEl.innerHTML = header + _renderSetupSteps(preset);
@@ -764,7 +764,7 @@ async function _renderPresetView() {
   document.getElementById("dp-test-token").checked = false;
   _dpTested = null;
   if (preset.catalog) {
-    guideEl.insertAdjacentHTML("afterbegin", '<div class="alert alert-warning small" style="margin-bottom:0.5rem;">Community preset from models.dev, not verified by Plugboard. Test the key before relying on it.</div>');
+    guideEl.insertAdjacentHTML("afterbegin", '<div class="alert alert-warning small mb-2">Community preset from models.dev, not verified by Plugboard. Test the key before relying on it.</div>');
   }
 }
 
@@ -829,10 +829,10 @@ async function _checkBrokerConnection(preset) {
       return c.source === preset.oauth_source;
     });
     if (match) {
-      statusEl.innerHTML = '<span style="color:var(--green);">✓ Already connected as <strong>'
+      statusEl.innerHTML = '<span class="text-green">✓ Already connected as <strong>'
         + _escape(match.account) + '</strong></span>'
-        + ' <button type="button" class="btn btn-ghost btn-sm" id="dp-reconnect-btn" style="margin-left:0.5rem;">Reconnect</button>'
-        + ' <button type="button" class="btn btn-danger btn-sm" id="dp-disconnect-btn" style="margin-left:0.25rem;">Disconnect</button>';
+        + ' <button type="button" class="btn btn-ghost btn-sm ml-2" id="dp-reconnect-btn">Reconnect</button>'
+        + ' <button type="button" class="btn btn-danger btn-sm ml-1" id="dp-disconnect-btn">Disconnect</button>';
       createBtn.textContent = "Provider ready";
       createBtn.disabled = false;
       const reconnectBtn = document.getElementById("dp-reconnect-btn");
@@ -846,7 +846,7 @@ async function _checkBrokerConnection(preset) {
         });
       }
     } else {
-      statusEl.innerHTML = '<span style="color:var(--text-muted);">Not connected yet. Click the button to start.</span>';
+      statusEl.innerHTML = '<span class="text-muted">Not connected yet. Click the button to start.</span>';
     }
   } catch (e) { console.debug("broker status unavailable:", e); }
 }
@@ -854,7 +854,7 @@ async function _checkBrokerConnection(preset) {
 async function _checkCLI(preset) {
   const statusEl = document.getElementById("dp-status");
   const createBtn = document.getElementById("btn-dp-create");
-  statusEl.innerHTML = '<span style="color:var(--text-muted);">Checking CLI...</span>';
+  statusEl.innerHTML = '<span class="text-muted">Checking CLI…</span>';
   try {
     const res = await api("GET", "/admin/direct-providers/" + preset.key + "/check");
     const status = await res.json();
@@ -867,15 +867,15 @@ async function _checkCLI(preset) {
       } else {
         label = '✓ Logged in as <strong>' + _escape(status.account || "user") + '</strong>';
       }
-      statusEl.innerHTML = '<span style="color:var(--green);">' + label + '</span>';
+      statusEl.innerHTML = '<span class="text-green">' + label + '</span>';
       createBtn.disabled = false;
     } else {
-      statusEl.innerHTML = '<span style="color:var(--red);">✗ ' + _escape(status.error || "Not available") + '</span>';
+      statusEl.innerHTML = '<span class="text-red">✗ ' + _escape(status.error || "Not available") + '</span>';
       createBtn.disabled = true;
     }
   } catch (e) {
     if (!_presetStillSelected(preset)) return;
-    statusEl.innerHTML = '<span style="color:var(--red);">✗ Check failed: ' + _escape(e.message) + '</span>';
+    statusEl.innerHTML = '<span class="text-red">✗ Check failed: ' + _escape(e.message) + '</span>';
     createBtn.disabled = true;
   }
 }
@@ -957,7 +957,7 @@ let _oauthMsgHandler = null;
 
 async function _startBrokerFlow(preset) {
   const statusEl = document.getElementById("dp-status");
-  statusEl.innerHTML = '<span style="color:var(--text-muted);">Starting OAuth flow...</span>';
+  statusEl.innerHTML = '<span class="text-muted">Starting OAuth flow…</span>';
   try {
     const res = await api("POST", "/admin/oauth/start", { preset: preset.key });
     if (!res.ok) {
@@ -973,7 +973,7 @@ async function _startBrokerFlow(preset) {
       throw new Error("Unknown flow type: " + data.flow);
     }
   } catch (e) {
-    statusEl.innerHTML = '<span style="color:var(--red);">✗ ' + _escape(e.message) + '</span>';
+    statusEl.innerHTML = '<span class="text-red">✗ ' + _escape(e.message) + '</span>';
     toast("OAuth start failed: " + e.message, "error");
   }
 }
@@ -985,11 +985,11 @@ function _runPopupFlow(preset, data) {
   const popup = window.open(data.auth_url, "oauth_" + preset.oauth_source,
                           "width=600,height=720,left=200,top=100,noreferrer");
   if (!popup) {
-    statusEl.innerHTML = '<span style="color:var(--red);">✗ Popup blocked. Allow popups for this site.</span>';
+    statusEl.innerHTML = '<span class="text-red">✗ Popup blocked. Allow popups for this site.</span>';
     toast("Popup blocked — allow popups and retry", "error");
     return;
   }
-  statusEl.innerHTML = '<span style="color:var(--text-muted);">Waiting for authorization in the popup window...</span>';
+  statusEl.innerHTML = '<span class="text-muted">Waiting for authorization in the popup window…</span>';
 
   // Clean up any previous listener
   if (_oauthMsgHandler) window.removeEventListener("message", _oauthMsgHandler);
@@ -1001,7 +1001,7 @@ function _runPopupFlow(preset, data) {
         && event.data.source === preset.oauth_source) {
       window.removeEventListener("message", _oauthMsgHandler);
       _oauthMsgHandler = null;
-      statusEl.innerHTML = '<span style="color:var(--green);">✓ Connected as <strong>'
+      statusEl.innerHTML = '<span class="text-green">✓ Connected as <strong>'
         + _escape(event.data.account) + '</strong></span>';
       toast("Connected: " + event.data.account, "success");
       directProviderForm.style.display = "none";
@@ -1010,7 +1010,7 @@ function _runPopupFlow(preset, data) {
                && event.data.source === preset.oauth_source) {
       window.removeEventListener("message", _oauthMsgHandler);
       _oauthMsgHandler = null;
-      statusEl.innerHTML = '<span style="color:var(--red);">✗ OAuth failed: '
+      statusEl.innerHTML = '<span class="text-red">✗ OAuth failed: '
         + _escape(event.data.error) + '</span>';
       toast("OAuth failed: " + event.data.error, "error");
     }
@@ -1027,7 +1027,7 @@ function _runDeviceFlow(preset, data) {
   const deviceStatus = document.getElementById("device-status");
 
   codeEl.textContent = data.user_code || "----";
-  deviceStatus.textContent = "Waiting for authorization...";
+  deviceStatus.textContent = "Waiting for authorization…";
   modal.style.display = "flex";
   modal.classList.remove("hidden");
 
@@ -1054,7 +1054,7 @@ function _runDeviceFlow(preset, data) {
         _closeDeviceFlow();
         toast("OAuth " + d.status + ": " + (d.error || ""), "error");
       } else {
-        deviceStatus.textContent = "Waiting for authorization... (" + d.status + ")";
+        deviceStatus.textContent = "Waiting for authorization… (" + d.status + ")";
       }
     } catch (e) { console.debug("discovery poll failed:", e); /* keep polling */ }
   }, interval);
@@ -1153,7 +1153,7 @@ async function loadProviders() {
         )),
       );
     });
-    container.appendChild(table(["Name / ID", "Base URL", "Default Model", "Timeout", "Status", "Health", "Models", "Actions"], rows));
+    container.appendChild(table(["Name / ID", "Base URL", "Default model", "Timeout", "Status", "Health", "Models", "Actions"], rows));
   } catch (e) { console.warn("providers load failed:", e); container.innerHTML = ""; container.appendChild(h("div", { className: "alert alert-error" }, "Failed to load providers.")); }
 }
 
@@ -1175,7 +1175,7 @@ function editProvider(p) {
   document.getElementById("pf-token").placeholder = "Leave empty to keep current";
   document.getElementById("pf-token").required = false;
   document.getElementById("pf-submit-btn").textContent = "Update";
-  document.getElementById("pf-form-title").textContent = "Edit Provider";
+  document.getElementById("pf-form-title").textContent = "Edit provider";
 }
 
 async function deleteProvider(id) {
@@ -1300,7 +1300,7 @@ async function loadMonitoring() {
         );
       });
       providersEl.appendChild(table(
-        ["Provider", "Status", "Latency", "Requests", "Error Rate", "Uptime 24h", "Models"],
+        ["Provider", "Status", "Latency", "Requests", "Error rate", "Uptime 24h", "Models"],
         rows
       ));
     } else {
@@ -1399,7 +1399,7 @@ async function runJob(jobId) {
     logEl.innerHTML = "";
     logEl.appendChild(h("div", { className: "card" },
       h("div", { className: "card-header" }, h("span", { className: "card-title" }, jobName + " — Output")),
-      h("pre", { style: "font-family:var(--mono);font-size:0.8rem;white-space:pre-wrap;max-height:400px;overflow:auto;color:var(--text-secondary);margin:0;" }, data.output || errMsg || "No output")
+      h("pre", { className: "log-pre" }, data.output || errMsg || "No output")
     ));
   } catch (err) { toast("Failed to run job: " + err.message, "error"); }
 }
@@ -1416,7 +1416,7 @@ async function viewJobLog(jobId) {
         h("span", { className: "card-title" }, data.name + " — last result"),
         h("span", { className: "badge badge-" + ({ success: "green", error: "red" }[data.status] || "muted") }, data.status || "unknown"),
       ),
-      h("pre", { style: "font-family:var(--mono);font-size:0.78rem;white-space:pre-wrap;max-height:500px;overflow:auto;color:var(--text-secondary);margin:0;padding:1rem;background:var(--bg);border-radius:8px;" }, data.output || "No result yet.")
+      h("pre", { className: "log-pre log-pre-boxed" }, data.output || "No result yet.")
     ));
   } catch (err) {
     logEl.innerHTML = "";
@@ -1574,7 +1574,7 @@ async function loadOllamaCloudCatalog() {
     const models = data.models || [];
     el.innerHTML = "";
     if (models.length === 0) {
-      el.appendChild(h("div", { className: "muted", style: "padding:1rem;" }, "The public cloud catalogue is empty or unreachable."));
+      el.appendChild(h("div", { className: "muted empty-note" }, "The public cloud catalog is empty or unreachable."));
       return;
     }
     // Adding a cloud model goes through the local Ollama: offer nothing while
@@ -1595,7 +1595,7 @@ async function loadOllamaCloudCatalog() {
       else if (m.installed) badge = h("span", { className: "badge badge-green" }, "installed");
       else badge = h("span", { className: "badge badge-muted" }, "available");
       tbody.appendChild(h("tr", null,
-        h("td", null, h("span", { style: "font-weight:600;" }, id)),
+        h("td", null, h("span", { className: "fw-semibold" }, id)),
         h("td", null, badge),
         h("td", null, (!online || m.installed) ? null : h("button", { className: "btn btn-ghost btn-sm", onClick: function () { _pullFromCatalog(id); } }, "Add"))
       ));
@@ -1604,7 +1604,7 @@ async function loadOllamaCloudCatalog() {
     el.appendChild(table);
   } catch (err) {
     el.innerHTML = "";
-    el.appendChild(h("div", { className: "alert alert-error" }, "Failed to load the cloud catalogue: " + err.message));
+    el.appendChild(h("div", { className: "alert alert-error" }, "Failed to load the cloud catalog: " + err.message));
   }
 }
 
@@ -1627,7 +1627,7 @@ async function loadOllamaStatus() {
     ));
     el.appendChild(h("div", { className: "stat-card" },
       h("div", { className: "stat-label" }, "URL"),
-      h("div", { className: "stat-value", style: "font-size:0.85rem;" }, d.url)
+      h("div", { className: "stat-value stat-value-sm" }, d.url)
     ));
     el.appendChild(h("div", { className: "stat-card" },
       h("div", { className: "stat-label" }, "Provider"),
@@ -1656,7 +1656,7 @@ async function loadOllamaModels() {
     const models = data.models || [];
     if (models.length === 0) {
       el.innerHTML = "";
-      el.appendChild(h("div", { className: "muted", style: "padding:1rem;" }, "No models installed. Use \"+ Pull Model\" to download one."));
+      el.appendChild(h("div", { className: "muted empty-note" }, "No models installed. Use \"+ Pull model\" to download one."));
       return;
     }
     const table = h("table", { className: "data-table" },
@@ -1676,13 +1676,13 @@ async function loadOllamaModels() {
       const modified = m.modified_at ? new Date(m.modified_at).toLocaleDateString() : "-";
       tbody.appendChild(h("tr", null,
         h("td", null,
-          h("span", { style: "font-weight:600;" }, name)
+          h("span", { className: "fw-semibold" }, name)
         ),
         h("td", null, size),
         h("td", null, modified),
         h("td", null,
           h("button", { className: "btn btn-ghost btn-sm", onClick: function () { showOllamaModelInfo(name); } }, "Info"),
-          h("button", { className: "btn btn-ghost btn-sm", style: "color:var(--danger);", onClick: function () { deleteOllamaModel(name); } }, "Delete")
+          h("button", { className: "btn btn-ghost btn-sm text-red", onClick: function () { deleteOllamaModel(name); } }, "Delete")
         )
       ));
     });
@@ -1701,7 +1701,7 @@ async function pullOllamaModel(name) {
   const statusEl = document.getElementById("ollama-pull-status");
   progressEl.style.display = "block";
   fillEl.style.width = "0%";
-  statusEl.textContent = "Starting pull for " + name + "...";
+  statusEl.textContent = "Starting pull for " + name + "…";
 
   try {
     const res = await fetch("/admin/ollama/models/pull", {
@@ -1825,16 +1825,16 @@ function _initPlaygroundEvents() {
     const btn = document.getElementById("btn-check-internet");
     const oldText = btn.textContent;
     btn.disabled = true;
-    btn.textContent = "⏳ Probing...";
+    btn.textContent = "⏳ Probing…";
 
-    toast("Checking internet access for " + modelId + "...", "success");
+    toast("Checking internet access for " + modelId + "…", "success");
 
     try {
       const res = await api("POST", "/admin/models/check-internet", { model_id: modelId, persist: true });
       const data = await res.json();
 
       if (data.status === "quarantined") {
-        toast("Model not found and has been quarantined. Reloading selector...", "error");
+        toast("Model not found and has been quarantined. Reloading selector…", "error");
         await loadPlayground();
       } else if (data.status === "busy") {
         toast("The provider is busy: nothing was checked. Retry in a few seconds.", "warning");
@@ -1864,8 +1864,8 @@ function _initPlaygroundEvents() {
     if (!await confirmAction("Probe ALL models for live internet access? This calls each model with a real prompt — may take a few minutes and consume some quota. Persistence: results saved to providers.json.")) return;
 
     btn.disabled = true;
-    btn.textContent = "⏳ Probing all...";
-    statusEl.textContent = "Bulk internet check in progress...";
+    btn.textContent = "⏳ Probing all…";
+    statusEl.textContent = "Bulk internet check in progress…";
 
     try {
       const res = await api("POST", "/admin/models/check-internet/all", { persist: true });
@@ -1950,7 +1950,7 @@ async function loadPlayground() {
 function _pgAddDivider(text) {
   const container = document.getElementById("pg-messages");
   const divider = document.createElement("p");
-  divider.style.cssText = "align-self:stretch; text-align:center; font-size:0.75rem; color:var(--text-muted); border-top:1px dashed var(--border-strong); padding-top:0.4rem; margin:0.5rem 0;";
+  divider.className = "chat-divider";
   divider.textContent = text;
   divider.dataset.role = "divider";
   container.appendChild(divider);
@@ -1970,9 +1970,7 @@ function _pgAddMessage(role, content) {
   if (placeholder) placeholder.remove();
 
   const bubble = document.createElement("div");
-  bubble.style.cssText = role === "user"
-    ? "align-self:flex-end; background:var(--accent); color:var(--on-accent); border-radius:12px 12px 2px 12px; padding:0.6rem 0.9rem; max-width:75%; white-space:pre-wrap; font-size:0.9rem;"
-    : "align-self:flex-start; background:var(--bg-card); border:1px solid var(--border-strong); border-radius:12px 12px 12px 2px; padding:0.6rem 0.9rem; max-width:75%; white-space:pre-wrap; font-size:0.9rem;";
+  bubble.className = role === "user" ? "chat-bubble chat-bubble-user" : "chat-bubble chat-bubble-assistant";
   bubble.textContent = content;
   bubble.dataset.role = role;
   bubble.dataset.testid = "message-bubble";  // live-test UI selector (C9 / P4-05)
@@ -2009,7 +2007,7 @@ async function _pgSend() {
   const assistantBubble = _pgAddMessage("assistant", "...");
   assistantBubble.dataset.model = model;
   assistantBubble.title = "Answer from " + model;
-  statusEl.textContent = "Sending to " + model + "...";
+  statusEl.textContent = "Sending to " + model + "…";
   statusEl.dataset.state = "sending";  // live-test completion hook (C9)
   if (window.plugboardLive) window.plugboardLive.ticker(statusEl, model);  // PLU-13
 
@@ -2058,13 +2056,13 @@ async function _pgSend() {
         if (thinkingEl) return;
         thinkingEl = document.createElement("details");
         thinkingEl.open = true; // open while streaming, will collapse on done
-        thinkingEl.style.cssText = "align-self:flex-start; max-width:75%; margin-bottom:0.25rem; background:var(--bg-secondary); border:1px solid var(--border-strong); border-radius:10px; padding:0.35rem 0.6rem; font-size:0.8rem; color:var(--text-secondary);";
+        thinkingEl.className = "chat-thinking";
         const summary = document.createElement("summary");
-        summary.style.cssText = "cursor:pointer; user-select:none; font-weight:500;";
+        summary.className = "chat-thinking-summary";
         summary.textContent = "🧠 Thinking…";
         thinkingEl.appendChild(summary);
         thinkingContent = document.createElement("div");
-        thinkingContent.style.cssText = "white-space:pre-wrap; margin-top:0.4rem; font-family:ui-monospace,monospace; font-size:0.75rem; max-height:300px; overflow-y:auto;";
+        thinkingContent.className = "chat-thinking-body";
         thinkingEl.appendChild(thinkingContent);
         assistantBubble.parentNode.insertBefore(thinkingEl, assistantBubble);
       }
@@ -2174,13 +2172,13 @@ async function _pgSend() {
       // UX as the streaming path so thinking models behave consistently.
       if (reasoning) {
         const thinkEl = document.createElement("details");
-        thinkEl.style.cssText = "align-self:flex-start; max-width:75%; margin-bottom:0.25rem; background:var(--bg-secondary); border:1px solid var(--border-strong); border-radius:10px; padding:0.35rem 0.6rem; font-size:0.8rem; color:var(--text-secondary);";
+        thinkEl.className = "chat-thinking";
         const sumEl = document.createElement("summary");
-        sumEl.style.cssText = "cursor:pointer; user-select:none; font-weight:500;";
+        sumEl.className = "chat-thinking-summary";
         sumEl.textContent = "🧠 Thinking (click to expand)";
         thinkEl.appendChild(sumEl);
         const contentEl = document.createElement("div");
-        contentEl.style.cssText = "white-space:pre-wrap; margin-top:0.4rem; font-family:ui-monospace,monospace; font-size:0.75rem; max-height:300px; overflow-y:auto;";
+        contentEl.className = "chat-thinking-body";
         contentEl.textContent = reasoning;
         thinkEl.appendChild(contentEl);
         assistantBubble.parentNode.insertBefore(thinkEl, assistantBubble);
@@ -2216,6 +2214,6 @@ function _pgClear() {
   _pgHistory = [];
   _pgContextModel = "";
   const container = document.getElementById("pg-messages");
-  container.innerHTML = '<div class="muted" style="text-align:center; padding:2rem;">Select a model and start chatting.</div>';
+  container.innerHTML = '<div class="muted pg-empty">Select a model and start chatting.</div>';
   document.getElementById("pg-status").textContent = "";
 }

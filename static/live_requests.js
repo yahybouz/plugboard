@@ -84,21 +84,7 @@
   }
 
   function mount() {
-    var css = el("style", [
-      "#live-pill{position:fixed;right:12px;bottom:12px;z-index:900;padding:4px 10px;border-radius:999px;",
-      "font-size:12px;cursor:pointer;background:var(--bg-secondary,#151922);color:var(--text-secondary,#aab);",
-      "border:1px solid var(--border-strong,#334);}",
-      "#live-pill[data-count]:not([data-count='0']){color:#fff;border-color:#4c9;}",
-      "#live-pill[data-slow='1']{border-color:#e90;}",
-      "#live-panel{position:fixed;right:12px;bottom:46px;z-index:900;max-width:min(560px,94vw);max-height:60vh;",
-      "overflow:auto;padding:8px 10px;border-radius:10px;font-size:12px;background:var(--bg-secondary,#151922);",
-      "color:var(--text-primary,#dde);border:1px solid var(--border-strong,#334);}",
-      "#live-panel[hidden]{display:none;}",
-      ".live-title{font-weight:600;margin:6px 0 2px;}.live-empty{opacity:.7;}",
-      ".live-row{display:flex;gap:8px;flex-wrap:wrap;padding:2px 0;}",
-      ".live-row[data-state='slow']{color:#e90;}.live-row[data-state='error']{color:#f66;}",
-    ].join(""));
-    document.head.appendChild(css);
+    // Styles: "Live requests" in style.css.
     pill = el("button", "0 in flight");
     pill.id = "live-pill";
     pill.type = "button";

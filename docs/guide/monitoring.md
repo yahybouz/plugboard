@@ -24,7 +24,7 @@ curl -s -b admin.cookies http://localhost:8765/admin/watchdog
 curl -s -b admin.cookies -X POST http://localhost:8765/auth/admin/logout
 ```
 
-Sessions are stored on the server (`data/admin_sessions.json`) and last `ADMIN_SESSION_MAX_AGE` (8 hours). Logout revokes that session; `POST /auth/admin/logout-all` (dashboard: **Log out everywhere**) revokes every session, this one included, and forgets every browser remembered for local auto-login (sign in again with the link `make dev` opens, or with `ADMIN_KEY`); enrolling, rotating or disabling MFA revokes every session; a session opened without a code stops working once MFA is enforced. Keep the cookie file private and delete it after use. Without enforced MFA the bearer alone works as before.
+Sessions are stored on the server (`data/admin_sessions.json`) and last `ADMIN_SESSION_MAX_AGE` (8 hours). **Log out** revokes that session; `POST /auth/admin/logout-all` (dashboard: **Log out everywhere**) revokes every session, this one included, and forgets every browser remembered for local auto-login (sign in again with the link `make dev` opens, or with `ADMIN_KEY`); enrolling, rotating or disabling MFA revokes every session; a session opened without a code stops working once MFA is enforced. Keep the cookie file private and delete it after use. Without enforced MFA the bearer alone works as before.
 
 Once a secret is enrolled, changing the second factor needs a current code from it, even from an open session: `DELETE /admin/mfa` takes it in the `X-Plugboard-Admin-TOTP` header, and rotating through `POST /admin/mfa/setup` takes it as `current_code` next to the new `secret` and `code`. Without it the call is refused with 403; wrong codes count towards the login lockout. With a lost authenticator, run `scripts/admin_mfa_setup.py --rotate` on the host.
 
@@ -35,17 +35,17 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 | Overview | Totals and a table of requests, errors and average latency per provider since the last restart |
 | Monitoring | Health of each active provider (status, latency, error rate, uptime over 24 hours and 7 days) and the check history of the last 24 hours |
 | Catalog history | Models each provider gained or lost, newest first, filtered by provider, period and model name ([details](#catalog-history)) |
-| Usage & Billing | Requests, tokens and cost per client for a month |
+| Usage & billing | Requests, tokens and cost per client for a month |
 | Jobs | The price refresh, the model catalog refresh and the provider watchdog: state, last and next run, **Run now** |
 | Playground | Per-model connectivity and internet-access indicators |
-| Suivi (`/suivi`) | Kanban of Plugboard tickets, see below |
+| Tickets (`/suivi`) | Kanban of Plugboard tickets, see below |
 
 ## Ticket board (`/suivi`)
 
-`/suivi` (sidebar link **Suivi**) shows Plugboard tickets as a Kanban: *À trier*, *Prêt*, *En cours*, *En revue*, *Terminé*, *Bloqué*, *Abandonné*. It needs the admin session, like the dashboard; opened signed out, it goes through `/login` and back.
+`/suivi` (sidebar link **Tickets**) shows Plugboard tickets as a Kanban: *Triage*, *Ready*, *In progress*, *In review*, *Done*, *Blocked*, *Abandoned*. It needs the admin session, like the dashboard; opened signed out, it goes through `/login` and back.
 
-- Move a ticket with its **Statut** list (works on a phone and with the keyboard). *Bloqué* and *Abandonné* ask for a reason; *Terminé* needs at least one proof (command and result, commit, CI run, path or link), added under **Preuves**.
-- **Importer** reads, without changing them, `docs/superpowers/plans/*.md` (one ticket per `### Task N:` section, or per top-level checkbox), `docs/superpowers/specs/*.md` that no plan mentions yet (one "Planifier : …" ticket each) and `TODOS.md` (one ticket per `###` entry, its `**Priority:**`, type *Sécurité* under `## Security`). Importing again creates nothing twice; a task whose boxes are all checked moves to *En revue*, never to *Terminé*. `.atelier/` traces are never read, and importing starts no agent or job.
+- Move a ticket with its **Status** list (works on a phone and with the keyboard). *Blocked* and *Abandoned* ask for a reason; *Done* needs at least one proof (command and result, commit, CI run, path or link), added under **Evidence**. Error messages from the server are still in French.
+- **Import** reads, without changing them, `docs/superpowers/plans/*.md` (one ticket per `### Task N:` section, or per top-level checkbox), `docs/superpowers/specs/*.md` that no plan mentions yet (one "Planifier : …" ticket each) and `TODOS.md` (one ticket per `###` entry, its `**Priority:**`, type *Security* under `## Security`). Importing again creates nothing twice; a task whose boxes are all checked moves to *In review*, never to *Done*. `.atelier/` traces are never read, and importing starts no agent or job.
 - Tickets, proofs and the history of moves are in `data/suivi.db`. Every change is in the [audit log](#admin-audit-log) (`suivi.*` actions).
 - API (admin): `GET`/`POST /admin/suivi/tickets`, `PATCH /admin/suivi/tickets/{id}`, `POST /admin/suivi/tickets/{id}/preuves`, `POST /admin/suivi/import`. A refused move answers `409` with a `code` (`motif_requis`, `preuve_requise`).
 

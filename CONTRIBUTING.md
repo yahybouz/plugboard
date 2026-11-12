@@ -56,6 +56,7 @@ Commits follow [Conventional Commits](https://www.conventionalcommits.org): `typ
 - Keep HTTP handling in `app.py` thin; put logic in the module that owns it (`router.py`, `billing.py`, ...).
 - No secrets, tokens or personal data in code, tests, fixtures, logs or documentation. Use obviously fake values in examples.
 - Errors returned to clients use FastAPI's `{"detail": "..."}` format; secrets are masked in every response.
+- Dashboard changes follow [DESIGN.md](DESIGN.md); `tests/test_dashboard_design_tokens.py` keeps raw values out.
 
 ### Architecture decisions
 
