@@ -7,7 +7,8 @@ observation. The operator runs every command; nothing here is automated.
 
 The gate passes when the new version serves for 24 hours with **less than
 1 % of `5xx` answers** on the client routes, over at least 100 client
-requests, after a green smoke and a rollback rehearsed both ways.
+requests, after a memory measure under load below the stop threshold, a
+green smoke and a rollback rehearsed both ways.
 
 This is a planned procedure, not an incident runbook: its sections are the
 steps of the gate.
@@ -69,9 +70,75 @@ smoke() {
   python3 ~/plugboard-tools/smoke_consumers.py --url http://127.0.0.1:8765 \
     --model <model> --expect-version "$1"
 }
+# Memory of the gateway container (gateway and CLI processes), from its cgroup
+mem() {
+  gw exec -T gateway sh -c 'echo "peak $(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB, \
+now $(( $(cat /sys/fs/cgroup/memory.current) / 1048576 )) MiB, \
+$(grep oom_kill /sys/fs/cgroup/memory.events)"'
+}
 ```
 
+## Memory stop threshold (D-43)
+
+`deploy/ovh/compose.yml` limits the gateway container to `mem_limit: 3g`
+(3072 MiB), CLI processes included. The gate **stops** when the memory peak
+of the container reaches **2457 MiB (80 % of the limit)**, when
+`oom_kill` is above 0, or when the container restarts during a measure: the
+remaining 20 % absorb the background jobs (prices, model lists) and a spike
+the bench did not produce. From 2150 MiB (70 %) up, go on but report the
+figure with the gate results.
+
 ## Steps
+
+### 0. Measure the memory under load, on the UAT host (D-43)
+
+Before touching production, measure the memory of the same image under load
+on the UAT host, which already runs the release (see
+[When to use](#when-to-use)), with the CLI providers limited to one request
+at a time (the release's default). The load comes from the bench of PLU-17,
+`scripts/bench_concurrency.py`, shipped in the image; it runs in a throwaway
+container of that image, so its own memory is not counted.
+
+- `<bench-model>`: to measure what D-43 is about, a model of a CLI provider.
+  Each chat uses that subscription's quota: one pass below sends
+  (1 + 2 + 4 + 8) x 2 = 30 short chats, most of them refused with `503`
+  (busy) at 4 and 8 clients since the CLI takes one request at a time.
+- `PLUGBOARD_BENCH_KEY`: a client key of the UAT gateway allowed to use
+  `<bench-model>`.
+- Run as root on the UAT host (system Docker); the gateway container is
+  `uat-plugboard-gateway-1`, published on `127.0.0.1:18765`.
+
+```bash
+c=uat-plugboard-gateway-1
+img="$(docker inspect --format '{{.Config.Image}}' "$c")"
+docker inspect --format '{{.RestartCount}} {{.State.StartedAt}}' "$c"   # write both down
+# The release's CLI limit (1) applies, and the bench ships in the image
+docker exec "$c" sh -c 'echo "CLI limit: ${PLUGBOARD_CLI_PROVIDER_MAX_INFLIGHT:-1 (default)}"'
+docker run --rm --entrypoint ls "$img" scripts/bench_concurrency.py
+read -rs PLUGBOARD_BENCH_KEY && export PLUGBOARD_BENCH_KEY
+for n in 1 2 4 8; do
+  docker run --rm --network host -e PLUGBOARD_BENCH_KEY --entrypoint python "$img" \
+    scripts/bench_concurrency.py --url http://127.0.0.1:18765 \
+    --model <bench-model> --clients "$n" --rounds 2 --max-tokens 64
+  docker exec "$c" sh -c 'echo "clients='"$n"': peak $(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB, \
+now $(( $(cat /sys/fs/cgroup/memory.current) / 1048576 )) MiB, \
+$(grep oom_kill /sys/fs/cgroup/memory.events)"'
+done
+docker inspect --format '{{.RestartCount}} {{.State.StartedAt}}' "$c"   # unchanged
+unset PLUGBOARD_BENCH_KEY
+```
+
+`CLI limit` must be `1`, or `1 (default)`: with a higher limit the measure
+does not describe the release as production runs it. `memory.peak` is the
+highest memory of the container since it started, so
+the line after each level holds the peak up to that level. Compare the last
+line with the [stop threshold](#memory-stop-threshold-d-43): at 2457 MiB or
+more, with `oom_kill` above 0, or with a changed restart count or start time,
+**stop the gate** and report the four lines; the release must not reach
+production. `docker stats --no-stream "$c"` gives the same figure as a
+snapshot. A UAT gateway without a memory limit still gives the peak in MiB:
+the threshold is the same.
+
 
 ### 1. Record what runs now and pause the daily backup
 
@@ -230,6 +297,10 @@ Every line must be `PASS` (`SKIP embeddings` only when the smoke key holds
 no embedding identity). A `FAIL`: go back now (step 8, **Back**), then stop
 the gate.
 
+```bash
+mem    # below the stop threshold, oom_kill 0
+```
+
 ### 8. Rehearse the rollback, then go forward again
 
 Make no admin change (keys, providers, prices) during this step.
@@ -302,6 +373,14 @@ must be about 24 hours old: if it is younger, the log was rotated (3 files of
 Not counted here: an error inside a stream that already answered `200`, and
 an error served by the HTTPS proxy in front of the gateway.
 
+At the end of the 24 hours, the memory of the container must still be below
+the [stop threshold](#memory-stop-threshold-d-43), with `oom_kill 0` (the
+peak counts from the last start of the container, the daily backup included):
+
+```bash
+mem
+```
+
 ### 10. Close the gate
 
 ```bash
@@ -310,7 +389,8 @@ rm -f ~/plugboard-tools/precheck_data.py ~/plugboard-tools/smoke_consumers.py
 ```
 
 - Write down the results: versions, image IDs, `<previous-ref>`, archive
-  name, the three smoke outputs, the `/metrics` snapshots and the 5xx rate.
+  name, the memory lines of step 0 and of `mem`, the three smoke outputs, the
+  `/metrics` snapshots and the 5xx rate.
 - Keep `plugboard:rollback-<running-version>` on the host and the archive in
   `~/plugboard-gate/` until the next release passes its own gate.
 - Revoke the smoke key in the dashboard if it will not be used again.
@@ -337,6 +417,7 @@ Before step 6 nothing was switched: `git checkout <previous-ref>` and
 
 | Step | Failure | Do |
 |---|---|---|
+| 0 | memory at or above the stop threshold, `oom_kill` above 0, or a restart on the UAT host | stop before touching production; report the figures |
 | 2 | the release is not the UAT commit, or the checkout has commits the release lacks | stop; restart the backup timer |
 | 3 | the data check is not `READY` | fix the keys, run it again; do not go on |
 | 3 | the backup, its checksum or its decryption fails | stop: no upgrade without a proven backup; restart the backup timer |
@@ -345,6 +426,7 @@ Before step 6 nothing was switched: `git checkout <previous-ref>` and
 | 6, 7 | not `healthy`, or the smoke fails | go back (block above); keep the outputs |
 | 8 | the previous version fails its smoke | go forward again (**Forward**); a real way back would need the restore of rollback-release.md step 5: escalate before relying on it |
 | 9 | 1 % or more `5xx` on the client routes | go back (block above), then investigate with [rollback-release.md](rollback-release.md) |
+| 7, 9 | `mem` at or above the stop threshold, or `oom_kill` above 0 | go back (block above); report the figures |
 
 ## Escalation
 
