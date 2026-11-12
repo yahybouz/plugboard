@@ -149,8 +149,21 @@ def get_cached(cache_key: str, client_id: str = "") -> Optional[Dict[str, Any]]:
     SEC-001 v2.8.2: filters by ``client_id`` even though the cache_key
     already encodes it — defense in depth so a hash collision or a caller
     bug cannot leak across tenants.
+
+    A cache that cannot be read (database locked or damaged, file not
+    readable, stored answer that is not a JSON object) is a miss with a
+    warning: the request is served without it (BUG-49). A missing
+    ``client_id`` in strict mode still raises (SEC-001).
     """
     cid = _check_client_id(client_id)
+    try:
+        return _read_cached(cache_key, cid)
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        log.warning("Response cache unreadable, served without it: %s", exc)
+        return None
+
+
+def _read_cached(cache_key: str, cid: str) -> Optional[Dict[str, Any]]:
     conn = _get_conn()
     try:
         row = conn.execute(
@@ -176,6 +189,8 @@ def get_cached(cache_key: str, client_id: str = "") -> Optional[Dict[str, Any]]:
         )
         conn.commit()
         response = json.loads(row["response"])
+        if not isinstance(response, dict):
+            raise ValueError("stored answer is not a JSON object")
         response["_cache"] = {
             "hit": True,
             "age_seconds": round(age, 1),

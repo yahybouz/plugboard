@@ -144,6 +144,7 @@ Cache hits are not billed again. Streaming responses (`"stream": true`) are serv
 ### Request options
 
 - `"cache": false` in the request body skips the response cache for that call. With an SDK, send it as an extra body field (for example `extra_body={"cache": False}`).
+- A response cache the gateway cannot read (database locked or damaged) does not fail the call: it is served without the cache (`X-Cache: MISS`) and the gateway logs a warning.
 - `"session_id": "<uuid>"` in the body keeps the conversation on the server: Plugboard prepends the stored history, so the client only sends the new turn. The `X-LLM-Session-ID` header does the same. Sessions are isolated per client, expire after `PLUGBOARD_SESSION_TTL_S` (24 hours) and keep `PLUGBOARD_SESSION_MAX_TURNS` turns (50). The turns of one session run one after the other, in arrival order: a turn sent while the previous one is still being answered waits for it and sees it, and a client that hangs up while it waits leaves the queue. Streamed turns are kept too: an HTTP provider's stream once it is complete (an interrupted one is not), a CLI's answer before it is replayed as a stream (kept even if the client hangs up during the replay). Requests without a session never wait.
 - `/v2/chat/completions` and `/v2/models` behave like the `/v1` routes and add `X-API-Version: 2`.
 

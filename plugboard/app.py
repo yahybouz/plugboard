@@ -2044,7 +2044,12 @@ async def chat_completions(
     # leak requires LAN-level adversary; opt-in for high-sensitivity
     # deployments via PLUGBOARD_CACHE_RESPONSE_FLOOR_MS.
     _request_t0 = time.perf_counter()
-    body = await request.json()
+    try:
+        body = await request.json()
+    except (ValueError, RecursionError):
+        # BUG-48: a body that is not JSON (or not UTF-8, or nested past the
+        # parser's depth) is the client's error, not a 500.
+        raise HTTPException(400, "Request body must be valid JSON") from None
     if not isinstance(body, dict):
         raise HTTPException(400, "Request body must be a JSON object")
     if not isinstance(body.get("model", ""), str):
