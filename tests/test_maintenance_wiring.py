@@ -123,3 +123,18 @@ async def test_admin_retention_needs_admin_and_returns_settings_and_last_run(
     res = await admin_client.get("/admin/retention", headers=ADMIN)
     assert res.status_code == 200
     assert res.json()["last_run"]["deleted_total"] == 0
+
+
+async def test_a_pass_with_a_failed_store_is_an_error(stores):
+    (stores / "watchdog.db").write_bytes(b"this is not an SQLite database\n" * 200)
+    job = maintenance.retention_job()
+
+    await job.run_now()
+
+    assert job.status_dict["last_error"].startswith(
+        "RuntimeError: 1 store(s) in error: watchdog"
+    )
+    report = retention.last_report()
+    assert report is not None
+    assert report["errors"] == 1
+    assert "error" in report["stores"]["watchdog"]

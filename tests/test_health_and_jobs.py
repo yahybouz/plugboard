@@ -12,6 +12,8 @@ from __future__ import annotations
 import pytest  # noqa: F401 — pytest fixtures rely on import
 from aioresponses import aioresponses
 
+from tests.test_retention import stores  # noqa: F401 - the stores fixture
+
 
 # ── /providers/{id}/health — URL overrides + strict status ────────────────
 
@@ -271,3 +273,26 @@ async def test_maintenance_jobs_are_listed(admin_client, monkeypatch):
     assert jobs["data_retention"]["name"] == "Data retention"
     assert jobs["data_retention"]["schedule"] == "daily at 04:00 UTC (in-process)"
     assert jobs["data_retention"]["last_status"] == "never_run"
+
+
+async def test_a_retention_pass_with_a_failed_store_shows_as_an_error(
+    admin_client,
+    stores,  # noqa: F811 - the fixture imported above
+    monkeypatch,
+):
+    """A store in error makes the retention pass an error on the Jobs page."""
+    from plugboard import maintenance
+    from plugboard.app import app
+
+    stores["watchdog"].write_bytes(b"this is not an SQLite database\n" * 200)
+    job = maintenance.retention_job()
+    monkeypatch.setattr(app.state, "retention_job", job, raising=False)
+    await job.run_now()
+
+    res = await admin_client.get(
+        "/admin/jobs",
+        headers={"Authorization": "Bearer adminkey"},
+    )
+    assert res.status_code == 200
+    jobs = {j["id"]: j for j in res.json()}
+    assert jobs["data_retention"]["last_status"] == "error"

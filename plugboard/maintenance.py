@@ -12,7 +12,8 @@ Two jobs are built here and started with the server:
 
 - ``availability_job()``: availability snapshots every
   ``PLUGBOARD_MONITORING_INTERVAL_S`` seconds;
-- ``retention_job()``: the daily data retention pass.
+- ``retention_job()``: the daily data retention pass; a pass with a store
+  in error is a failed run.
 """
 
 from __future__ import annotations
@@ -217,6 +218,16 @@ async def _retention_pass() -> Dict[str, Any]:
     report, cancelled = await storage.to_thread_to_the_end(retention.run_retention)
     if cancelled is not None:
         raise cancelled
+    # A store in error fails the run, so that the Jobs page shows it; the
+    # report is already written and GET /admin/retention gives the details.
+    if report.get("errors"):
+        failed = sorted(
+            name for name, store in report["stores"].items() if "error" in store
+        )
+        raise RuntimeError(
+            f"{len(failed)} store(s) in error: {', '.join(failed)}; "
+            "see GET /admin/retention"
+        )
     return report
 
 
