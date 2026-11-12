@@ -576,3 +576,4 @@ code, kbd, .mono { font-family: var(--mono); }
 .ch-row details[open] { flex-basis: 100%; }
 .ch-row summary { cursor: pointer; font-size: 0.8rem; color: var(--text-muted); }
 .ch-match { background: var(--accent-bg); color: var(--accent); border-radius: var(--radius-sm); padding: 0 0.25rem; }
+@media (pointer: coarse) { .ch-row summary { padding: 12px 0; } } /* "+N more": a 44 px target */

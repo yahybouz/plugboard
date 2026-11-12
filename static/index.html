@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin>
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <script src="/dashboard/theme.js?v=2"></script>
-  <link rel="stylesheet" href="/dashboard/style.css?v=12">
+  <link rel="stylesheet" href="/dashboard/style.css?v=13">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Instrument+Serif&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -490,9 +490,12 @@
     <section id="page-catalog-history" class="page">
       <div class="topbar">
         <h2>Catalog history</h2>
+        <div class="topbar-actions">
+          <button class="btn btn-primary btn-sm" id="ch-refresh" type="button">Refresh</button>
+        </div>
       </div>
       <div class="content">
-        <p class="muted small">Models each provider gained or lost, newest first. The first model list of a new provider is not a change; a model is counted as removed once refreshes confirm it is gone.</p>
+        <p class="muted small">Models each provider gained or lost, newest first. The first model list of a new provider is not a change. An automatic refresh records a removal once the model has been missing on consecutive refreshes; Discover records it at once.</p>
         <div class="ch-filters">
           <label>Provider
             <select id="ch-provider"><option value="">All providers</option></select>
@@ -510,7 +513,8 @@
             <input type="search" id="ch-model" placeholder="Search a model name" autocomplete="off">
           </label>
         </div>
-        <div id="ch-list" aria-live="polite"></div>
+        <p id="ch-status" class="muted small" role="status" aria-live="polite"></p>
+        <div id="ch-list" aria-busy="false"></div>
         <button class="btn btn-sm" id="ch-more" type="button" style="display:none">Load more</button>
         <p class="muted small" id="ch-footer"></p>
       </div>
@@ -522,7 +526,7 @@
 <div class="toast-container" id="toast-container"></div>
 <script src="/dashboard/app.js?v=23"></script>
 <script src="/dashboard/auto_update.js?v=5"></script>
-<script src="/dashboard/catalog_history.js?v=1"></script>
+<script src="/dashboard/catalog_history.js?v=2"></script>
 <script src="/dashboard/live_requests.js?v=2"></script>
 <script type="module" src="/dashboard/live3d.js?v=5"></script>
 </body>

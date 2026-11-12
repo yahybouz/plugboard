@@ -400,3 +400,41 @@ def test_catalog_history_js_writes_text_only():
     js = (STATIC / "catalog_history.js").read_text()
     for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
         assert sink not in js, sink
+
+
+@pytest.mark.parametrize(
+    "file, label",
+    [
+        ("index.html", "> Catalog history"),
+        ("index.html", "<h2>Catalog history</h2>"),
+        ("index.html", '<option value="">All providers</option>'),
+        ("index.html", '<option value="">All time</option>'),
+        ("index.html", '<option value="7">Last 7 days</option>'),
+        ("index.html", '<option value="30">Last 30 days</option>'),
+        ("index.html", '<option value="90">Last 90 days</option>'),
+        ("index.html", '<option value="365">Last year</option>'),
+        ("index.html", 'placeholder="Search a model name"'),
+        ("index.html", '<a href="#catalog-history">Full history</a>'),
+        ("index.html", 'id="ch-refresh"'),
+        (
+            "index.html",
+            'id="ch-status" class="muted small" role="status" aria-live="polite"',
+        ),
+        ("catalog_history.js", '"All providers"'),
+        ("catalog_history.js", '"Load more ("'),
+        ("catalog_history.js", '"No model change matches these filters."'),
+        ("catalog_history.js", '"No model change recorded yet."'),
+        ("catalog_history.js", '"Catalog history unavailable: "'),
+        ("catalog_history.js", '" added"'),
+        ("catalog_history.js", '" removed"'),
+    ],
+)
+def test_catalog_history_labels(file, label):
+    assert label in (STATIC / file).read_text()
+
+
+def test_only_the_status_line_is_announced():
+    """Screen readers hear "50 of 120 changes", not 50 cards on each filter."""
+    html = (STATIC / "index.html").read_text()
+    list_tag = html[html.index('id="ch-list"') - 5 : html.index('id="ch-list"') + 60]
+    assert "aria-live" not in list_tag

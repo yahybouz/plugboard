@@ -12,24 +12,32 @@
   var SHOWN = 10;       // names shown before "+N more"
   var DEBOUNCE_MS = 400;
   var DAY_MS = 86400000;
+  var view = null;      // filters of the list on screen; "Load more" keeps them
   var shown = 0;        // entries on screen
   var seq = 0;          // the latest request; older answers are dropped
+  var busy = false;
   var typing = null;
+  var typed = "";       // model text of the last load (a trailing space is not a change)
 
   function el(id) { return document.getElementById(id); }
 
   function modelText() { return el("ch-model").value.trim(); }
 
-  function filtered() {
-    return Boolean(el("ch-provider").value || el("ch-period").value || modelText());
+  // The filters as the boxes show them now, frozen for one list.
+  function currentFilters() {
+    var days = el("ch-period").value;
+    return {
+      provider: el("ch-provider").value,
+      since: days ? new Date(Date.now() - Number(days) * DAY_MS).toISOString().slice(0, 10) : "",
+      model: modelText(),
+    };
   }
 
-  function query(offset) {
+  function query(filters, offset) {
     var params = new URLSearchParams();
-    var days = el("ch-period").value;
-    if (el("ch-provider").value) params.set("provider", el("ch-provider").value);
-    if (days) params.set("since", new Date(Date.now() - Number(days) * DAY_MS).toISOString().slice(0, 10));
-    if (modelText()) params.set("model", modelText());
+    if (filters.provider) params.set("provider", filters.provider);
+    if (filters.since) params.set("since", filters.since);
+    if (filters.model) params.set("model", filters.model);
     params.set("limit", String(PAGE));
     params.set("offset", String(offset));
     return "/admin/catalog/history?" + params.toString();
@@ -96,40 +104,65 @@
     el("ch-footer").textContent = text;
   }
 
+  function setBusy(on) {
+    busy = on;
+    el("ch-list").setAttribute("aria-busy", on ? "true" : "false");
+    el("ch-more").setAttribute("aria-disabled", on ? "true" : "false");
+  }
+
   async function load(append) {
+    if (append && busy) return;
     var mine = ++seq;
     var list = el("ch-list");
     var more = el("ch-more");
+    var status = el("ch-status");
+    var moreHadFocus = document.activeElement === more;
     if (!append) {
+      view = currentFilters();
+      typed = view.model;
       shown = 0;
-      list.replaceChildren();
-      list.appendChild(skeleton(2));
+      list.replaceChildren(skeleton(2));
+      status.textContent = "Loading…";
     }
-    more.disabled = true;
+    var filters = view;
+    var needle = filters.model.toLowerCase();
+    var anyFilter = Boolean(filters.provider || filters.since || filters.model);
+    setBusy(true);
     var body;
     try {
-      var res = await api("GET", query(shown));
+      var res = await api("GET", query(filters, shown));
       if (!res.ok) throw new Error(await errorText(res));
       body = await res.json();
     } catch (e) {
       if (mine !== seq) return;
+      setBusy(false);
       if (!append) list.replaceChildren();
       list.appendChild(h("div", { className: "alert alert-error" }, "Catalog history unavailable: " + e.message));
+      status.textContent = "Catalog history unavailable. Use Refresh to try again.";
       more.style.display = "none";
       return;
     }
     if (mine !== seq) return; // a newer request replaced this one
+    setBusy(false);
     if (!append) list.replaceChildren();
-    var needle = modelText().toLowerCase();
-    body.entries.forEach(function (entry) { list.appendChild(card(entry, needle)); });
+    var added = body.entries.map(function (entry) { return card(entry, needle); });
+    added.forEach(function (node) { list.appendChild(node); });
     shown += body.entries.length;
     if (!body.total) {
-      list.appendChild(emptyState("—", filtered() ? "No model change matches these filters." : "No model change recorded yet."));
+      var empty = anyFilter ? "No model change matches these filters." : "No model change recorded yet.";
+      list.appendChild(emptyState("—", empty));
+      status.textContent = empty;
+    } else {
+      status.textContent = shown + " of " + body.total + " changes";
     }
     var left = body.total - shown;
     more.textContent = "Load more (" + left + " left)";
     more.style.display = left > 0 && body.entries.length ? "" : "none";
-    more.disabled = false;
+    // Keep keyboard focus: on the button, or on the first new card once it is gone.
+    if (append && moreHadFocus && added.length && more.style.display === "none") {
+      added[0].setAttribute("tabindex", "-1");
+      added[0].focus();
+    }
     fillProviders(body.providers || []);
     footer(body.retention || {});
   }
@@ -138,9 +171,14 @@
   el("ch-period").addEventListener("change", function () { load(false); });
   el("ch-model").addEventListener("input", function () {
     clearTimeout(typing);
-    typing = setTimeout(function () { load(false); }, DEBOUNCE_MS);
+    typing = setTimeout(function () {
+      if (modelText() !== typed) load(false);
+    }, DEBOUNCE_MS);
   });
   el("ch-more").addEventListener("click", function () { load(true); });
+  el("ch-refresh").addEventListener("click", function () { load(false); });
 
   window.loadCatalogHistoryPage = function () { load(false); };
+  // Opened straight on #catalog-history after the tab switch already ran.
+  if (el("page-catalog-history").classList.contains("active")) load(false);
 })();
