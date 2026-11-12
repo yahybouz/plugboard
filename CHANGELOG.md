@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **`plugboard.cli_limits` names what a CLI subscription route cannot serve** (lot L3): `unsupported_on_cli(body)` lists, in a fixed order, the fields of a chat body that a `subprocess:` route would drop (`tools`, `tool_choice` other than `none`/`auto`, `functions`, `function_call` other than `none`/`auto`, a `response_format` other than text, and each non-text content part as `content:<type>`), with the reason code `unsupported_on_cli`. Nothing calls it yet.
+
 ## [4.11.5] — 2026-11-12
 
 ### Security
