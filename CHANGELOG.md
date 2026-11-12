@@ -20,6 +20,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **A prompt a CLI subscription route finds too long answers `400` and is not sent to another provider**: when the CLI's own error, or its stderr when it gave none, says the messages do not fit the model's context (`Prompt is too long`, `prompt is too long: 250000 tokens > 200000 maximum`), `CliSubprocessError.request_too_long` is set (never together with `quota`, never from the model's answer) and `forward()` raises at once: no other candidate is called, the route's circuit and the model quarantine are left alone, the provider slot is given back. `POST /v1/chat/completions` answers `400` with `code` `context_length_exceeded` instead of trying the next provider and answering `502`, also for `stream: true`; a client key gets a sentence naming the provider and a log reference, without the CLI's stderr or pid, and the admin keeps them.
 - **A CLI subscription route gets the model name whole, and an unqualified name only when it lists it**: `cli_subprocess.complete()` no longer cuts the model name at its first `:` (`qwen3:8b` reached the CLI as `8b`); the CLI's `--model`, the answer's `model` and `CliSubprocessError.model_id` carry the whole name. A model asked without a provider prefix is no longer offered to a `subprocess:` route that lists models without it, so its refusal cannot quarantine a name another provider (such as Ollama) serves; a CLI route without a model list, or one that lists the name, is still tried, and a provider-prefixed model is routed as before.
 
+### Security
+
+- **codex, gemini and agy receive the prompt on stdin instead of as a command-line argument**, as claude already did: any local user could read an argument in the process list, and a prompt over about 128 KiB failed with `Argument list too long`. gemini loses `--prompt`, agy loses `-p`, codex ends its argv with `-`; `CliBackend` gains `stdin_arg` and loses `resolve_prompt_args`, and every backend has `input_mode` `stdin`. A CLI that exits without reading its stdin still fails with its own exit code.
+
 ## [4.11.5] — 2026-11-12
 
 ### Security
