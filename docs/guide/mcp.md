@@ -144,7 +144,7 @@ The registry is operator data kept outside the repository: `data/registry.json`,
 ```
 
 - `impact` is one of `CRITIQUE` (apply immediately), `IMPORTANT` or `EVOLUTION` (apply when convenient); `check_updates` groups pending items by these values.
-- `clients` lists the client IDs the update targets; it must hold the client IDs of your keys.
+- `clients` lists the client IDs the update targets: a list holding the client IDs of your keys (a single string targets no client).
 - Each change has `file`, `action` and `description`, and optionally `detail` (free text shown as a code block) or `old` and `new` (lists of lines). An optional `mcp_server` object is rendered as an MCP client configuration snippet.
 - Applied updates are recorded in `data/client_updates.db`.
 
