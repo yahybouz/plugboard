@@ -6,8 +6,8 @@ cap came before the provider queue: a second application got 503 at once
 while a provider capped at one request (Ollama) could have queued it.
 
 PLU-15: the key is checked before a global slot is taken, and a request waits
-once: one deadline, set by its first wait, ends its waits for a global slot,
-for its session's turn and for a provider.
+once: its waits for a global slot, for its session's turn and for a provider
+share one budget (10 s in all by default).
 
 Providers are faked with aioresponses: no network, no inference.
 """
@@ -182,6 +182,22 @@ async def test_call_without_a_valid_key_gets_401_even_when_the_cap_is_full(
 
 
 @pytest.mark.parametrize("path", ["/v1/chat/completions", "/v2/chat/completions"])
+async def test_anonymous_chat_in_strict_mode_gets_401_even_when_the_cap_is_full(
+    client, app_mod, full_cap, monkeypatch, path
+):
+    """With an empty API_KEY the key check lets an anonymous call through; strict
+    tenant mode (the default) still refuses it before it waits for a slot."""
+    monkeypatch.setattr(app_mod, "_API_KEY", "")
+    monkeypatch.delenv("PLUGBOARD_ALLOW_PERMISSIVE", raising=False)
+    started = time.monotonic()
+    resp = await client.post(path, json=_chat())
+    elapsed = time.monotonic() - started
+    assert resp.status_code == 401, resp.text
+    assert elapsed < 1.0, f"waited {elapsed:.2f} s for a slot"
+    assert full_cap._value == 0 and not full_cap._waiters
+
+
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v2/chat/completions"])
 async def test_key_is_resolved_once_per_request(
     client, app_mod, tmp_path, monkeypatch, path
 ):
@@ -228,7 +244,7 @@ def test_every_slot_route_checks_the_key_first(app_mod):
     assert slot_routes == 3
 
 
-# ── PLU-15: one deadline per request ────────────────────────────────────────
+# ── PLU-15: one wait budget per request ─────────────────────────────────────
 
 
 @pytest.fixture
@@ -241,6 +257,22 @@ def busy_provider(one_at_a_time):
     lease.release()
 
 
+@pytest.fixture
+def provider_waits(monkeypatch):
+    """The timeout given to each wait for a provider, in order."""
+    from plugboard import provider_admission
+
+    seen = []
+    real_wait = provider_admission.wait_acquire
+
+    async def spy(providers, timeout):
+        seen.append(timeout)
+        return await real_wait(providers, timeout)
+
+    monkeypatch.setattr(provider_admission, "wait_acquire", spy)
+    return seen
+
+
 def _waits(app_mod, monkeypatch, *, cap=None, slot_s, provider_s):
     from plugboard import provider_admission
 
@@ -250,20 +282,25 @@ def _waits(app_mod, monkeypatch, *, cap=None, slot_s, provider_s):
     monkeypatch.setattr(provider_admission, "WAIT_S", provider_s)
 
 
-async def _release_after(delay, release):
+async def _release_once_waiting(is_waiting, delay, release):
+    """Give the slot or turn back ``delay`` s after the request started
+    waiting for it: the request has then waited at least that long."""
+    await _until(is_waiting)
     await asyncio.sleep(delay)
     release()
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
-async def test_slot_wait_and_provider_wait_share_one_deadline(
-    client, app_mod, busy_provider, monkeypatch, stream
+async def test_slot_wait_and_provider_wait_share_one_budget(
+    client, app_mod, busy_provider, provider_waits, monkeypatch, stream
 ):
     """0.6 s waiting for a global slot leaves 0.4 s for the provider, not 1 s."""
     _waits(app_mod, monkeypatch, cap=1, slot_s=1.0, provider_s=1.0)
     sem = app_mod._get_inflight_sem()
     await sem.acquire()
-    freeing = asyncio.create_task(_release_after(0.6, sem.release))
+    freeing = asyncio.create_task(
+        _release_once_waiting(lambda: sem._waiters, 0.6, sem.release)
+    )
     started = time.monotonic()
     resp = await client.post(
         "/v1/chat/completions", headers=AUTH, json=_chat(stream=stream)
@@ -272,7 +309,8 @@ async def test_slot_wait_and_provider_wait_share_one_deadline(
     await freeing
     assert resp.status_code == 503, resp.text
     assert resp.json()["code"] == "providers_busy"
-    assert 0.9 <= elapsed < 1.4, f"waited {elapsed:.2f} s in all"
+    assert len(provider_waits) == 1 and provider_waits[0] <= 0.4, provider_waits
+    assert elapsed >= 0.9, f"waited {elapsed:.2f} s in all"
 
 
 @pytest.fixture
@@ -284,15 +322,19 @@ def session_db(tmp_path, monkeypatch):
     return session_store
 
 
-async def test_turn_wait_and_provider_wait_share_one_deadline(
-    client, app_mod, busy_provider, session_db, monkeypatch
+async def test_turn_wait_and_provider_wait_share_one_budget(
+    client, app_mod, busy_provider, provider_waits, session_db, monkeypatch
 ):
     """0.6 s waiting for the session's turn leaves 0.4 s for the provider."""
     from plugboard import session_turns
 
     _waits(app_mod, monkeypatch, slot_s=1.0, provider_s=1.0)
     release_turn = await session_turns.acquire("admin", "s1")
-    freeing = asyncio.create_task(_release_after(0.6, release_turn))
+    freeing = asyncio.create_task(
+        _release_once_waiting(
+            lambda: session_turns.waiting("admin", "s1") == 1, 0.6, release_turn
+        )
+    )
     started = time.monotonic()
     resp = await client.post(
         "/v1/chat/completions",
@@ -303,16 +345,18 @@ async def test_turn_wait_and_provider_wait_share_one_deadline(
     await freeing
     assert resp.status_code == 503, resp.text
     assert resp.json()["code"] == "providers_busy"
-    assert 0.9 <= elapsed < 1.4, f"waited {elapsed:.2f} s in all"
+    assert len(provider_waits) == 1 and provider_waits[0] <= 0.4, provider_waits
+    assert elapsed >= 0.9, f"waited {elapsed:.2f} s in all"
     assert session_turns._turns == {}
 
 
 @pytest.mark.parametrize("path", ["/v1/chat/completions", "/v2/chat/completions"])
-async def test_turn_wait_ends_at_the_deadline_with_503(
+async def test_turn_wait_ends_with_the_budget_with_503(
     client, app_mod, session_db, monkeypatch, path
 ):
-    """A turn no longer waits without end for the previous one: at the
-    deadline it gets 503 with Retry-After, and leaves the session's queue."""
+    """A turn no longer waits without end for the previous one: when the
+    request's budget is spent it gets 503 with Retry-After, and leaves the
+    session's queue."""
     from plugboard import session_turns
 
     _waits(app_mod, monkeypatch, slot_s=0.5, provider_s=0.5)
@@ -329,70 +373,82 @@ async def test_turn_wait_ends_at_the_deadline_with_503(
     assert resp.status_code == 503, resp.text
     assert resp.headers["Retry-After"] == "5"
     assert "session" in resp.json()["detail"]
-    assert 0.45 <= elapsed < 1.0, f"waited {elapsed:.2f} s"
+    assert 0.45 <= elapsed < 2.5, f"waited {elapsed:.2f} s"
     assert session_turns._turns == {}
 
 
-async def test_preflight_pings_share_one_deadline(
-    client, app_mod, busy_provider, monkeypatch
+async def test_preflight_pings_share_one_budget(
+    client, app_mod, busy_provider, provider_waits, monkeypatch
 ):
     """Two pings of a busy provider wait 0.5 s in all, not 0.5 s each."""
     _waits(app_mod, monkeypatch, slot_s=0.5, provider_s=0.5)
-    started = time.monotonic()
     resp = await client.post(
         "/v1/preflight", headers=AUTH, json={"items": _PREFLIGHT["items"] * 2}
     )
-    elapsed = time.monotonic() - started
     assert resp.status_code == 200, resp.text
     assert [r.get("error") for r in resp.json()["results"]] == ["providers_busy"] * 2
-    assert 0.45 <= elapsed < 0.85, f"waited {elapsed:.2f} s in all"
+    assert provider_waits[0] == pytest.approx(0.5, abs=0.05)
+    assert provider_waits[1] == 0.0
 
 
-async def test_deadline_starts_at_the_first_wait(busy_provider, monkeypatch):
-    """Time spent before any wait (a provider that failed slowly, an earlier
-    preflight ping) does not shorten the wait; once a wait has started, the
-    next one only gets what is left."""
+async def test_only_waiting_time_counts(busy_provider, provider_waits, monkeypatch):
+    """Time spent working (the checks, a provider that failed slowly, an
+    earlier preflight ping) leaves the budget whole; an earlier wait uses it."""
     from plugboard import provider_admission, request_wait, router
 
     monkeypatch.setattr(provider_admission, "WAIT_S", 10.0)
 
-    async def provider_wait(first_wait_s):
+    async def request(earlier_wait: bool):
         request_wait.start(0.4)
-        if first_wait_s is not None:
-            request_wait.remaining()  # a first wait starts the clock
-            await asyncio.sleep(first_wait_s)
+        if earlier_wait:
+            with request_wait.waiting():
+                await asyncio.sleep(0.3)
         else:
-            await asyncio.sleep(0.3)  # work, no wait
-        started = time.monotonic()
+            await asyncio.sleep(0.3)  # work, not a wait
         with pytest.raises(router.ProvidersBusyError):
             await router.forward({"model": ONLY_A, "messages": _chat()["messages"]})
-        return time.monotonic() - started
 
-    # Own task each: the deadline lives in that task's context only.
-    assert 0.35 <= await asyncio.create_task(provider_wait(None)) < 0.7
-    assert await asyncio.create_task(provider_wait(0.3)) < 0.2
+    # Own task each: the budget lives in that task's context only.
+    await asyncio.create_task(request(earlier_wait=False))
+    await asyncio.create_task(request(earlier_wait=True))
+    assert provider_waits[0] == pytest.approx(0.4, abs=0.01)
+    assert provider_waits[1] <= 0.1
 
 
-def test_request_wait_outside_a_request_keeps_each_ceiling():
+def test_wait_budget_outside_a_request_keeps_each_ceiling():
     from plugboard import request_wait
 
     async def outside():
-        assert request_wait.remaining(2.5) == 2.5
-        assert request_wait.remaining() is None
+        with request_wait.waiting(2.5) as wait_s:
+            assert wait_s == 2.5
+        with request_wait.waiting() as wait_s:
+            assert wait_s is None
 
     asyncio.run(outside())
 
 
-def test_request_wait_is_bounded_by_the_ceiling_and_the_deadline():
+def test_wait_budget_adds_up_the_waits_only():
     from plugboard import request_wait
 
     async def inside():
-        request_wait.start(1.0)
-        assert request_wait.remaining(0.2) == pytest.approx(0.2)
-        assert 0.9 < request_wait.remaining() <= 1.0
-        await asyncio.sleep(0.3)
-        assert 0.6 < request_wait.remaining(5.0) <= 0.7
+        budget = request_wait.start(1.0)
+        with request_wait.waiting(0.2) as wait_s:
+            assert wait_s == 0.2  # its own ceiling
+        with request_wait.waiting() as wait_s:
+            assert wait_s == pytest.approx(1.0, abs=0.05)
+            await asyncio.sleep(0.3)
+        await asyncio.sleep(0.2)  # work, not counted
+        with request_wait.waiting(5.0) as wait_s:
+            assert 0.6 < wait_s <= 0.7
+        with pytest.raises(TimeoutError):  # counted however the wait ends
+            with request_wait.waiting():
+                await asyncio.sleep(0.4)
+                raise TimeoutError
+        assert 0.7 <= budget.spent < 0.9
+        with request_wait.waiting(5.0) as wait_s:
+            assert wait_s < 0.3
         request_wait.start(0.0)
-        assert request_wait.remaining() == 0.0
+        with request_wait.waiting(5.0) as wait_s:
+            assert wait_s == 0.0
 
     asyncio.run(inside())

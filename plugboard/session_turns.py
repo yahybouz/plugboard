@@ -5,8 +5,8 @@ second was answered without seeing the first, and on a full history one of
 the two exchanges was lost when both were recorded. A turn now takes the
 session's lock before its history is merged and gives it back once its
 answer is sent and recorded; the next turn waits for it, in arrival order
-(``asyncio.Lock`` is fair), at most until its request's deadline (PLU-15,
-``request_wait``).
+(``asyncio.Lock`` is fair), for at most what is left of its request's wait
+budget (PLU-15, ``request_wait``).
 
 The lock is per ``(client_id, session_id)``: two clients that pick the same
 session id never wait for each other. State lives in this process only, like
@@ -29,11 +29,6 @@ def _leave(key: Tuple[str, str], entry: List) -> None:
         del _turns[key]
 
 
-def busy(client_id: str, session_id: str) -> bool:
-    """A turn of this session runs or waits: the next one would wait."""
-    return (client_id, session_id) in _turns
-
-
 async def acquire(
     client_id: str, session_id: str, timeout: Optional[float] = None
 ) -> Callable[[], None]:
@@ -41,7 +36,8 @@ async def acquire(
 
     The returned function is idempotent. A wait that is cancelled (the caller
     hung up) or lasts ``timeout`` seconds (``TimeoutError``, PLU-15) leaves
-    the queue without taking the turn; None waits without limit.
+    the queue without taking the turn; None waits without limit. A free
+    turn is taken at once, whatever the timeout (0 included).
     """
     key = (client_id, session_id)
     entry = _turns.get(key)
