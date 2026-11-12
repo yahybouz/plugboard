@@ -244,6 +244,8 @@ def test_create_from_catalog_preset_freezes_base_url(
     monkeypatch.setenv("PLUGBOARD_DATA", str(catalog_env))
     record = create_from_preset("catalog-acme", "test-key-123456")
     assert record["preset_key"] == "catalog-acme"
+    # A name with letters gives the id, not the preset key (BUG-65 fallback).
+    assert record["id"] == "acme-ai"
     assert record["auto_discover"] is True
     assert [m["id"] for m in record["models"]] == ["acme-1"]
     # The catalog later points acme somewhere else: the provider keeps its URL.
