@@ -13,7 +13,9 @@ ROOT = Path(__file__).resolve().parent.parent
 STATIC = ROOT / "static"
 CSS_FILES = ("style.css", "suivi.css")
 
-VAR_USE = re.compile(r"var\(\s*(--[\w-]+)")
+VAR_USE = re.compile(
+    r"(?:var\(\s*|getPropertyValue\(\s*[\"']|_cssVar\(\s*[\"'])(--[\w-]+)"
+)
 VAR_DEF = re.compile(r"(?<![\w-])(--[\w-]+)\s*:")
 TOKEN_BLOCK = re.compile(
     r"/\* design-tokens: start \*/(.*?)/\* design-tokens: end \*/", re.S
@@ -25,7 +27,9 @@ MARKED_REGION = re.compile(
 )
 COMMENT = re.compile(r"/\*.*?\*/", re.S)
 DECLARATION = re.compile(r"([\w-]+)\s*:\s*([^;{}]+)")
-COLOUR = re.compile(r"#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\(")
+COLOUR = re.compile(
+    r"(?<![&\w-])#[0-9a-fA-F]{3,8}(?![\w-])|\b(?:rgba?|hsla?|hwb|oklch|oklab)\("
+)
 
 NEW_TOKENS = {
     "--fs-root",
@@ -83,13 +87,17 @@ def _checked_css(name: str) -> str:
 
 
 def _declarations(css: str) -> list[tuple[str, str]]:
-    return [(p.strip().lower(), v.strip()) for p, v in DECLARATION.findall(css)]
+    """``(property, value)`` pairs, read inside rule bodies only (not selectors)."""
+    pairs = []
+    for body in re.findall(r"\{([^{}]*)\}", css):
+        pairs += [(p.strip().lower(), v.strip()) for p, v in DECLARATION.findall(body)]
+    return pairs
 
 
 def test_every_css_variable_used_is_defined():
     defined: set[str] = set()
     for name in (*CSS_FILES, "index.html"):  # index.html: the --c of the 3D legend
-        defined |= set(VAR_DEF.findall(_read(name)))
+        defined |= set(VAR_DEF.findall(COMMENT.sub("", _read(name))))
     missing: dict[str, list[str]] = {}
     for path in sorted(STATIC.glob("*.*")):
         if path.suffix not in {".css", ".js", ".html"}:
@@ -107,7 +115,8 @@ def test_design_md_documents_every_token():
 
 
 SPACING_PROPS = re.compile(
-    r"^(?:padding|margin)(?:-(?:top|right|bottom|left))?$|^(?:row-|column-)?gap$"
+    r"^(?:padding|margin)(?:-(?:top|right|bottom|left|inline|block)(?:-(?:start|end))?)?$"
+    r"|^(?:grid-)?(?:row-|column-)?gap$"
 )
 SPACING_PART = re.compile(
     r"^(?:0|auto|var\(--(?:space|pad)-[\w-]+\)|var\(--sidebar-w\))$"
@@ -124,8 +133,12 @@ def _violates(prop: str, value: str) -> bool:
         return not re.fullmatch(r"var\(--fw-[\w-]+\)|inherit", value)
     if SPACING_PROPS.match(prop):
         return not all(SPACING_PART.match(part) for part in value.split())
-    if prop == "border-radius":
+    if re.fullmatch(
+        r"border(?:-(?:top|bottom|start|end)-(?:left|right|start|end))?-radius", prop
+    ):
         return not all(RADIUS_PART.match(part) for part in value.split())
+    if prop == "font":
+        return bool(re.search(r"\d(?:px|rem|em|%)", value))
     return False
 
 
@@ -141,22 +154,48 @@ def test_stylesheet_has_no_raw_colour(name):
 
 
 def test_touch_rule_still_covers_controls():
-    rule = re.search(
+    block = re.search(
         r"@media \(pointer: coarse\)\s*\{(.*?)\n\}", _read("style.css"), re.S
     )
-    assert rule, "the touch-screen rule is gone"
-    for selector in (".btn", "input", "select", ".nav-link"):
-        assert selector in rule.group(1)
+    assert block, "the touch-screen rule is gone"
+    rule = re.search(r"([^{}]+)\{\s*min-height:\s*44px;?\s*\}", block.group(1))
+    assert rule, "no 44px rule for touch screens"
+    selectors = {s.strip() for s in rule.group(1).split(",")}
+    assert {".btn", ".btn-sm", "input", "select", ".nav-link"} <= selectors
 
 
-INLINE_STYLE = re.compile(r'style=\\?"([^"\\]*)|style:\s*"([^"]*)"')
+def test_token_markers_cannot_hide_rules():
+    css = _read("style.css")
+    blocks = TOKEN_BLOCK.findall(css)
+    assert len(blocks) == 1
+    # Only theme blocks with custom properties (and color-scheme) inside.
+    for prop, _ in _declarations(COMMENT.sub("", blocks[0])):
+        assert prop.startswith("--") or prop == "color-scheme", prop
+    exceptions = re.findall(
+        r"/\* design-tokens: exception start[^*]*\*/(.*?)/\* design-tokens: exception end \*/",
+        css,
+        re.S,
+    )
+    assert len(exceptions) == 1
+    selectors = re.findall(r"([^{}]+)\{", COMMENT.sub("", exceptions[0]))
+    for selector in selectors:
+        selector = selector.strip()
+        if selector.startswith("@") or re.fullmatch(r"\d+%|from|to", selector):
+            continue  # at-rules and keyframe steps
+        assert "live3d" in selector, selector
+    assert "design-tokens" not in _read("suivi.css")
+
+
+INLINE_STYLE = re.compile(
+    r'style=\\?"([^"\\]*)|style=\'([^\']*)\'|style:\s*"([^"]*)"|style:\s*\'([^\']*)\''
+)
 
 
 def _inline_declarations(text: str) -> list[str]:
     """Each declaration of every style attribute or ``style:`` property."""
     found = []
-    for attr, prop in INLINE_STYLE.findall(text):
-        for decl in (attr or prop).split(";"):
+    for groups in INLINE_STYLE.findall(text):
+        for decl in "".join(groups).split(";"):
             if decl.strip():
                 found.append(re.sub(r"\s*:\s*", ":", decl.strip(), count=1))
     return found
@@ -166,9 +205,12 @@ def test_index_inline_styles_only_where_js_needs_them():
     html = _read("index.html")
     allowed = re.compile(r"^(?:display:none|--c:#[0-9a-fA-F]{6}|position:absolute)$")
     assert [d for d in _inline_declarations(html) if not allowed.match(d)] == []
+    assert _inline_declarations(_read("suivi.html")) == []
 
 
-@pytest.mark.parametrize("name", ["app.js", "auto_update.js", "portal.js"])
+@pytest.mark.parametrize(
+    "name", ["app.js", "auto_update.js", "live_requests.js", "portal.js", "suivi.js"]
+)
 def test_scripts_inline_styles_only_where_js_needs_them(name):
     js = _read(name)
     assert "cssText" not in js
@@ -186,7 +228,13 @@ def test_playground_keeps_its_js_hooks():
     assert 'bubble.dataset.testid = "message-bubble"' in js
 
 
-JS_COLOUR_FREE = ["app.js", "auto_update.js", "live_requests.js", "portal.js"]
+JS_COLOUR_FREE = [
+    "app.js",
+    "auto_update.js",
+    "live_requests.js",
+    "portal.js",
+    "suivi.js",
+]
 
 
 @pytest.mark.parametrize("name", JS_COLOUR_FREE)
@@ -285,7 +333,12 @@ ELLIPSIS = re.compile(r'\w\.\.\.|\+\s*"\.\.\."')
 @pytest.mark.parametrize("name", LABEL_FILES)
 def test_labels_follow_the_copy_rules(name):
     text = _read(name)
-    assert [label for label in FORBIDDEN_LABELS if label in text] == []
+    found = [
+        label
+        for label in FORBIDDEN_LABELS
+        if re.search(r"(?<![\w-])" + re.escape(label) + r"(?![\w-])", text)
+    ]
+    assert found == []
     assert ELLIPSIS.findall(text) == []
     assert FRENCH.findall(text) == []
 
