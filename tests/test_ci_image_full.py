@@ -340,3 +340,30 @@ def test_invalid_check_options_are_refused_before_any_build(fake_docker, extra):
 
     assert proc.returncode == 2
     assert calls == []
+
+
+# ── The Python SDK is tested and linted by the CI too ─────────────────────
+
+
+def _step(step_id: str) -> dict:
+    pipeline = json.loads((ROOT / "ci/pipeline.json").read_text(encoding="utf-8"))
+    return next(s for s in pipeline["steps"] if s["id"] == step_id)
+
+
+def test_ci_runs_the_sdk_tests_in_their_own_step():
+    pipeline = json.loads((ROOT / "ci/pipeline.json").read_text(encoding="utf-8"))
+    ids = [s["id"] for s in pipeline["steps"]]
+    argv = _step("sdk-tests")["argv"]
+
+    # After the main suite, in the dev environment, with the SDK's own config
+    # (`pytest tests/` from the root cannot import plugboard_sdk).
+    assert ids.index("sdk-tests") == ids.index("pytest") + 1
+    assert argv[:3] == ["{scratch}/venv/bin/python", "-m", "pytest"]
+    assert _option_values(argv, "-c") == ["sdk/python/pyproject.toml"]
+    assert "sdk/python/tests" in argv
+    assert not [a for a in argv if a.startswith("--cov")]
+
+
+@pytest.mark.parametrize("step_id", ["ruff", "ruff-format"])
+def test_ci_lints_the_sdk(step_id):
+    assert "sdk/python/" in _step(step_id)["argv"]
