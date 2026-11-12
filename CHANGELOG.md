@@ -6,6 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.11.5] — 2026-11-12
+
+### Security
+
+- **Debian fixes published after the Python base image are now applied** (`api` and `full` images): the `base` stage runs `apt-get upgrade`, which stays on the image's Debian release and only updates installed packages; `zlib1g` moves to `1:1.3.dfsg+really1.3.1-1+deb13u1` (CVE-2026-76844, CVE-2026-85091, HIGH). The HIGH finding in `gh` (`golang.org/x/net` v0.61.0) waits for a `gh` release built with v0.62.0.
+- **The `full` image ships npm 11.21.2 instead of the npm 10.9.x of Node 22**: npm 10's bundled `brace-expansion`, `picomatch`, `ip-address`, `pacote` and `sigstore` carry HIGH CVEs that no npm 10 release fixes (CVE-2026-102276, CVE-2026-102278, CVE-2026-13149, CVE-2026-14257, CVE-2026-69152, CVE-2026-33671, CVE-2026-69192, CVE-2026-9496, CVE-2026-48815). Node stays on 22; `npm` and `npx` move to a new major version.
+
 ## [4.11.4] — 2026-11-12
 
 ### Fixed

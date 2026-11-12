@@ -42,6 +42,15 @@ ENV PYTHONUNBUFFERED=1 \
 
 RUN useradd --create-home --home-dir /home/app --shell /usr/sbin/nologin --uid 1000 app
 
+# Debian fixes published after the Python image was built (zlib1g for
+# CVE-2026-76844 and CVE-2026-85091 at the time of writing). `upgrade`
+# stays on the image's Debian release and only updates installed packages:
+# it never installs or removes a package, nor changes the release.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Dependencies first (cache layer), pinned and hash-checked.
@@ -112,6 +121,13 @@ COPY --from=node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
  && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
  && node --version && npm --version
+# npm 11 replaces the npm 10.9.x shipped with Node 22, whose bundled
+# brace-expansion, picomatch, ip-address, pacote and sigstore carry HIGH
+# CVEs (CVE-2026-102276, CVE-2026-102278, CVE-2026-13149, CVE-2026-14257,
+# CVE-2026-69152, CVE-2026-33671, CVE-2026-69192, CVE-2026-9496,
+# CVE-2026-48815) that no npm 10 release fixes. Major npm bump approved by
+# the project owner on 2026-11-12; npm 11 needs Node ^20.17.0 || >=22.9.0.
+RUN npm install -g npm@11.21.2 && npm --version
 
 # Each CLI is installed in its own step so that one failing package (rate
 # limit, rename) does not prevent the others from landing.
