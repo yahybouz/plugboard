@@ -339,8 +339,16 @@ async def test_limited_key_gets_403_first_for_a_bare_name(off, http):
     assert calls == []
 
 
-async def test_session_turn_gets_503_and_stores_nothing(off, http):
+async def test_session_turn_gets_503_and_stores_nothing(
+    off, http, tmp_path, monkeypatch
+):
     from plugboard import session_store
+
+    # The store keeps the path of its first import and creates its table once
+    # per process; earlier test files leave it on another file. Own one here.
+    monkeypatch.setattr(session_store, "_DATA_DIR", tmp_path)
+    monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "sessions.db")
+    monkeypatch.setattr(session_store, "_INITIALISED", False)
 
     client, auth, calls = http
     resp = await client.post(
