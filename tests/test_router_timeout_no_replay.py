@@ -14,7 +14,7 @@ import pytest
 from aioresponses import aioresponses
 from yarl import URL
 
-from plugboard import router
+from plugboard import alerts, circuit_breaker, metrics, router
 from tests.factories import FAKE_COMPLETION
 
 _SLOW = "http://fake-llm.test/v1/chat/completions"
@@ -25,6 +25,13 @@ _BODY = {"model": "fake:model-v1", "messages": []}
 
 def _calls(mock: aioresponses, url: str) -> int:
     return len(mock.requests.get(("POST", URL(url)), []))
+
+
+@pytest.fixture(autouse=True)
+def _fresh_counters(monkeypatch):
+    """Metrics and provider-down counters start empty, and are put back."""
+    monkeypatch.setattr(metrics, "_stats", {})
+    monkeypatch.setattr(alerts, "_provider_failures", {})
 
 
 @pytest.fixture
@@ -72,8 +79,12 @@ async def test_timed_out_provider_is_called_once_then_the_next_serves(
     assert result["choices"][0]["message"]["content"] == "Hello!"
     provider, _model = router.served_by()
     assert provider["id"] == "other-provider"
-    # The timeout still counts against the slow provider, once (D-7).
+    # The timeout still counts against the slow route, once (D-7): circuit,
+    # provider-down alert and error metrics (it counted 5 errors before).
+    assert circuit_breaker._circuits["test-provider:fake:model-v1"].failures == 1
     assert failures == ["test-provider"]
+    assert metrics._stats["test-provider"]["requests"] == 1
+    assert metrics._stats["test-provider"]["errors"] == 1
 
 
 @pytest.mark.asyncio
