@@ -160,9 +160,26 @@ def get_key_record(raw_key: str) -> Optional[Dict[str, Any]]:
     stored_hash = rec.get("key_hash", "")
     if not hmac.compare_digest(stored_hash, incoming_hash):
         return None
-    if rec.get("is_active", True):
-        return rec
-    return None
+    if not rec.get("is_active", True):
+        return None
+    if has_blank_client_id(rec):
+        # Every client route reads an empty client_id as "no caller" (no
+        # budget, rpm_limit or allowed_models): such a key is not valid.
+        log.warning(
+            "client key refused reason=blank_client_id key_id=%s",
+            rec.get("key_id", ""),
+        )
+        return None
+    return rec
+
+
+def has_blank_client_id(record: Dict[str, Any]) -> bool:
+    """True for a key whose client_id is empty or only spaces (BUG-64).
+
+    POST /admin/keys refuses such a client_id; keys issued before that check
+    are refused when used and cannot be rotated.
+    """
+    return not str(record.get("client_id") or "").strip()
 
 
 def create_key(
