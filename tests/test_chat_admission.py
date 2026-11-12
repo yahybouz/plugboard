@@ -569,3 +569,34 @@ async def test_another_cli_is_not_blocked(client, two_clis):
         gates["claude"].set()
     assert other.status_code == 200, other.text
     assert (await first).status_code == 200
+
+
+async def test_internet_check_calls_only_the_provider_it_checks(
+    client, _providers_file, monkeypatch
+):
+    """The probe names its provider: checking an HTTP model never runs a CLI
+    (which, capped at one request, would also answer the bulk check "busy"),
+    and the result belongs to the model that was asked."""
+    from plugboard import cli_subprocess, router
+
+    listed = {**PROVIDER_A, "models": [{"id": "fake:model-v1", "name": "V1"}]}
+    _providers_file.write_text(
+        json.dumps({"providers": [_cli_provider("claude"), listed]})
+    )
+    router.invalidate_models_cache()
+    cli_runs = []
+
+    async def fake_complete(kind, body, *, timeout_s=None):
+        cli_runs.append(body["model"])
+        return {**FAKE_COMPLETION}
+
+    monkeypatch.setattr(cli_subprocess, "complete", fake_complete)
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION, repeat=True)
+        resp = await client.post(
+            "/admin/models/check-internet", headers=AUTH, json={"model_id": ONLY_A}
+        )
+        http_calls = sum(len(v) for k, v in mock.requests.items() if k[0] == "POST")
+    assert resp.status_code == 200, resp.text
+    assert cli_runs == []
+    assert http_calls >= 1

@@ -3269,6 +3269,10 @@ async def check_model_internet_access(
     )
 
     probe_body = build_internet_probe_body(real_model or model_id)
+    # The provider being checked, and no other: a bare model name went to
+    # every active provider, so another one (a CLI) could answer, or be held
+    # by the probe, and its result be recorded for this model (D-43).
+    probe_body["model"] = f"{provider['id']}:{real_model or model_id}"
 
     try:
         # Retry-on-fail guard (2026-05-31 — user observed claude-opus-4-6
