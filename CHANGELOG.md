@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **Debian fixes published after the Python base image are now applied** (`api` and `full` images): the `base` stage runs `apt-get upgrade`, which stays on the image's Debian release and only updates installed packages; `zlib1g` moves to `1:1.3.dfsg+really1.3.1-1+deb13u1` (CVE-2026-76844, CVE-2026-85091, HIGH). The HIGH findings in the `npm` shipped with Node 22 and in `gh` are not covered by this change.
+
 ## [4.11.3] — 2026-11-12
 
 ### Fixed

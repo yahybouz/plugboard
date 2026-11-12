@@ -42,6 +42,15 @@ ENV PYTHONUNBUFFERED=1 \
 
 RUN useradd --create-home --home-dir /home/app --shell /usr/sbin/nologin --uid 1000 app
 
+# Debian fixes published after the Python image was built (zlib1g for
+# CVE-2026-76844 and CVE-2026-85091 at the time of writing). `upgrade`
+# stays on the image's Debian release and only updates installed packages:
+# it never installs or removes a package, nor changes the release.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Dependencies first (cache layer), pinned and hash-checked.
