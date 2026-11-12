@@ -8,8 +8,9 @@ events (default 50); the rest is grouped in one event per type carrying
 reported: callers only add real changes.
 
 The journal keeps a change for ``PLUGBOARD_CHANGE_JOURNAL_DAYS`` days (365;
-``0`` = no age limit) and at most ``JOURNAL_MAX_LINES`` lines (10 000); older
-lines are dropped when a change is written.
+``0`` = no age limit) and at most ``JOURNAL_MAX_LINES`` lines (10 000). Older
+lines are dropped when a change is written and skipped when the history is
+read (``query_model_history``), so a quiet journal never shows them.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -127,6 +128,91 @@ def read_journal(limit: int = 100) -> List[Dict[str, Any]]:
         except ValueError:
             continue
     return out
+
+
+def _names(value: Any) -> List[str]:
+    return [str(name) for name in value] if isinstance(value, list) else []
+
+
+def _matching_first(names: List[str], needle: str) -> List[str]:
+    hits = [name for name in names if needle in name.lower()]
+    return hits + [name for name in names if needle not in name.lower()]
+
+
+def query_model_history(
+    *,
+    provider: Optional[str] = None,
+    since: Optional[date] = None,
+    until: Optional[date] = None,
+    model: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    """Models added or removed per provider, newest first, one page at a time.
+
+    Only ``models.changed`` lines with a provider count. A line past the age
+    limit is skipped even when the file has not been purged yet. ``providers``
+    and ``oldest`` describe every kept line, whatever the filters. With
+    ``model`` an entry keeps all its names, the matching ones first. Dates
+    are UTC days, both bounds included; an undated line is left out as soon
+    as ``since`` or ``until`` is given.
+    """
+    path = _journal_path()
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    limit_at = cutoff()
+    start = datetime.combine(since, time.min, tzinfo=timezone.utc) if since else None
+    end = (
+        datetime.combine(until + timedelta(days=1), time.min, tzinfo=timezone.utc)
+        if until
+        else None
+    )
+    needle = (model or "").lower()
+    providers = set()
+    oldest: Optional[Tuple[datetime, str]] = None
+    matches: List[Dict[str, Any]] = []
+    for line in lines:
+        try:
+            raw = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(raw, dict) or raw.get("event") != "models.changed":
+            continue
+        pid = raw.get("provider")
+        if not isinstance(pid, str) or not pid:
+            continue
+        at = _parse_at(raw.get("at"))
+        if at is not None and limit_at is not None and at < limit_at:
+            continue
+        providers.add(pid)
+        if at is not None and (oldest is None or at < oldest[0]):
+            oldest = (at, raw["at"])
+        if provider and pid != provider:
+            continue
+        if start or end:
+            if at is None or (start and at < start) or (end and at >= end):
+                continue
+        added, removed = _names(raw.get("added")), _names(raw.get("removed"))
+        if needle:
+            if not any(needle in name.lower() for name in added + removed):
+                continue
+            added = _matching_first(added, needle)
+            removed = _matching_first(removed, needle)
+        at_text = raw.get("at")
+        matches.append(
+            {
+                "at": at_text if isinstance(at_text, str) else "",
+                "provider": pid,
+                "added": added,
+                "removed": removed,
+            }
+        )
+    matches.reverse()
+    return {
+        "entries": matches[offset : offset + limit],
+        "total": len(matches),
+        "providers": sorted(providers),
+        "oldest": oldest[1] if oldest else None,
+    }
 
 
 class ChangeBatch:

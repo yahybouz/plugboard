@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import json
+from datetime import date, datetime, timezone
 
 import pytest
 
@@ -67,3 +68,142 @@ def test_cutoff_is_now_minus_retention(monkeypatch):
     monkeypatch.setenv("PLUGBOARD_CHANGE_JOURNAL_DAYS", "10")
     monkeypatch.setattr(change_events, "_utcnow", lambda: NOW)
     assert change_events.cutoff() == datetime(2026, 11, 2, tzinfo=timezone.utc)
+
+
+# -- query -------------------------------------------------------------------------
+
+LINES = [
+    {
+        "at": "2026-01-05T10:00:00Z",
+        "event": "models.changed",
+        "provider": "provider-a",
+        "added": ["alpha-1"],
+        "removed": [],
+    },
+    {
+        "at": "2026-03-01T00:00:00Z",
+        "event": "pricing.changed",
+        "provider": "provider-a",
+        "model": "alpha-1",
+    },
+    {
+        "at": "2026-06-30T23:59:59Z",
+        "event": "models.changed",
+        "provider": "provider-b",
+        "added": "oops",
+        "removed": ["Beta-Large"],
+        "extra": "hidden",
+    },
+    {
+        "at": "2026-07-01T00:00:00Z",
+        "event": "models.changed",
+        "provider": "old-provider",
+        "added": ["gamma"],
+        "removed": ["zeta", "alpha-1"],
+    },
+]
+
+
+@pytest.fixture
+def journal(monkeypatch, tmp_path):
+    monkeypatch.setenv("PLUGBOARD_DATA", str(tmp_path))
+    monkeypatch.delenv("PLUGBOARD_CHANGE_JOURNAL_DAYS", raising=False)
+    monkeypatch.setattr(change_events, "_utcnow", lambda: NOW)
+    path = tmp_path / "catalog" / "changes.jsonl"
+    path.parent.mkdir(parents=True)
+    rows = [json.dumps(LINES[0]), "not json", json.dumps({"event": "models.changed"})]
+    rows += [json.dumps(line) for line in LINES[1:]]
+    path.write_text("\n".join(rows) + "\n")
+    return path
+
+
+def _providers(out):
+    return [e["provider"] for e in out["entries"]]
+
+
+def test_history_lists_model_changes_newest_first(journal):
+    out = change_events.query_model_history()
+    assert _providers(out) == ["old-provider", "provider-b", "provider-a"]
+    assert out["total"] == 3
+    assert out["providers"] == ["old-provider", "provider-a", "provider-b"]
+    assert out["oldest"] == "2026-01-05T10:00:00Z"
+
+
+def test_history_skips_bad_lines(journal):
+    entries = change_events.query_model_history()["entries"]
+    assert all(set(e) == {"at", "provider", "added", "removed"} for e in entries)
+    assert entries[1] == {
+        "at": "2026-06-30T23:59:59Z",
+        "provider": "provider-b",
+        "added": [],
+        "removed": ["Beta-Large"],
+    }
+
+
+def test_history_filters_by_provider(journal):
+    out = change_events.query_model_history(provider="provider-b")
+    assert out["total"] == 1
+    assert out["providers"] == ["old-provider", "provider-a", "provider-b"]
+
+
+def test_history_until_is_inclusive(journal):
+    out = change_events.query_model_history(until=date(2026, 6, 30))
+    assert _providers(out) == ["provider-b", "provider-a"]
+
+
+def test_history_since(journal):
+    out = change_events.query_model_history(since=date(2026, 7, 1))
+    assert _providers(out) == ["old-provider"]
+
+
+def test_history_filters_by_model_without_case(journal):
+    assert _providers(change_events.query_model_history(model="beta")) == ["provider-b"]
+    assert _providers(change_events.query_model_history(model="ALPHA")) == [
+        "old-provider",
+        "provider-a",
+    ]
+
+
+def test_history_puts_matching_names_first(journal):
+    assert change_events.query_model_history()["entries"][0]["removed"] == [
+        "zeta",
+        "alpha-1",
+    ]
+    first = change_events.query_model_history(model="alpha")["entries"][0]
+    assert first["removed"] == ["alpha-1", "zeta"] and first["added"] == ["gamma"]
+
+
+def test_history_hides_lines_past_retention(journal, monkeypatch):
+    monkeypatch.setenv("PLUGBOARD_CHANGE_JOURNAL_DAYS", "140")  # limit: 2026-06-25
+    out = change_events.query_model_history()
+    assert _providers(out) == ["old-provider", "provider-b"]
+    assert out["providers"] == ["old-provider", "provider-b"]
+    assert out["oldest"] == "2026-06-30T23:59:59Z"
+
+
+def test_history_excludes_undated_lines_with_a_date_filter(journal):
+    with journal.open("a") as fh:
+        fh.write(
+            json.dumps(
+                {"event": "models.changed", "provider": "provider-c", "added": ["x"]}
+            )
+            + "\n"
+        )
+    assert "provider-c" in _providers(change_events.query_model_history())
+    dated = change_events.query_model_history(since=date(2026, 1, 1))
+    assert "provider-c" not in _providers(dated)
+
+
+def test_history_paginates(journal):
+    out = change_events.query_model_history(limit=1, offset=1)
+    assert _providers(out) == ["provider-b"] and out["total"] == 3
+
+
+def test_history_without_journal(monkeypatch, tmp_path):
+    monkeypatch.setenv("PLUGBOARD_DATA", str(tmp_path))
+    assert change_events.query_model_history() == {
+        "entries": [],
+        "total": 0,
+        "providers": [],
+        "oldest": None,
+    }
