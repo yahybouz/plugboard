@@ -25,7 +25,7 @@ A change to a file here takes effect only once a root operator installs it on th
 
 | File here | SHA-256 | Copied | Drift check on the host |
 |---|---|---|---|
-| `compose.yml` | `9ba0e1328932840bc3aca3ca185eed173151ccf6e95a68a326c4f76103123d2f` | 2026-11-12 | `sha256sum /srv/plugboard/compose.yml` |
+| `compose.yml` | `b154b0ef238d1d84ea3c5702a2a336397f971dccc5f33e15060aecf00aba9f36` | 2026-11-13 | `sha256sum /srv/plugboard/compose.yml` |
 | `seccomp-plugboard-userns.json` | `35afc90b6fbd72bcd6d6af1df24bc1250cf6c196d1e01f384cf2688930b74ed5` | 2026-11-12 | `sha256sum /srv/plugboard/seccomp/plugboard-userns.json` |
 | `apparmor-plugboard-userns` | `74b76daa402cbc29fc70caa75b162cecf15fe525e450bdf361318a30964a99e1` | 2026-11-12 | `sha256sum /etc/apparmor.d/plugboard-userns` |
 

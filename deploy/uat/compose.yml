@@ -18,7 +18,10 @@ services:
       PLUGBOARD_LOCAL_AUTO_LOGIN: "0"
       COOKIE_SECURE: "true"
       CORS_ORIGINS: ""
-      PLUGBOARD_MAX_INFLIGHT_CHAT: "1"
+      PLUGBOARD_MAX_INFLIGHT_CHAT: "8"
+      PLUGBOARD_INFLIGHT_WAIT_S: "10"
+      PLUGBOARD_PROVIDER_WAIT_S: "10"
+      PLUGBOARD_CLI_PROVIDER_MAX_INFLIGHT: "1"
       PLUGBOARD_SUBPROCESS_LIMIT: "1"
       MODEL_AVAILABILITY_SCHEDULER_DISABLED: "1"
       PRICING_SCHEDULER_DISABLED: "1"
@@ -51,8 +54,8 @@ services:
     cap_drop:
       - ALL
     pids_limit: 256
-    mem_limit: 1g
-    cpus: 1.5
+    mem_limit: 3g
+    cpus: 1.75
     logging:
       driver: json-file
       options:
