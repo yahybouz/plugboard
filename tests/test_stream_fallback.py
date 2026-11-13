@@ -540,3 +540,20 @@ async def test_stream_successes_count_in_the_routing_score(
             )
     stats = router.metrics._stats["test-provider"]
     assert (stats["requests"], stats["errors"]) == (4, 1)
+
+
+async def test_an_empty_stream_on_its_only_route_is_an_error_not_a_success(
+    client, two_routes
+):
+    """BUG-82: a 200 with no event at all is no success for the circuit, and
+    with no other route the client gets the error, not an empty 200."""
+    with aioresponses() as mock:
+        mock.post(URL_A, body=b"", status=200)
+        resp = await client.post(
+            "/v1/chat/completions",
+            headers=AUTH,
+            json=_stream(f"{PROVIDER_A['id']}:{BARE}"),
+        )
+    assert resp.status_code == 502, resp.text
+    circuit = circuit_breaker._circuits.get(f"{PROVIDER_A['id']}:{BARE}")
+    assert circuit is not None and circuit.failures == 1
