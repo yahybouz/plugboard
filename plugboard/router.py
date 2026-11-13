@@ -577,6 +577,15 @@ def _listed_models(provider: Dict[str, Any]) -> List[str]:
     ]
 
 
+def _request_caused(exc: BaseException) -> bool:
+    """Whether a CLI route's error was caused by the request, not the CLI: a
+    prompt too long for the model (D-45) or a model the route's subscription
+    does not serve (BUG-78). Decided by the CLI wrapper's flags."""
+    return isinstance(exc, CliSubprocessError) and bool(
+        exc.request_too_long or exc.model_unsupported
+    )
+
+
 def _route_refused(provider: Dict[str, Any]) -> frozenset:
     """The model names the route's subscription refuses (BUG-78): the ones a
     ChatGPT sign-in refuses on a codex route, none on any other route."""
@@ -1221,10 +1230,16 @@ async def forward(
                             sub_body,
                             timeout_s=timeout,
                         )
-                    except Exception:
-                        metrics.record(
-                            provider["id"], _time.perf_counter() - _t_cli, error=True
-                        )
+                    except Exception as cli_exc:
+                        # A prompt too long or a model the subscription
+                        # refuses is the request's error: it does not lower
+                        # the route's load-balancing score (review MIN-5).
+                        if not _request_caused(cli_exc):
+                            metrics.record(
+                                provider["id"],
+                                _time.perf_counter() - _t_cli,
+                                error=True,
+                            )
                         raise
                     metrics.record(provider["id"], _time.perf_counter() - _t_cli)
                     reported = _pop_reported_usage(result)
@@ -1747,7 +1762,11 @@ async def _stream_route(
             )
             metrics.record(provider["id"], _time.perf_counter() - _t_cli)
         except Exception as exc:
-            metrics.record(provider["id"], _time.perf_counter() - _t_cli, error=True)
+            # The request's own error does not lower the score (review MIN-5).
+            if not _request_caused(exc):
+                metrics.record(
+                    provider["id"], _time.perf_counter() - _t_cli, error=True
+                )
             # A model the route's subscription does not serve is valid on
             # other providers: never quarantined nor counted (BUG-78). The
             # wrapper's flags decide, even when the message does not quote

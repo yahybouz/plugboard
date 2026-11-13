@@ -667,3 +667,52 @@ def test_a_refused_default_or_family_alias_is_not_known_to_codex(
     # What the route serves stays known, whatever the sign-in.
     assert router._known_native(codex, "gpt-6-luna") == "gpt-6-luna"
     assert router._known_native(codex, "gpt-6-sol-20260101") == "gpt-6-sol-20260101"
+
+
+# ── An error the request caused leaves the routing score alone (MIN-5) ────
+
+_STDERR_TOO_LONG = b"prompt is too long: 250000 tokens > 200000 maximum\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stderr", [_STDERR_REFUSAL, _STDERR_TOO_LONG], ids=["refused", "too-long"]
+)
+@pytest.mark.parametrize("stream", [False, True], ids=["forward", "stream"])
+async def test_a_request_caused_cli_error_is_not_a_provider_error(
+    isolated, http_provider, cli_process, stderr, stream
+):
+    import plugboard.metrics as metrics
+    import plugboard.router as router
+    from plugboard.cli_subprocess import CliSubprocessError
+
+    cli_process(b"", stderr)
+
+    with pytest.raises(CliSubprocessError):
+        if stream:
+            [
+                chunk
+                async for chunk in router.forward_stream(
+                    _chat(f"{CLI_ID}:{REFUSED}", True)
+                )
+            ]
+        else:
+            await router.forward(_chat(f"{CLI_ID}:{REFUSED}"))
+
+    assert metrics._stats.get(CLI_ID, {}).get("errors", 0) == 0
+    assert metrics.get_stats().get(CLI_ID, {}).get("errors", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_failed_cli_run_still_counts_as_a_provider_error(
+    isolated, http_provider, cli_process
+):
+    import plugboard.metrics as metrics
+    import plugboard.router as router
+
+    cli_process(b'{"type":"turn.failed","error":{"message":"model overloaded"}}\n')
+
+    with pytest.raises(Exception):
+        await router.forward(_chat(f"{CLI_ID}:{REFUSED}"))
+
+    assert metrics._stats[CLI_ID]["errors"] == 1
