@@ -13,6 +13,7 @@ The public API is unchanged — all existing callers continue to work.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import sqlite3
 from datetime import datetime, timezone
@@ -402,10 +403,11 @@ def purge_old_usage(keep_months: int = 6) -> List[str]:
         deleted = []
         for row in months:
             m = row[0]
-            parts = m.split("_")
-            if len(parts) != 2:
+            # Only YYYY_MM months, as the retention pass: a malformed one
+            # ("xx_yy") is left as it is instead of a 500 (BUG-69).
+            if not isinstance(m, str) or not re.fullmatch(r"\d{4}_\d{2}", m):
                 continue
-            year, month_num = int(parts[0]), int(parts[1])
+            year, month_num = int(m[:4]), int(m[5:])
             age = (now.year - year) * 12 + (now.month - month_num)
             if age > keep_months:
                 conn.execute("DELETE FROM usage_entries WHERE month = ?", (m,))
