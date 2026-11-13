@@ -69,6 +69,7 @@ A completed rotation also signs out every dashboard session and forgets the brow
 | `PLUGBOARD_DEFAULT_RPM_LIMIT` | `60` | RPM limit applied to a new key created without one. `0` means unlimited. |
 | `PLUGBOARD_DEFAULT_MONTHLY_LIMIT_USD` | `10` | Monthly USD budget applied to a new key created without one. `0` means unlimited. |
 | `PLUGBOARD_SESSION_TTL_S` | `86400` | Lifetime of server-side chat sessions (`session_id`). |
+| `PLUGBOARD_SESSION_MAX_WAITING` | `8` | Turns of one session that may wait at once for the previous one. Past it, a turn gets `503 session_busy` at once. `0` means no limit. |
 | `PLUGBOARD_SESSION_MAX_TURNS` | `50` | Turns kept per session. |
 
 ## Routing
@@ -81,6 +82,7 @@ A completed rotation also signs out every dashboard session and forgets the brow
 | `PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT` | `1` | Concurrent requests a local provider (`sovereign`, a loopback or private address, or an Ollama over plain `http://`, whatever its host; see [concurrent requests per provider](providers-and-subscriptions.md#concurrent-requests-per-provider)) takes when its record sets no `max_concurrency`. `0` means no cap. |
 | `PLUGBOARD_CLI_PROVIDER_MAX_INFLIGHT` | `1` | Concurrent requests a CLI provider (`auth_source` `subprocess:`: Claude Code, Codex, Gemini CLI, agy) takes when its record sets no `max_concurrency`; the next ones wait for it within the request's wait budget, then get `503 providers_busy`. `0` means no cap. |
 | `PLUGBOARD_PROVIDER_WAIT_S` | `10` | How long a request waits when every candidate provider is at its cap, before `503 providers_busy`. `0` answers at once. The wait also takes no more than what is left of the request's wait budget, shared with the waits for a global slot and for the session's turn (see `PLUGBOARD_INFLIGHT_WAIT_S`). |
+| `PLUGBOARD_PROVIDER_MAX_WAITING` | `8` | Requests that may wait at once for one provider at its cap. Past it, a request does not wait for that provider: `503 providers_busy` at once when no other candidate can be waited for. Waiting requests hold no slot of the global cap, so this bounds them. `0` means no limit. |
 | `PLUGBOARD_HTTP_POOL_SIZE` | `100` | Shared HTTP connection pool size. |
 | `PLUGBOARD_HTTP_POOL_PER_HOST` | `20` | Connections per upstream host. |
 | `PLUGBOARD_HTTP_DNS_TTL` | `300` | DNS cache lifetime, in seconds. |

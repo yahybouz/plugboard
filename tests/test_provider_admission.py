@@ -212,3 +212,54 @@ async def test_lowered_cap_is_respected_when_slots_come_back():
     lease = await waiter
     assert pa.in_flight("ollama") == 1
     lease.release()
+
+
+async def test_a_provider_queue_is_bounded(monkeypatch):
+    """PLU-50: past PLUGBOARD_PROVIDER_MAX_WAITING requests waiting for a
+    provider, the next one does not wait: None at once (providers_busy)."""
+    monkeypatch.setattr(pa, "MAX_WAITING", 2)
+    held = pa.try_acquire(LOCAL)
+    waits = [asyncio.create_task(pa.wait_acquire([LOCAL], 5.0)) for _ in range(2)]
+    await asyncio.sleep(0)
+    assert pa.waiting("ollama") == 2
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    assert await pa.wait_acquire([LOCAL], 5.0) is None
+    assert loop.time() - started < 0.5
+    held.release()
+    first = await waits[0]
+    first.release()
+    (await waits[1]).release()
+    assert pa._active == {} and pa.waiting("ollama") == 0
+
+
+async def test_a_full_queue_is_skipped_when_another_provider_can_be_waited_for(
+    monkeypatch,
+):
+    other = {"id": "lmstudio", "base_url": "http://127.0.0.1:1234"}
+    monkeypatch.setattr(pa, "MAX_WAITING", 1)
+    held = [pa.try_acquire(LOCAL), pa.try_acquire(other)]
+    queued = asyncio.create_task(pa.wait_acquire([LOCAL], 5.0))
+    await asyncio.sleep(0)
+    both = asyncio.create_task(pa.wait_acquire([LOCAL, other], 5.0))
+    await asyncio.sleep(0)
+    assert pa.waiting("lmstudio") == 1 and pa.waiting("ollama") == 1
+    held[1].release()
+    lease = await asyncio.wait_for(both, 1.0)
+    assert lease.provider_id == "lmstudio"
+    lease.release()
+    held[0].release()
+    (await queued).release()
+    assert pa._active == {}
+
+
+async def test_no_limit_when_max_waiting_is_zero(monkeypatch):
+    monkeypatch.setattr(pa, "MAX_WAITING", 0)
+    held = pa.try_acquire(LOCAL)
+    waits = [asyncio.create_task(pa.wait_acquire([LOCAL], 5.0)) for _ in range(20)]
+    await asyncio.sleep(0)
+    assert pa.waiting("ollama") == 20
+    held.release()
+    for task in waits:
+        (await task).release()
+    assert pa._active == {}

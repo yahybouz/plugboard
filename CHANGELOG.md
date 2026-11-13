@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Bounded queues for waiting requests** (PLU-50): since 4.12.1, a request waiting for a full provider or for its session's turn holds no slot of the global cap, so nothing but the rate limits and the 10 s wait bounded how many could wait. At most `PLUGBOARD_PROVIDER_MAX_WAITING` requests now wait for one provider and `PLUGBOARD_SESSION_MAX_WAITING` turns for one session (8 each by default, `0` for no limit); past that, the request is answered at once: `503 providers_busy` when no other candidate provider can be waited for, `503 session_busy` for a turn ([configuration](docs/guide/configuration.md)).
+
 - **The total wait of each chat request in `/metrics/prometheus`** (PLU-46): `plugboard_request_wait_seconds`, a histogram without labels, records once per chat request (`/v1/chat/completions`, `/v2/chat/completions`, `/v1/preflight`) the seconds it waited in all, for a slot of the global cap, for its session's turn and for providers' slots, whether it was served or refused. The JSON of `GET /metrics` is unchanged ([monitoring](docs/guide/monitoring.md#per-model-measures)).
 
 ### Changed

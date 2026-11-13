@@ -36,6 +36,9 @@ CLI_DEFAULT = envcompat.get_int(
 )
 # Seconds a request waits when every candidate is full; 0 = no wait.
 WAIT_S = envcompat.get_float("PLUGBOARD_PROVIDER_WAIT_S", default=10.0, minimum=0.0)
+# Requests that may wait for one provider at once (PLU-50); 0 = no limit.
+# Waiting requests hold no global chat slot (BUG-77): this bounds them.
+MAX_WAITING = envcompat.get_int("PLUGBOARD_PROVIDER_MAX_WAITING", default=8, minimum=0)
 
 # Leases held, by provider id (no entry = none).
 _active: Dict[str, int] = {}
@@ -158,8 +161,11 @@ async def wait_acquire(
     the requests queued before this one; None after ``timeout`` seconds.
 
     A slot handed over just as the wait ends (timeout or cancellation) goes
-    to the next waiter.
+    to the next waiter. A provider with ``MAX_WAITING`` requests already
+    waiting is not waited for (PLU-50); None at once when none is left.
     """
+    if MAX_WAITING:
+        providers = [p for p in providers if waiting(p["id"]) < MAX_WAITING]
     if timeout <= 0 or not providers:
         return None
     fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()

@@ -1170,3 +1170,67 @@ async def test_a_cli_granted_its_slot_runs_only_with_a_global_slot(
     assert refused.json()["code"] == "server_busy"
     assert runs["claude"] == 0
     assert cli_slots_after == 0
+
+
+# ── PLU-50: bounded queues ──────────────────────────────────────────────────
+
+
+async def test_requests_past_a_provider_queue_limit_get_providers_busy_at_once(
+    client, app_mod, a_at_one_b_free, monkeypatch
+):
+    from plugboard import provider_admission
+    from plugboard.config import get_provider
+
+    _waits(app_mod, monkeypatch, slot_s=3.0, provider_s=3.0)
+    monkeypatch.setattr(provider_admission, "MAX_WAITING", 2)
+    held = provider_admission.try_acquire(get_provider(PROVIDER_A["id"]))
+    queued = [
+        asyncio.create_task(
+            client.post("/v1/chat/completions", headers=AUTH, json=_chat())
+        )
+        for _ in range(2)
+    ]
+    await _until(lambda: provider_admission.waiting(PROVIDER_A["id"]) == 2)
+    started = time.monotonic()
+    extra = await client.post("/v1/chat/completions", headers=AUTH, json=_chat())
+    elapsed = time.monotonic() - started
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION, repeat=True)
+        held.release()
+        answers = await asyncio.wait_for(asyncio.gather(*queued), 5.0)
+    assert extra.status_code == 503 and extra.json()["code"] == "providers_busy"
+    assert elapsed < 1.0, f"answered after {elapsed:.2f} s"
+    assert [r.status_code for r in answers] == [200, 200]
+
+
+async def test_turns_past_a_session_queue_limit_get_session_busy_at_once(
+    client, app_mod, session_db, monkeypatch
+):
+    from plugboard import session_turns
+
+    _waits(app_mod, monkeypatch, slot_s=3.0, provider_s=3.0)
+    monkeypatch.setattr(session_turns, "MAX_WAITING", 1)
+    release_turn = await session_turns.acquire("admin", "q")
+    in_session = {**AUTH, "X-LLM-Session-ID": "q"}
+    queued = asyncio.create_task(
+        client.post("/v1/chat/completions", headers=in_session, json=_chat())
+    )
+    await _until(lambda: session_turns.waiting("admin", "q") == 1)
+    started = time.monotonic()
+    extra = await client.post("/v1/chat/completions", headers=in_session, json=_chat())
+    elapsed = time.monotonic() - started
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION, repeat=True)
+        release_turn()
+        queued_answer = await asyncio.wait_for(queued, 5.0)
+    assert extra.status_code == 503 and extra.json()["code"] == "session_busy"
+    assert elapsed < 1.0, f"answered after {elapsed:.2f} s"
+    assert queued_answer.status_code == 200, queued_answer.text
+    assert session_turns._turns == {}
+
+
+def test_queue_limits_default_to_eight():
+    from plugboard import provider_admission, session_turns
+
+    assert provider_admission.MAX_WAITING == 8
+    assert session_turns.MAX_WAITING == 8

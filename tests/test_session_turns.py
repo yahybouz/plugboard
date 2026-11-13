@@ -404,3 +404,23 @@ async def test_streamed_cli_turn_is_recorded(
         "role": "assistant",
         "content": "from the CLI",
     }
+
+
+async def test_a_session_queue_is_bounded(monkeypatch):
+    """PLU-50: past PLUGBOARD_SESSION_MAX_WAITING turns waiting in one
+    session, the next turn does not wait (TimeoutError at once)."""
+    monkeypatch.setattr(session_turns, "MAX_WAITING", 1)
+    release = await session_turns.acquire("c", "s")
+    second = asyncio.create_task(session_turns.acquire("c", "s", timeout=5.0))
+    await asyncio.sleep(0)
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    with pytest.raises(TimeoutError):
+        await session_turns.acquire("c", "s", timeout=5.0)
+    assert loop.time() - started < 0.5
+    assert session_turns.waiting("c", "s") == 1
+    other = await session_turns.acquire("c", "t", timeout=5.0)  # another session
+    other()
+    release()
+    (await second)()
+    assert session_turns._turns == {}

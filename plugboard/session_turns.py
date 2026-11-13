@@ -18,6 +18,12 @@ from __future__ import annotations
 import asyncio
 from typing import Callable, Dict, List, Optional, Tuple
 
+from plugboard import envcompat
+
+# Turns that may wait in one session at once (PLU-50); 0 = no limit. Waiting
+# turns hold no global chat slot (BUG-77): this bounds them.
+MAX_WAITING = envcompat.get_int("PLUGBOARD_SESSION_MAX_WAITING", default=8, minimum=0)
+
 # (client_id, session_id) -> [lock, users]: users counts the turn running
 # plus the turns waiting behind it.
 _turns: Dict[Tuple[str, str], List] = {}
@@ -42,9 +48,13 @@ async def acquire(
     The returned function is idempotent. A wait that is cancelled (the caller
     hung up) or lasts ``timeout`` seconds (``TimeoutError``, PLU-15) leaves
     the queue without taking the turn; None waits without limit. A free
-    turn is taken at once, whatever the timeout (0 included).
+    turn is taken at once, whatever the timeout (0 included). With
+    ``MAX_WAITING`` turns already waiting, the turn does not wait:
+    ``TimeoutError`` at once (PLU-50).
     """
     key = (client_id, session_id)
+    if MAX_WAITING and waiting(client_id, session_id) >= MAX_WAITING:
+        raise TimeoutError("too many turns of this session are waiting")
     entry = _turns.get(key)
     if entry is None:
         entry = _turns[key] = [asyncio.Lock(), 0]
