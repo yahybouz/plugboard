@@ -1,7 +1,8 @@
 """Data retention: purge old rows from the SQLite stores.
 
 One synchronous pass deletes the rows older than each store's retention,
-compacts the store when enough pages are free, writes a report to
+compacts the store when enough pages are free (never the usage and session
+stores, which requests write: BUG-76), writes a report to
 ``data/retention.json`` and records an audit line when rows were deleted.
 
 - usage (``usage_entries``): whole months, ``PLUGBOARD_USAGE_RETENTION_MONTHS``;
@@ -21,6 +22,7 @@ event loop.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -45,13 +47,39 @@ DEFAULT_AUDIT_DAYS = 365
 DEFAULT_WATCHDOG_DAYS = 14
 DEFAULT_MONITORING_DAYS = 90
 DEFAULT_HOUR_UTC = 4
+# A scheduled pass more than this long after the last one is held: a clock
+# running ahead would delete rows that should be kept (BUG-70).
+MAX_CLOCK_STEP_DAYS = 7
 
 _TRUE = {"1", "true", "yes"}
 _ERROR_MAX_CHARS = 200
 
 
+# Shortest retention a non-zero value may give (BUG-71): an audit kept 12
+# days, or usage kept one month, leaves too little to investigate or bill.
+FLOORS = {
+    "PLUGBOARD_USAGE_RETENTION_MONTHS": 3,
+    "PLUGBOARD_AUDIT_RETENTION_DAYS": 90,
+    "PLUGBOARD_WATCHDOG_RETENTION_DAYS": 7,
+    "PLUGBOARD_MONITORING_RETENTION_DAYS": 7,
+}
+_floor_warned: set = set()
+
+
 def _retention(name: str, default: int) -> int:
-    return envcompat.get_int(name, default=default, minimum=0)
+    value = envcompat.get_int(name, default=default, minimum=0)
+    floor = FLOORS.get(name, 0)
+    if 0 < value < floor:
+        if (name, value) not in _floor_warned:
+            _floor_warned.add((name, value))
+            log.warning(
+                "%s=%d is below its floor: %d is used (0 keeps everything)",
+                name,
+                value,
+                floor,
+            )
+        return floor
+    return value
 
 
 def settings() -> Dict[str, Any]:
@@ -109,7 +137,9 @@ def _day_cutoff(now: datetime, days: int) -> Optional[str]:
     return cutoff.replace(tzinfo=None).isoformat(timespec="seconds")
 
 
-def _purge_and_compact(path: Path, purge: Callable[[], int]) -> Dict[str, Any]:
+def _purge_and_compact(
+    path: Path, purge: Callable[[], int], *, compact: bool = True
+) -> Dict[str, Any]:
     """Purge one store, then compact it; a failure is reported, never raised.
 
     The purge is committed before compaction starts: when compaction fails,
@@ -121,7 +151,8 @@ def _purge_and_compact(path: Path, purge: Callable[[], int]) -> Dict[str, Any]:
     entry: Dict[str, Any] = {"deleted": 0, "compacted": False}
     try:
         entry["deleted"] = purge()
-        entry["compacted"] = storage.compact_sqlite(path)
+        if compact:
+            entry["compacted"] = storage.compact_sqlite(path)
     except (sqlite3.Error, OSError) as exc:
         reported: BaseException = exc
         if isinstance(exc, storage.PartialPurgeError):
@@ -134,12 +165,14 @@ def _purge_and_compact(path: Path, purge: Callable[[], int]) -> Dict[str, Any]:
 
 
 def _purge_store(
-    path: Path, table: str, where: str, cutoff: Optional[str]
+    path: Path, table: str, where: str, cutoff: Optional[str], *, compact: bool = True
 ) -> Dict[str, Any]:
     if cutoff is None:
         return {"deleted": 0, "compacted": False, "kept": "all"}
     return _purge_and_compact(
-        path, lambda: storage.purge_sqlite_rows(path, table, where, (cutoff,))
+        path,
+        lambda: storage.purge_sqlite_rows(path, table, where, (cutoff,)),
+        compact=compact,
     )
 
 
@@ -160,6 +193,10 @@ def run_retention(now: Optional[datetime] = None) -> Dict[str, Any]:
             "usage_entries",
             "month < ? AND month GLOB '[0-9][0-9][0-9][0-9]_[0-9][0-9]'",
             month_cutoff,
+            # Never compacted (BUG-76): VACUUM locks the store while it runs,
+            # and every billing write waited up to 5 s on the event loop, then
+            # failed. SQLite reuses the freed pages for the next rows instead.
+            compact=False,
         ),
         "audit": _purge_store(
             audit._DB_PATH,
@@ -180,7 +217,10 @@ def run_retention(now: Optional[datetime] = None) -> Dict[str, Any]:
             _day_cutoff(now, conf["monitoring_days"]),
         ),
         "sessions": _purge_and_compact(
-            session_store._DB_PATH, session_store.purge_expired
+            # Written by chat requests too: not compacted, as usage (BUG-76).
+            session_store._DB_PATH,
+            session_store.purge_expired,
+            compact=False,
         ),
     }
     deleted_total = sum(store["deleted"] for store in stores.values())
@@ -202,7 +242,114 @@ def run_retention(now: Optional[datetime] = None) -> Dict[str, Any]:
         storage.atomic_write_json(report_path(), report, mode=0o600)
     except Exception:
         log.exception("Retention pass: cannot write %s", report_path())
+    global _hold
+    _hold = None  # a pass ran: nothing is held any more (BUG-81)
     return report
+
+
+# A daily pass older than this when the server starts was missed (BUG-72).
+OVERDUE_AFTER = timedelta(hours=25)
+
+
+def _last_ran_at() -> Optional[datetime]:
+    try:
+        ran_at = datetime.strptime(
+            str((last_report() or {}).get("ran_at")), "%Y-%m-%dT%H:%M:%SZ"
+        )
+    except ValueError:
+        return None
+    return ran_at.replace(tzinfo=timezone.utc)
+
+
+def pass_overdue(now: Optional[datetime] = None) -> bool:
+    """True when the last pass is more than a day old (BUG-72).
+
+    The server was not running at the daily hour: the pass runs soon after
+    the start instead of a day later (and the clock check still applies).
+    Never true before the first pass, which waits for the daily hour.
+    """
+    ran_at = _last_ran_at()
+    if ran_at is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return now - ran_at > OVERDUE_AFTER
+
+
+# The pass held by the clock check, until a pass runs (BUG-81): shown by
+# GET /admin/retention, and alerted once per hold.
+_hold: Optional[Dict[str, Any]] = None
+_hold_alerted: set = set()
+_alert_tasks: set = set()
+
+
+def held() -> Optional[Dict[str, Any]]:
+    """``{reason, since}`` while the daily pass is held, else None."""
+    return dict(_hold) if _hold else None
+
+
+def _record_hold(reason: str, now: datetime) -> str:
+    global _hold
+    anchor = (last_report() or {}).get("ran_at") or "unreadable"
+    if _hold is None or _hold.get("anchor") != anchor:
+        _hold = {
+            "reason": reason,
+            "since": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "anchor": anchor,
+        }
+    else:
+        _hold["reason"] = reason
+    if anchor not in _hold_alerted:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return reason  # alerted from the next check made under a loop
+        _hold_alerted.add(anchor)
+        from plugboard import alerts
+
+        task = loop.create_task(alerts.send_retention_held_alert(reason))
+        _alert_tasks.add(task)
+        task.add_done_callback(_alert_tasks.discard)
+    return reason
+
+
+def clock_check(now: Optional[datetime] = None) -> Optional[str]:
+    """Why a scheduled pass must not run now, or None (BUG-70).
+
+    The clock is compared with the last pass: more than
+    ``MAX_CLOCK_STEP_DAYS`` after it, the server clock may be running ahead,
+    and a pass would delete every row older than that wrong date. A pass
+    held this way writes nothing, so the next one is held too until an
+    admin checks the clock and runs it from the Jobs page (manual runs are
+    not held). Without a previous pass there is nothing to compare with.
+    """
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+    if not report_path().exists():
+        return None  # the first pass: nothing to compare with
+    ran_at = _last_ran_at()
+    if ran_at is None:
+        # Present but unreadable, or no valid ran_at: the clock cannot be
+        # checked, so the pass is held rather than let through (review M-2).
+        return _record_hold(
+            f"held: {report_path().name} cannot be read or has no valid ran_at, "
+            "so the clock cannot be checked. Check the server clock, then run "
+            "the pass from the Jobs page.",
+            now,
+        )
+    gap = now - ran_at
+    if gap <= timedelta(days=MAX_CLOCK_STEP_DAYS):
+        return None
+    return _record_hold(
+        f"held: the clock reads {now:%Y-%m-%d %H:%M} UTC, {gap.days} days after "
+        f"the last pass ({ran_at:%Y-%m-%dT%H:%M:%SZ}); a clock running ahead would delete "
+        "data that should be kept. Check the server clock, then run the pass "
+        "from the Jobs page.",
+        now,
+    )
 
 
 def last_report() -> Optional[Dict[str, Any]]:

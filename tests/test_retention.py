@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
 import stat
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 NOW = datetime(2026, 11, 12, 4, 0, tzinfo=timezone.utc)
+ADMIN = {"Authorization": "Bearer adminkey"}
 
 _VARIABLES = (
     "PLUGBOARD_USAGE_RETENTION_MONTHS",
@@ -466,3 +468,232 @@ def test_a_failure_after_committed_batches_keeps_their_count(stores, monkeypatch
     entries = audit.get_audit_log(action="retention.run")
     assert len(entries) == 1
     assert "watchdog=5000" in entries[0]["details"]
+
+
+# --- BUG-70: a clock running ahead -------------------------------------------
+
+
+def _last_pass_at(stores, when: datetime) -> None:
+    import json
+
+    stores["report"].write_text(
+        json.dumps({"ran_at": when.strftime("%Y-%m-%dT%H:%M:%SZ"), "stores": {}})
+    )
+
+
+def test_clock_check_refuses_a_pass_long_after_the_last_one(stores):
+    from plugboard import retention
+
+    _last_pass_at(stores, NOW - timedelta(days=1))
+    assert retention.clock_check(NOW) is None
+    _last_pass_at(stores, NOW - timedelta(days=retention.MAX_CLOCK_STEP_DAYS + 1))
+    message = retention.clock_check(NOW)
+    assert message and "clock" in message and "Jobs" in message
+
+
+def test_clock_check_passes_without_a_previous_pass(stores):
+    from plugboard import retention
+
+    assert retention.clock_check(NOW) is None
+
+
+async def test_scheduled_pass_with_a_clock_far_ahead_deletes_nothing(stores):
+    # A server clock a year ahead would have emptied every store.
+    from plugboard import maintenance, retention
+
+    seed_one_old_and_one_recent_row_everywhere()
+    before = {name: column(stores[name], *spec) for name, spec in _COLUMNS.items()}
+    _last_pass_at(stores, datetime.now(timezone.utc) - timedelta(days=365))
+    job = maintenance.retention_job()
+    await job._run_once("scheduled")
+    assert "clock" in job.status_dict["last_error"]
+    assert {
+        name: column(stores[name], *spec) for name, spec in _COLUMNS.items()
+    } == before
+    assert retention.last_report()["stores"] == {}  # the last pass is unchanged
+
+
+async def test_a_manual_pass_is_not_held_by_the_clock_check(stores):
+    from plugboard import maintenance, retention
+
+    _last_pass_at(stores, datetime.now(timezone.utc) - timedelta(days=365))
+    job = maintenance.retention_job()
+    await job._run_once("scheduled")  # the same setup holds a scheduled pass
+    assert "clock" in job.status_dict["last_error"]
+    await job.run_now("manual")
+    assert job.status_dict["last_error"] is None
+    assert retention.last_report()["stores"]  # a new report was written
+
+
+_COLUMNS = {
+    "usage": ("usage_entries", "id"),
+    "audit": ("audit_log", "id"),
+    "watchdog": ("watchdog_events", "id"),
+    "monitoring": ("monitoring_snapshots", "id"),
+}
+
+
+# --- BUG-71: floors on the configured retentions -----------------------------
+
+
+@pytest.mark.parametrize(
+    "variable, key, value, floor",
+    [
+        ("PLUGBOARD_AUDIT_RETENTION_DAYS", "audit_days", "12", 90),
+        ("PLUGBOARD_USAGE_RETENTION_MONTHS", "usage_months", "1", 3),
+        ("PLUGBOARD_WATCHDOG_RETENTION_DAYS", "watchdog_days", "2", 7),
+        ("PLUGBOARD_MONITORING_RETENTION_DAYS", "monitoring_days", "1", 7),
+    ],
+)
+def test_a_retention_below_its_floor_is_raised_to_it(
+    stores, monkeypatch, caplog, variable, key, value, floor
+):
+    import logging
+
+    from plugboard import retention
+
+    monkeypatch.setattr(retention, "_floor_warned", set())
+    monkeypatch.setenv(variable, value)
+    with caplog.at_level(logging.WARNING, logger="plugboard.retention"):
+        assert retention.settings()[key] == floor
+    assert any(variable in r.getMessage() for r in caplog.records)
+
+
+def test_zero_still_keeps_everything_and_the_floor_holds_rows(stores, monkeypatch):
+    from plugboard import retention
+
+    monkeypatch.setenv("PLUGBOARD_AUDIT_RETENTION_DAYS", "0")
+    assert retention.settings()["audit_days"] == 0
+    monkeypatch.setenv("PLUGBOARD_AUDIT_RETENTION_DAYS", "12")
+    seed_audit([_audit_row("a30", (NOW - timedelta(days=30)).isoformat())])
+    retention.run_retention(NOW)
+    assert column(stores["audit"], "audit_log", "id") == ["a30"]
+
+
+# --- BUG-72: catching up a missed daily pass ---------------------------------
+
+
+def test_a_pass_is_overdue_a_day_after_the_last_one(stores):
+    from plugboard import retention
+
+    assert retention.pass_overdue(NOW) is False  # never ran: wait for the hour
+    _last_pass_at(stores, NOW - timedelta(hours=23))
+    assert retention.pass_overdue(NOW) is False
+    _last_pass_at(stores, NOW - timedelta(hours=26))
+    assert retention.pass_overdue(NOW) is True
+
+
+def test_the_retention_job_catches_up_an_overdue_pass(stores):
+    from plugboard import maintenance, retention
+
+    _last_pass_at(stores, datetime.now(timezone.utc) - timedelta(days=2))
+    job = maintenance.retention_job()
+    assert job.catches_up() is True
+    assert retention.pass_overdue() is True
+
+
+# --- BUG-76: no compaction of the stores the requests write ------------------
+
+
+def test_the_stores_written_by_requests_are_never_compacted(stores, monkeypatch):
+    # VACUUM locks the store while it runs: a billing write (usage) or a chat
+    # session write waited up to its 5 s busy timeout on the event loop, and
+    # failed after it. Their free pages are reused by later writes instead.
+    from plugboard import retention, storage
+
+    seed_one_old_and_one_recent_row_everywhere()
+    compacted = []
+    real_compact = storage.compact_sqlite
+
+    def spy(path, *args, **kwargs):
+        compacted.append(path)
+        return real_compact(path, *args, **kwargs)
+
+    monkeypatch.setattr(storage, "compact_sqlite", spy)
+    report = retention.run_retention(NOW)
+
+    assert stores["usage"] not in compacted
+    assert stores["sessions"] not in compacted
+    assert {stores["audit"], stores["watchdog"], stores["monitoring"]} <= set(compacted)
+    assert report["stores"]["usage"]["deleted"] >= 1
+    assert report["stores"]["usage"]["compacted"] is False
+
+
+@pytest.mark.parametrize("content", ["{not json", '{"ran_at": "13/11/2026"}', "[]"])
+def test_an_unreadable_last_report_holds_the_pass(stores, content):
+    # Review M-2: only a missing report lets the first pass through.
+    from plugboard import retention
+
+    stores["report"].write_text(content)
+    message = retention.clock_check(NOW)
+    assert message and "retention.json" in message
+
+
+async def test_a_missed_pass_caught_up_after_a_long_stop_is_held(stores):
+    # Review M-9: the catch-up goes through the loop and the clock check.
+    from plugboard import maintenance
+
+    seed_one_old_and_one_recent_row_everywhere()
+    before = {name: column(stores[name], *spec) for name, spec in _COLUMNS.items()}
+    _last_pass_at(stores, datetime.now(timezone.utc) - timedelta(days=30))
+    job = maintenance.retention_job()
+    sleeps = []
+
+    async def _sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            raise asyncio.CancelledError()
+
+    job._sleep = _sleep
+    await job.start()
+    with pytest.raises(asyncio.CancelledError):
+        await job.task
+    assert sleeps[0] == job.first_delay_s  # caught up a minute after the start
+    assert "clock" in job.status_dict["last_error"]
+    assert {
+        name: column(stores[name], *spec) for name, spec in _COLUMNS.items()
+    } == before
+
+
+# --- BUG-81: a held pass is alerted and visible ------------------------------
+
+
+@pytest.fixture
+def held_alerts(monkeypatch):
+    from plugboard import alerts, retention
+
+    sent = []
+
+    async def _alert(reason):
+        sent.append(reason)
+
+    monkeypatch.setattr(alerts, "send_retention_held_alert", _alert, raising=False)
+    monkeypatch.setattr(retention, "_hold", None, raising=False)
+    monkeypatch.setattr(retention, "_hold_alerted", set(), raising=False)
+    return sent
+
+
+async def test_a_held_pass_is_alerted_once_per_hold(stores, held_alerts):
+    from plugboard import maintenance, retention
+
+    _last_pass_at(stores, datetime.now(timezone.utc) - timedelta(days=365))
+    job = maintenance.retention_job()
+    for _ in range(3):  # held again on each daily tick
+        await job._run_once("scheduled")
+    await asyncio.gather(*list(retention._alert_tasks))
+    assert len(held_alerts) == 1 and "clock" in held_alerts[0]
+
+
+async def test_get_admin_retention_shows_the_hold_until_a_pass_runs(
+    stores, held_alerts, admin_client
+):
+    from plugboard import maintenance
+
+    _last_pass_at(stores, datetime.now(timezone.utc) - timedelta(days=365))
+    job = maintenance.retention_job()
+    await job._run_once("scheduled")
+    body = (await admin_client.get("/admin/retention", headers=ADMIN)).json()
+    assert "clock" in body["held"]["reason"] and body["held"]["since"]
+    await job.run_now("manual")  # an admin checked the clock
+    body = (await admin_client.get("/admin/retention", headers=ADMIN)).json()
+    assert body["held"] is None

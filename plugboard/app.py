@@ -6411,7 +6411,11 @@ async def admin_retention(_: None = Depends(_require_admin)):
     """Retention settings and the report of the last retention pass."""
     from plugboard import retention
 
-    return {"settings": retention.settings(), "last_run": retention.last_report()}
+    return {
+        "settings": retention.settings(),
+        "last_run": retention.last_report(),
+        "held": retention.held(),
+    }
 
 
 @app.post("/admin/usage/migrate")

@@ -234,7 +234,7 @@ The catalog is downloaded with each price update. A download that fails, is inva
 
 | Variable | Default | Description |
 |---|---|---|
-| `ALERT_WEBHOOK_URL` | empty | URL receiving `provider_down`, `spending_alert`, `provider_egress_refused` and `provider_secret_unreadable` JSON alerts ([alert webhook](monitoring.md#alert-webhook)). |
+| `ALERT_WEBHOOK_URL` | empty | URL receiving `provider_down`, `spending_alert`, `provider_egress_refused`, `provider_secret_unreadable` and `retention_held` JSON alerts ([alert webhook](monitoring.md#alert-webhook)). |
 | `ALERT_FAILURE_THRESHOLD` | `3` | Consecutive provider failures (circuit breaker's rule, never an error the request caused) before a `provider_down` alert. |
 | `WEBHOOK_URLS` | empty | Comma-separated URLs receiving lifecycle events. |
 | `WEBHOOK_EVENTS` | empty (all) | Comma-separated list of events to send. |
@@ -263,20 +263,22 @@ See [typed decisions](decisions.md) and the [local decision runtime](decisions-r
 
 ## Data retention
 
-A retention pass deletes the rows older than each store's retention, then compacts the store when at least 20 % of its pages are free. Its last report is written to `data/retention.json`, and a pass that deleted rows records a `retention.run` line in the audit trail. For the four retentions below, `0` keeps every row, and a value that is negative or not a whole number gives the default. Chat sessions are purged after `PLUGBOARD_SESSION_TTL_S` ([client keys](#client-keys)).
+A retention pass deletes the rows older than each store's retention, then compacts the store when at least 20 % of its pages are free, except `data/usage.db` and `data/sessions.db`, which requests write. Its last report is written to `data/retention.json`, and a pass that deleted rows records a `retention.run` line in the audit trail. For the four retentions below, `0` keeps every row, and a value that is negative or not a whole number gives the default. Chat sessions are purged after `PLUGBOARD_SESSION_TTL_S` ([client keys](#client-keys)).
 
-The pass runs inside the server once a day, as the *Data retention* job of the Jobs page, where **Run now** starts it at once, even when the daily pass is turned off. `GET /admin/retention` (admin) returns the settings in force and the last report. Back up `data/` before you shorten a retention: the rows it no longer covers are deleted for good at the next pass.
+The pass runs inside the server once a day, as the *Data retention* job of the Jobs page, where **Run now** starts it at once, even when the daily pass is turned off. When the server starts more than 25 hours after the last pass (it was not running at the daily hour), a catch-up pass runs a minute after the start, on top of the daily pass, which keeps its hour; before the first pass ever, it waits for the daily hour. A daily pass that finds the clock more than 7 days after the last pass is held, deletes nothing and shows the reason on the Jobs page: a clock running ahead would delete rows that should be kept. Check the server clock, then use **Run now**, which is never held. `GET /admin/retention` (admin) returns the settings in force and the last report. Back up `data/` before you shorten a retention: the rows it no longer covers are deleted for good at the next pass.
 
-Rows are deleted in short batches, so the server's own writes get through during a long purge. Compaction is different: it locks the store for as long as it runs, and it happens only when at least 20 % of the file is free at the time of the pass, typically after a large purge such as the first one. While `data/usage.db` is compacted, billing writes can wait or fail, and `GET /health/ready` can wait up to 5 seconds, then answer `503` with `usage_db: "fail"` ([health endpoints](monitoring.md#health-endpoints)).
+Rows are deleted in short batches, so the server's own writes get through during a long purge. Compaction is different: it locks the store for as long as it runs, and it happens only when at least 20 % of the file is free at the time of the pass, typically after a large purge such as the first one. So `data/usage.db` and `data/sessions.db`, written by billing and chat sessions, are never compacted: a billing or session write would wait up to 5 seconds, then fail. Their freed pages are reused for the next rows, so the files stop growing without shrinking; to shrink them, stop the server and run `sqlite3 <file> VACUUM`.
 
 | Variable | Default | Description |
 |---|---|---|
-| `PLUGBOARD_USAGE_RETENTION_MONTHS` | `13` | Whole months of usage entries kept before the current month (`data/usage.db`): with `13`, in November 2026 the oldest month kept is October 2025. Lowering it deletes the older months, and their cost history, for good. |
-| `PLUGBOARD_AUDIT_RETENTION_DAYS` | `365` | Days an audit entry is kept (`data/audit.db`). |
-| `PLUGBOARD_WATCHDOG_RETENTION_DAYS` | `14` | Days a watchdog event is kept (`data/watchdog.db`). |
-| `PLUGBOARD_MONITORING_RETENTION_DAYS` | `90` | Days a monitoring snapshot is kept (`data/monitoring.db`). |
+| `PLUGBOARD_USAGE_RETENTION_MONTHS` | `13` | Whole months of usage entries kept before the current month (`data/usage.db`), at least `3`: with `13`, in November 2026 the oldest month kept is October 2025. Lowering it deletes the older months, and their cost history, for good. |
+| `PLUGBOARD_AUDIT_RETENTION_DAYS` | `365` | Days an audit entry is kept (`data/audit.db`); at least `90`. |
+| `PLUGBOARD_WATCHDOG_RETENTION_DAYS` | `14` | Days a watchdog event is kept (`data/watchdog.db`); at least `7`. |
+| `PLUGBOARD_MONITORING_RETENTION_DAYS` | `90` | Days a monitoring snapshot is kept (`data/monitoring.db`); at least `7`. |
 | `PLUGBOARD_RETENTION_HOUR_UTC` | `4` | Hour (UTC, `0` to `23`) of the daily pass; a value above `23` gives `23`. |
 | `PLUGBOARD_RETENTION_DISABLED` | empty | `1`, `true` or `yes` turns the daily pass off; **Run now** still runs it. |
+
+A non-zero retention below its floor (usage 3 months, audit 90 days, watchdog and monitoring 7 days) is raised to the floor, with a warning in the log; `0` still keeps everything.
 
 ## MCP server and scripts
 

@@ -53,7 +53,8 @@ _JOBS: Dict[str, Dict[str, Any]] = {
     "data_retention": {
         "name": "Data retention",
         "description": "Deletes usage, audit, watchdog, monitoring and session rows "
-        "older than their retention, then compacts the stores.",
+        "older than their retention, then compacts the audit, watchdog and "
+        "monitoring stores (never usage or sessions, which requests write).",
         "state_attr": "retention_job",
     },
 }

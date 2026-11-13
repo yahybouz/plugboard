@@ -284,3 +284,88 @@ def test_constructor_needs_exactly_one_schedule():
         PeriodicJob("both", work, interval_s=300, daily_hour_utc=4)
     with pytest.raises(ValueError):
         PeriodicJob("bad hour", work, daily_hour_utc=24)
+
+
+async def test_a_missed_daily_run_is_caught_up_after_the_first_delay():
+    # BUG-72: a server down at the daily hour waited a whole day more.
+    calls: List[int] = []
+
+    async def work() -> Dict[str, Any]:
+        calls.append(1)
+        return {}
+
+    sleep = _FakeSleep(stop_after=2)
+    job = PeriodicJob(
+        "retention",
+        work,
+        daily_hour_utc=4,
+        sleep_fn=sleep,
+        now_fn=_clock(),
+        catch_up=lambda: True,
+    )
+    await _run_loop_to_the_end(job)
+    assert sleep.calls == [60.0, 19800]
+    assert calls == [1]
+
+
+async def test_no_catch_up_when_the_last_run_is_recent():
+    async def work() -> Dict[str, Any]:
+        return {}
+
+    sleep = _FakeSleep(stop_after=1)
+    job = PeriodicJob(
+        "retention",
+        work,
+        daily_hour_utc=4,
+        sleep_fn=sleep,
+        now_fn=_clock(),
+        catch_up=lambda: False,
+    )
+    await _run_loop_to_the_end(job)
+    assert sleep.calls == [19800]
+
+
+async def test_a_guard_that_raises_holds_the_run_and_keeps_the_loop():
+    # M-1: an exception in the guard killed the job's loop for good.
+    calls: List[int] = []
+
+    async def work() -> Dict[str, Any]:
+        calls.append(1)
+        return {}
+
+    def guard() -> str:
+        raise OSError("disk")
+
+    sleep = _FakeSleep(stop_after=3)
+    job = PeriodicJob(
+        "retention",
+        work,
+        interval_s=300,
+        sleep_fn=sleep,
+        now_fn=_clock(),
+        scheduled_guard=guard,
+    )
+    await _run_loop_to_the_end(job)
+    assert calls == []
+    assert len(sleep.calls) == 3  # the loop went on after each held run
+    assert "OSError" in job.status_dict["last_error"]
+
+
+async def test_a_catch_up_check_that_raises_waits_for_the_daily_hour():
+    async def work() -> Dict[str, Any]:
+        return {}
+
+    def catch_up() -> bool:
+        raise ValueError("bad report")
+
+    sleep = _FakeSleep(stop_after=1)
+    job = PeriodicJob(
+        "retention",
+        work,
+        daily_hour_utc=4,
+        sleep_fn=sleep,
+        now_fn=_clock(),
+        catch_up=catch_up,
+    )
+    await _run_loop_to_the_end(job)
+    assert sleep.calls == [19800]

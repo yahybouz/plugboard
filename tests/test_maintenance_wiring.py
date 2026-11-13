@@ -138,3 +138,12 @@ async def test_a_pass_with_a_failed_store_is_an_error(stores):
     assert report is not None
     assert report["errors"] == 1
     assert "error" in report["stores"]["watchdog"]
+
+
+def test_retention_job_description_names_the_stores_it_compacts():
+    # Review M-6: it said "then compacts the stores", but usage and sessions
+    # are never compacted (BUG-76).
+    from plugboard import jobs
+
+    text = jobs._JOBS["data_retention"]["description"]
+    assert "compacts the audit, watchdog and monitoring stores" in text

@@ -67,7 +67,7 @@ The list of providers is on the admin `GET /providers`. The client authenticatio
 
 | Check | States | Blocks readiness |
 |---|---|---|
-| `usage_db` | `ok`: `data/usage.db` takes a write lock; `fail`: it cannot within 5 seconds, for example while the retention pass compacts it after a large purge, when billing writes can wait or fail too ([data retention](configuration.md#data-retention)) | yes, unless `ok` |
+| `usage_db` | `ok`: `data/usage.db` takes a write lock; `fail`: it cannot within 5 seconds (another process holds it, a damaged file), when billing writes can wait or fail too; the retention pass never compacts it ([data retention](configuration.md#data-retention)) | yes, unless `ok` |
 | `cli` | `ok`: every active CLI provider finds its binary on PATH; `fail`: one does not; `none`: no active CLI provider | on `fail` |
 | `auth` | `ok`: `API_KEY` is set; `dev`: empty with `PLUGBOARD_DEV=1`; `fail`: empty outside dev mode | on `fail` |
 | `ollama` | `ok` or `unreachable` from the watchdog's last check of the active Ollama providers; `unknown` when the watchdog is stopped or its last check is older than three intervals; `not_configured` without an active Ollama provider | never |
@@ -85,7 +85,7 @@ The body names no provider and carries no error text: a check that raises gives 
 | `GET /metrics/prometheus` | Prometheus text format: request totals, error totals and average latency per provider, an `up` gauge, the per-model histograms and counter below, and the total wait of each chat request |
 | `GET /admin/monitoring` | Full health check of all providers with 24-hour and 7-day uptime computed from the stored snapshots; the check itself is not stored. `uptime_pct` is `null` when the period holds no snapshot |
 | `GET /admin/monitoring/history?provider_id=&limit=` | Availability snapshots (`data/monitoring.db`): one row per active provider every 5 minutes; a probe that does not answer within 30 seconds is stored as down |
-| `GET /admin/retention` | Retention settings in force (`settings`) and the report of the last retention pass (`last_run`, `null` before the first pass): when it ran, rows deleted per store, errors ([data retention](configuration.md#data-retention)) |
+| `GET /admin/retention` | Retention settings in force (`settings`), the report of the last retention pass (`last_run`, `null` before the first pass): when it ran, rows deleted per store, errors; and `held` (`reason`, `since`) while the daily pass is held by its clock check, else `null` ([data retention](configuration.md#data-retention)) |
 | `GET /admin/circuits` | Per-route circuit breaker state (at most 1024 routes are kept: the least recently used closed route without failures is forgotten first, then a closed one with failures, then any) |
 | `GET /admin/cache/stats` | Response cache statistics |
 
@@ -224,6 +224,12 @@ Set `ALERT_WEBHOOK_URL` to receive JSON alerts (for example on a Slack or Discor
 
   ```json
   {"type": "provider_secret_unreadable", "provider_id": "openai", "message": "..."}
+  ```
+
+- `retention_held`: the daily data retention pass is held by its clock check: the clock is more than 7 days after the last pass, or `data/retention.json` cannot be read ([data retention](configuration.md#data-retention)). Once per hold; `GET /admin/retention` shows it in `held` until a pass runs.
+
+  ```json
+  {"type": "retention_held", "message": "..."}
   ```
 
 ### Event webhooks
