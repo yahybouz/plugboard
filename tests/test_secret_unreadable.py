@@ -292,3 +292,25 @@ def test_dashboard_edit_form_sends_the_stored_switch_back():
         js,
     )
     assert '"key unreadable"' in js
+
+
+@pytest.mark.parametrize(
+    "method, path",
+    [
+        ("GET", "/providers/test-provider/health"),  # Ping
+        ("POST", "/providers/test-provider/discover?dry_run=true"),  # Discover
+    ],
+)
+async def test_ping_and_discover_of_a_cut_provider_call_nobody(
+    client, other_key_store, audit_db, alerts_sent, method, path
+):
+    # BUG-79: they called the provider with an empty token, and the admin read
+    # "connection refused" instead of why the provider is off.
+    from aioresponses import aioresponses
+
+    with aioresponses() as mock:
+        r = await client.request(method, path, headers=AUTH)
+        sent = [call for calls in mock.requests.values() for call in calls]
+    assert sent == []
+    assert r.status_code == 409, r.text
+    assert "ENCRYPTION_KEY" in r.json()["detail"]

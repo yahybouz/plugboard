@@ -4311,11 +4311,27 @@ async def remove_provider(provider_id: str, _: None = Depends(_require_admin)):
     await _webhook("provider.deleted", {"provider_id": provider_id})
 
 
+def _refuse_unreadable_secret(provider: Dict[str, Any]) -> None:
+    """409 for a provider turned off because its key cannot be decrypted.
+
+    Ping and Discover called it with an empty token, and the admin read a
+    connection or discovery error instead of why it is off (BUG-79).
+    """
+    if provider.get("secret_unreadable"):
+        raise HTTPException(
+            409,
+            f"Provider '{provider.get('id', '')}' is turned off: its stored key "
+            "cannot be decrypted with the current ENCRYPTION_KEY. Restore that "
+            "key, or enter the provider's key again; nothing was called.",
+        )
+
+
 @app.get("/providers/{provider_id}/health")
 async def provider_health(provider_id: str, _: None = Depends(_require_admin)):
     provider = get_provider(provider_id)
     if provider is None:
         raise HTTPException(404, f"Provider '{provider_id}' not found")
+    _refuse_unreadable_secret(provider)
     try:
         require_supported_provider(provider)
     except ValueError as exc:
@@ -4399,6 +4415,7 @@ async def _discover_provider(
     provider = get_provider(provider_id)
     if provider is None:
         raise HTTPException(404, f"Provider '{provider_id}' not found")
+    _refuse_unreadable_secret(provider)
     try:
         require_supported_provider(provider)
     except ValueError as exc:
