@@ -320,3 +320,14 @@ def test_committed_contract_names_server_busy():
         assert "server_busy" in unavailable, path
     code = doc["components"]["schemas"]["ErrorResponse"]["properties"]["code"]
     assert "server_busy" in code["description"]
+
+
+def test_committed_contract_names_session_busy():
+    """PLU-45: a refused session turn's 503 carries code session_busy (2.2.0)."""
+    doc = json.loads((ROOT / "docs" / "api" / "openapi.json").read_text("utf-8"))
+    assert tuple(map(int, doc["info"]["version"].split("."))) >= (2, 2, 0)
+    for path in ("/v1/chat/completions", "/v2/chat/completions"):
+        unavailable = doc["paths"][path]["post"]["responses"]["503"]["description"]
+        assert "session_busy" in unavailable, path
+    code = doc["components"]["schemas"]["ErrorResponse"]["properties"]["code"]
+    assert "session_busy" in code["description"]

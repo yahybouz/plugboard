@@ -129,13 +129,16 @@ async def test_upstream_error_mid_stream_records_usage(
 
     monkeypatch.setattr("plugboard.app.forward_stream", broken_upstream)
 
-    with pytest.raises(aiohttp.ClientPayloadError):
-        await client.post(
-            "/v1/chat/completions",
-            headers={"Authorization": "Bearer testkey"},
-            json=_BODY,
-        )
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer testkey"},
+        json=_BODY,
+    )
 
+    # PLU-26: the stream ends with a readable error, not a bare cut.
+    assert resp.status_code == 200
+    assert b'"code": "stream_interrupted"' in resp.content
+    assert resp.content.rstrip().endswith(b"data: [DONE]")
     rows = _rows(usage_store)
     assert len(rows) == 1
     assert rows[0]["completion_tokens"] > 0

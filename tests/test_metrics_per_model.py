@@ -44,6 +44,9 @@ def fresh_metrics(monkeypatch):
     """Every test starts with empty metrics and the real clock."""
     monkeypatch.setattr(metrics, "_stats", {})
     monkeypatch.setattr(metrics, "_models", {})
+    monkeypatch.setattr(
+        metrics, "_request_wait", metrics._Histogram(metrics.WAIT_BUCKETS)
+    )
 
 
 class FakeClock:
@@ -734,3 +737,30 @@ async def test_a_busy_preflight_is_no_refusal(client, capped_a):
     held.release()
     assert resp.json()["results"][0]["error"] == "providers_busy"
     assert metrics.get_stats(per_model=True) == {}
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -1.0, True, "1"])
+def test_request_wait_ignores_invalid_values(bad):
+    metrics.record_request_wait(bad)
+    assert metrics._request_wait.count == 0
+
+
+def test_request_wait_never_raises(monkeypatch):
+    class Broken:
+        def observe(self, value):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(metrics, "_request_wait", Broken())
+    metrics.record_request_wait(1.0)  # no exception
+
+
+def test_prometheus_request_wait_buckets_are_cumulative():
+    for seconds in (0.0, 0.3, 4.0, 40.0):
+        metrics.record_request_wait(seconds)
+    text = metrics.format_prometheus()
+    assert 'plugboard_request_wait_seconds_bucket{le="0.01"} 1' in text
+    assert 'plugboard_request_wait_seconds_bucket{le="0.5"} 2' in text
+    assert 'plugboard_request_wait_seconds_bucket{le="5.0"} 3' in text
+    assert 'plugboard_request_wait_seconds_bucket{le="+Inf"} 4' in text
+    assert "plugboard_request_wait_seconds_sum 44.3" in text
+    assert "plugboard_request_wait_seconds_count 4" in text

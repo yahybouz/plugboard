@@ -404,3 +404,51 @@ async def test_streamed_cli_turn_is_recorded(
         "role": "assistant",
         "content": "from the CLI",
     }
+
+
+async def test_a_session_queue_is_bounded(monkeypatch):
+    """PLU-50: past PLUGBOARD_SESSION_MAX_WAITING turns waiting in one
+    session, the next turn does not wait (TimeoutError at once)."""
+    monkeypatch.setattr(session_turns, "MAX_WAITING", 1)
+    release = await session_turns.acquire("c", "s")
+    second = asyncio.create_task(session_turns.acquire("c", "s", timeout=5.0))
+    await asyncio.sleep(0)
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    with pytest.raises(TimeoutError):
+        await session_turns.acquire("c", "s", timeout=5.0)
+    assert loop.time() - started < 0.5
+    assert session_turns.waiting("c", "s") == 1
+    other = await session_turns.acquire("c", "t", timeout=5.0)  # another session
+    other()
+    release()
+    (await second)()
+    assert session_turns._turns == {}
+
+
+async def test_waiting_count_is_exact_while_the_turn_is_handed_over(monkeypatch):
+    monkeypatch.setattr(session_turns, "MAX_WAITING", 2)
+    release = await session_turns.acquire("c", "h")
+    second = asyncio.create_task(session_turns.acquire("c", "h", timeout=5.0))
+    await asyncio.sleep(0)
+    release()  # handed to ``second``, which has not resumed yet
+    assert session_turns.waiting("c", "h") == 0
+    third = asyncio.create_task(session_turns.acquire("c", "h", timeout=5.0))
+    (await second)()
+    (await third)()
+    assert session_turns._turns == {}
+
+
+async def test_no_session_bound_when_max_waiting_is_zero(monkeypatch):
+    monkeypatch.setattr(session_turns, "MAX_WAITING", 0)
+    release = await session_turns.acquire("c", "z")
+    waits = [
+        asyncio.create_task(session_turns.acquire("c", "z", timeout=5.0))
+        for _ in range(12)
+    ]
+    await asyncio.sleep(0)
+    assert session_turns.waiting("c", "z") == 12
+    release()
+    for task in waits:
+        (await task)()
+    assert session_turns._turns == {}

@@ -26,7 +26,17 @@ import os
 import re
 import time as _time
 import uuid as _uuid
-from typing import Any, AsyncIterator, Callable, Dict, List, Mapping, Optional, Set
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Set,
+    Tuple,
+)
 
 import aiohttp
 
@@ -40,6 +50,7 @@ from plugboard import (
 )
 from plugboard.alerts import record_provider_failure, record_provider_success
 from plugboard.circuit_breaker import is_request_too_long
+from plugboard.cli_auth import AuthError
 from plugboard.cli_limits import unsupported_on_cli
 from plugboard.cli_subprocess import MAX_RETRY_AFTER_S, CliSubprocessError
 from plugboard.config import load_providers
@@ -102,6 +113,22 @@ class ProviderHTTPError(RuntimeError):
         self.provider_id = provider_id
         self.status = status
         self.request_rejected = request_rejected
+
+
+class ProviderAuthError(AuthError):
+    """The gateway could not get a provider's credentials (an OAuth token a
+    CLI or the broker holds). The provider was not called: a stream hands
+    over to its next route (PLU-26), as forward() does. ``status_code`` is
+    the original ``AuthError``'s, else 502."""
+
+    def __init__(self, provider_id: str, cause: Exception):
+        super().__init__(str(cause), getattr(cause, "status_code", 502))
+        self.provider_id = provider_id
+
+
+class ProviderTimeoutError(RuntimeError):
+    """A provider gave no answer within the request's timeout (its message
+    still says "timeout", which the chat route answers 503)."""
 
 
 class ProviderNetworkError(RuntimeError):
@@ -961,39 +988,17 @@ def _order_routes(candidates: List[tuple], open_routes: Set[str]) -> List[tuple]
     return [route for _, route in sorted(enumerate(candidates), key=rank)]
 
 
-async def forward(
+def _candidates_for(
     body: Dict[str, Any],
-    timeout: float = _TIMEOUT,
-    *,
-    route_guard: Optional[Callable[[Dict[str, Any], str], None]] = None,
-) -> Dict[str, Any]:
+    route_guard: Optional[Callable[[Dict[str, Any], str], None]],
+) -> Tuple[List[tuple], Optional[Exception]]:
+    """The routes a chat request may use, in the order to try them, and the
+    key's refusal of the first route it may not use (None when it may use
+    them all). Shared by forward() and forward_stream() (PLU-26).
     """
-    Forward a /v1/chat/completions request to the resolved provider.
-    Retries on transient errors per provider, then falls back to next provider.
-    An error saying the context is too long is not retried: the same request
-    would fail again. From an HTTP provider it goes straight to the next
-    provider; from a CLI subscription route (``request_too_long``) it is
-    raised at once, and no other provider is tried. Neither is a
-    timeout: the request already waited its whole timeout (BUG-47).
-    A request with a field a CLI route cannot serve (``unsupported_on_cli``)
-    leaves the CLI routes out; when only they serve the model,
-    ``UnsupportedOnCliError`` is raised before any call.
-    A provider at its concurrency cap is skipped; when every candidate left
-    is, the request waits up to ``PLUGBOARD_PROVIDER_WAIT_S`` for the first
-    freed slot, then raises ``ProvidersBusyError``.
-    """
-    from plugboard.circuit_breaker import (
-        check_circuit,
-        is_provider_fault,
-        record_failure as cb_failure,
-        record_success as cb_success,
-    )
+    from plugboard.circuit_breaker import check_circuit
 
-    _served_by.set(None)
-    _usage_reported.set(False)
-    model_str = body.get("model", "")
-    _refuse_if_disabled(model_str)
-    candidates = _resolve_all_providers(model_str)
+    candidates = _resolve_all_providers(body.get("model", ""))
     # A CLI route would drop tools, a structured format or an image: it is
     # left out, before any circuit read, guard or slot, and the request is
     # refused when nothing else is left.
@@ -1026,7 +1031,41 @@ async def forward(
         if refused is not None and not allowed:
             raise refused
         candidates = allowed
-    candidates = _order_routes(candidates, open_routes)
+    return _order_routes(candidates, open_routes), refused
+
+
+async def forward(
+    body: Dict[str, Any],
+    timeout: float = _TIMEOUT,
+    *,
+    route_guard: Optional[Callable[[Dict[str, Any], str], None]] = None,
+) -> Dict[str, Any]:
+    """
+    Forward a /v1/chat/completions request to the resolved provider.
+    Retries on transient errors per provider, then falls back to next provider.
+    An error saying the context is too long is not retried: the same request
+    would fail again. From an HTTP provider it goes straight to the next
+    provider; from a CLI subscription route (``request_too_long``) it is
+    raised at once, and no other provider is tried. Neither is a
+    timeout: the request already waited its whole timeout (BUG-47).
+    A request with a field a CLI route cannot serve (``unsupported_on_cli``)
+    leaves the CLI routes out; when only they serve the model,
+    ``UnsupportedOnCliError`` is raised before any call.
+    A provider at its concurrency cap is skipped; when every candidate left
+    is, the request waits up to ``PLUGBOARD_PROVIDER_WAIT_S`` for the first
+    freed slot, then raises ``ProvidersBusyError``.
+    """
+    from plugboard.circuit_breaker import (
+        is_provider_fault,
+        record_failure as cb_failure,
+        record_success as cb_success,
+    )
+
+    _served_by.set(None)
+    _usage_reported.set(False)
+    model_str = body.get("model", "")
+    _refuse_if_disabled(model_str)
+    candidates, refused = _candidates_for(body, route_guard)
 
     last_err: Optional[Exception] = None
     # PERF-2: reuse the app-wide pooled sessions (keepalive + DNS cache)
@@ -1079,15 +1118,14 @@ async def forward(
                     deadline = loop.time() + provider_admission.WAIT_S
                 _live.update(phase="waiting_provider")
                 wait_t0 = loop.time()
-                # BUG-77: the global chat slot is given back while the request
-                # waits, and taken back when it got a provider's slot.
-                async with request_wait.slot_released() as step:
-                    with request_wait.waiting(deadline - loop.time()) as wait_s:
-                        granted = await provider_admission.wait_acquire(
-                            [p for p, _ in busy], wait_s
-                        )
-                    pending_wait += loop.time() - wait_t0
-                    step.come_back = granted is not None
+                # BUG-77: no global chat slot held while the request waits;
+                # it is taken back right before a provider is called.
+                request_wait.release_slot()
+                with request_wait.waiting(deadline - loop.time()) as wait_s:
+                    granted = await provider_admission.wait_acquire(
+                        [p for p, _ in busy], wait_s
+                    )
+                pending_wait += loop.time() - wait_t0
                 _live.update(phase="running")
                 if granted is None:
                     break
@@ -1110,6 +1148,22 @@ async def forward(
                 lease = _take(provider, real_model)
                 if lease is None:
                     busy.append((provider, real_model))
+                    continue
+                try:
+                    # PLU-51: the global slot right before the call, ahead of
+                    # the requests that hold no scarce provider's slot (PLU-48).
+                    took = await request_wait.slot_back(
+                        first=provider_admission.max_inflight(provider) > 0
+                    )
+                except BaseException:
+                    lease.release()
+                    raise
+                if took and _turned_off(provider["id"]):
+                    # Turned off while this request waited for the slot (PLU-12).
+                    lease.release()
+                    disabled_seen = provider["id"]
+                    queue = deque(c for c in queue if c[0]["id"] != disabled_seen)
+                    busy[:] = [c for c in busy if c[0]["id"] != disabled_seen]
                     continue
                 try:
                     kind = auth_source.removeprefix("subprocess:")
@@ -1170,6 +1224,23 @@ async def forward(
                     # no other candidate; the chat route answers 400.
                     if isinstance(exc, CliSubprocessError) and exc.request_too_long:
                         raise
+                    reason = str(exc)
+                    # A quota, an unavailable model or a failed run counts, for
+                    # the circuit and the provider_down alert alike; a prompt
+                    # the CLI found too long is the request's fault. Outside
+                    # the quarantine's try: its failure never skips them
+                    # (BUG-51).
+                    if is_provider_fault(reason):
+                        cb_failure(_circuit_key(provider, real_model))
+                        try:
+                            await record_provider_failure(provider["id"])
+                        except Exception as alert_exc:
+                            log.debug("provider_down alert failed: %s", alert_exc)
+                    # A CLI quota pauses the route, as an HTTP 429 does.
+                    if isinstance(exc, CliSubprocessError) and exc.quota:
+                        route_pauses.pause(
+                            _circuit_key(provider, real_model), exc.retry_after
+                        )
                     try:
                         from plugboard.model_quarantine import (
                             is_account_unsupported_error,
@@ -1178,7 +1249,6 @@ async def forward(
                             record_terminal_unavailable,
                         )
 
-                        reason = str(exc)
                         if is_account_unsupported_error(reason):
                             record_account_unsupported(real_model, reason=reason[:200])
                             invalidate_models_cache()
@@ -1189,19 +1259,8 @@ async def forward(
                                 terminal_reason="model_unavailable",
                             )
                             invalidate_models_cache()
-                        # A quota, an unavailable model or a failed run counts,
-                        # for the circuit and the provider_down alert alike; a
-                        # prompt the CLI found too long is the request's fault.
-                        if is_provider_fault(reason):
-                            cb_failure(_circuit_key(provider, real_model))
-                            await record_provider_failure(provider["id"])
-                        # A CLI quota pauses the route, as an HTTP 429 does.
-                        if isinstance(exc, CliSubprocessError) and exc.quota:
-                            route_pauses.pause(
-                                _circuit_key(provider, real_model), exc.retry_after
-                            )
-                    except Exception:
-                        pass
+                    except Exception as quarantine_exc:
+                        log.warning("model quarantine failed: %r", quarantine_exc)
                     continue
                 finally:
                     lease.release()
@@ -1233,6 +1292,17 @@ async def forward(
                 busy.append((provider, real_model))
                 continue
             with lease:
+                # PLU-51: the global slot right before the call, ahead of the
+                # requests that hold no scarce provider's slot (PLU-48).
+                took = await request_wait.slot_back(
+                    first=provider_admission.max_inflight(provider) > 0
+                )
+                if took and _turned_off(provider["id"]):
+                    # Turned off while this request waited for the slot (PLU-12).
+                    disabled_seen = provider["id"]
+                    queue = deque(c for c in queue if c[0]["id"] != disabled_seen)
+                    busy[:] = [c for c in busy if c[0]["id"] != disabled_seen]
+                    continue
                 for attempt, delay in enumerate([0] + _DELAYS):
                     if delay:
                         log.warning(
@@ -1309,7 +1379,7 @@ async def forward(
                             metrics.record(provider["id"], 0.0, error=True)
                         except Exception:
                             pass
-                        last_err = RuntimeError(
+                        last_err = ProviderTimeoutError(
                             f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}"
                         )
                         provider_fault = True
@@ -1415,46 +1485,147 @@ async def forward_stream(
 ) -> AsyncIterator[bytes]:
     """
     Forward a streaming /v1/chat/completions request, yielding raw SSE chunks.
-    No retry — cannot retry after streaming has begun.
 
-    The route holds a lease on its provider from the first chunk to the
-    last, or until the stream is closed early; a provider at its cap is
-    waited for up to ``PLUGBOARD_PROVIDER_WAIT_S``, then raises
-    ``ProvidersBusyError`` before any call.
+    The routes are those of forward(), in its order (open circuits and paused
+    routes last, the key's refusals left out). A full provider passes the
+    request to the next route; when every route left is full, the request
+    waits up to ``PLUGBOARD_PROVIDER_WAIT_S`` (within its wait budget) for
+    the first freed slot, then raises ``ProvidersBusyError`` (D-23). A route
+    that fails before its first chunk (an error status, a timeout, a dropped
+    connection, a provider turned off) hands over to the next one (PLU-26);
+    once a chunk has gone out, nothing is replayed: a later failure is raised
+    to the caller, which ends the stream with an error event.
+
+    A route holds its provider's slot from its first chunk to its last, or
+    until the stream is closed early.
     """
     model_str = body.get("model", "")
     _refuse_if_disabled(model_str)
-    provider, real_model = resolve_provider_and_model(model_str)
-    if route_guard is not None:
-        route_guard(provider, real_model)
-    _drop_cli_routes(body, [(provider, real_model)])  # raises on a CLI route
-    label = _metric_model(provider, real_model)  # PLU-16
-    lease = provider_admission.try_acquire(provider)
-    waited = lease is None
-    wait_t0 = _time.perf_counter()
-    if waited:
-        _live.update(phase="waiting_provider")
-        try:
-            # BUG-77: no global chat slot held while the request waits.
-            async with request_wait.slot_released() as step:
-                with request_wait.waiting(provider_admission.WAIT_S) as wait_s:
-                    lease = await provider_admission.wait_acquire([provider], wait_s)
-                step.come_back = lease is not None
-        except BaseException:
+    candidates, refused = _candidates_for(body, route_guard)
+    queue: List[tuple] = list(candidates)
+    loop = asyncio.get_running_loop()
+    deadline: Optional[float] = None
+    last_err: Optional[Exception] = None
+    disabled_seen: Optional[str] = None
+    recheck = False  # the first route was checked by _refuse_if_disabled
+    while queue:
+        route: Optional[tuple] = None
+        lease: Optional[provider_admission.Lease] = None
+        waited = 0.0
+        for candidate in list(queue):
+            provider = candidate[0]
+            if recheck and _turned_off(provider["id"]):
+                disabled_seen = provider["id"]
+                queue = [c for c in queue if c[0]["id"] != provider["id"]]
+                continue
+            lease = provider_admission.try_acquire(provider)
             if lease is not None:
-                lease.release()  # granted, but the global slot was not
-            raise
-        _live.update(phase="running")
-    if lease is None:
-        if _turned_off(provider["id"]):
-            raise ProviderDisabledError(provider["id"])  # off, not full
-        raise ProvidersBusyError([provider["id"]], label)
+                route = candidate
+                break
+        recheck = True
+        if lease is None and queue:
+            # Every route left is full: wait for the first to free a slot,
+            # one deadline for the whole call (PLUGBOARD_PROVIDER_WAIT_S),
+            # within the request's wait budget; no global slot meanwhile.
+            if deadline is None:
+                deadline = loop.time() + provider_admission.WAIT_S
+            providers = list({c[0]["id"]: c[0] for c in queue}.values())
+            _live.update(phase="waiting_provider")
+            request_wait.release_slot()
+            wait_t0 = loop.time()
+            with request_wait.waiting(deadline - loop.time()) as wait_s:
+                lease = await provider_admission.wait_acquire(providers, wait_s)
+            waited = loop.time() - wait_t0
+            _live.update(phase="running")
+            if lease is None:
+                still_on = [c for c in queue if not _turned_off(c[0]["id"])]
+                if still_on:
+                    raise ProvidersBusyError(
+                        [p["id"] for p in providers], _metric_model(*still_on[0])
+                    )
+                disabled_seen = queue[0][0]["id"]  # off, not full
+                break
+            route = next(c for c in queue if c[0]["id"] == lease.provider_id)
+        if lease is None or route is None:
+            break
+        queue.remove(route)
+        chunks = _stream_with_lease(body, *route, timeout, lease, waited)
+        try:
+            first = await chunks.__anext__()
+        except StopAsyncIteration:
+            # An answer with no event at all: the next route may do better.
+            last_err = ProviderNetworkError(
+                f"[{route[0]['id']}] empty stream", provider_id=route[0]["id"]
+            )
+            continue
+        except Exception as exc:
+            if not _stream_hands_over(exc):
+                raise
+            if isinstance(exc, ProviderDisabledError):
+                disabled_seen = exc.provider_id
+                continue
+            last_err = exc
+            log.warning(
+                "Stream from %s failed before its first chunk: %s",
+                route[0]["id"],
+                exc,
+            )
+            continue
+        try:
+            yield first
+            async for chunk in chunks:
+                yield chunk
+        finally:
+            await chunks.aclose()
+        return
+    if disabled_seen is not None and refused is None and last_err is None:
+        raise ProviderDisabledError(disabled_seen)
+    raise refused or last_err or RuntimeError("All providers failed")
+
+
+def _stream_hands_over(exc: Exception) -> bool:
+    """Whether a route that failed before its first chunk hands the stream
+    over to the next one (PLU-26): the provider's failures, as in forward().
+    Never the request's own refusal: a prompt a CLI found too long, a route
+    the key refuses, the global cap."""
+    if isinstance(exc, CliSubprocessError):
+        return not exc.request_too_long
+    return isinstance(
+        exc,
+        (
+            ProviderHTTPError,
+            ProviderQuotaError,
+            ProviderNetworkError,
+            ProviderTimeoutError,
+            ProviderDisabledError,
+            ProviderAuthError,
+        ),
+    )
+
+
+async def _stream_with_lease(
+    body: Dict[str, Any],
+    provider: Dict[str, Any],
+    real_model: str,
+    timeout: float,
+    lease: provider_admission.Lease,
+    waited: float,
+) -> AsyncIterator[bytes]:
+    """Stream ``body`` from one route whose provider's slot is ``lease``
+    (given back at the end): the global slot first, then the chunks."""
     try:
-        # Inside the try: the slot goes back whatever the registry read does.
         if waited and _turned_off(provider["id"]):
             raise ProviderDisabledError(provider["id"])  # off while it waited
-        wait_s = _time.perf_counter() - wait_t0 if waited else 0.0
-        metrics.record_admission_wait(provider["id"], label, wait_s)
+        label = _metric_model(provider, real_model)  # PLU-16
+        metrics.record_admission_wait(provider["id"], label, waited)
+        # PLU-51: the global slot right before the call, ahead of the requests
+        # that hold no scarce provider's slot (PLU-48); a provider turned off
+        # while this request waited for the slot is not called (PLU-12).
+        took = await request_wait.slot_back(
+            first=provider_admission.max_inflight(provider) > 0
+        )
+        if took and _turned_off(provider["id"]):
+            raise ProviderDisabledError(provider["id"])
         async with contextlib.aclosing(
             _stream_route(body, provider, real_model, timeout)
         ) as chunks:
@@ -1462,6 +1633,26 @@ async def forward_stream(
                 yield chunk
     finally:
         lease.release()
+
+
+async def _stream_failed(provider_id: str, fault: bool) -> None:
+    """A streamed route failed: the error counts in the provider's metrics
+    (its routing score), and, with ``fault`` (a provider failure before the
+    first chunk), in its provider_down alert, as in forward(). A complete
+    stream resets the alert's count. Never raises."""
+    try:
+        metrics.record(provider_id, 0.0, error=True)
+    except Exception as exc:
+        log.debug("metrics: %s", exc)
+    if fault:
+        await _alert_failure(provider_id)
+
+
+async def _alert_failure(provider_id: str) -> None:
+    try:
+        await record_provider_failure(provider_id)
+    except Exception as exc:
+        log.debug("provider_down alert failed: %s", exc)
 
 
 async def _stream_route(
@@ -1509,6 +1700,7 @@ async def _stream_route(
             metrics.record(provider["id"], _time.perf_counter() - _t_cli, error=True)
             if is_provider_fault(str(exc)):
                 cb_failure(circuit_key)
+                await _alert_failure(provider["id"])
             try:
                 from plugboard.model_quarantine import (
                     is_account_unsupported_error,
@@ -1528,26 +1720,19 @@ async def _stream_route(
                         terminal_reason="model_unavailable",
                     )
                     invalidate_models_cache()
-                # A CLI quota pauses the route, as an HTTP 429 does.
-                if isinstance(exc, CliSubprocessError) and exc.quota:
-                    route_pauses.pause(circuit_key, exc.retry_after)
-            except Exception:
-                pass
-            err_payload: Dict[str, Any] = {
-                "error": {"message": str(exc), "type": "subprocess_error"}
-            }
-            if isinstance(exc, CliSubprocessError):
-                err_payload["error"]["exit_code"] = exc.exit_code
-                err_payload["error"]["stderr"] = exc.stderr
-                err_payload["error"]["pid"] = exc.pid
-                err_payload["error"]["provider_name"] = exc.provider_name
-                err_payload["error"]["model_id"] = exc.model_id
-            err_evt = _json.dumps(err_payload)
-            yield f"data: {err_evt}\n\n".encode("utf-8")
-            yield b"data: [DONE]\n\n"
-            return
+            except Exception as quarantine_exc:
+                log.warning("model quarantine failed: %r", quarantine_exc)
+            # A CLI quota pauses the route, as an HTTP 429 does; outside the
+            # quarantine's try (BUG-51).
+            if isinstance(exc, CliSubprocessError) and exc.quota:
+                route_pauses.pause(circuit_key, exc.retry_after)
+            # Nothing was sent: forward_stream hands over to the next route,
+            # or the chat route answers the error, its CLI details for the
+            # admin only (PLU-26). An error event here showed them to anyone.
+            raise
         cb_success(circuit_key)
         route_pauses.clear(circuit_key)
+        record_provider_success(provider["id"])
         reported = _pop_reported_usage(result)
         reported_usage = result.get("usage") or {}
         content = result["choices"][0]["message"]["content"]
@@ -1625,7 +1810,11 @@ async def _stream_route(
     # PLU-16: the time to first token counts from here, the slot granted.
     meter = metrics.StreamMeter(provider["id"], _metric_model(provider, real_model))
     url = openai_url(provider["base_url"], "chat/completions")
-    auth_header = await _build_auth_header_async(provider)
+    try:
+        auth_header = await _build_auth_header_async(provider)
+    except RuntimeError as exc:
+        log.warning("Auth resolution failed for %s: %s", provider["id"], exc)
+        raise ProviderAuthError(provider["id"], exc) from exc
     headers = {
         "Content-Type": "application/json",
         **auth_header,
@@ -1643,6 +1832,8 @@ async def _stream_route(
 
     session = await session_for(provider)
     streaming = False
+    started = _time.perf_counter()
+    refused_fault: Optional[bool] = None  # set when the provider answered an error
     # aiohttp's text names the provider's host and port: typed like forward().
     try:
         async with session.post(
@@ -1653,25 +1844,44 @@ async def _stream_route(
         ) as resp:
             if resp.status != 200:
                 text = await resp.text()
-                if is_provider_fault(text, resp.status):
+                refused_fault = is_provider_fault(text, resp.status)
+                if refused_fault:
                     cb_failure(circuit_key)
                 err = _http_error(provider["id"], resp.status, text, resp.headers)
                 if isinstance(err, ProviderQuotaError):
                     route_pauses.pause(circuit_key, err.retry_after)
                 raise err
-            cb_success(circuit_key)
-            route_pauses.clear(circuit_key)
-            streaming = True
             async for chunk in resp.content.iter_any():
+                if not streaming:
+                    # The first chunk: the route works (an empty 200 does not).
+                    streaming = True
+                    cb_success(circuit_key)
+                    route_pauses.clear(circuit_key)
+                    record_provider_success(provider["id"])
                 meter.feed(chunk)
                 yield chunk
             meter.finish()
+        if not streaming:
+            # A 200 with nothing in it: a failure of the route, which
+            # forward_stream hands over.
+            cb_failure(circuit_key)
+            await _stream_failed(provider["id"], True)
+            return
+        # A whole stream: its duration feeds the routing score, as a
+        # non-streamed call's does.
+        metrics.record(provider["id"], _time.perf_counter() - started)
+    except (ProviderHTTPError, ProviderQuotaError):
+        # Counted once the connection is given back (the alert may post a
+        # webhook): the error answer, before any chunk.
+        await _stream_failed(provider["id"], bool(refused_fault))
+        raise
     except asyncio.TimeoutError as exc:
         # No answer: a timeout or a network error counts, as in forward().
         # Once the stream has begun, its success is already recorded.
         if not streaming:
             cb_failure(circuit_key)
-        raise RuntimeError(
+        await _stream_failed(provider["id"], not streaming)
+        raise ProviderTimeoutError(
             f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}"
         ) from exc
     except aiohttp.ClientError as exc:
@@ -1682,6 +1892,7 @@ async def _stream_route(
             raise ProviderEgressRefused(provider["id"], exc.host) from exc
         if not streaming:
             cb_failure(circuit_key)
+        await _stream_failed(provider["id"], not streaming)
         detail = str(exc) or type(exc).__name__
         raise ProviderNetworkError(
             f"[{provider['id']}] network error: {detail[:200]}",

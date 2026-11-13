@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "2.1.0",
+    "version": "2.2.0",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
@@ -221,7 +221,7 @@
       },
       "ChatCompletionChunk": {
         "additionalProperties": true,
-        "description": "One `data:` event of a streamed completion (SSE).\n\nThe stream ends with `data: [DONE]`. A chunk carrying `usage` (and\n`cost_usd` when the gateway computed it) always comes before `[DONE]`.",
+        "description": "One `data:` event of a streamed completion (SSE).\n\nThe stream ends with `data: [DONE]`. A chunk carrying `usage` (and\n`cost_usd` when the gateway computed it) always comes before `[DONE]`.\nA stream the provider breaks off after its first chunk ends instead with\n`data: {\"error\": {\"message\", \"type\": \"server_error\", \"code\":\n\"stream_interrupted\"}}`, then `data: [DONE]`.",
         "properties": {
           "id": {
             "title": "Id",
@@ -1439,7 +1439,7 @@
       },
       "ErrorResponse": {
         "additionalProperties": true,
-        "description": "FastAPI's error body. Upstream timeouts (503) add `retry_after` and a\nRetry-After header, as does an exhausted provider quota (429) when the\nprovider gave a delay; a failing CLI provider (502) adds its exit details\nfor the admin only. A chat model no provider knows (404) adds `code` and\n`hint`. A chat whose candidate providers all stayed at their concurrency\ncap (503) adds `code` providers_busy, `retry_after` and Retry-After; one\nthe global chat cap kept waiting for a slot (503) adds `code`\nserver_busy, `retry_after` and Retry-After. A\nchat model of a provider the admin turned off (503) adds `code`\nprovider_disabled and `hint`, without Retry-After. A chat request only\nCLI subscription routes could serve, asking for what they cannot serve\n(400), adds `code` unsupported_on_cli, `unsupported` (the refused fields)\nand `hint`. A prompt a CLI subscription route finds too long (400) adds\n`code` context_length_exceeded, `error_ref`, `provider_name` and\n`model_id`.",
+        "description": "FastAPI's error body. Upstream timeouts (503) add `retry_after` and a\nRetry-After header, as does an exhausted provider quota (429) when the\nprovider gave a delay; a failing CLI provider (502) adds its exit details\nfor the admin only. A chat model no provider knows (404) adds `code` and\n`hint`. A chat whose candidate providers all stayed at their concurrency\ncap, or had too many requests already waiting (503), adds `code`\nproviders_busy, `retry_after` and Retry-After; one\nthe global chat cap kept waiting for a slot (503) adds `code`\nserver_busy, `retry_after` and Retry-After; one whose session's previous\nturn was still being answered when its wait ended, or with too many turns\nalready waiting (503), adds `code`\nsession_busy, `retry_after` and Retry-After. A\nchat model of a provider the admin turned off (503) adds `code`\nprovider_disabled and `hint`, without Retry-After. A chat request only\nCLI subscription routes could serve, asking for what they cannot serve\n(400), adds `code` unsupported_on_cli, `unsupported` (the refused fields)\nand `hint`. A prompt a CLI subscription route finds too long (400) adds\n`code` context_length_exceeded, `error_ref`, `provider_name` and\n`model_id`.",
         "properties": {
           "detail": {
             "anyOf": [
@@ -1479,7 +1479,7 @@
               }
             ],
             "default": null,
-            "description": "Stable reason for programs, when the route gives one: unsupported_on_cli (chat, 400), context_length_exceeded (chat, 400), model_not_found (chat, 404), providers_busy (chat, 503), server_busy (chat and preflight, 503; also a preflight item's error), provider_disabled (chat, 503).",
+            "description": "Stable reason for programs, when the route gives one: unsupported_on_cli (chat, 400), context_length_exceeded (chat, 400), model_not_found (chat, 404), providers_busy (chat, 503), server_busy (chat and preflight, 503; also a preflight item's error), session_busy (chat, 503), provider_disabled (chat, 503).",
             "title": "Code"
           },
           "unsupported": {
@@ -2765,7 +2765,7 @@
               "text/event-stream": {
                 "schema": {
                   "type": "string",
-                  "description": "When stream is true: `data: <ChatCompletionChunk>` events, then `data: [DONE]`. The usage chunk comes before [DONE]."
+                  "description": "When stream is true: `data: <ChatCompletionChunk>` events, then `data: [DONE]`. The usage chunk comes before [DONE]. A stream the provider breaks off after its first chunk ends with `data: {\"error\": {..., \"code\": \"stream_interrupted\"}}`, then `data: [DONE]`."
                 }
               }
             },
@@ -2883,7 +2883,7 @@
             }
           },
           "503": {
-            "description": "Provider timeout (retry_after), the global cap of concurrent chat requests full for the whole wait (code server_busy, Retry-After 5), every candidate provider at its concurrency cap (code providers_busy, Retry-After 5), or the model belongs to a provider the admin turned off (code provider_disabled, hint, no Retry-After); nothing was called.",
+            "description": "Provider timeout (retry_after), the global cap of concurrent chat requests full for the whole wait (code server_busy, Retry-After 5), the previous turn of the request's session still answered when its wait ended, or too many of its turns already waiting (code session_busy, Retry-After 5), every candidate provider at its concurrency cap, or with too many requests already waiting for it (code providers_busy, Retry-After 5), or the model belongs to a provider the admin turned off (code provider_disabled, hint, no Retry-After); nothing was called.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3622,7 +3622,7 @@
               "text/event-stream": {
                 "schema": {
                   "type": "string",
-                  "description": "When stream is true: `data: <ChatCompletionChunk>` events, then `data: [DONE]`. The usage chunk comes before [DONE]."
+                  "description": "When stream is true: `data: <ChatCompletionChunk>` events, then `data: [DONE]`. The usage chunk comes before [DONE]. A stream the provider breaks off after its first chunk ends with `data: {\"error\": {..., \"code\": \"stream_interrupted\"}}`, then `data: [DONE]`."
                 }
               }
             },
@@ -3740,7 +3740,7 @@
             }
           },
           "503": {
-            "description": "Provider timeout (retry_after), the global cap of concurrent chat requests full for the whole wait (code server_busy, Retry-After 5), every candidate provider at its concurrency cap (code providers_busy, Retry-After 5), or the model belongs to a provider the admin turned off (code provider_disabled, hint, no Retry-After); nothing was called.",
+            "description": "Provider timeout (retry_after), the global cap of concurrent chat requests full for the whole wait (code server_busy, Retry-After 5), the previous turn of the request's session still answered when its wait ended, or too many of its turns already waiting (code session_busy, Retry-After 5), every candidate provider at its concurrency cap, or with too many requests already waiting for it (code providers_busy, Retry-After 5), or the model belongs to a provider the admin turned off (code provider_disabled, hint, no Retry-After); nothing was called.",
             "content": {
               "application/json": {
                 "schema": {

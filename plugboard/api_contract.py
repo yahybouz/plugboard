@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "2.1.0"
+CONTRACT_VERSION = "2.2.0"
 _JSON = "application/json"
 
 
@@ -189,6 +189,9 @@ class ChatCompletionChunk(_Open):
 
     The stream ends with `data: [DONE]`. A chunk carrying `usage` (and
     `cost_usd` when the gateway computed it) always comes before `[DONE]`.
+    A stream the provider breaks off after its first chunk ends instead with
+    `data: {"error": {"message", "type": "server_error", "code":
+    "stream_interrupted"}}`, then `data: [DONE]`.
     """
 
     id: str
@@ -537,9 +540,13 @@ class ErrorResponse(_Open):
     provider gave a delay; a failing CLI provider (502) adds its exit details
     for the admin only. A chat model no provider knows (404) adds `code` and
     `hint`. A chat whose candidate providers all stayed at their concurrency
-    cap (503) adds `code` providers_busy, `retry_after` and Retry-After; one
+    cap, or had too many requests already waiting (503), adds `code`
+    providers_busy, `retry_after` and Retry-After; one
     the global chat cap kept waiting for a slot (503) adds `code`
-    server_busy, `retry_after` and Retry-After. A
+    server_busy, `retry_after` and Retry-After; one whose session's previous
+    turn was still being answered when its wait ended, or with too many turns
+    already waiting (503), adds `code`
+    session_busy, `retry_after` and Retry-After. A
     chat model of a provider the admin turned off (503) adds `code`
     provider_disabled and `hint`, without Retry-After. A chat request only
     CLI subscription routes could serve, asking for what they cannot serve
@@ -556,6 +563,7 @@ class ErrorResponse(_Open):
         "unsupported_on_cli (chat, 400), context_length_exceeded (chat, 400), "
         "model_not_found (chat, 404), providers_busy (chat, 503), "
         "server_busy (chat and preflight, 503; also a preflight item's error), "
+        "session_busy (chat, 503), "
         "provider_disabled (chat, 503).",
     )
     unsupported: Optional[List[str]] = Field(
@@ -656,8 +664,12 @@ _CHAT_ERRORS = {
     "413": "Request body larger than MAX_BODY_BYTES (10 MB by default).",
     "502": "The provider failed or answered with an error.",
     "503": "Provider timeout (retry_after), the global cap of concurrent chat"
-    " requests full for the whole wait (code server_busy, Retry-After 5), every"
-    " candidate provider at its concurrency cap (code providers_busy, Retry-After 5),"
+    " requests full for the whole wait (code server_busy, Retry-After 5), the"
+    " previous turn of the request's session still answered when its wait ended,"
+    " or too many of its turns already waiting"
+    " (code session_busy, Retry-After 5), every"
+    " candidate provider at its concurrency cap, or with too many requests already"
+    " waiting for it (code providers_busy, Retry-After 5),"
     " or the model belongs to a provider the admin turned off (code"
     " provider_disabled, hint, no Retry-After); nothing was called.",
 }
@@ -814,7 +826,10 @@ def _ok_response(
                 "type": "string",
                 "description": (
                     "When stream is true: `data: <ChatCompletionChunk>` events, "
-                    "then `data: [DONE]`. The usage chunk comes before [DONE]."
+                    "then `data: [DONE]`. The usage chunk comes before [DONE]. "
+                    "A stream the provider breaks off after its first chunk ends "
+                    'with `data: {"error": {..., "code": '
+                    '"stream_interrupted"}}`, then `data: [DONE]`.'
                 ),
             }
         }

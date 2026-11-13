@@ -16,6 +16,12 @@ succeeded (``record``). Per provider and model (PLU-16, D-26):
   provider (0 when the slot was free).
 - ``busy_refusals``: chats answered 503 ``providers_busy``, one per answer.
 
+Per chat request, without labels (PLU-46): ``request_wait``, the seconds it
+spent waiting in all, for a global slot, its session's turn and providers'
+slots (``request_wait.RequestWait.spent``), one value per request that
+passed the key check, served or refused. Prometheus only: the JSON of
+``/metrics`` stays one entry per provider.
+
 Labels are a provider id and a model name the caller vouches for (the
 router passes a model its provider lists, else ``UNLISTED_MODEL``), never a
 client, a key or any request content. The number of (provider, model)
@@ -144,6 +150,9 @@ class _ModelStats:
 # (provider id, model) -> its measures.
 _models: Dict[Tuple[str, str], _ModelStats] = {}
 
+# Total wait of each chat request (PLU-46).
+_request_wait = _Histogram(WAIT_BUCKETS)
+
 
 def _series(provider_id: str, model: str) -> _ModelStats:
     key = (str(provider_id), str(model or "")[:MAX_LABEL])
@@ -184,6 +193,15 @@ def record_tokens_per_second(provider_id: str, model: str, rate: float) -> None:
 
 def record_admission_wait(provider_id: str, model: str, seconds: float) -> None:
     _observe(provider_id, model, "admission_wait", seconds)
+
+
+def record_request_wait(seconds: float) -> None:
+    """The seconds one chat request waited in all (PLU-46)."""
+    try:
+        if _valid(seconds):
+            _request_wait.observe(float(seconds))
+    except Exception as exc:  # a metric never breaks a request
+        log.debug("metrics: %s", exc)
 
 
 def record_busy_refusal(provider_id: str, model: str) -> None:
@@ -386,6 +404,19 @@ def format_prometheus() -> str:
         "(0 when the slot was free)",
         "admission_wait",
     )
+    name = "plugboard_request_wait_seconds"
+    lines.append(
+        f"# HELP {name} Seconds each chat request waited in all: for a global "
+        "slot, for its session's turn and for providers' slots"
+    )
+    lines.append(f"# TYPE {name} histogram")
+    running = 0
+    for bound, n in zip(_request_wait.bounds, _request_wait.buckets):
+        running += n
+        lines.append(f'{name}_bucket{{le="{bound!r}"}} {running}')
+    lines.append(f'{name}_bucket{{le="+Inf"}} {_request_wait.count}')
+    lines.append(f"{name}_sum {_num(_request_wait.sum)}")
+    lines.append(f"{name}_count {_request_wait.count}")
     lines.append(
         "# HELP plugboard_providers_busy_total Chats answered 503 "
         "providers_busy, under the first full candidate route"

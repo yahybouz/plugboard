@@ -356,11 +356,99 @@ async def test_streamed_success_closes_the_circuit_after_cooldown(
 async def test_forward_stream_cli_failure_is_judged_the_same(
     cli, breaker, process, counted
 ):
+    from plugboard.cli_subprocess import CliSubprocessError
     from plugboard.router import forward_stream
 
     cli("claude", **process)
     body = {"model": _CLI_MODEL, "messages": _MESSAGES, "stream": True}
-    chunks = [chunk async for chunk in forward_stream(body)]
-
-    assert b"subprocess_error" in chunks[0]
+    # PLU-26: raised, not sent as an event: the next route may take over,
+    # and the chat route shows the CLI's details to the admin only.
+    with pytest.raises(CliSubprocessError):
+        async for _ in forward_stream(body):
+            pass
     assert _failures(_CLI_KEY) == counted
+
+
+# ── BUG-51 ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cli_failure_counts_even_when_the_quarantine_fails(
+    cli, breaker, monkeypatch
+):
+    """BUG-51 (audit K2-04): the circuit and the provider_down alert counted a
+    CLI failure inside the quarantine's try: a quarantine error skipped them."""
+    import plugboard.model_quarantine as quarantine
+    import plugboard.router as router
+    from plugboard.router import forward
+
+    def broken(*args, **kwargs):
+        raise OSError("quarantine store unreadable")
+
+    monkeypatch.setattr(quarantine, "is_account_unsupported_error", broken)
+    alerted = []
+
+    async def alert(provider_id):
+        alerted.append(provider_id)
+
+    monkeypatch.setattr(router, "record_provider_failure", alert)
+    from plugboard import route_pauses
+
+    monkeypatch.setattr(route_pauses, "_pauses", {})
+    cli("claude", stderr=b"Error: rate limit exceeded, try again later")
+    with pytest.raises(RuntimeError):
+        await forward({"model": _CLI_MODEL, "messages": _MESSAGES})
+    assert _failures(_CLI_KEY) == 1
+    assert alerted == [_CLI_ID]
+    assert route_pauses.paused_for(_CLI_KEY) > 0
+
+
+@pytest.mark.asyncio
+async def test_a_route_refused_by_the_key_does_not_count(_providers_file, breaker):
+    """BUG-51: the key's 403 (route_guard) is the request's answer, not a
+    provider failure."""
+    from fastapi import HTTPException
+
+    from plugboard.router import forward
+
+    def guard(provider, model):
+        raise HTTPException(403, "model not allowed")
+
+    for _ in range(4):
+        with pytest.raises(HTTPException):
+            await forward(
+                {"model": _HTTP_MODEL, "messages": _MESSAGES}, route_guard=guard
+            )
+    assert _failures(_HTTP_KEY) == 0
+
+
+def test_the_breaker_keeps_a_bounded_number_of_circuits(breaker, monkeypatch):
+    """BUG-51 (audit A-20): one circuit per route name, arbitrary names
+    included; past the bound, the closed circuits without failures go first,
+    then the oldest, so an open circuit outlives a burst of new names."""
+    monkeypatch.setattr(breaker, "_MAX_CIRCUITS", 3)
+    for _ in range(3):
+        breaker.record_failure("p:open")
+    assert breaker._circuits["p:open"].state == breaker.OPEN
+    for n in range(10):
+        breaker.check_circuit(f"p:name-{n}")
+    assert len(breaker._circuits) == 3
+    assert "p:open" in breaker._circuits
+    assert not breaker.check_circuit("p:open")["allowed"]
+
+
+def test_eviction_follows_use_and_spares_failing_circuits(breaker, monkeypatch):
+    monkeypatch.setattr(breaker, "_MAX_CIRCUITS", 3)
+    breaker.check_circuit("p:a")
+    breaker.check_circuit("p:b")
+    breaker.check_circuit("p:c")
+    breaker.check_circuit("p:a")  # used again: "p:b" is now the oldest
+    breaker.check_circuit("p:d")
+    assert list(breaker._circuits) == ["p:c", "p:a", "p:d"]
+    for key in ("p:c", "p:a", "p:d"):
+        breaker.record_failure(key)  # all closed with one failure
+    for _ in range(3):
+        breaker.record_failure("p:c")  # open now
+    breaker.check_circuit("p:e")
+    assert "p:c" in breaker._circuits  # a closed one with failures went first
+    assert "p:a" not in breaker._circuits

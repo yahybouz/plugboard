@@ -138,12 +138,20 @@ and final reviews are not validated by these examples.
 
 - **`billing`** in every billed answer: tokens, `cost_usd`, the `model` that served the call (after any fallback) and the `pricing_month`. The same figures are in `X-Cost-USD`, `X-Prompt-Tokens` and `X-Completion-Tokens`.
 - **`"cache": false`** in the body bypasses the response cache for that call (`X-Cache` says `HIT`, `MISS` or `SEMANTIC-HIT-*`).
-- **`"session_id"`** (or the `X-LLM-Session-ID` header) keeps the conversation on the server: send only the new turn. The turns of one session run one after the other, streamed turns included; a turn whose previous one is still being answered when its wait ends (10 s by default, shared with the other waits of the request) gets `503` with `Retry-After`.
+- **`"session_id"`** (or the `X-LLM-Session-ID` header) keeps the conversation on the server: send only the new turn. The turns of one session run one after the other, streamed turns included; a turn whose previous one is still being answered when its wait ends (10 s by default, shared with the other waits of the request) gets `503` with `"code": "session_busy"` and `Retry-After`.
 - **Per-model adjustments**, so one request shape works everywhere: `temperature`, `top_p` and `top_k` are removed for Claude models that reject them (Opus 4.7 and later, Sonnet 5+, Haiku 5+), and `max_tokens` becomes `max_completion_tokens` for OpenAI o-series models.
 
 ## Streaming
 
 With `"stream": true` the answer is `text/event-stream`: `data: <chunk>` events, each a `ChatCompletionChunk`, then `data: [DONE]`. A chunk carrying `usage` (with `cost_usd` when Plugboard computed it) always comes **before** `[DONE]`, even when the provider sends none, so clients that stop at `[DONE]` still get tokens and cost. Billing headers are not sent on streamed answers.
+
+For a model without provider prefix, a provider that fails before the first chunk (an error status, a timeout, a dropped connection, a full or turned-off provider) hands the request over to the next candidate, as for a non-streamed request: the client sees only the stream that worked, or the last error. Once the first chunk is out, nothing is replayed: if the provider breaks off, the stream ends with an error event in OpenAI's shape, then `data: [DONE]`:
+
+```
+data: {"error": {"message": "The provider stopped the answer before its end: what came before this event is all there is.", "type": "server_error", "code": "stream_interrupted"}}
+```
+
+What was received is billed; a session turn ended this way is not recorded.
 
 ## Errors
 
@@ -162,7 +170,7 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 | `429` | IP rate limit, key RPM limit or monthly budget | Back off; `GET /v1/me` shows the budget left |
 | `429` | The last provider tried has exhausted its quota or rate limit (a streamed request to an HTTP provider is not offered to another one); `detail` names the provider | Retry after `Retry-After` / `retry_after` seconds when set (at most 7 days), else later or with another model |
 | `502` | The provider failed | Retry later or use another model |
-| `503` | Gateway at capacity (`code` `server_busy`: the cap of concurrent chat requests stayed full for the whole wait), provider timeout, or, with `code` `providers_busy`, every provider of the model busy at its concurrency cap after the wait; nothing was called | Retry after `Retry-After` / `retry_after` seconds (5 for `server_busy` and `providers_busy`) |
+| `503` | Gateway at capacity (`code` `server_busy`: the cap of concurrent chat requests stayed full for the whole wait), provider timeout, with `code` `session_busy` the previous turn of the request's session was still being answered when its wait ended, or, with `code` `providers_busy`, every provider of the model busy at its concurrency cap after the wait; nothing was called | Retry after `Retry-After` / `retry_after` seconds (5 for `server_busy`, `session_busy` and `providers_busy`) |
 | `503` | Chat only, `code` is `provider_disabled`: the model belongs to a provider the operator turned off; nothing was called and no other provider stands in (below) | Pick another model from `GET /v1/models`, or ask the operator to turn the provider back on |
 
 ### `404 model_not_found`

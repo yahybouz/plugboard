@@ -20,11 +20,14 @@ The state lives in this process's memory: each worker keeps its own.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import deque
 from typing import Any, Deque, Dict, Optional, Sequence
 
 from plugboard import envcompat
 from plugboard.billing import _is_local_host, _is_ollama
+
+log = logging.getLogger(__name__)
 
 # Cap of a local provider whose record sets no ``max_concurrency``; 0 = none.
 LOCAL_DEFAULT = envcompat.get_int(
@@ -36,6 +39,9 @@ CLI_DEFAULT = envcompat.get_int(
 )
 # Seconds a request waits when every candidate is full; 0 = no wait.
 WAIT_S = envcompat.get_float("PLUGBOARD_PROVIDER_WAIT_S", default=10.0, minimum=0.0)
+# Requests that may wait for one provider at once (PLU-50); 0 = no limit.
+# Waiting requests hold no global chat slot (BUG-77): this bounds them.
+MAX_WAITING = envcompat.get_int("PLUGBOARD_PROVIDER_MAX_WAITING", default=8, minimum=0)
 
 # Leases held, by provider id (no entry = none).
 _active: Dict[str, int] = {}
@@ -158,8 +164,23 @@ async def wait_acquire(
     the requests queued before this one; None after ``timeout`` seconds.
 
     A slot handed over just as the wait ends (timeout or cancellation) goes
-    to the next waiter.
+    to the next waiter. A provider with ``MAX_WAITING`` requests already
+    waiting is not waited for (PLU-50); None at once when none is left.
     """
+    for provider in providers:
+        # A raised cap first serves the requests already queued (a full queue
+        # may have room again).
+        _caps[provider["id"]] = max_inflight(provider)
+        _wake(provider["id"])
+    if MAX_WAITING:
+        open_queues = [p for p in providers if waiting(p["id"]) < MAX_WAITING]
+        if len(open_queues) < len(providers):
+            log.info(
+                "provider queue full (%d waiting): %s",
+                MAX_WAITING,
+                ", ".join(p["id"] for p in providers if p not in open_queues),
+            )
+        providers = open_queues
     if timeout <= 0 or not providers:
         return None
     fut: asyncio.Future[str] = asyncio.get_running_loop().create_future()

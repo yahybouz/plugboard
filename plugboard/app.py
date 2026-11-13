@@ -106,7 +106,7 @@ from plugboard import live_requests as _live
 from plugboard import provider_admission as _provider_admission
 from plugboard import request_wait as _request_wait
 from plugboard.logging_config import _request_id_var, setup_logging
-from plugboard.metrics import get_stats, record_busy_refusal
+from plugboard.metrics import get_stats, record_busy_refusal, record_request_wait
 from plugboard.ratelimit import check_client_rate_limit, check_rate_limit
 from plugboard.decision_api import router as decision_router
 from plugboard.embeddings_api import router as embeddings_router
@@ -720,45 +720,67 @@ _INFLIGHT_WAIT_S = envcompat.get_float(
     "PLUGBOARD_INFLIGHT_WAIT_S", default=10.0, minimum=0.0
 )
 _INFLIGHT_RETRY_AFTER_S = 5
-_inflight_chat_sem: Optional["_asyncio.Semaphore"] = None
+_inflight_chat_sem: Optional["_request_wait.ChatCap"] = None
 _inflight_chat_active = 0  # observability counter; only accurate when sem is used
 
 
-def _get_inflight_sem() -> Optional["_asyncio.Semaphore"]:
-    """Lazily create the semaphore so it binds to the running event loop
-    (prod uvicorn loop, pytest-asyncio loop, etc.) instead of whatever
-    loop existed at import time."""
+def _get_inflight_sem() -> Optional["_request_wait.ChatCap"]:
+    """The global cap, created on first use (``request_wait.ChatCap``: first
+    come first served, a request holding a provider's slot first, PLU-48)."""
     global _inflight_chat_sem
     if _INFLIGHT_CHAT_MAX <= 0:
         return None
     if _inflight_chat_sem is None:
-        _inflight_chat_sem = _asyncio.Semaphore(_INFLIGHT_CHAT_MAX)
+        _inflight_chat_sem = _request_wait.ChatCap(_INFLIGHT_CHAT_MAX)
     return _inflight_chat_sem
 
 
-class _ChatOverloaded(HTTPException):
-    """503 ``server_busy``: the global chat cap stayed full for the whole wait.
+class _BusyRefusal(HTTPException):
+    """A 503 that tells a program why with ``code``, and when to retry.
 
     An HTTPException, so the handlers that let an HTTPException raised by the
-    router through do the same with this one (a slot taken back after a
-    provider's wait, BUG-77); its own handler adds ``code`` and
-    ``retry_after``.
+    router through do the same with these (a slot taken back after a
+    provider's wait, BUG-77); their handler adds ``code`` and ``retry_after``.
     """
 
-    def __init__(self) -> None:
+    code: str  # set by each subclass
+
+    def __init__(self, detail: str) -> None:
         super().__init__(
             status_code=503,
-            detail=(
-                "Server overloaded: the limit of concurrent chat requests is "
-                f"reached, retry in {_INFLIGHT_RETRY_AFTER_S} s"
-            ),
+            detail=detail,
             headers={"Retry-After": str(_INFLIGHT_RETRY_AFTER_S)},
         )
 
 
-@app.exception_handler(_ChatOverloaded)
-async def _chat_overloaded_handler(request: Request, exc: _ChatOverloaded):
-    content: Dict[str, Any] = {"detail": exc.detail, "code": "server_busy"}
+class _ChatOverloaded(_BusyRefusal):
+    """503 ``server_busy``: the global chat cap stayed full for the whole wait."""
+
+    code = "server_busy"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Server overloaded: the limit of concurrent chat requests is "
+            f"reached, retry in {_INFLIGHT_RETRY_AFTER_S} s"
+        )
+
+
+class _SessionBusy(_BusyRefusal):
+    """503 ``session_busy``: the session's previous turn was still being
+    answered when the request's wait ended (PLU-45)."""
+
+    code = "session_busy"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The previous turn of this session is still being answered: "
+            f"retry in {_INFLIGHT_RETRY_AFTER_S} s"
+        )
+
+
+@app.exception_handler(_BusyRefusal)
+async def _busy_refusal_handler(request: Request, exc: _BusyRefusal):
+    content: Dict[str, Any] = {"detail": exc.detail, "code": exc.code}
     headers = _retry_after_headers(content, _INFLIGHT_RETRY_AFTER_S)
     return JSONResponse(status_code=503, content=content, headers=headers)
 
@@ -767,31 +789,38 @@ class _ChatSlot:
     """A request's slot under the global cap (``request_wait.ChatSlot``).
 
     The request gives it back while it waits for a provider or for its
-    session's turn, and takes it back to go on (BUG-77): requests waiting for
-    a full provider no longer keep out the requests for the other ones.
+    session's turn (BUG-77), so requests waiting for a full provider no
+    longer keep out the requests for the other ones, and takes it back right
+    before a provider is called (``request_wait.slot_back``, PLU-51), ahead
+    of the requests that hold no scarce provider's slot (PLU-48).
     """
 
     __slots__ = ("sem", "rid", "held", "wait_s")
 
-    def __init__(self, sem: "_asyncio.Semaphore", rid: str) -> None:
+    def __init__(self, sem: Any, rid: str) -> None:
         self.sem = sem
         self.rid = rid
         self.held = False
         self.wait_s = _INFLIGHT_WAIT_S
 
-    async def take(self, wait_s: float) -> None:
+    async def take(self, wait_s: float, first: bool = False) -> None:
         global _inflight_chat_active
-        if self.sem.locked():
+        # A plain asyncio semaphore (a test's) has no front of the line.
+        if first and isinstance(self.sem, _request_wait.ChatCap):
+            acquire, waits = self.sem.acquire_first, self.sem.would_wait(True)
+        else:
+            acquire, waits = self.sem.acquire, self.sem.locked()
+        if waits:
             if wait_s <= 0:
                 raise _ChatOverloaded()
             _live.update(self.rid, phase="waiting_slot")
             try:
-                await _asyncio.wait_for(self.sem.acquire(), timeout=wait_s)
+                await _asyncio.wait_for(acquire(), timeout=wait_s)
             except _asyncio.TimeoutError:
                 raise _ChatOverloaded() from None
             _live.update(self.rid, phase="running")
         else:
-            await self.sem.acquire()  # free: taken at once, without suspending
+            await acquire()  # free: taken at once, without suspending
         self.held = True
         _inflight_chat_active += 1
 
@@ -817,16 +846,18 @@ async def _inflight_chat_dep(request: Request):
     a slot. The request's wait budget (``request_wait``) starts here: the
     waits for a slot, for the session's turn and for a provider share it.
     BUG-77: the slot is given back while the request waits for a provider or
-    for its session's turn, and taken back after (``_ChatSlot``).
+    for its session's turn, and taken back right before a provider is called
+    (``_ChatSlot``, PLU-51).
     """
     # PLU-13: every chat call is listed in /v1/inflight, cap or not.
     rid = _request_id_var.get()
     _live.begin(rid, request.url.path, request.headers.get(_live.SURFACE_HEADER))
     slot: Optional[_ChatSlot] = None
+    budget: Optional[_request_wait.RequestWait] = None
     try:
         sem = _get_inflight_sem()
         slot = _ChatSlot(sem, rid) if sem is not None else None
-        _request_wait.start(
+        budget = _request_wait.start(
             max(_INFLIGHT_WAIT_S, _provider_admission.WAIT_S), slot=slot
         )
         if slot is not None:
@@ -836,6 +867,10 @@ async def _inflight_chat_dep(request: Request):
     finally:
         if slot is not None:
             slot.release()
+        if budget is not None:
+            # PLU-46: all the request waited, once it ends (a stream after
+            # its last byte, a refusal just before its 503 goes out).
+            record_request_wait(budget.spent)
         _live.finish(rid)
 
 
@@ -904,6 +939,70 @@ async def _unless_client_gone(request: Request, awaitable: Awaitable[_T]) -> _T:
     return result
 
 
+_EVENT_ENDS = (b"\n\n", b"\r\n\r\n")
+
+
+_DONE = b"data: [DONE]"
+# Held without an event end past this, a provider's stream goes out as it
+# comes (all but its last bytes): a stream that never ends its events must
+# not be buffered whole.
+_MAX_HELD = 1 << 16
+
+
+def _done_event_at(buf: bytearray) -> int:
+    """Where the `data: [DONE]` event starts in ``buf``, -1 when there is
+    none. Only a whole event counts: at the start of ``buf`` (which starts
+    at an event's start) or right after an event end, followed by a line
+    end or nothing yet; `data: [DONE]` quoted inside an event's JSON does
+    not."""
+    end = len(buf)
+    while True:
+        at = buf.rfind(_DONE, 0, end)
+        if at == -1:
+            return -1
+        after = buf[at + len(_DONE) : at + len(_DONE) + 1]
+        starts_event = at == 0 or any(buf.endswith(sep, 0, at) for sep in _EVENT_ENDS)
+        if starts_event and after in (b"", b"\n", b"\r"):
+            return at
+        end = at
+
+
+def _complete_events(buf: bytearray) -> bytes:
+    """Take from ``buf`` the complete SSE events that may go out now: up to
+    the last event end, but never the `data: [DONE]` event nor what follows
+    it. What is left stays in ``buf``."""
+    done = _done_event_at(buf)
+    limit = len(buf) if done == -1 else done
+    end = 0
+    for sep in _EVENT_ENDS:
+        at = buf.rfind(sep, 0, limit)
+        if at != -1:
+            end = max(end, at + len(sep))
+    if not end and done == -1 and len(buf) > _MAX_HELD:
+        end = len(buf) - 64  # no event end in sight: let it flow
+    if not end:
+        return b""
+    out = bytes(buf[:end])
+    del buf[:end]
+    return out
+
+
+def _stream_cut_event() -> bytes:
+    """The SSE event that ends a stream the provider broke off after its
+    first chunk (PLU-26), in OpenAI's streamed error shape."""
+    event = {
+        "error": {
+            "message": (
+                "The provider stopped the answer before its end: what came "
+                "before this event is all there is."
+            ),
+            "type": "server_error",
+            "code": "stream_interrupted",
+        }
+    }
+    return f"data: {json.dumps(event)}\n\n".encode("utf-8")
+
+
 def _client_gone_response(model: str) -> Response:
     """Answer nobody reads: it only lets the inflight slot go at once."""
     log.info(
@@ -936,9 +1035,10 @@ async def _take_session_turn(request: Request, client_id: str, session_id: str) 
 
     The release is stored as soon as the turn is obtained, so a hang-up that
     comes later (``_ClientGone``) cannot lose it. The wait takes what is left
-    of the request's wait budget (PLU-15): then 503 with Retry-After, out of
-    the queue. A free turn is taken at once, even with no budget left. While
-    the turn runs elsewhere, the request gives its global slot back (BUG-77).
+    of the request's wait budget (PLU-15): then 503 ``session_busy`` with
+    Retry-After (PLU-45), out of the queue. A free turn is taken at once,
+    even with no budget left. While the turn runs elsewhere, the request
+    gives its global slot back (BUG-77).
     """
     from plugboard import session_turns
 
@@ -947,22 +1047,20 @@ async def _take_session_turn(request: Request, client_id: str, session_id: str) 
             client_id, session_id
         )
         return
+    # BUG-77: no global slot held while the turn runs elsewhere; it is taken
+    # back right before a provider is called (PLU-51).
+    _request_wait.release_slot()
     try:
-        async with _request_wait.slot_released():
-            with _request_wait.waiting() as timeout:
-                request.state.session_turn_release = await session_turns.acquire(
-                    client_id, session_id, timeout=timeout
-                )
+        with _request_wait.waiting() as timeout:
+            request.state.session_turn_release = await session_turns.acquire(
+                client_id, session_id, timeout=timeout
+            )
+    except session_turns.QueueFull:
+        log.info("session turn busy: %d turns already wait", session_turns.MAX_WAITING)
+        raise _SessionBusy() from None
     except TimeoutError:
         log.info("session turn busy: the request's wait ended")
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "The previous turn of this session is still being answered: "
-                f"retry in {_INFLIGHT_RETRY_AFTER_S} s"
-            ),
-            headers={"Retry-After": str(_INFLIGHT_RETRY_AFTER_S)},
-        ) from None
+        raise _SessionBusy() from None
 
 
 def _record_session_turn(
@@ -2750,6 +2848,10 @@ async def chat_completions(
                 return _unsupported_on_cli_response(exc)
             log.error("stream error: %s", exc)
             err_str = str(exc)
+            if isinstance(exc, CliSubprocessError):
+                # A CLI route among a stream's routes (PLU-26): its details
+                # for the admin only, as on the non-streamed path.
+                return _cli_error_response(exc, client_id)
             if isinstance(exc, ProviderQuotaError):
                 return _quota_error_response(exc, client_id)
             # Before the timeout test: the provider's body can say "timeout".
@@ -2775,41 +2877,41 @@ async def chat_completions(
             Without this injection, the Playground
             never sees tokens/cost for those upstreams.
 
-            We must preserve the real-time streaming UX — so we yield each
-            chunk as it arrives and only buffer enough state at the end
-            (the tail around [DONE]) to splice the usage chunk in.
+            We must preserve the real-time streaming UX — so each complete
+            event goes out as soon as it is in; only an event cut by a read,
+            and `[DONE]` with what follows, are held back (``tail_buf``), so
+            the usage chunk can be spliced in before `[DONE]` (OpenAI
+            clients stop reading there) and a cut stream ends between two
+            events (PLU-26).
             """
             import json as _json_mod
 
-            accumulated = bytearray()
-            # 1) First chunk is already consumed by the caller's probe —
-            # accumulate and yield immediately. A short answer can arrive
-            # whole in this one read: then `[DONE]` is held back with the
-            # tail, or the usage chunk would land after it and OpenAI
-            # clients, which stop reading at `[DONE]`, would never see it.
-            accumulated.extend(first_chunk)
-            done_in_first = first_chunk.rfind(b"data: [DONE]")
-            if done_in_first == -1:
-                yield first_chunk
-            elif done_in_first:
-                yield first_chunk[:done_in_first]
-            # 2) Keep the very last bytes buffered so we can detect `[DONE]`.
-            # Most upstreams end with `data: [DONE]\n\n` — 16 bytes is enough
-            # to disambiguate. We buffer the trailing window only.
-            TAIL = 64
-            tail_buf = bytearray(
-                first_chunk[done_in_first:] if done_in_first != -1 else b""
-            )
+            accumulated = bytearray(first_chunk)
+            # The first chunk is already consumed by the caller's probe; a
+            # short answer can arrive whole in this one read.
+            tail_buf = bytearray(first_chunk)
+            ready = _complete_events(tail_buf)
+            if ready:
+                yield ready
             completed = False
+            cut: Optional[Exception] = None
             try:
                 async for chunk in rest:
                     accumulated.extend(chunk)
                     tail_buf.extend(chunk)
-                    if len(tail_buf) > TAIL:
-                        overflow = bytes(tail_buf[:-TAIL])
-                        yield overflow
-                        del tail_buf[:-TAIL]
+                    ready = _complete_events(tail_buf)
+                    if ready:
+                        yield ready
                 completed = True
+            except Exception as exc:
+                if _done_event_at(tail_buf) != -1:
+                    # The provider had finished: a late read error is moot.
+                    completed = True
+                else:
+                    # The provider broke off after the first chunk (PLU-26):
+                    # no other provider can take over a stream already begun.
+                    cut = exc
+                    log.warning("Stream cut by the provider: %s", exc)
             finally:
                 if not completed:
                     # Client gone (cancellation or generator close) or upstream
@@ -2828,8 +2930,15 @@ async def chat_completions(
                         except Exception as exc:
                             log.warning("Stream billing error (non-fatal): %s", exc)
                     await _aclose_quietly(rest)
-            # At this point `tail_buf` holds the last <=TAIL bytes and has
-            # NOT been yielded yet.
+            if cut is not None:
+                # What came, in whole events, then a readable end: an error
+                # event and [DONE], never the provider's own text (it may name
+                # its address). An event the cut broke in two is dropped.
+                yield _stream_cut_event()
+                yield b"data: [DONE]\n\n"
+                return
+            # At this point `tail_buf` holds what was held back (an event cut
+            # by a read, `[DONE]` and what follows) and has NOT been yielded.
 
             bill = None
             if cid:
@@ -2866,7 +2975,7 @@ async def chat_completions(
             }
             usage_sse = f"data: {_json_mod.dumps(usage_evt)}\n\n".encode("utf-8")
 
-            done_idx = tail_buf.rfind(b"data: [DONE]")
+            done_idx = _done_event_at(tail_buf)
             if done_idx == -1:
                 if tail_buf:
                     yield bytes(tail_buf)
@@ -3115,8 +3224,8 @@ async def preflight(
     a provider that is not turned off, a model some provider knows, known
     price, rpm) and is billed like a chat call. The batch holds one slot of
     the global cap, given back while a ping waits for a full provider and
-    taken back before the next ping (BUG-77): a pair it cannot ping for want
-    of a slot answers ``server_busy``. Errors are closed codes, never the
+    taken back right before a provider is called (BUG-77, PLU-51): a pair it
+    cannot ping for want of a slot answers ``server_busy``. Errors are closed codes, never the
     provider's text.
     """
     key_record = _get_request_key_record(request, client_id=client_id)
@@ -3147,9 +3256,8 @@ async def preflight(
                 "max_tokens": 1,
             }
             try:
-                # BUG-77: a ping refused after a provider's wait left the
-                # global slot; the batch takes it back before its next ping.
-                await _request_wait.slot_back()
+                # BUG-77: a ping that waited for a full provider gave the
+                # global slot back; the router takes it back before a call.
                 result = await _unless_client_gone(
                     request, forward(ping_body, timeout=10.0, **route_options)
                 )

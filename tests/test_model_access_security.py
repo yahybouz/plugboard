@@ -93,8 +93,9 @@ async def test_forward_guards_fallback_before_any_call(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_forward_stream_guard_before_call(monkeypatch):
+    # PLU-26: a stream reads its candidate routes as forward() does.
     monkeypatch.setattr(
-        router, "resolve_provider_and_model", lambda _m: (_B, "other:model-v2")
+        router, "_resolve_all_providers", lambda _m: [(_B, "other:model-v2")]
     )
     guard = _model_route_guard(
         "c", {"client_id": "c", "allowed_models": ["test-provider:fake:model-v1"]}
