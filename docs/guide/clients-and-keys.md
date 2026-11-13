@@ -65,13 +65,13 @@ Each entry is compared, as a whole string, with the provider and model that serv
 - When a provider lists only dated snapshots of a model (`claude-haiku-4-5-20251001`), a request for the undated name can be served, and is then checked, under the newest dated ID once Plugboard has loaded its model list. List the dated ID and request it as it is.
 - On `/v1/chat/completions`, the `detail` of a `403` names the ID that was checked (`Model '<provider-id>:<model>' not allowed ...`) and the key's list. `/v1/embeddings` answers `403 Embedding model not permitted for this key` without them, and `/v1/preflight` gives the closed code `forbidden_model`.
 
-An entry that is only a provider prefix (`"anthropic-direct:"`, `"Codex:"`) or part of a name (`"claude"` for `claude-haiku-...`) has allowed none of the models it used to cover since 4.3.1: their requests get `403`. `GET /admin/keys` shows the list of each key. A list cannot be edited, and rotating a key copies it: create a new key with full IDs, then revoke the old one ([details](../model-access-correction.md)).
+An entry that is only a provider prefix (`"anthropic-direct:"`, `"Codex:"`) or part of a name (`"claude"` for `claude-haiku-...`) has allowed none of the models it used to cover since 4.3.1: their requests get `403`. Since BUG-59, `POST /admin/keys` refuses such a list with `422` before anything is written: an entry that names no model (empty, a prefix ending with `:`) or has surrounding spaces, an entry no provider knows by the chat's own rule (the one that answers `404 model_not_found`: no registered provider ID prefixes it and no provider lists it; an active provider without a model list may serve any name, so it makes every name known), and an entry a provider knows only under another spelling, since the check compares exact IDs (an undated family name served as a dated ID, another case). A `<provider-id>:<model>` entry for a model the provider does not list yet is accepted, as chat routes it. `GET /admin/keys` shows the list of each key. A list cannot be edited, and rotating a key copies it: create a new key with full IDs, then revoke the old one ([details](../model-access-correction.md)).
 
 ## How limits are enforced
 
 Checks run in this order on each chat request. The key itself is checked right after the rate limit: a request without a valid key gets `401` at once, and never takes nor waits for a slot of the concurrency cap.
 
-1. **Global rate limit per IP address**: `RATE_LIMIT` requests per minute (default 60, `0` disables it), for every route. Exceeding it returns `429 Rate limit exceeded`. Behind a reverse proxy every request comes from the proxy's address; see [Deployment](deployment.md#behind-a-reverse-proxy).
+1. **Global rate limit per IP address**: `RATE_LIMIT` requests per minute (default 60, `0` disables it), for every route. Exceeding it returns `429 Rate limit exceeded`. Behind a reverse proxy, the client's address is used when the proxy is listed in `FORWARDED_ALLOW_IPS`, otherwise every request counts against the proxy's address; see [Deployment](deployment.md#behind-a-reverse-proxy).
 2. **Global concurrency cap**: beyond `PLUGBOARD_MAX_INFLIGHT_CHAT` concurrent chat requests (default 8, `0` turns the cap off), a request waits up to `PLUGBOARD_INFLIGHT_WAIT_S` seconds (default 10) for a slot, then gets `503` with `"code": "server_busy"`, `retry_after` 5 and `Retry-After: 5`. A request holds its slot until its answer is sent, or until its client hangs up: the gateway then stops the provider call (the CLI and its children are killed, an HTTP request is cancelled), bills and caches nothing, and frees the slot at once. While it waits for a provider at its cap or for its session's turn, a request gives its slot back, so requests waiting for a full provider never keep out the requests for the other providers; it takes the slot back, within its wait budget, before going on (`503 server_busy` if the cap stays full until then).
 3. **Monthly budget**: the key's spend for the current month is summed from the usage records. When it is greater than or equal to the limit the request is refused with `429 Monthly spending limit exceeded`. The check happens before the call, so the last request of a month can take the spend slightly over the limit.
 4. **Allowed models**: a model outside the list returns `403`.
@@ -114,9 +114,11 @@ When `ALERT_WEBHOOK_URL` is set, every billed request from a client at or above 
 | Action | Dashboard | API |
 |---|---|---|
 | Revoke (keep the record, refuse the key) | API keys → Revoke | `POST /admin/keys/{key_id}/revoke` |
-| Rotate (revoke and issue a new key with the same settings) | not in the dashboard | `POST /admin/keys/{key_id}/rotate` |
+| Rotate (revoke and issue a new key with the same settings, in one write: on a failure the old key keeps working; a key already revoked answers `409`, so a retried rotation never leaves two live keys) | not in the dashboard | `POST /admin/keys/{key_id}/rotate` |
 | Delete | API keys → Delete | `DELETE /admin/keys/{key_id}` |
 | List | API keys | `GET /admin/keys`, `GET /admin/keys/client/{client_id}` |
+
+The admin answers about keys never contain the key's hash (`key_hash`): only its first characters (`key_display`), and the full key once, when it is created or rotated.
 
 ## What clients get back
 

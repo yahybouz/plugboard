@@ -61,7 +61,7 @@ jobs:
       - name: Dependency CVE audit (pip-audit)
         # pip-audit (PyPA) checks the pinned set against the PyPI advisory
         # database and fails on any known vulnerability.
-        run: pip-audit --strict --progress-spinner off --disable-pip --require-hashes -r requirements-dev.lock
+        run: for lock in requirements-dev.lock requirements.lock requirements-mcp.lock requirements-decisions.lock; do pip-audit --strict --progress-spinner off --disable-pip --require-hashes -r "$lock" || exit 1; done
 
       - name: Validate the registry example JSON
         run: python -m json.tool plugboard/registry.example.json > /dev/null

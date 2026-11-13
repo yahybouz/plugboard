@@ -79,6 +79,7 @@ from plugboard.audit import count_audit_log, get_audit_log, log_action as _audit
 from plugboard.webhooks import emit_fire_and_forget as _webhook
 from plugboard.apikeys import (
     KEY_PREFIXES,  # ARCH-DEBT-029
+    KeyRevoked,
     create_key,
     delete_key,
     get_key_record,
@@ -336,10 +337,94 @@ if _dotenv_warning:
     log.warning(_dotenv_warning)
 
 
+def trusted_proxy_warning(value: str) -> Optional[str]:
+    """Why FORWARDED_ALLOW_IPS is unsafe or partly ignored, or None (BUG-56).
+
+    uvicorn takes the client IP from X-Forwarded-For only for a peer listed
+    there: ``*`` or a ``/0`` network lists every peer, so any client can
+    choose its IP; an entry that is neither an address nor a network is
+    silently ignored by uvicorn.
+    """
+    import ipaddress
+
+    entries = [part.strip() for part in value.split(",") if part.strip()]
+    trust_all, ignored = [], []
+    for entry in entries:
+        if entry == "*":
+            trust_all.append(entry)
+            continue
+        try:
+            network = ipaddress.ip_network(entry, strict=False)
+        except ValueError:
+            ignored.append(entry)
+            continue
+        if network.prefixlen == 0:
+            trust_all.append(entry)
+    if trust_all:
+        return (
+            f"FORWARDED_ALLOW_IPS trusts every peer ({', '.join(trust_all)}): any "
+            "client can set its IP with X-Forwarded-For and so dodge the per-IP "
+            "rate limit and the admin-login lockout. List only the reverse "
+            "proxy's address."
+        )
+    if ignored:
+        return (
+            f"FORWARDED_ALLOW_IPS has entries that are neither an address nor a "
+            f"network ({', '.join(ignored)}): uvicorn ignores them, so a proxy "
+            "meant there is not trusted and its clients share one rate limit "
+            "and one admin-login lockout."
+        )
+    return None
+
+
+def _warn_trusted_proxies() -> None:
+    message = trusted_proxy_warning(os.environ.get("FORWARDED_ALLOW_IPS", ""))
+    if message:
+        log.warning(message)
+
+
+_warn_trusted_proxies()
+
+
+def _check_stored_secrets() -> None:
+    """Say at boot which stored secrets ENCRYPTION_KEY cannot decrypt (BUG-57).
+
+    Never stops the boot: the providers concerned are turned off (and
+    audited and alerted by load_providers), the rest keeps working.
+    """
+    from plugboard import config as _config
+    from plugboard.secrets_rekey import unreadable_secrets
+
+    report = unreadable_secrets(_config.PROVIDERS_FILE.parent, _config._ENCRYPTION_KEY)
+    damaged = report.damaged
+    if damaged:
+        # Not a key problem: changing the key would not help.
+        log.critical(
+            "Stored secrets cannot be read, whatever the key: %s. Restore these "
+            "files from a backup.",
+            "; ".join(damaged),
+        )
+    unreadable = [where for where in report.unreadable if where not in damaged]
+    if unreadable:
+        log.critical(
+            "ENCRYPTION_KEY cannot decrypt %d stored secret(s): %s. Restore the "
+            "key that encrypted them (ENCRYPTION_KEY or data/.encryption_key) and "
+            "restart, or enter these secrets again. Until then the providers "
+            "concerned are turned off and none of these secrets is sent.",
+            len(unreadable),
+            "; ".join(unreadable),
+        )
+        load_providers()  # reports each provider turned off (audit, alert)
+
+
 @asynccontextmanager
 async def _lifespan(application: FastAPI):  # noqa: ARG001
     """Start background services on startup, stop on shutdown."""
     _issue_local_login_token()
+    try:
+        _check_stored_secrets()
+    except Exception as exc:  # the check must never stop the boot
+        log.error("Stored secrets check failed: %s", exc)
     # Auto-start provider watchdog
     from plugboard.provider_watchdog import start_watchdog, stop_watchdog
 
@@ -4064,6 +4149,27 @@ def _admin_actor(request: Request) -> str:
     return "mcp" if surface == "mcp" else "admin"
 
 
+def _require_parsable_base_url(base_url: str, label: str) -> None:
+    """Refuse (422) an address that cannot be parsed, as the guard does.
+
+    An unclosed IPv6 bracket, a bracketed name or a bad port (urlsplit,
+    .port), or an empty or over-long label in an ASCII host (the IDNA step of
+    getaddrinfo, which aiohttp lets through): a 500 on the connection test
+    (BUG-63), and a provider saved that no request could reach (BUG-66). A
+    non-ASCII host is encoded by aiohttp, which reports it.
+    """
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(base_url)
+        parts.port  # parsed on read
+        host = parts.hostname or ""
+        if host.isascii():
+            host.encode("idna")
+    except ValueError as exc:
+        raise HTTPException(422, f"{label} refused: not a valid address ({exc})")
+
+
 @app.post("/providers", status_code=201)
 async def add_provider(
     body: ProviderCreate, request: Request, _: None = Depends(_require_admin)
@@ -4072,6 +4178,10 @@ async def add_provider(
     if body.egress_guard:
         await _require_guard_allows("", body.base_url, actor=actor)
     try:
+        # The domain allowlist first, so its refusals stay audited (TM-004);
+        # then an address that cannot be parsed, guard or not (BUG-66).
+        _cfg_mod.check_provider_domain_allowed(body.base_url)
+        _require_parsable_base_url(body.base_url, "Provider base_url")
         record = create_provider(
             name=body.name,
             base_url=body.base_url,
@@ -4136,6 +4246,10 @@ async def patch_provider(
     if before is not None:
         await _check_guard_on_edit(provider_id, before, updates)
     try:
+        if before is not None and "base_url" in updates:
+            # As on creation: the audited allowlist first (TM-004), then BUG-66.
+            _cfg_mod.check_provider_domain_allowed(updates["base_url"])
+            _require_parsable_base_url(updates["base_url"], "Provider base_url")
         record = update_provider(provider_id, updates)
     except _cfg_mod.ProviderDomainNotAllowed as exc:
         _audit(
@@ -4197,11 +4311,27 @@ async def remove_provider(provider_id: str, _: None = Depends(_require_admin)):
     await _webhook("provider.deleted", {"provider_id": provider_id})
 
 
+def _refuse_unreadable_secret(provider: Dict[str, Any]) -> None:
+    """409 for a provider turned off because its key cannot be decrypted.
+
+    Ping and Discover called it with an empty token, and the admin read a
+    connection or discovery error instead of why it is off (BUG-79).
+    """
+    if provider.get("secret_unreadable"):
+        raise HTTPException(
+            409,
+            f"Provider '{provider.get('id', '')}' is turned off: its stored key "
+            "cannot be decrypted with the current ENCRYPTION_KEY. Restore that "
+            "key, or enter the provider's key again; nothing was called.",
+        )
+
+
 @app.get("/providers/{provider_id}/health")
 async def provider_health(provider_id: str, _: None = Depends(_require_admin)):
     provider = get_provider(provider_id)
     if provider is None:
         raise HTTPException(404, f"Provider '{provider_id}' not found")
+    _refuse_unreadable_secret(provider)
     try:
         require_supported_provider(provider)
     except ValueError as exc:
@@ -4285,6 +4415,7 @@ async def _discover_provider(
     provider = get_provider(provider_id)
     if provider is None:
         raise HTTPException(404, f"Provider '{provider_id}' not found")
+    _refuse_unreadable_secret(provider)
     try:
         require_supported_provider(provider)
     except ValueError as exc:
@@ -4892,8 +5023,6 @@ async def test_direct_provider(
     body: DirectProviderTest, _: None = Depends(_require_admin)
 ):
     """Check a key against a preset or custom endpoint without creating anything."""
-    from urllib.parse import urlsplit
-
     from plugboard.config import check_provider_domain_allowed, ProviderDomainNotAllowed
     from plugboard.direct_providers import get_preset
 
@@ -4909,18 +5038,7 @@ async def test_direct_provider(
             pinned = await _require_public_host(base_url)
     if not base_url.startswith(("http://", "https://")):
         raise HTTPException(422, "Give a preset_key or an http(s) base_url")
-    try:
-        # An unclosed IPv6 bracket, a bracketed name or a bad port (urlsplit,
-        # .port), or an empty or over-long label in an ASCII host (the IDNA
-        # step of getaddrinfo, which aiohttp lets through) raised a 500
-        # (BUG-63). A non-ASCII host is encoded by aiohttp, which reports it.
-        parts = urlsplit(base_url)
-        parts.port  # parsed on read
-        host = parts.hostname or ""
-        if host.isascii():
-            host.encode("idna")
-    except ValueError as exc:
-        raise HTTPException(422, f"base_url refused: not a valid address ({exc})")
+    _require_parsable_base_url(base_url, "base_url")
     try:
         check_provider_domain_allowed(base_url)
     except ProviderDomainNotAllowed as exc:
@@ -5354,6 +5472,64 @@ class KeyCreate(BaseModel):
             raise ValueError("client_id must not be blank")
         return value
 
+    @field_validator("allowed_models")
+    @classmethod
+    def _models_named(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        # An entry that names no model grants nothing ("", "Codex:",
+        # "<provider>:"), and one with surrounding spaces matches no ID
+        # (BUG-59): a typo would leave the key without the model it needs.
+        for entry in value or []:
+            if not entry.strip() or entry.endswith(":"):
+                raise ValueError(f"allowed_models entry {entry!r} names no model")
+            if entry != entry.strip():
+                raise ValueError(
+                    f"allowed_models entry {entry!r} has surrounding spaces"
+                )
+        return value
+
+
+def _allowed_model_refusal(entry: str) -> Optional[str]:
+    """Why an allowed_models entry would grant nothing, or None (BUG-59).
+
+    Refused: an entry no provider knows (chat's own 404 model_not_found
+    rule), and one a provider knows only under another spelling, since the
+    guard compares exact IDs: an undated family name that chat promotes to a
+    listed dated ID, or another case. A ``<provider-id>:<model>`` the
+    provider does not list (yet) is accepted, as chat routes it there.
+    """
+    from plugboard.model_identity import _DISPLAY_OWNERS, registered_model_owner
+    from plugboard.router import _family_aliases, _listed_models
+
+    if is_unknown_model(entry):
+        return f"no provider knows {entry!r}; use an ID GET /v1/models lists"
+    registry = [p for p in load_providers() if not is_removed_provider(p)]
+    ids = [p["id"] for p in registry]
+    owner = registered_model_owner(entry, ids)
+    if owner is None and ":" in entry:
+        alias = entry.split(":", 1)[0]
+        owner = next((o for o, a in _DISPLAY_OWNERS.items() if a == alias), None)
+    native = (
+        entry[len(owner) + 1 :] if owner and entry.startswith(owner + ":") else entry
+    )
+    if owner and native == entry:  # a display prefix (Codex:...)
+        native = entry.split(":", 1)[1]
+    candidates = [p for p in registry if owner is None or p["id"] == owner]
+    for provider in candidates:
+        names = _listed_models(provider) + [provider.get("default_model") or ""]
+        if native in names:
+            return None
+    for provider in candidates:
+        names = [n for n in _listed_models(provider) if n]
+        if native in _family_aliases(provider) and native not in names:
+            return (
+                f"{entry!r} is served as a dated ID of {provider['id']}: "
+                "list that ID (GET /v1/models)"
+            )
+        exact = next((n for n in names if n.casefold() == native.casefold()), None)
+        if exact is not None:
+            return f"{entry!r} is spelled {exact!r} by {provider['id']}"
+    return None
+
 
 def _default_rpm_limit() -> int:
     """Production-safe default applied when a key is created without an
@@ -5369,16 +5545,25 @@ def _default_monthly_limit_usd() -> float:
     )
 
 
+def _admin_key_view(record: Dict[str, Any]) -> Dict[str, Any]:
+    """A key record as the admin API shows it: never its hash (BUG-59)."""
+    view = {k: v for k, v in record.items() if k != "key_hash"}
+    if "key" not in record:
+        view["key_display"] = mask_key(record.get("key_prefix", ""))
+    return view
+
+
 @app.get("/admin/keys")
 async def list_api_keys(_: None = Depends(_require_admin)):
-    return [
-        {**k, "key_display": mask_key(k.get("key_prefix", ""))} for k in load_keys()
-    ]
+    return [_admin_key_view(k) for k in load_keys()]
 
 
 @app.post("/admin/keys", status_code=201)
 async def create_api_key(body: KeyCreate, _: None = Depends(_require_admin)):
     """Creates a new client key. The key is shown in plaintext ONLY in this response."""
+    refusals = [r for r in map(_allowed_model_refusal, body.allowed_models or []) if r]
+    if refusals:
+        raise HTTPException(422, "allowed_models: " + "; ".join(refusals))
     rpm = body.rpm_limit if body.rpm_limit is not None else _default_rpm_limit()
     budget = (
         body.monthly_limit_usd
@@ -5403,14 +5588,14 @@ async def create_api_key(body: KeyCreate, _: None = Depends(_require_admin)):
     await _webhook(
         "key.created", {"key_id": rec.get("key_id"), "client_id": body.client_id}
     )
-    return rec
+    return _admin_key_view(rec)
 
 
 @app.get("/admin/keys/client/{client_id}")
 async def list_keys_by_client(client_id: str, _: None = Depends(_require_admin)):
     """List all keys for a specific client_id."""
     keys = get_keys_by_client(client_id)
-    return [{**k, "key_display": mask_key(k.get("key_prefix", ""))} for k in keys]
+    return [_admin_key_view(k) for k in keys]
 
 
 @app.post("/admin/keys/{key_id}/revoke", status_code=200)
@@ -5441,12 +5626,26 @@ async def rotate_api_key(key_id: str, _: None = Depends(_require_admin)):
             "This key's client ID is empty or reserved and the key is refused "
             "when used: revoke it and create a new key with a valid client ID",
         )
-    result = rotate_key(key_id)
+    try:
+        result = rotate_key(key_id)
+    except KeyRevoked:
+        raise HTTPException(
+            409,
+            f"Key '{key_id}' is already revoked: rotate its replacement, or "
+            "create a new key",
+        ) from None
+    except ValueError as exc:
+        # The new key cannot be written (a retired decision model): the old
+        # key is untouched (BUG-59).
+        raise HTTPException(
+            422,
+            f"This key cannot be rotated ({exc}): create a new key, then revoke this one",
+        ) from None
     if result is None:
         raise HTTPException(404, f"Key '{key_id}' not found")
     _audit("key.rotate", target_type="key", target_id=key_id)
     await _webhook("key.rotated", {"key_id": key_id})
-    return result
+    return _admin_key_view(result)
 
 
 # -- Admin: Organisations ----------------------------------------------------
@@ -5462,7 +5661,7 @@ async def list_orgs(_: None = Depends(_require_admin)):
 async def list_org_keys(org_id: str, _: None = Depends(_require_admin)):
     """List all keys for an organisation."""
     keys = get_keys_by_org(org_id)
-    return [{**k, "key_display": mask_key(k.get("key_prefix", ""))} for k in keys]
+    return [_admin_key_view(k) for k in keys]
 
 
 @app.get("/admin/orgs/{org_id}/usage/{month}")

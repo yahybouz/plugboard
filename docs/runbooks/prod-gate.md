@@ -278,10 +278,28 @@ and in `deploy/ovh/compose.yml`. Another version or an error stops the gate.
 
 ### 6. Switch to the new version
 
+From this release, `deploy/ovh/compose.yml` fixes the default network to
+`172.30.115.0/29` and trusts only its gateway, `172.30.115.1`, in
+`FORWARDED_ALLOW_IPS` (D-50): Tailscale Serve reaches the gateway from that
+address, and each tailnet client then gets its own rate limit and login
+lockout. A network created by an earlier release has another subnet: it is
+removed once, with the container, by `gw down` (never `-v`: the volumes and
+`plugboard-ollama` stay).
+
 ```bash
 cd /opt/plugboard
+# The fixed subnet must not overlap a host route (VPN, another bridge).
+# Expected: "free", or only the bridge of plugboard-private_default once fixed.
+python3 -c 'import ipaddress,json,subprocess;w=ipaddress.ip_network("172.30.115.0/29");r=json.loads(subprocess.check_output(["ip","-j","-4","route"]));print([(x["dst"],x.get("dev")) for x in r if x.get("dst") not in (None,"default","0.0.0.0/0") and w.overlaps(ipaddress.ip_network(x["dst"],strict=False))] or "free")'
+net=$(sudo docker network inspect plugboard-private_default \
+  --format '{{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}{{end}}' 2>/dev/null || true)
+# A network of an earlier release (another subnet) is removed once
+[ -z "$net" ] || [ "$net" = "172.30.115.0/29 172.30.115.1" ] || gw down   # never -v
 gw up -d --no-build gateway
 wait_healthy                              # plugboard:private-full-v<new-version> healthy
+sudo docker network inspect plugboard-private_default \
+  --format '{{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}{{end}}'
+# Expected: 172.30.115.0/29 172.30.115.1
 gw exec gateway sh -ec 'claude --version; codex --version; gemini --version; gh --version; agy --version'
 ```
 
@@ -415,6 +433,11 @@ git checkout <previous-ref>
 sudo docker image tag plugboard:rollback-<running-version> <running-image-name>
 sudo systemctl start plugboard-backup.timer
 ```
+
+The fixed network (`172.30.115.0/29`) stays: the earlier version runs on it
+as is, without `FORWARDED_ALLOW_IPS`. If a later `up -d` from the previous
+checkout refuses that network, run `docker compose -f deploy/ovh/compose.yml
+down` (never `-v`) once, then `up -d`.
 
 Before step 6 nothing was switched: `git checkout <previous-ref>` and
 `sudo systemctl start plugboard-backup.timer` are enough.

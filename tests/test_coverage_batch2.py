@@ -55,14 +55,14 @@ class TestConfigEncryption:
         providers = cfg.load_providers()
         assert providers[0]["bearer_token"] == "top-secret-token-123"
 
-    def test_decrypt_without_key_returns_raw(self, monkeypatch):
-        """Encrypted token found but ENCRYPTION_KEY not set (lines 49-51)."""
+    def test_decrypt_without_key_raises(self, monkeypatch):
+        """Encrypted token found but ENCRYPTION_KEY not set."""
         import plugboard.config as cfg
 
         monkeypatch.setattr(cfg, "_ENCRYPTION_KEY", "")
-        result = cfg._decrypt_token("enc:some-encrypted-blob")
-        # Can't decrypt, should return the raw string unchanged
-        assert result == "enc:some-encrypted-blob"
+        # The ciphertext is never handed back as a token (BUG-57).
+        with pytest.raises(cfg.SecretUnreadable):
+            cfg._decrypt_token("enc:some-encrypted-blob")
 
 
 class TestConfigBootstrap:

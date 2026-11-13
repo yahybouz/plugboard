@@ -25,7 +25,7 @@ Then:
 - [ ] Optional: `PLUGBOARD_ADMIN_MFA_REQUIRED=1` after enrolling a TOTP secret.
 - [ ] Optional: `PLUGBOARD_PROVIDER_DOMAINS_ALLOWED` to restrict where provider requests may go.
 - [ ] Optional: `ALERT_WEBHOOK_URL` for provider and budget alerts.
-- [ ] `RATE_LIMIT` adapted to the reverse proxy (see below).
+- [ ] `FORWARDED_ALLOW_IPS` lists the reverse proxy's address as Plugboard sees it (see below).
 - [ ] Do not expose subscription-backed providers to other people (see [the risks](providers-and-subscriptions.md#risks-of-using-subscriptions)).
 
 ## Docker Compose
@@ -93,7 +93,7 @@ Terminate TLS in a reverse proxy and forward to `127.0.0.1:8765`. Three things m
 
 1. **Long timeouts.** A request to a slow model or a CLI provider can take minutes (Plugboard allows up to 900 seconds). Raise the proxy's read timeout.
 2. **No buffering for streams.** Streaming responses are server-sent events; Plugboard sends `X-Accel-Buffering: no`, which nginx honours.
-3. **Client addresses.** Plugboard does not read forwarded-for headers: the per-IP limit (`RATE_LIMIT`) sees the proxy's address for every request. Raise `RATE_LIMIT`, or set it to `0` and rate-limit at the proxy; per-key RPM limits keep working. Forwarded headers also disable dashboard auto-login, which is intended.
+3. **Client addresses.** The per-IP limit (`RATE_LIMIT`) and the admin-login lockout use the address in `X-Forwarded-For` only when the connection comes from an address listed in `FORWARDED_ALLOW_IPS` (default `127.0.0.1,::1`): a proxy on the same host that forwards to `127.0.0.1:8765` works as is. In Docker, the proxy arrives from the bridge gateway (`docker network inspect`): list that address, or every client shares one counter and one lockout. The proxy must set or append `X-Forwarded-For`. Never list `*` or a `/0` network: any client could then choose its address (the boot log warns). Forwarded headers also disable dashboard auto-login, which is intended.
 
 Caddy (automatic HTTPS):
 
@@ -151,7 +151,7 @@ Protected providers (catalog presets, built-in presets with an HTTP(S) URL, and 
 
 ## Backups and upgrades
 
-- Back up `data/` (and `ENCRYPTION_KEY` if it is set in the environment, or `data/.encryption_key` if it was generated). Without the encryption key, stored provider credentials cannot be decrypted.
+- Back up `data/` (and `ENCRYPTION_KEY` if it is set in the environment, or `data/.encryption_key` if it was generated). Without the encryption key, stored provider credentials cannot be decrypted: if the server starts with another key, its boot log names every stored secret it cannot decrypt (critical level), the providers concerned are turned off until the right key is restored or their key is entered again (audit `provider.secret_unreadable`, alert `provider_secret_unreadable`), and their stored key is never sent.
 - To upgrade: back up `data/`, pull the new version, run `make setup` (or rebuild the image), restart, and check `/health`. To go back, follow the [rollback runbook](../runbooks/rollback-release.md).
 - To move the install to another machine, follow the [move runbook](../runbooks/move-install.md).
 

@@ -79,6 +79,8 @@ Claude CLI catalogues are exposed with the `claude-code:` model prefix, while th
 
 Native Ollama stays bound to host loopback `127.0.0.1:11434`. `install-ollama-bridge.sh` creates the internal Docker network `plugboard-ollama` (`172.30.114.0/29`, bridge `br-pb-ollama`) and a socket-activated `systemd-socket-proxyd` listening only on `172.30.114.1:11434`, forwarding to loopback. UFW allows that port only on that bridge, from that subnet. Nothing is published on the public or Tailscale interfaces. The gateway joins this network with `OLLAMA_URL=http://172.30.114.1:11434`; cloud-catalog autosync is disabled so only the installed references appear, not unverified paid models. Run the installer before `docker compose up`.
 
+The gateway's own network, `plugboard-private_default`, has a fixed subnet, `172.30.115.0/29`: Tailscale Serve reaches the gateway from its gateway address, `172.30.115.1`, the only address listed in `FORWARDED_ALLOW_IPS`, so the rate limit and the admin-login lockout count each tailnet client (D-50). Tailscale Serve sets `X-Forwarded-For` itself; a client cannot choose its address.
+
 ## Deployment after authorized SSH is available
 
 1. Confirm the delivered hostname/IP, OS and architecture from OVH and the live host; establish a dedicated authorized SSH key. Never request passwords in chat.

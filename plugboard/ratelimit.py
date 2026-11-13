@@ -74,6 +74,20 @@ _AUTH_WINDOW = 60.0  # 1 minute window
 _LOCKOUT_DURATION = 900.0  # 15 minutes lockout after exceeding limit
 _auth_buckets: Dict[str, collections.deque] = {}
 _lockouts: Dict[str, float] = {}
+# Behind a trusted proxy every client has its own address (BUG-56): counters
+# and lockouts that are over are dropped, at most once per _AUTH_WINDOW.
+_last_auth_purge = 0.0
+
+
+def _purge_auth_stale(now: float) -> None:
+    # Snapshots (list() copies at C level, under the GIL) and pop(): the
+    # tables are also written from the threadpool (sync admin dependency).
+    for ip, dq in list(_auth_buckets.items()):
+        if not dq or dq[-1] < now - _AUTH_WINDOW:
+            _auth_buckets.pop(ip, None)
+    for ip, until in list(_lockouts.items()):
+        if until <= now:
+            _lockouts.pop(ip, None)
 
 
 def check_auth_rate_limit(ip: str) -> bool:
@@ -96,7 +110,12 @@ def check_auth_rate_limit(ip: str) -> bool:
 
 def record_auth_failure(ip: str) -> bool:
     """Record a failed auth attempt. Returns True if IP is now locked out."""
+    global _last_auth_purge
+
     now = time.monotonic()
+    if now - _last_auth_purge >= _AUTH_WINDOW:
+        _last_auth_purge = now
+        _purge_auth_stale(now)
     dq = _auth_buckets.setdefault(ip, collections.deque())
     # Evict old timestamps
     while dq and dq[0] < now - _AUTH_WINDOW:

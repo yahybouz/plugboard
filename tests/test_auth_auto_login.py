@@ -518,8 +518,10 @@ def test_run_py_exports_the_real_bind(monkeypatch, host, expected):
 
     assert captured["host"] == expected
     assert app_module._bind_host() == expected
-    # uvicorn's default proxy handling is kept (per-IP limits behind a proxy).
+    # uvicorn's default proxy handling is kept (per-IP limits behind a proxy),
+    # with FORWARDED_ALLOW_IPS from the environment, which the boot checks.
     assert "proxy_headers" not in captured
+    assert "forwarded_allow_ips" not in captured
 
 
 @pytest.mark.parametrize(

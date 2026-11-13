@@ -187,7 +187,7 @@ The answer lists `entries` newest first, each with `at` (UTC), `provider`, `adde
 
 ## Admin audit log
 
-Admin actions are recorded in `data/audit.db`: logins (success, failure, lockout, MFA), auto-logins and suspicious auto-login refusals, key creation, revocation, rotation and deletion, provider creation, changes and deletion (including base URL changes and refused domains), OAuth connections, pricing refreshes, cache clears, circuit resets, watchdog actions, model refreshes, Ollama pulls and deletions, job runs, and MFA enrolment. Each entry has an `actor`: `admin` by default, `system` for an egress refusal found when a protected provider connects (`provider.egress_refused`), and `mcp` for the provider calls of the [MCP admin tools](mcp.md#admin-tools-stdio-only). These record `provider.create`, `provider.discover`, `provider.egress.rejected` and `provider.domain.rejected` as for the dashboard, plus their other refusals (`provider.create.refused`, `provider.discover.refused`) and previews (`provider.discover.preview`).
+Admin actions are recorded in `data/audit.db`: logins (success, failure, lockout, MFA), auto-logins and suspicious auto-login refusals, key creation, revocation, rotation and deletion, provider creation, changes and deletion (including base URL changes and refused domains), OAuth connections, pricing refreshes, cache clears, circuit resets, watchdog actions, model refreshes, Ollama pulls and deletions, job runs, and MFA enrolment. Each entry has an `actor`: `admin` by default, `system` for an egress refusal found when a protected provider connects (`provider.egress_refused`) and for a provider whose stored key cannot be decrypted (`provider.secret_unreadable`), and `mcp` for the provider calls of the [MCP admin tools](mcp.md#admin-tools-stdio-only). These record `provider.create`, `provider.discover`, `provider.egress.rejected` and `provider.domain.rejected` as for the dashboard, plus their other refusals (`provider.create.refused`, `provider.discover.refused`) and previews (`provider.discover.preview`).
 
 ```bash
 curl -s "http://localhost:8765/admin/audit?limit=20" -H "Authorization: Bearer $ADMIN_KEY"
@@ -216,6 +216,12 @@ Set `ALERT_WEBHOOK_URL` to receive JSON alerts (for example on a Slack or Discor
 
   ```json
   {"type": "provider_egress_refused", "provider_id": "catalog-provider", "host": "api.example.com", "message": "..."}
+  ```
+
+- `provider_secret_unreadable`: a provider's stored key cannot be decrypted with the current `ENCRYPTION_KEY`, so the provider is turned off and its key is never sent ([backups and upgrades](deployment.md#backups-and-upgrades)). Once per provider and stored key while the server runs.
+
+  ```json
+  {"type": "provider_secret_unreadable", "provider_id": "openai", "message": "..."}
   ```
 
 ### Event webhooks
