@@ -13,6 +13,8 @@ import logging
 import pytest
 from cryptography.fernet import Fernet
 
+from plugboard import alerts
+
 from tests.conftest import _setup_providers
 from tests.factories import PROVIDER_A, PROVIDER_B
 
@@ -117,7 +119,6 @@ async def test_chat_to_that_provider_calls_nobody(
 async def test_unreadable_key_is_logged_audited_and_alerted_once(
     other_key_store, audit_db, alerts_sent, caplog
 ):
-    import asyncio
 
     from plugboard import config
 
@@ -125,7 +126,7 @@ async def test_unreadable_key_is_logged_audited_and_alerted_once(
     with caplog.at_level(logging.CRITICAL, logger="plugboard.config"):
         for _ in range(3):
             config.load_providers()
-        await asyncio.gather(*list(config._report_tasks))
+        await alerts.drain()
     [line] = [r.getMessage() for r in caplog.records if r.levelno == logging.CRITICAL]
     assert "test-provider" in line and "ENCRYPTION_KEY" in line
     assert sealed[4:] not in caplog.text
@@ -260,7 +261,7 @@ async def test_found_outside_an_event_loop_the_alert_waits_for_one(
     assert alerts_sent == []
     assert len(audit_db.get_audit_log(action="provider.secret_unreadable")) == 1
     config.load_providers()
-    await asyncio.gather(*list(config._report_tasks))
+    await alerts.drain()
     assert alerts_sent == ["test-provider"]
     assert len(audit_db.get_audit_log(action="provider.secret_unreadable")) == 1
 
