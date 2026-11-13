@@ -191,6 +191,41 @@ def refused_client_reason(record: Dict[str, Any]) -> str:
     return ""
 
 
+def _new_key(
+    client_id: str,
+    label: str = "",
+    monthly_limit_usd: float = 0.0,
+    allowed_models: Optional[List[str]] = None,
+    rpm_limit: int = 0,
+    org_id: str = "",
+    allowed_decision_models: Optional[List[str]] = None,
+) -> tuple[Dict[str, Any], str]:
+    """A new key record and its plaintext key; nothing is written."""
+    if allowed_decision_models is not None:
+        from plugboard.decisions import DECISION_MODELS
+
+        if not isinstance(allowed_decision_models, list) or any(
+            model not in DECISION_MODELS for model in allowed_decision_models
+        ):
+            raise ValueError("Invalid decision policy")
+    raw_key = KEY_PREFIX + secrets.token_hex(32)
+    record: Dict[str, Any] = {
+        "key_id": uuid.uuid4().hex,
+        "key_hash": _hash_key(raw_key),
+        "key_prefix": raw_key[:8],
+        "client_id": client_id,
+        "org_id": org_id,
+        "label": label,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "is_active": True,
+        "monthly_limit_usd": monthly_limit_usd,
+        "allowed_models": allowed_models or [],
+        "rpm_limit": rpm_limit,
+        "allowed_decision_models": allowed_decision_models,
+    }
+    return record, raw_key
+
+
 def create_key(
     client_id: str,
     label: str = "",
@@ -205,32 +240,15 @@ def create_key(
     The plaintext key is included in the returned dict under ``"key"`` so the
     caller can show it once.  Only the hash is persisted to disk.
     """
-    if allowed_decision_models is not None:
-        from plugboard.decisions import DECISION_MODELS
-
-        if not isinstance(allowed_decision_models, list) or any(
-            model not in DECISION_MODELS for model in allowed_decision_models
-        ):
-            raise ValueError("Invalid decision policy")
-    key_id = uuid.uuid4().hex
-    raw_key = KEY_PREFIX + secrets.token_hex(32)
-    key_hash = _hash_key(raw_key)
-    key_prefix = raw_key[:8]
-
-    record: Dict[str, Any] = {
-        "key_id": key_id,
-        "key_hash": key_hash,
-        "key_prefix": key_prefix,
-        "client_id": client_id,
-        "org_id": org_id,
-        "label": label,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "is_active": True,
-        "monthly_limit_usd": monthly_limit_usd,
-        "allowed_models": allowed_models or [],
-        "rpm_limit": rpm_limit,
-        "allowed_decision_models": allowed_decision_models,
-    }
+    record, raw_key = _new_key(
+        client_id,
+        label,
+        monthly_limit_usd,
+        allowed_models,
+        rpm_limit,
+        org_id,
+        allowed_decision_models,
+    )
     with _lock():
         data = _read()
         keys = list(data.get("keys", []))
@@ -301,30 +319,29 @@ def rotate_key(key_id: str) -> Optional[Dict[str, Any]]:
     """Rotate a key: revoke the old one and create a new one with same settings.
 
     Returns the new key record (with plaintext key) or None if key_id not found.
+    All or nothing (BUG-59): the new key is built first, then the old one is
+    revoked and the new one added in a single write; a refusal or a failed
+    write leaves the old key working.
     """
     with _lock():
         data = _read()
-        old = None
-        for k in data.get("keys", []):
-            if k["key_id"] == key_id:
-                old = k
-                break
+        keys = list(data.get("keys", []))
+        old = next((k for k in keys if k["key_id"] == key_id), None)
         if not old:
             return None
-        # Revoke old
-        old["is_active"] = False
-        _write(data)
-
-    # Create new with same settings
-    return create_key(
-        client_id=old["client_id"],
-        label=old.get("label", ""),
-        monthly_limit_usd=old.get("monthly_limit_usd", 0.0),
-        allowed_models=old.get("allowed_models"),
-        rpm_limit=old.get("rpm_limit", 0),
-        org_id=old.get("org_id", ""),
-        allowed_decision_models=old.get("allowed_decision_models"),
-    )
+        record, raw_key = _new_key(
+            client_id=old["client_id"],
+            label=old.get("label", ""),
+            monthly_limit_usd=old.get("monthly_limit_usd", 0.0),
+            allowed_models=old.get("allowed_models"),
+            rpm_limit=old.get("rpm_limit", 0),
+            org_id=old.get("org_id", ""),
+            allowed_decision_models=old.get("allowed_decision_models"),
+        )
+        keys = [{**k, "is_active": False} if k is old else k for k in keys]
+        keys.append(record)
+        _write({**data, "keys": keys})
+    return {**record, "key": raw_key}
 
 
 def mask_key(key_prefix: str) -> str:

@@ -65,7 +65,7 @@ Each entry is compared, as a whole string, with the provider and model that serv
 - When a provider lists only dated snapshots of a model (`claude-haiku-4-5-20251001`), a request for the undated name can be served, and is then checked, under the newest dated ID once Plugboard has loaded its model list. List the dated ID and request it as it is.
 - On `/v1/chat/completions`, the `detail` of a `403` names the ID that was checked (`Model '<provider-id>:<model>' not allowed ...`) and the key's list. `/v1/embeddings` answers `403 Embedding model not permitted for this key` without them, and `/v1/preflight` gives the closed code `forbidden_model`.
 
-An entry that is only a provider prefix (`"anthropic-direct:"`, `"Codex:"`) or part of a name (`"claude"` for `claude-haiku-...`) has allowed none of the models it used to cover since 4.3.1: their requests get `403`. `GET /admin/keys` shows the list of each key. A list cannot be edited, and rotating a key copies it: create a new key with full IDs, then revoke the old one ([details](../model-access-correction.md)).
+An entry that is only a provider prefix (`"anthropic-direct:"`, `"Codex:"`) or part of a name (`"claude"` for `claude-haiku-...`) has allowed none of the models it used to cover since 4.3.1: their requests get `403`. Since BUG-59, `POST /admin/keys` refuses such a list with `422` before anything is written: an entry that names no model (empty, a prefix ending with `:`) or has surrounding spaces, and an entry no provider knows by the chat's own rule (the one that answers `404 model_not_found`: no registered provider ID prefixes it and no provider lists it). A `<provider-id>:<model>` entry for a model the provider does not list yet is accepted, as chat routes it. `GET /admin/keys` shows the list of each key. A list cannot be edited, and rotating a key copies it: create a new key with full IDs, then revoke the old one ([details](../model-access-correction.md)).
 
 ## How limits are enforced
 
@@ -114,9 +114,11 @@ When `ALERT_WEBHOOK_URL` is set, every billed request from a client at or above 
 | Action | Dashboard | API |
 |---|---|---|
 | Revoke (keep the record, refuse the key) | API keys → Revoke | `POST /admin/keys/{key_id}/revoke` |
-| Rotate (revoke and issue a new key with the same settings) | not in the dashboard | `POST /admin/keys/{key_id}/rotate` |
+| Rotate (revoke and issue a new key with the same settings, in one write: on a failure the old key keeps working) | not in the dashboard | `POST /admin/keys/{key_id}/rotate` |
 | Delete | API keys → Delete | `DELETE /admin/keys/{key_id}` |
 | List | API keys | `GET /admin/keys`, `GET /admin/keys/client/{client_id}` |
+
+The admin answers about keys never contain the key's hash (`key_hash`): only its first characters (`key_display`), and the full key once, when it is created or rotated.
 
 ## What clients get back
 
