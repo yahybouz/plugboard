@@ -405,7 +405,7 @@ def purge_old_usage(keep_months: int = 6) -> List[str]:
             m = row[0]
             # Only YYYY_MM months, as the retention pass: a malformed one
             # ("xx_yy") is left as it is instead of a 500 (BUG-69).
-            if not isinstance(m, str) or not re.fullmatch(r"\d{4}_\d{2}", m):
+            if not isinstance(m, str) or not re.fullmatch(r"[0-9]{4}_[0-9]{2}", m):
                 continue
             year, month_num = int(m[:4]), int(m[5:])
             age = (now.year - year) * 12 + (now.month - month_num)

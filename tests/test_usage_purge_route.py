@@ -27,7 +27,13 @@ async def test_a_malformed_month_is_skipped_not_a_500(
     current = datetime.now(timezone.utc).strftime("%Y_%m")
     conn = usage._get_conn()
     try:
-        for row_id, month in (("old", "2001_01"), ("bad", "xx_yy"), ("now", current)):
+        for row_id, month in (
+            ("old", "2001_01"),
+            ("bad", "xx_yy"),
+            # Fullwidth digits: \\d matched them and int() read 2001 (review M-9).
+            ("wide", "\uff12\uff10\uff10\uff11_\uff10\uff11"),
+            ("now", current),
+        ):
             conn.execute(
                 "INSERT INTO usage_entries (id, ts, month, client_id, key_id, model, "
                 "provider_id, prompt_tokens, completion_tokens, total_tokens, "
@@ -43,4 +49,6 @@ async def test_a_malformed_month_is_skipped_not_a_500(
     assert r.status_code == 200, r.text
     assert r.json()["purged"] == ["2001_01"]
     # Left as it is, like the automatic retention pass does.
-    assert _months(usage._DB_PATH) == sorted([current, "xx_yy"])
+    assert _months(usage._DB_PATH) == sorted(
+        [current, "xx_yy", "\uff12\uff10\uff10\uff11_\uff10\uff11"]
+    )
