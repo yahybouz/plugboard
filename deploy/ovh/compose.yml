@@ -21,6 +21,11 @@ services:
       PLUGBOARD_LOCAL_AUTO_LOGIN: "0"
       COOKIE_SECURE: "true"
       CORS_ORIGINS: ""
+      # Tailscale Serve reaches the gateway through the gateway of the
+      # default network below, whose subnet is fixed: trust that address
+      # only, so the rate limit and the login lockout count each tailnet
+      # client (D-50). Tailscale Serve sets X-Forwarded-For itself.
+      FORWARDED_ALLOW_IPS: "172.30.115.1"
       # Eight chats at once; a ninth waits up to 10 s for a slot (D-32).
       # Ollama, at a private address, still takes one chat at a time
       # (PLUGBOARD_LOCAL_PROVIDER_MAX_INFLIGHT, default 1) until it is
@@ -81,6 +86,14 @@ services:
         max-size: "10m"
         max-file: "3"
 networks:
+  # Fixed, so its gateway (FORWARDED_ALLOW_IPS above) never changes when
+  # the network is recreated (D-50). Next to plugboard-ollama
+  # (172.30.114.0/29, install-ollama-bridge.sh), never overlapping it.
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.115.0/29
+          gateway: 172.30.115.1
   ollama-private:
     external: true
     name: plugboard-ollama

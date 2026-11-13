@@ -149,3 +149,37 @@ def test_trusting_every_peer_is_logged_at_boot(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger=app_mod.log.name):
         app_mod._warn_trusted_proxies()
     assert any("FORWARDED_ALLOW_IPS" in r.getMessage() for r in caplog.records)
+
+
+def test_production_compose_trusts_only_its_fixed_bridge_gateway():
+    """D-50: Tailscale Serve reaches the container through the gateway of the
+    project's default network. deploy/ovh/compose.yml fixes that network, so
+    its gateway, listed in FORWARDED_ALLOW_IPS, never changes (BUG-56).
+    Tailscale Serve overwrites X-Forwarded-For itself, so a tailnet client
+    cannot choose the address it is counted under."""
+    import ipaddress
+    from pathlib import Path
+    from urllib.parse import urlparse
+
+    import yaml
+
+    from plugboard.app import trusted_proxy_warning
+
+    root = Path(__file__).resolve().parent.parent
+    doc = yaml.safe_load((root / "deploy/ovh/compose.yml").read_text(encoding="utf-8"))
+    service = doc["services"]["gateway"]
+    trusted = service["environment"]["FORWARDED_ALLOW_IPS"]
+    assert "default" in service["networks"]
+    pools = doc["networks"]["default"]["ipam"]["config"]
+    assert len(pools) == 1
+    subnet = ipaddress.ip_network(pools[0]["subnet"])
+    gateway = ipaddress.ip_address(pools[0]["gateway"])
+    assert trusted == str(gateway)
+    assert gateway in subnet and subnet.is_private
+    assert trusted_proxy_warning(trusted) is None
+    # Distinct from the private Ollama network (install-ollama-bridge.sh).
+    assert not subnet.overlaps(ipaddress.ip_network("172.30.114.0/29"))
+    ollama = ipaddress.ip_address(
+        urlparse(service["environment"]["OLLAMA_URL"]).hostname
+    )
+    assert ollama not in subnet
