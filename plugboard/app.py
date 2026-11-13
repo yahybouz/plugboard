@@ -336,6 +336,30 @@ if _dotenv_warning:
     log.warning(_dotenv_warning)
 
 
+def trusted_proxy_warning(value: str) -> Optional[str]:
+    """Why FORWARDED_ALLOW_IPS is unsafe, or None (BUG-56).
+
+    uvicorn takes the client IP from X-Forwarded-For only for a peer listed
+    there; ``*`` lists every peer, so any client can choose its IP.
+    """
+    if "*" not in (part.strip() for part in value.split(",")):
+        return None
+    return (
+        "FORWARDED_ALLOW_IPS contains '*': any client can set its IP with "
+        "X-Forwarded-For and so dodge the per-IP rate limit and the admin-login "
+        "lockout. List only the reverse proxy's address."
+    )
+
+
+def _warn_trusted_proxies() -> None:
+    message = trusted_proxy_warning(os.environ.get("FORWARDED_ALLOW_IPS", ""))
+    if message:
+        log.warning(message)
+
+
+_warn_trusted_proxies()
+
+
 def _check_stored_secrets() -> None:
     """Say at boot which stored secrets ENCRYPTION_KEY cannot decrypt (BUG-57).
 
