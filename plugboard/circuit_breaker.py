@@ -76,14 +76,31 @@ def is_request_too_long(message: str) -> bool:
     return any(fragment in text for fragment in _REQUEST_TOO_LONG)
 
 
+# Lower-case fragments of codex's refusal of a model the signed-in ChatGPT
+# subscription does not serve ("The 'gpt-6.1-sol' model is not supported when
+# using Codex with a ChatGPT account", BUG-78): the request named a model this
+# route cannot run, the provider did not fail.
+_SUBSCRIPTION_REFUSED = (
+    "not supported when using codex with a chatgpt account",
+    "not supported for chatgpt accounts",
+)
+
+
+def is_model_unsupported_by_subscription(message: str) -> bool:
+    """True when a CLI says its subscription does not serve the model."""
+    text = (message or "").lower()
+    return any(fragment in text for fragment in _SUBSCRIPTION_REFUSED)
+
+
 def is_provider_fault(message: str, status: Optional[int] = None) -> bool:
     """Whether a failed call counts against its route's circuit.
 
     ``status`` is the HTTP status of the provider's answer, or None when there
     was none: a timeout, a network error or a failed CLI run, which count
-    unless the error says the request is too long.
+    unless the error says the request is too long or names a model the
+    route's subscription does not serve.
     """
-    if is_request_too_long(message):
+    if is_request_too_long(message) or is_model_unsupported_by_subscription(message):
         return False
     if status is None:
         return True

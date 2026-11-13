@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "2.1.0"
+CONTRACT_VERSION = "2.2.0"
 _JSON = "application/json"
 
 
@@ -546,7 +546,9 @@ class ErrorResponse(_Open):
     (400), adds `code` unsupported_on_cli, `unsupported` (the refused fields)
     and `hint`. A prompt a CLI subscription route finds too long (400) adds
     `code` context_length_exceeded, `error_ref`, `provider_name` and
-    `model_id`."""
+    `model_id`. A model a CLI subscription route's account plan does not serve
+    (400) adds `code` model_not_supported_by_subscription, `hint`,
+    `error_ref`, `provider_name` and `model_id`."""
 
     detail: Union[str, List[Any], Dict[str, Any]]
     retry_after: Optional[int] = None
@@ -554,6 +556,7 @@ class ErrorResponse(_Open):
         default=None,
         description="Stable reason for programs, when the route gives one: "
         "unsupported_on_cli (chat, 400), context_length_exceeded (chat, 400), "
+        "model_not_supported_by_subscription (chat, 400), "
         "model_not_found (chat, 404), providers_busy (chat, 503), "
         "server_busy (chat and preflight, 503; also a preflight item's error), "
         "provider_disabled (chat, 503).",
@@ -641,6 +644,9 @@ _CHAT_ERRORS = {
     " part other than text; unsupported lists them, hint says what to send;"
     " nothing was called. code context_length_exceeded: a CLI subscription route"
     " found the prompt too long for the model's context; no other provider was"
+    " tried. code model_not_supported_by_subscription: the account plan a CLI"
+    " subscription route is signed in with does not serve the model (codex"
+    " with a ChatGPT account); hint says what to do, no other provider was"
     " tried. Without code: a body that is not valid JSON or not a JSON object, a"
     " model that is not a string or is removed, missing or invalid messages, a"
     " session_id that is a list or an object, a decision model (use"
