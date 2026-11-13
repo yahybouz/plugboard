@@ -161,6 +161,7 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 |---|---|---|
 | `400` | Chat: the body is not valid JSON or not a JSON object, the model is not a string or was removed, `messages` is missing or invalid, `session_id` is a list or an object, a decision model was sent, or the provider rejected the request (context too long, parameters; `error_ref`); nothing was billed | Fix the request; `detail` says what is wrong |
 | `400` | Chat only, `code` is `unsupported_on_cli`: only CLI subscription routes serve the model and the request asks for tools, a structured `response_format` or a non-text content part, listed in `unsupported`; nothing was called ([details](../guide/providers-and-subscriptions.md#what-a-cli-subscription-route-does-not-do)) | Send plain text, or pick a model an API or Ollama provider serves |
+| `400` | Chat only, `code` is `model_not_supported_by_subscription`: the account plan of a CLI subscription route does not serve the model (codex with a ChatGPT account); no other provider was tried | Pick another model from `GET /v1/models`, or use a route with an API key |
 | `400` | Chat only, `code` is `context_length_exceeded`: a CLI subscription route found the prompt too long for the model's context; no other provider was tried | Shorten the messages or pick a model with a larger context |
 | `401` | Missing, unknown or revoked key | Check the key |
 | `402` | The key has a monthly budget and the model has no known price; nothing was called | Ask the operator to price the model, or use a priced one |

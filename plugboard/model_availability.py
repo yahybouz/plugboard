@@ -686,6 +686,13 @@ async def refresh_subprocess_provider_models(
         if quarantine_path
         else get_quarantined_suffixes()
     )
+    # Models a ChatGPT sign-in refuses leave the codex route's saved list
+    # too, never probed nor quarantined: they stay valid elsewhere (BUG-78).
+    refused: frozenset = frozenset()
+    if kind == "codex":
+        from plugboard.cli_subprocess import codex_refused_models
+
+        refused = codex_refused_models()
 
     kept: List[str] = []
     dropped: List[Dict[str, Any]] = []
@@ -693,6 +700,9 @@ async def refresh_subprocess_provider_models(
     skipped = 0
 
     for mid in candidate_ids:
+        if mid in refused:
+            dropped.append({"id": mid, "reason": "not_supported_by_subscription"})
+            continue
         if trusted_account_catalog:
             # Listed is not proven usable: no probe, no quarantine change.
             if mid in quarantined:

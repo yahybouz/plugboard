@@ -2276,7 +2276,9 @@ def _cli_error_response(
     exc: CliSubprocessError, client_id: Optional[str]
 ) -> JSONResponse:
     """502 for a failed CLI provider, 429 when it failed on its quota, 400
-    (``context_length_exceeded``) when it found the prompt too long.
+    (``context_length_exceeded``) when it found the prompt too long, 400
+    (``model_not_supported_by_subscription``) when its subscription does not
+    serve the model (BUG-78).
 
     ``exc.quota`` and ``exc.request_too_long`` were decided by the CLI wrapper
     from the CLI's own error and stderr, never from the model's output. The
@@ -2286,6 +2288,7 @@ def _cli_error_response(
     """
     quota = exc.quota
     too_long = exc.request_too_long and not quota
+    unsupported = getattr(exc, "model_unsupported", False) and not quota
     ref = secrets.token_hex(4)
     log.warning(
         "cli provider error ref=%s provider=%s model=%s exit=%s pid=%s: %s | stderr=%s",
@@ -2316,6 +2319,12 @@ def _cli_error_response(
                 f"The {name} provider rejected the request: the messages are too "
                 f"long for the model's context (reference {ref} in the gateway log)."
             )
+        elif unsupported:
+            detail = (
+                f"The {name} provider's subscription does not support the model "
+                f"{exc.model_id!r}: pick another model from GET /v1/models "
+                f"(reference {ref} in the gateway log)."
+            )
         else:
             detail = f"The {name} provider failed (reference {ref} in the gateway log)."
         content = {
@@ -2327,11 +2336,21 @@ def _cli_error_response(
     if too_long:
         content["code"] = "context_length_exceeded"
         return JSONResponse(status_code=400, content=content)
+    if unsupported:
+        content["code"] = "model_not_supported_by_subscription"
+        content["hint"] = MODEL_NOT_SUPPORTED_HINT
+        return JSONResponse(status_code=400, content=content)
     if not quota:
         return JSONResponse(status_code=502, content=content)
     headers = _retry_after_headers(content, exc.retry_after)
     return JSONResponse(status_code=429, content=content, headers=headers)
 
+
+MODEL_NOT_SUPPORTED_HINT = (
+    "This route's subscription (a CLI signed in with an account plan) does not "
+    "serve this model: GET /v1/models lists the ones it does, or use a route "
+    "with an API key."
+)
 
 MODEL_NOT_FOUND_HINT = (
     "GET /v1/models lists the model IDs this gateway serves: "

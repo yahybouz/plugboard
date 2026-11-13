@@ -1046,7 +1046,9 @@ async def forward(
     An error saying the context is too long is not retried: the same request
     would fail again. From an HTTP provider it goes straight to the next
     provider; from a CLI subscription route (``request_too_long``) it is
-    raised at once, and no other provider is tried. Neither is a
+    raised at once, and no other provider is tried, like a model the
+    route's subscription does not serve (``model_unsupported``, BUG-78).
+    Neither is a
     timeout: the request already waited its whole timeout (BUG-47).
     A request with a field a CLI route cannot serve (``unsupported_on_cli``)
     leaves the CLI routes out; when only they serve the model,
@@ -1221,8 +1223,13 @@ async def forward(
                     )
                     # The CLI found the prompt too long: the same messages fail
                     # the same way anywhere. No quarantine, no circuit count,
-                    # no other candidate; the chat route answers 400.
-                    if isinstance(exc, CliSubprocessError) and exc.request_too_long:
+                    # no other candidate; the chat route answers 400. Same for
+                    # a model the route's subscription does not serve
+                    # (BUG-78): the name is valid elsewhere, so it is not
+                    # quarantined, and the client picks another model.
+                    if isinstance(exc, CliSubprocessError) and (
+                        exc.request_too_long or exc.model_unsupported
+                    ):
                         raise
                     reason = str(exc)
                     # A quota, an unavailable model or a failed run counts, for
@@ -1586,10 +1593,11 @@ async def forward_stream(
 def _stream_hands_over(exc: Exception) -> bool:
     """Whether a route that failed before its first chunk hands the stream
     over to the next one (PLU-26): the provider's failures, as in forward().
-    Never the request's own refusal: a prompt a CLI found too long, a route
-    the key refuses, the global cap."""
+    Never the request's own refusal: a prompt a CLI found too long, a model
+    the route's subscription does not serve (BUG-78), a route the key
+    refuses, the global cap."""
     if isinstance(exc, CliSubprocessError):
-        return not exc.request_too_long
+        return not (exc.request_too_long or exc.model_unsupported)
     return isinstance(
         exc,
         (
@@ -1701,6 +1709,9 @@ async def _stream_route(
             if is_provider_fault(str(exc)):
                 cb_failure(circuit_key)
                 await _alert_failure(provider["id"])
+            # A model the route's subscription does not serve is valid on
+            # other providers: never quarantined (BUG-78).
+            refused = isinstance(exc, CliSubprocessError) and exc.model_unsupported
             try:
                 from plugboard.model_quarantine import (
                     is_account_unsupported_error,
@@ -1710,7 +1721,9 @@ async def _stream_route(
                 )
 
                 reason = str(exc)
-                if is_account_unsupported_error(reason):
+                if refused:
+                    pass
+                elif is_account_unsupported_error(reason):
                     record_account_unsupported(real_model, reason=reason[:200])
                     invalidate_models_cache()
                 elif is_terminal_model_unavailable_error(reason):
@@ -2328,9 +2341,19 @@ async def list_models() -> List[Dict[str, Any]]:
         ]
 
     models = []
+    codex_refused: Optional[frozenset] = None
     for p in providers:
         if not p.get("is_active", True):
             continue
+        # A codex route signed in with ChatGPT does not publish the models
+        # that sign-in refuses, even when they are saved (BUG-78).
+        refused: frozenset = frozenset()
+        if p.get("auth_source") == "subprocess:codex":
+            if codex_refused is None:
+                from plugboard.cli_subprocess import codex_refused_models
+
+                codex_refused = codex_refused_models()
+            refused = codex_refused
         # Subprocess providers (claude-cli, codex-cli, gemini-cli) have no
         # HTTP /v1/models endpoint, so their persisted models list can lag
         # behind the real vendor catalog. Augment the persisted list at
@@ -2340,7 +2363,11 @@ async def list_models() -> List[Dict[str, Any]]:
             for m in (p.get("models") or [])
             if isinstance(m, dict) and m.get("id")
         }
-        extra_ids = [m for m in p.get("extra_model_ids", []) if m not in persisted_ids]
+        extra_ids = [
+            m
+            for m in p.get("extra_model_ids", [])
+            if m not in persisted_ids and m not in refused
+        ]
         for mid in extra_ids:
             models.append(
                 {
@@ -2354,6 +2381,8 @@ async def list_models() -> List[Dict[str, Any]]:
             if not isinstance(pm, dict) or not pm.get("id"):
                 continue
             mid = pm["id"]
+            if mid in refused:
+                continue
             models.append(
                 {
                     "id": f"{p['id']}:{mid}",
@@ -2364,7 +2393,12 @@ async def list_models() -> List[Dict[str, Any]]:
                 }
             )
         # If no models list and no dynamic extras, expose default_model
-        if not persisted_ids and not extra_ids and p.get("default_model"):
+        if (
+            not persisted_ids
+            and not extra_ids
+            and p.get("default_model")
+            and p["default_model"] not in refused
+        ):
             models.append(
                 {
                     "id": f"{p['id']}:{p['default_model']}",
@@ -2751,12 +2785,16 @@ async def discover_models(provider: Dict[str, Any]) -> List[Dict[str, str]]:
                     len(agy_ids),
                 )
                 return [{"id": m, "name": m} for m in agy_ids]
+        codex_refused: frozenset = frozenset()
         if kind == "codex":
             # The codex CLI caches the account's own catalog: a ChatGPT plan
-            # rejects API-only models such as the preset's gpt-5.x list.
-            from plugboard.cli_subprocess import list_codex_models
+            # rejects API-only models such as the preset's gpt-5.x list. The
+            # cache also lists models a ChatGPT sign-in refuses (BUG-78):
+            # left out, for that sign-in only.
+            from plugboard.cli_subprocess import codex_refused_models, list_codex_models
 
-            codex_ids = list_codex_models()
+            codex_refused = codex_refused_models()
+            codex_ids = [m for m in list_codex_models() if m not in codex_refused]
             if codex_ids:
                 _discovery_trusted.set(True)
                 log.info(
@@ -2798,6 +2836,7 @@ async def discover_models(provider: Dict[str, Any]) -> List[Dict[str, str]]:
             if m and m not in seen:
                 seen.add(m)
                 merged.append(m)
+        merged = [m for m in merged if m not in codex_refused]
 
         log.info(
             "subprocess provider %s: %d models (preset=%d, dynamic=%d)",

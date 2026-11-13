@@ -44,6 +44,16 @@ if not os.environ.get("PLUGBOARD_DATA"):
     # Removed when the run ends, so test runs leave nothing in /tmp.
     _atexit.register(_shutil.rmtree, os.environ["PLUGBOARD_DATA"], True)
 
+# The codex catalogue depends on codex's sign-in and model cache (BUG-78):
+# the suite never reads the developer's ~/.codex. Live tests keep it.
+if os.environ.get("PLUGBOARD_RUN_LIVE_TESTS", "0") != "1":
+    import atexit as _atexit_codex
+    import shutil as _shutil_codex
+    import tempfile as _tempfile_codex
+
+    os.environ["CODEX_HOME"] = _tempfile_codex.mkdtemp(prefix="plugboard-tests-codex-")
+    _atexit_codex.register(_shutil_codex.rmtree, os.environ["CODEX_HOME"], True)
+
 import json  # noqa: E402
 import aiohttp  # noqa: E402
 import pytest  # noqa: E402

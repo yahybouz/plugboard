@@ -46,7 +46,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from plugboard import envcompat
-from plugboard.circuit_breaker import is_request_too_long
+from plugboard.circuit_breaker import (
+    is_model_unsupported_by_subscription,
+    is_request_too_long,
+)
 from plugboard import live_requests as _live
 
 log = logging.getLogger(__name__)
@@ -68,6 +71,10 @@ class CliSubprocessError(RuntimeError):
         request_too_long: the CLI's own error or its stderr says the messages
             do not fit the model's context (decided like ``quota``, and never
             set with it): the request caused it, no other provider is tried.
+        model_unsupported: the CLI's own error or its stderr says the signed-in
+            subscription does not serve the model (codex with a ChatGPT
+            account, BUG-78; decided like ``request_too_long``, never set with
+            ``quota``): no other provider is tried, nothing is quarantined.
     """
 
     def __init__(
@@ -82,6 +89,7 @@ class CliSubprocessError(RuntimeError):
         quota: bool = False,
         retry_after: Optional[int] = None,
         request_too_long: bool = False,
+        model_unsupported: bool = False,
     ):
         super().__init__(message)
         self.exit_code = exit_code
@@ -92,6 +100,7 @@ class CliSubprocessError(RuntimeError):
         self.quota = quota
         self.retry_after = retry_after
         self.request_too_long = request_too_long
+        self.model_unsupported = model_unsupported
 
 
 _SPAWN_CWD_CACHE: Optional[str] = None
@@ -746,10 +755,52 @@ async def list_agy_models(timeout_s: float = 30.0) -> List[str]:
     return parse_agy_models((stdout or b"").decode("utf-8", "replace"))
 
 
+def _codex_home() -> Path:
+    return Path(os.environ.get("CODEX_HOME") or str(Path.home() / ".codex"))
+
+
 def codex_models_cache_path() -> Path:
     """Where the codex CLI caches the model list of the signed-in account."""
-    home = os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
-    return Path(home) / "models_cache.json"
+    return _codex_home() / "models_cache.json"
+
+
+# Models codex lists in its cache (``models_cache.json`` has no field for
+# it) but refuses on a ChatGPT sign-in: "The '<model>' model is not supported
+# when using Codex with a ChatGPT account". Found on 11/11 (BUG-78); with an
+# API key, codex serves them.
+CHATGPT_REFUSED_CODEX_MODELS = frozenset(
+    {"gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-astra"}
+)
+
+
+def codex_uses_chatgpt_sign_in() -> bool:
+    """Whether codex runs on a ChatGPT sign-in (a subscription), not an API key.
+
+    ``CODEX_API_KEY`` in the gateway's environment (passed to codex) means an
+    API key. Otherwise codex's ``auth.json`` says: ``auth_mode`` ``chatgpt``,
+    or, without ``auth_mode``, sign-in tokens and no API key. Signed out or
+    unreadable: False (nothing is filtered on a guess). Only these two fields
+    are read, never a token.
+    """
+    if os.environ.get("CODEX_API_KEY", "").strip():
+        return False
+    try:
+        data = json.loads((_codex_home() / "auth.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    mode = str(data.get("auth_mode") or "").strip().lower()
+    if mode:
+        return mode.startswith("chatgpt")
+    return bool(data.get("tokens")) and not data.get("OPENAI_API_KEY")
+
+
+def codex_refused_models() -> frozenset:
+    """The models the signed-in codex refuses: none unless on a ChatGPT sign-in."""
+    if codex_uses_chatgpt_sign_in():
+        return CHATGPT_REFUSED_CODEX_MODELS
+    return frozenset()
 
 
 def list_codex_models(path: Optional[Path] = None) -> List[str]:
@@ -1198,8 +1249,8 @@ def quota_retry_after(message: str) -> Optional[int]:
 def _quota_fields(
     cli_error: str, stderr_text: str, *, rate_limited: bool = False
 ) -> Dict[str, Any]:
-    """quota/retry_after/request_too_long of a CliSubprocessError, never from
-    the model's stdout.
+    """quota/retry_after/request_too_long/model_unsupported of a
+    CliSubprocessError, never from the model's stdout.
 
     The CLI's own error decides; stderr is read only when the CLI gave none
     (a retry log there must not override "model not found"). ``rate_limited``
@@ -1208,10 +1259,14 @@ def _quota_fields(
     """
     reason = cli_error if cli_error else stderr_text
     quota = rate_limited or is_quota_error(reason)
+    unsupported = not quota and is_model_unsupported_by_subscription(reason)
     return {
         "quota": quota,
         "retry_after": quota_retry_after(cli_error) if quota else None,
-        "request_too_long": not quota and is_request_too_long(reason),
+        "request_too_long": not quota
+        and not unsupported
+        and is_request_too_long(reason),
+        "model_unsupported": unsupported,
     }
 
 
@@ -1885,6 +1940,10 @@ async def complete(
             text = ""
 
     if not text:
+        # No answer: the event that ended the run in error (codex turn.failed
+        # with exit 0) classifies the failure; a transient error event
+        # ("Reconnecting... 5/5") does not, stderr does as before.
+        ended_error = _extract_cli_error(stdout_text, kind, terminal_only=True)
         raise CliSubprocessError(
             f"CLI {backend.command!r} returned empty content "
             f"(stderr: {stderr_text[:200]!r})",
@@ -1893,7 +1952,7 @@ async def complete(
             pid=proc.pid,
             provider_name=backend.command,
             model_id=model,
-            **_quota_fields("", stderr_text, rate_limited=rate_limited),
+            **_quota_fields(ended_error, stderr_text, rate_limited=rate_limited),
         )
 
     # Only agy reports token counts; the other CLIs keep usage=0 and the
