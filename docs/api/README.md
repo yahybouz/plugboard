@@ -138,7 +138,7 @@ and final reviews are not validated by these examples.
 
 - **`billing`** in every billed answer: tokens, `cost_usd`, the `model` that served the call (after any fallback) and the `pricing_month`. The same figures are in `X-Cost-USD`, `X-Prompt-Tokens` and `X-Completion-Tokens`.
 - **`"cache": false`** in the body bypasses the response cache for that call (`X-Cache` says `HIT`, `MISS` or `SEMANTIC-HIT-*`).
-- **`"session_id"`** (or the `X-LLM-Session-ID` header) keeps the conversation on the server: send only the new turn. The turns of one session run one after the other, streamed turns included; a turn whose previous one is still being answered when its wait ends (10 s by default, shared with the other waits of the request) gets `503` with `Retry-After`.
+- **`"session_id"`** (or the `X-LLM-Session-ID` header) keeps the conversation on the server: send only the new turn. The turns of one session run one after the other, streamed turns included; a turn whose previous one is still being answered when its wait ends (10 s by default, shared with the other waits of the request) gets `503` with `"code": "session_busy"` and `Retry-After`.
 - **Per-model adjustments**, so one request shape works everywhere: `temperature`, `top_p` and `top_k` are removed for Claude models that reject them (Opus 4.7 and later, Sonnet 5+, Haiku 5+), and `max_tokens` becomes `max_completion_tokens` for OpenAI o-series models.
 
 ## Streaming

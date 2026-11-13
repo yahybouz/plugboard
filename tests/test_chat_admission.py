@@ -861,3 +861,30 @@ async def test_preflight_reports_server_busy_for_a_pair_it_could_not_ping(
     assert errors == ["providers_busy", "server_busy"]
     assert b.calls == 2  # the second pair was not pinged
     assert sem._value == 2 and app_mod._inflight_chat_active == 0
+
+
+# ── PLU-45: a refused session turn carries a code ───────────────────────────
+
+
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v2/chat/completions"])
+async def test_refused_turn_answers_503_session_busy(
+    client, app_mod, session_db, monkeypatch, path
+):
+    from plugboard import session_turns
+
+    _waits(app_mod, monkeypatch, slot_s=0.2, provider_s=0.2)
+    release_turn = await session_turns.acquire("admin", "busy-s")
+    try:
+        resp = await asyncio.wait_for(
+            client.post(
+                path, headers={**AUTH, "X-LLM-Session-ID": "busy-s"}, json=_chat()
+            ),
+            3.0,
+        )
+    finally:
+        release_turn()
+    assert resp.status_code == 503, resp.text
+    body = resp.json()
+    assert body["code"] == "session_busy"
+    assert body["retry_after"] == 5 and resp.headers["Retry-After"] == "5"
+    assert "previous turn of this session" in body["detail"]

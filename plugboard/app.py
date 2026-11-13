@@ -651,29 +651,52 @@ def _get_inflight_sem() -> Optional["_asyncio.Semaphore"]:
     return _inflight_chat_sem
 
 
-class _ChatOverloaded(HTTPException):
-    """503 ``server_busy``: the global chat cap stayed full for the whole wait.
+class _BusyRefusal(HTTPException):
+    """A 503 that tells a program why with ``code``, and when to retry.
 
     An HTTPException, so the handlers that let an HTTPException raised by the
-    router through do the same with this one (a slot taken back after a
-    provider's wait, BUG-77); its own handler adds ``code`` and
-    ``retry_after``.
+    router through do the same with these (a slot taken back after a
+    provider's wait, BUG-77); their handler adds ``code`` and ``retry_after``.
     """
 
-    def __init__(self) -> None:
+    code = ""
+
+    def __init__(self, detail: str) -> None:
         super().__init__(
             status_code=503,
-            detail=(
-                "Server overloaded: the limit of concurrent chat requests is "
-                f"reached, retry in {_INFLIGHT_RETRY_AFTER_S} s"
-            ),
+            detail=detail,
             headers={"Retry-After": str(_INFLIGHT_RETRY_AFTER_S)},
         )
 
 
-@app.exception_handler(_ChatOverloaded)
-async def _chat_overloaded_handler(request: Request, exc: _ChatOverloaded):
-    content: Dict[str, Any] = {"detail": exc.detail, "code": "server_busy"}
+class _ChatOverloaded(_BusyRefusal):
+    """503 ``server_busy``: the global chat cap stayed full for the whole wait."""
+
+    code = "server_busy"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Server overloaded: the limit of concurrent chat requests is "
+            f"reached, retry in {_INFLIGHT_RETRY_AFTER_S} s"
+        )
+
+
+class _SessionBusy(_BusyRefusal):
+    """503 ``session_busy``: the session's previous turn was still being
+    answered when the request's wait ended (PLU-45)."""
+
+    code = "session_busy"
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The previous turn of this session is still being answered: "
+            f"retry in {_INFLIGHT_RETRY_AFTER_S} s"
+        )
+
+
+@app.exception_handler(_BusyRefusal)
+async def _busy_refusal_handler(request: Request, exc: _BusyRefusal):
+    content: Dict[str, Any] = {"detail": exc.detail, "code": exc.code}
     headers = _retry_after_headers(content, _INFLIGHT_RETRY_AFTER_S)
     return JSONResponse(status_code=503, content=content, headers=headers)
 
@@ -851,8 +874,8 @@ async def _take_session_turn(request: Request, client_id: str, session_id: str) 
 
     The release is stored as soon as the turn is obtained, so a hang-up that
     comes later (``_ClientGone``) cannot lose it. The wait takes what is left
-    of the request's wait budget (PLU-15): then 503 with Retry-After, out of
-    the queue. A free turn is taken at once, even with no budget left. While
+    of the request's wait budget (PLU-15): then 503 ``session_busy`` with
+    Retry-After (PLU-45), out of the queue. A free turn is taken at once, even with no budget left. While
     the turn runs elsewhere, the request gives its global slot back (BUG-77).
     """
     from plugboard import session_turns
@@ -870,14 +893,7 @@ async def _take_session_turn(request: Request, client_id: str, session_id: str) 
                 )
     except TimeoutError:
         log.info("session turn busy: the request's wait ended")
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "The previous turn of this session is still being answered: "
-                f"retry in {_INFLIGHT_RETRY_AFTER_S} s"
-            ),
-            headers={"Retry-After": str(_INFLIGHT_RETRY_AFTER_S)},
-        ) from None
+        raise _SessionBusy() from None
 
 
 def _record_session_turn(
