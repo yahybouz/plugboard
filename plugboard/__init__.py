@@ -1,4 +1,4 @@
-__version__ = "4.12.1"
+__version__ = "4.13.0"
 
 # Before any submodule reads its settings: load .env (unless skipped), then
 # accept pre-rename variable names. Loading first lets a new name written in
