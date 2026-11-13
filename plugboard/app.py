@@ -105,6 +105,7 @@ from plugboard import live_requests as _live
 from plugboard import provider_admission as _provider_admission
 from plugboard import request_wait as _request_wait
 from plugboard.logging_config import _request_id_var, setup_logging
+from plugboard import metrics as _metrics
 from plugboard.metrics import get_stats, record_busy_refusal
 from plugboard.ratelimit import check_client_rate_limit, check_rate_limit
 from plugboard.decision_api import router as decision_router
@@ -761,10 +762,11 @@ async def _inflight_chat_dep(request: Request):
     rid = _request_id_var.get()
     _live.begin(rid, request.url.path, request.headers.get(_live.SURFACE_HEADER))
     slot: Optional[_ChatSlot] = None
+    budget: Optional[_request_wait.RequestWait] = None
     try:
         sem = _get_inflight_sem()
         slot = _ChatSlot(sem, rid) if sem is not None else None
-        _request_wait.start(
+        budget = _request_wait.start(
             max(_INFLIGHT_WAIT_S, _provider_admission.WAIT_S), slot=slot
         )
         if slot is not None:
@@ -774,6 +776,9 @@ async def _inflight_chat_dep(request: Request):
     finally:
         if slot is not None:
             slot.release()
+        if budget is not None:
+            # PLU-46: once the answer is sent, all the request waited.
+            _metrics.record_request_wait(budget.spent)
         _live.finish(rid)
 
 

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **The total wait of each chat request in `/metrics/prometheus`** (PLU-46): `plugboard_request_wait_seconds`, a histogram without labels, records once per chat request (`/v1/chat/completions`, `/v2/chat/completions`, `/v1/preflight`) the seconds it waited in all, for a slot of the global cap, for its session's turn and for providers' slots, whether it was served or refused. The JSON of `GET /metrics` is unchanged ([monitoring](docs/guide/monitoring.md#per-model-measures)).
+
 ### Changed
 
 - **A refused session turn says so with a code** (PLU-45): a chat turn whose session's previous turn was still being answered when its wait ended got `503` with only a `detail`; it now also carries `"code": "session_busy"` and `retry_after` 5 (`Retry-After: 5` and the `detail` are unchanged), like `server_busy` and `providers_busy`. API contract 2.2.0 (`docs/api/openapi.json`, `docs/api/mcp.json`): `session_busy` in `ErrorResponse.code` and in the `503` of both chat routes.

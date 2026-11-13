@@ -82,7 +82,7 @@ The body names no provider and carries no error text: a check that raises gives 
 | Endpoint | Format |
 |---|---|
 | `GET /metrics` | JSON: per provider, request count, error count, average latency, and under `models` the per-model measures below |
-| `GET /metrics/prometheus` | Prometheus text format: request totals, error totals and average latency per provider, an `up` gauge, and the per-model histograms and counter below |
+| `GET /metrics/prometheus` | Prometheus text format: request totals, error totals and average latency per provider, an `up` gauge, the per-model histograms and counter below, and the total wait of each chat request |
 | `GET /admin/monitoring` | Full health check of all providers with 24-hour and 7-day uptime computed from the stored snapshots; the check itself is not stored. `uptime_pct` is `null` when the period holds no snapshot |
 | `GET /admin/monitoring/history?provider_id=&limit=` | Availability snapshots (`data/monitoring.db`): one row per active provider every 5 minutes; a probe that does not answer within 30 seconds is stored as down |
 | `GET /admin/retention` | Retention settings in force (`settings`) and the report of the last retention pass (`last_run`, `null` before the first pass): when it ran, rows deleted per store, errors ([data retention](configuration.md#data-retention)) |
@@ -101,6 +101,8 @@ Each provider entry of `GET /metrics` gains a `models` object once one of its mo
 | Tokens per second | `plugboard_tokens_per_second` (histogram) | Completion tokens after the first one, divided by the time from the first generated chunk to the last. Uses the provider's `usage`, else a tiktoken estimate. Only when the words came over 50 ms at least: a burst says nothing of the rate. A provider that counts hidden reasoning in `usage` reads higher than what the reader sees |
 | Admission wait | `plugboard_admission_wait_seconds` (histogram) | Seconds a request waited for each slot it took on a provider (`PLUGBOARD_PROVIDER_WAIT_S`); `0` when the slot was free. A request that falls back to another provider records one value per provider; internal calls through the router (preflight, internet check) count too |
 | Busy refusals | `plugboard_providers_busy_total` (counter) | Chats answered `503 providers_busy`, one per answer, under the first full candidate route |
+
+**Total wait per request** (`plugboard_request_wait_seconds`, histogram, Prometheus only, no labels): the seconds each chat request (`/v1/chat/completions`, `/v2/chat/completions`, `/v1/preflight`) spent waiting in all, for a slot of the global cap, for its session's turn and for providers' slots, recorded once its answer is sent; `0` for a request that never waited. Every request that passed the key check counts, served or refused (`503 server_busy`, `session_busy` or `providers_busy`), so the buckets near `PLUGBOARD_INFLIGHT_WAIT_S` show the requests that waited their whole budget. `GET /metrics` keeps one entry per provider and does not carry it.
 
 The time to first token and tokens per second are measured on streamed answers from HTTP providers: a non-streamed answer has no first token to time, and a CLI provider's stream is replayed from its complete answer. Labels are `provider` and `model` only, never a client or a key; a model the provider does not list (nor has as its default model) is labelled `(unlisted)`, so a name a client typed never becomes a label. At most 256 (provider, model) series are kept; past that, each provider's new models are counted under one `(other)` series of that provider.
 

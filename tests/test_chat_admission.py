@@ -888,3 +888,56 @@ async def test_refused_turn_answers_503_session_busy(
     assert body["code"] == "session_busy"
     assert body["retry_after"] == 5 and resp.headers["Retry-After"] == "5"
     assert "previous turn of this session" in body["detail"]
+
+
+# ── PLU-46: the total wait of each chat request in /metrics/prometheus ───────
+
+
+@pytest.fixture
+def request_waits(monkeypatch):
+    from plugboard import metrics
+
+    hist = metrics._Histogram(metrics.WAIT_BUCKETS)
+    monkeypatch.setattr(metrics, "_request_wait", hist)
+    return hist
+
+
+async def test_metrics_expose_each_request_total_wait(
+    client, app_mod, a_at_one_b_free, session_db, request_waits, monkeypatch
+):
+    """One request waits 0.3 s for its session's turn, then 0.2 s for a
+    full provider: one observation of about 0.5 s; one served at once: 0."""
+    from plugboard import metrics, provider_admission, session_turns
+    from plugboard.config import get_provider
+
+    _waits(app_mod, monkeypatch, slot_s=0.6, provider_s=0.2)  # budget 0.6 s
+    held = provider_admission.try_acquire(get_provider(PROVIDER_A["id"]))
+    release_turn = await session_turns.acquire("admin", "w")
+    freeing = asyncio.create_task(
+        _release_once_waiting(
+            lambda: session_turns.waiting("admin", "w") == 1, 0.3, release_turn
+        )
+    )
+    waited = await client.post(
+        "/v1/chat/completions", headers={**AUTH, "X-LLM-Session-ID": "w"}, json=_chat()
+    )
+    await freeing
+    held.release()
+    assert waited.status_code == 503 and waited.json()["code"] == "providers_busy"
+    assert request_waits.count == 1 and 0.45 <= request_waits.sum < 1.5
+
+    with aioresponses() as mock:
+        mock.post(URL_B, payload=FAKE_COMPLETION)
+        served = await client.post(
+            "/v1/chat/completions",
+            headers=AUTH,
+            json=_chat("other-provider:other:model-v2"),
+        )
+    assert served.status_code == 200, served.text
+    assert request_waits.count == 2 and request_waits.sum < 1.5
+    assert request_waits.buckets[0] == 1  # the one served at once
+
+    text = metrics.format_prometheus()
+    assert "# TYPE plugboard_request_wait_seconds histogram" in text
+    assert 'plugboard_request_wait_seconds_bucket{le="+Inf"} 2' in text
+    assert "plugboard_request_wait_seconds_count 2" in text
