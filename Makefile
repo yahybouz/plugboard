@@ -185,7 +185,10 @@ format-check:  ## Check formatting without changing files
 
 audit:         ## Static security analysis (bandit) and dependency CVEs (pip-audit)
 	"$(VENV)/bin/bandit" -r plugboard/ -x tests/ -ll
-	"$(VENV)/bin/pip-audit" --strict --progress-spinner off --disable-pip --require-hashes -r requirements-dev.lock
+	@for lock in requirements-dev.lock requirements.lock requirements-mcp.lock requirements-decisions.lock; do \
+	  echo "pip-audit $$lock"; \
+	  "$(VENV)/bin/pip-audit" --strict --progress-spinner off --disable-pip --require-hashes -r $$lock || exit 1; \
+	done
 
 check: lint test ## Lint + tests + bandit
 	"$(VENV)/bin/bandit" -r plugboard/ -x tests/ -ll
