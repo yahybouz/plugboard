@@ -281,7 +281,6 @@ def pass_overdue(now: Optional[datetime] = None) -> bool:
 # GET /admin/retention, and alerted once per hold.
 _hold: Optional[Dict[str, Any]] = None
 _hold_alerted: set = set()
-_alert_tasks: set = set()
 
 
 def held() -> Optional[Dict[str, Any]]:
@@ -302,15 +301,14 @@ def _record_hold(reason: str, now: datetime) -> str:
         _hold["reason"] = reason
     if anchor not in _hold_alerted:
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()  # in_background needs one
         except RuntimeError:
             return reason  # alerted from the next check made under a loop
         _hold_alerted.add(anchor)
         from plugboard import alerts
 
-        task = loop.create_task(alerts.send_retention_held_alert(reason))
-        _alert_tasks.add(task)
-        task.add_done_callback(_alert_tasks.discard)
+        # Through in_background: alerts.drain() waits for it at shutdown.
+        alerts.in_background(alerts.send_retention_held_alert(reason))
     return reason
 
 

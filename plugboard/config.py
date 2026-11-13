@@ -320,7 +320,6 @@ _providers_cache: Dict[str, Any] = {}
 _unreadable_secret_reported: set = set()
 _unreadable_secret_alerted: set = set()
 _unreadable_secret_lock = threading.Lock()
-_report_tasks: set = set()  # audit and alert tasks, kept until they finish
 
 
 def _key_digest() -> str:
@@ -406,7 +405,7 @@ def _report_unreadable_secret(provider_id: str, stored: str) -> None:
     if not alert_due:
         return
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()  # in_background needs one
     except RuntimeError:
         if first:
             _audit_unreadable_secret(provider_id)
@@ -415,9 +414,10 @@ def _report_unreadable_secret(provider_id: str, stored: str) -> None:
         if mark in _unreadable_secret_alerted:
             return
         _unreadable_secret_alerted.add(mark)
-    task = loop.create_task(_audit_and_alert_unreadable(provider_id, audit=first))
-    _report_tasks.add(task)
-    task.add_done_callback(_report_tasks.discard)
+    # Through alerts.in_background: alerts.drain() waits for it at shutdown.
+    from plugboard import alerts
+
+    alerts.in_background(_audit_and_alert_unreadable(provider_id, audit=first))
 
 
 def _audit_unreadable_secret(provider_id: str) -> None:

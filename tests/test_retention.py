@@ -674,13 +674,15 @@ def held_alerts(monkeypatch):
 
 
 async def test_a_held_pass_is_alerted_once_per_hold(stores, held_alerts):
-    from plugboard import maintenance, retention
+    from plugboard import maintenance
 
     _last_pass_at(stores, datetime.now(timezone.utc) - timedelta(days=365))
     job = maintenance.retention_job()
     for _ in range(3):  # held again on each daily tick
         await job._run_once("scheduled")
-    await asyncio.gather(*list(retention._alert_tasks))
+    from plugboard import alerts
+
+    await alerts.drain()  # review 4.13.0 MIN-3: waited for at shutdown
     assert len(held_alerts) == 1 and "clock" in held_alerts[0]
 
 

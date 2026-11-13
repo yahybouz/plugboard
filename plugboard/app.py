@@ -2381,21 +2381,41 @@ def _providers_busy_response(
     return JSONResponse(status_code=503, content=content, headers=headers)
 
 
-def _provider_disabled_response(provider_id: str) -> JSONResponse:
+def _provider_disabled_response(
+    provider_id: str, provider: Optional[Dict[str, Any]] = None
+) -> JSONResponse:
     """503 ``provider_disabled``: the model belongs to a provider the admin
     turned off (PLU-12). Nothing was called, no other provider stands in,
     and no ``Retry-After``: nobody knows when it comes back.
+
+    A provider turned off because its stored key cannot be decrypted
+    (BUG-57) keeps the same code, with a detail and hint that say so.
     """
     log.info("provider disabled: %s", provider_id)
+    if provider is None:
+        provider = get_provider(provider_id) or {}
+    if provider.get("secret_unreadable"):
+        detail = (
+            f"Provider '{provider_id}' is turned off: its stored key cannot be "
+            "decrypted with the current ENCRYPTION_KEY; nothing was called."
+        )
+        hint = (
+            "Pick another model from GET /v1/models, or ask the administrator "
+            "to restore the ENCRYPTION_KEY that encrypted it, or to enter the "
+            "provider's key again."
+        )
+    else:
+        detail = (
+            f"Provider '{provider_id}' is turned off by the "
+            "administrator; nothing was called."
+        )
+        hint = (
+            "Pick another model from GET /v1/models, or ask the "
+            "administrator to turn the provider back on."
+        )
     return JSONResponse(
         status_code=503,
-        content={
-            "detail": f"Provider '{provider_id}' is turned off by the "
-            "administrator; nothing was called.",
-            "code": "provider_disabled",
-            "hint": "Pick another model from GET /v1/models, or ask the "
-            "administrator to turn the provider back on.",
-        },
+        content={"detail": detail, "code": "provider_disabled", "hint": hint},
     )
 
 
@@ -2785,7 +2805,7 @@ async def chat_completions(
     # After the key's 403, before the 404 and the 402; before the cache too,
     # so no stored answer comes out while the provider is off.
     if disabled is not None:
-        return _provider_disabled_response(disabled[0]["id"])
+        return _provider_disabled_response(disabled[0]["id"], disabled[0])
 
     # After the key's 403, so a limited key cannot probe which IDs exist;
     # before the 402, which would blame a price for a model that is not there.
