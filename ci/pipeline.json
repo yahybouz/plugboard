@@ -37,7 +37,7 @@
      "argv": ["{python}", "-B", "ci/ci_outils.py", "git-depot", "--ref", "main"], "timeout_seconds": 120},
     {"id": "gitleaks", "argv": ["{python}", "-B", "ci/ci_outils.py", "gitleaks", "--base", "main", "--config", ".gitleaks.toml"], "timeout_seconds": 600},
     {"id": "bandit", "argv": ["{scratch}/venv/bin/bandit", "-q", "-r", "plugboard/", "-x", "tests/", "-ll"], "timeout_seconds": 600},
-    {"id": "pip-audit", "description": "CVE des dépendances, un lock par étape (PLU-30) : dev, image (requirements.lock), serveur MCP, décisions.",
+    {"id": "pip-audit", "description": "CVE des dépendances, un lock par étape (PLU-30) : dev, image (requirements.lock), serveur MCP, décisions. Avis sans correctif sur le runtime décisions (optionnel, hors image) : --ignore-vuln <ID> sur pip-audit-decisions seulement, avec la réserve écrite dans docs/guide/decisions-runtime.md.",
      "argv": ["{scratch}/venv/bin/pip-audit", "--strict", "--progress-spinner", "off", "--disable-pip",
       "--require-hashes", "-r", "requirements-dev.lock"], "timeout_seconds": 600},
     {"id": "pip-audit-image", "argv": ["{scratch}/venv/bin/pip-audit", "--strict", "--progress-spinner", "off", "--disable-pip",

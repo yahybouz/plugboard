@@ -183,7 +183,7 @@ pip-audit:
   stage: security
   needs: []
   script:
-    - pip-audit --strict --progress-spinner off --disable-pip --require-hashes -r requirements-dev.lock
+    - for lock in requirements-dev.lock requirements.lock requirements-mcp.lock requirements-decisions.lock; do pip-audit --strict --progress-spinner off --disable-pip --require-hashes -r "$lock" || exit 1; done
 
 # ── build ─────────────────────────────────────────────────────
 

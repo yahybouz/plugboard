@@ -23,19 +23,29 @@ def _audited_in_ci() -> set:
     for step in pipeline["steps"]:
         argv = step.get("argv", [])
         if argv and argv[0].endswith("/pip-audit"):
-            assert "--require-hashes" in argv and "--strict" in argv, step["id"]
+            for flag in ("--require-hashes", "--strict", "--disable-pip"):
+                assert flag in argv, (step["id"], flag)
             audited |= {argv[i + 1] for i, a in enumerate(argv) if a == "-r"}
     return audited
 
 
 def _audited_by_make() -> set:
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-    target = re.search(r"^audit:.*?(?=^\S)", makefile, re.M | re.S).group(0)
-    assert "pip-audit" in target and "--require-hashes" in target
-    return set(re.findall(r"requirements[\w-]*\.lock", target))
+    target = re.search(r"^audit:.*?(?=^\S|\Z)", makefile, re.M | re.S)
+    assert target, "audit target not found in the Makefile"
+    return _loop_locks(target.group(0))
 
 
-def test_the_three_locks_exist():
+def _loop_locks(text: str) -> set:
+    """Locks of the `for lock in ...; do pip-audit ... -r $lock` loop."""
+    loop = re.search(r"for lock in ([^;]+);\s*do[^\n]*?(?:\\\n[^\n]*?)*pip-audit", text)
+    assert loop, "no pip-audit loop over the locks"
+    for flag in ("--require-hashes", "--strict", "--disable-pip"):
+        assert flag in text, flag
+    return set(loop.group(1).split())
+
+
+def test_the_known_locks_exist():
     assert {
         "requirements.lock",  # the image's
         "requirements-dev.lock",
@@ -52,3 +62,9 @@ def test_every_lock_is_audited_in_ci(lock):
 @pytest.mark.parametrize("lock", LOCKS)
 def test_every_lock_is_audited_by_make_audit(lock):
     assert lock in _audited_by_make()
+
+
+@pytest.mark.parametrize("path", [".gitlab-ci.yml", ".github/workflows/ci.yml"])
+def test_remote_ci_definitions_audit_every_lock(path):
+    # Kept in step with ci/pipeline.json, which translates them.
+    assert _loop_locks((ROOT / path).read_text(encoding="utf-8")) == set(LOCKS)
