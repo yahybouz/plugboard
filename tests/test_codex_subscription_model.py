@@ -501,3 +501,104 @@ async def test_the_published_catalogue_follows_the_sign_in(
         assert {"gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-luna"} <= listed
     else:
         assert _CHATGPT_REFUSED <= listed
+
+
+# ── Routing follows the catalogue (review of BUG-78) ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_with_a_chatgpt_sign_in_a_bare_refused_name_goes_elsewhere(
+    client, client_key, http_provider, cli_process, codex_home
+):
+    # Saved list not refreshed yet: the codex route still lists the model,
+    # but with a ChatGPT sign-in it is neither published nor routed there.
+    received = http_provider
+    codex_home("chatgpt")
+    spawned = cli_process(b"", _STDERR_REFUSAL)
+
+    resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
+
+    assert resp.status_code == 200, resp.text
+    assert spawned == []
+    assert len(received) == 1
+
+
+@pytest.mark.asyncio
+async def test_with_a_chatgpt_sign_in_the_codex_prefix_still_gets_400(
+    client, client_key, http_provider, cli_process, codex_home
+):
+    received = http_provider
+    codex_home("chatgpt")
+    spawned = cli_process(b"", _STDERR_REFUSAL)
+
+    resp = await client.post(
+        "/v1/chat/completions", headers=client_key, json=_chat(f"Codex:{REFUSED}")
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["code"] == "model_not_supported_by_subscription"
+    assert len(spawned) == 1
+    assert received == []
+
+
+@pytest.mark.parametrize("mode", ["chatgpt", "apikey"])
+def test_a_name_only_the_refusing_route_lists_is_unknown(
+    _providers_file, codex_home, mode
+):
+    from plugboard import router
+
+    codex_home(mode)
+    listed_http = {**PROVIDER_A, "models": [{"id": "other-model"}]}
+    _providers_file.write_text(json.dumps({"providers": [CLI_PROVIDER, listed_http]}))
+    router.invalidate_models_cache()
+
+    assert router.is_unknown_model(REFUSED) is (mode == "chatgpt")
+    assert router.is_unknown_model(f"Codex:{REFUSED}") is False
+
+
+@pytest.mark.asyncio
+async def test_exit_0_refusal_is_named_and_not_counted_on_the_stream_route(
+    isolated, http_provider, cli_process
+):
+    import plugboard.router as router
+    from plugboard import circuit_breaker as cb
+    from plugboard import cli_subprocess as cs
+
+    cli_process(_JSON_REFUSAL, _STDERR_NOISE, 0)
+    exc = await _codex_error()
+    assert exc.model_unsupported is True
+    assert "not supported when using Codex" in str(exc)
+
+    chunks = [
+        chunk
+        async for chunk in router.forward_stream(_chat(f"{CLI_ID}:{REFUSED}", True))
+    ]
+
+    assert chunks
+    assert all(state.failures == 0 for state in cb._circuits.values())
+    assert not isolated.exists()
+    assert cs.CliSubprocessError  # the wrapper raised, the route answered
+
+
+@pytest.mark.parametrize(
+    ("auth", "chatgpt"),
+    [
+        pytest.param({"tokens": {"id_token": "x"}}, True, id="tokens-no-mode"),
+        pytest.param(
+            {"tokens": {"id_token": "x"}, "OPENAI_API_KEY": "test-key"},
+            False,
+            id="tokens-and-key",
+        ),
+        pytest.param({"auth_mode": "apikey"}, False, id="apikey"),
+        pytest.param("not json", False, id="unreadable"),
+    ],
+)
+def test_the_sign_in_is_read_from_auth_json(codex_home, auth, chatgpt):
+    from plugboard import cli_subprocess as cs
+
+    home = codex_home(None)
+    text = auth if isinstance(auth, str) else json.dumps(auth)
+    (home / "auth.json").write_text(text, encoding="utf-8")
+
+    assert cs.codex_uses_chatgpt_sign_in() is chatgpt
+    assert bool(cs.codex_refused_models()) is chatgpt
