@@ -161,7 +161,7 @@ Cache hits are not billed again. Streaming responses (`"stream": true`) are serv
 | `413` | Request body larger than `MAX_BODY_BYTES` (10 MB) |
 | `429` | IP rate limit, key RPM limit or monthly budget reached, or the quota of the last provider tried exhausted (`Retry-After` when it gives a delay) |
 | `502` | The provider returned an error or could not be reached, or every candidate provider failed. A client key never gets the provider's own message or address: the `error_ref` finds it in the gateway log |
-| `503` | Server at its concurrency cap, every provider of the model at its own cap (`"code": "providers_busy"`), or a CLI provider timed out (`Retry-After` is set); or the model belongs to a provider the operator turned off (`"code": "provider_disabled"`, no `Retry-After`: pick another model) |
+| `503` | Server at its concurrency cap for the whole wait (`"code": "server_busy"`), the previous turn of the session still being answered when the wait ended (`"code": "session_busy"`), every provider of the model at its own cap (`"code": "providers_busy"`), or a CLI provider timed out (`Retry-After` is set); or the model belongs to a provider the operator turned off (`"code": "provider_disabled"`, no `Retry-After`: pick another model) |
 
 ## Self-service for clients
 

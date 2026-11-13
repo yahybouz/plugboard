@@ -105,8 +105,7 @@ from plugboard import live_requests as _live
 from plugboard import provider_admission as _provider_admission
 from plugboard import request_wait as _request_wait
 from plugboard.logging_config import _request_id_var, setup_logging
-from plugboard import metrics as _metrics
-from plugboard.metrics import get_stats, record_busy_refusal
+from plugboard.metrics import get_stats, record_busy_refusal, record_request_wait
 from plugboard.ratelimit import check_client_rate_limit, check_rate_limit
 from plugboard.decision_api import router as decision_router
 from plugboard.embeddings_api import router as embeddings_router
@@ -660,7 +659,7 @@ class _BusyRefusal(HTTPException):
     provider's wait, BUG-77); their handler adds ``code`` and ``retry_after``.
     """
 
-    code = ""
+    code: str  # set by each subclass
 
     def __init__(self, detail: str) -> None:
         super().__init__(
@@ -777,8 +776,9 @@ async def _inflight_chat_dep(request: Request):
         if slot is not None:
             slot.release()
         if budget is not None:
-            # PLU-46: once the answer is sent, all the request waited.
-            _metrics.record_request_wait(budget.spent)
+            # PLU-46: all the request waited, once it ends (a stream after
+            # its last byte, a refusal just before its 503 goes out).
+            record_request_wait(budget.spent)
         _live.finish(rid)
 
 
@@ -880,8 +880,9 @@ async def _take_session_turn(request: Request, client_id: str, session_id: str) 
     The release is stored as soon as the turn is obtained, so a hang-up that
     comes later (``_ClientGone``) cannot lose it. The wait takes what is left
     of the request's wait budget (PLU-15): then 503 ``session_busy`` with
-    Retry-After (PLU-45), out of the queue. A free turn is taken at once, even with no budget left. While
-    the turn runs elsewhere, the request gives its global slot back (BUG-77).
+    Retry-After (PLU-45), out of the queue. A free turn is taken at once,
+    even with no budget left. While the turn runs elsewhere, the request
+    gives its global slot back (BUG-77).
     """
     from plugboard import session_turns
 

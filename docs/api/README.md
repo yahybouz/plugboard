@@ -162,7 +162,7 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 | `429` | IP rate limit, key RPM limit or monthly budget | Back off; `GET /v1/me` shows the budget left |
 | `429` | The last provider tried has exhausted its quota or rate limit (a streamed request to an HTTP provider is not offered to another one); `detail` names the provider | Retry after `Retry-After` / `retry_after` seconds when set (at most 7 days), else later or with another model |
 | `502` | The provider failed | Retry later or use another model |
-| `503` | Gateway at capacity (`code` `server_busy`: the cap of concurrent chat requests stayed full for the whole wait), provider timeout, or, with `code` `providers_busy`, every provider of the model busy at its concurrency cap after the wait; nothing was called | Retry after `Retry-After` / `retry_after` seconds (5 for `server_busy` and `providers_busy`) |
+| `503` | Gateway at capacity (`code` `server_busy`: the cap of concurrent chat requests stayed full for the whole wait), provider timeout, with `code` `session_busy` the previous turn of the request's session was still being answered when its wait ended, or, with `code` `providers_busy`, every provider of the model busy at its concurrency cap after the wait; nothing was called | Retry after `Retry-After` / `retry_after` seconds (5 for `server_busy`, `session_busy` and `providers_busy`) |
 | `503` | Chat only, `code` is `provider_disabled`: the model belongs to a provider the operator turned off; nothing was called and no other provider stands in (below) | Pick another model from `GET /v1/models`, or ask the operator to turn the provider back on |
 
 ### `404 model_not_found`

@@ -941,3 +941,19 @@ async def test_metrics_expose_each_request_total_wait(
     assert "# TYPE plugboard_request_wait_seconds histogram" in text
     assert 'plugboard_request_wait_seconds_bucket{le="+Inf"} 2' in text
     assert "plugboard_request_wait_seconds_count 2" in text
+
+
+async def test_request_wait_counts_each_refusal_once_and_no_401(
+    client, app_mod, full_cap, request_waits, monkeypatch
+):
+    monkeypatch.setattr(app_mod, "_INFLIGHT_WAIT_S", 0.0)
+    refused = await client.post("/v1/chat/completions", headers=AUTH, json=_chat())
+    assert refused.json()["code"] == "server_busy"
+    assert request_waits.count == 1
+    unknown = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer not-a-key"},
+        json=_chat(),
+    )
+    assert unknown.status_code == 401
+    assert request_waits.count == 1
