@@ -519,3 +519,24 @@ async def test_an_empty_stream_counts_as_a_failure_not_a_success(client, two_rou
     circuit = circuit_breaker._circuits.get(f"{PROVIDER_A['id']}:{BARE}")
     assert circuit is not None and circuit.failures == 1
     assert alerts._provider_failures.get("test-provider") == 2
+
+
+async def test_stream_successes_count_in_the_routing_score(
+    client, two_routes, monkeypatch
+):
+    """One failed stream then three good ones: 4 requests, 1 error, not a
+    provider at 100 % errors."""
+    monkeypatch.setattr(router.metrics, "_stats", {})
+    with aioresponses() as mock:
+        mock.post(URL_A, status=500, body="down")
+        mock.post(URL_B, body=FAKE_STREAM_BODY, status=200)
+        await client.post("/v1/chat/completions", headers=AUTH, json=_stream())
+        for _ in range(3):
+            mock.post(URL_A, body=FAKE_STREAM_BODY, status=200)
+            await client.post(
+                "/v1/chat/completions",
+                headers=AUTH,
+                json=_stream(f"{PROVIDER_A['id']}:{BARE}"),
+            )
+    stats = router.metrics._stats["test-provider"]
+    assert (stats["requests"], stats["errors"]) == (4, 1)
