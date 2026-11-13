@@ -833,7 +833,8 @@ def _client_gone_response(model: str) -> Response:
 
 
 async def _session_turn_dep(request: Request):
-    """Give the session's turn back once the response is sent.
+    """Give the session's turn back once the response is sent, and the
+    budget hold of a call that was not billed (BUG-52).
 
     The handler takes the turn (``_take_session_turn``) only when the call
     carries a session id; a yield dependency (scope "request") exits after
@@ -845,6 +846,9 @@ async def _session_turn_dep(request: Request):
         release = getattr(request.state, "session_turn_release", None)
         if release is not None:
             release()
+        hold = getattr(request.state, "budget_hold", None)
+        if hold is not None and not hold.done:
+            await _asyncio.to_thread(hold.release)
 
 
 async def _take_session_turn(request: Request, client_id: str, session_id: str) -> None:
@@ -1531,10 +1535,16 @@ def _check_spending_limit(
     if limit <= 0:
         return 0.0  # unlimited
     month = _billing.current_pricing_month()
-    if key_id:
-        total = _usage.get_total_cost_by_key(month, key_id)
-    else:
-        total = _usage.get_total_cost_by_client(month, client_id)
+    try:
+        if key_id:
+            total = _usage.get_total_cost_by_key(month, key_id)
+        else:
+            total = _usage.get_total_cost_by_client(month, client_id)
+        # Plus the holds of the calls in progress (BUG-52).
+        total += _usage.get_held_cost(month, key_id=key_id, client_id=client_id)
+    except Exception as exc:
+        log.error("usage cannot be read: budgeted key refused (%s)", exc)
+        raise _UsageUnavailable() from None
     if total >= limit:
         scope = f"key '{key_id}'" if key_id else f"client '{client_id}'"
         raise HTTPException(
@@ -1542,6 +1552,111 @@ def _check_spending_limit(
             detail=f"Monthly spending limit exceeded for {scope} (${total:.4f} >= ${limit:.4f})",
         )
     return total
+
+
+# Completion tokens a budgeted call is assumed to produce when it sets
+# neither max_tokens nor max_completion_tokens (BUG-52).
+_BUDGET_RESERVE_TOKENS = envcompat.get_int(
+    "PLUGBOARD_BUDGET_RESERVE_TOKENS", default=1024, minimum=1
+)
+_USAGE_RETRY_AFTER_S = 30
+
+
+class _UsageUnavailable(HTTPException):
+    """503 ``usage_unavailable``: usage cannot be read or written, so a key
+    with a monthly budget is refused before any provider call (D-37); the
+    other keys are served. An HTTPException, so the chat handlers let it
+    through; its own handler adds ``code`` and ``retry_after``."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=503,
+            detail=(
+                "Usage cannot be recorded right now, so a key with a monthly "
+                f"budget is refused: retry in {_USAGE_RETRY_AFTER_S} s"
+            ),
+            headers={"Retry-After": str(_USAGE_RETRY_AFTER_S)},
+        )
+
+
+@app.exception_handler(_UsageUnavailable)
+async def _usage_unavailable_handler(request: Request, exc: _UsageUnavailable):
+    content: Dict[str, Any] = {"detail": exc.detail, "code": "usage_unavailable"}
+    headers = _retry_after_headers(content, _USAGE_RETRY_AFTER_S)
+    return JSONResponse(status_code=503, content=content, headers=headers)
+
+
+def _completion_cap(body: Dict[str, Any]) -> int:
+    """Completion tokens the call may produce: its max_completion_tokens or
+    max_tokens, else _BUDGET_RESERVE_TOKENS."""
+    for name in ("max_completion_tokens", "max_tokens"):
+        value = body.get(name)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return _BUDGET_RESERVE_TOKENS
+
+
+def _estimate_call_cost(body: Dict[str, Any]) -> float:
+    """The most this call should cost: its prompt and completion cap priced
+    on the dearest of the routes it may take."""
+    from plugboard.router import _resolve_all_providers
+
+    try:
+        routes = _resolve_all_providers(body.get("model", ""))
+    except ValueError:
+        return 0.0  # forward() stops on the same routing error, before any call
+    prompt = estimate_prompt_tokens(body.get("messages", []))
+    cap = _completion_cap(body)
+    return max(
+        (chat_billing.price(p, m, prompt, cap).cost_usd for p, m in routes),
+        default=0.0,
+    )
+
+
+async def _hold_budget(
+    request: Request,
+    client_id: Optional[str],
+    key_record: Optional[Dict[str, Any]],
+    body: Dict[str, Any],
+) -> None:
+    """Hold the call's estimated cost on the key's monthly budget (BUG-52).
+
+    Keys without a budget, and the admin, hold nothing. The check and the
+    hold are one transaction of the usage database, so simultaneous calls
+    cannot pass the budget together: a call that does not fit is refused
+    (429) and calls nothing. When the hold cannot be written the key is
+    refused (503 usage_unavailable, D-37): nothing is served uncounted.
+    """
+    request.state.budget_hold = None
+    if not client_id or client_id == "admin":
+        return
+    limit, key_id = _spending_scope(client_id, key_record)
+    if limit <= 0:
+        return
+    cost = _estimate_call_cost(body)
+    try:
+        got = await _asyncio.to_thread(
+            _usage.hold_budget,
+            client_id=client_id,
+            key_id=key_id,
+            month=_billing.current_pricing_month(),
+            limit=limit,
+            cost=cost,
+        )
+    except Exception as exc:
+        log.error("usage cannot be written: budgeted key refused (%s)", exc)
+        raise _UsageUnavailable() from None
+    if isinstance(got, _usage.HoldRefused):
+        scope = f"key '{key_id}'" if key_id else f"client '{client_id}'"
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Monthly spending limit would be exceeded for {scope}: "
+                f"${got.spent:.4f} spent, ${got.held:.4f} held for calls in "
+                f"progress, about ${cost:.4f} for this call, limit ${limit:.4f}"
+            ),
+        )
+    request.state.budget_hold = chat_billing.BudgetHold(got)
 
 
 _UNPRICED_DETAIL = "Model price unavailable for this key"
@@ -1626,7 +1741,11 @@ async def _aclose_quietly(agen: Any) -> None:
 
 
 def _bill_streaming(
-    client_id: str, body: dict, raw_sse: bytes, key_id: str = ""
+    client_id: str,
+    body: dict,
+    raw_sse: bytes,
+    key_id: str = "",
+    hold: Optional[chat_billing.BudgetHold] = None,
 ) -> Dict[str, Any]:
     """Record usage from accumulated SSE chunks and return the billing dict.
 
@@ -1668,7 +1787,7 @@ def _bill_streaming(
 
     provider, real_model = _billing_target(body)
     charge = chat_billing.price(provider, real_model, prompt_tokens, completion_tokens)
-    chat_billing.record(client_id, key_id, charge)
+    chat_billing.record(client_id, key_id, charge, hold=hold)
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
@@ -1681,7 +1800,11 @@ def _bill_streaming(
 
 
 def _bill_completion(
-    client_id: str, key_id: str, body: Dict[str, Any], result: Dict[str, Any]
+    client_id: str,
+    key_id: str,
+    body: Dict[str, Any],
+    result: Dict[str, Any],
+    hold: Optional[chat_billing.BudgetHold] = None,
 ) -> Dict[str, Any]:
     """Record the usage of a whole answer; return the billing dict.
 
@@ -1692,7 +1815,7 @@ def _bill_completion(
     charge = chat_billing.charge_completion(
         body, result, provider, real_model, reported=_usage_reported()
     )
-    chat_billing.record(client_id, key_id, charge)
+    chat_billing.record(client_id, key_id, charge, hold=hold)
     return charge.billing_info()
 
 
@@ -1711,7 +1834,11 @@ def _charge_answer(
         return {}
     try:
         billing_info = _bill_completion(
-            client_id, getattr(request.state, "key_id", ""), body, result
+            client_id,
+            getattr(request.state, "key_id", ""),
+            body,
+            result,
+            hold=getattr(request.state, "budget_hold", None),
         )
     except Exception as exc:
         log.warning("Billing error (non-fatal): %s", exc)
@@ -2467,6 +2594,12 @@ async def chat_completions(
                 },
             )
 
+    # BUG-52: a budgeted key holds this call's estimated cost before any
+    # provider is called (429 when it does not fit, 503 when usage cannot be
+    # written); the hold is settled when the call is billed, else released
+    # once the response is sent (_session_turn_dep).
+    await _hold_budget(request, client_id, key_record, body)
+
     if body.get("stream") is True:
         # Fast path: subprocess providers execute synchronously (CLI returns
         # the full text), so we can call forward() to populate the non-stream
@@ -2577,6 +2710,7 @@ async def chat_completions(
             return _chat_error_response(exc, client_id, "stream")
 
         _key_id = getattr(request.state, "key_id", "")
+        _hold = getattr(request.state, "budget_hold", None)
 
         async def _stream_and_bill(first_chunk: bytes, rest, cid, req_body, kid):
             """Yield chunks in real-time and append a final usage chunk.
@@ -2629,7 +2763,11 @@ async def chat_completions(
                     if cid:
                         try:
                             _bill_streaming(
-                                cid, req_body, bytes(accumulated), key_id=kid
+                                cid,
+                                req_body,
+                                bytes(accumulated),
+                                key_id=kid,
+                                hold=_hold,
                             )
                             log.info(
                                 "Stream interrupted: billed the partial answer "
@@ -2646,7 +2784,7 @@ async def chat_completions(
             if cid:
                 try:
                     bill = _bill_streaming(
-                        cid, req_body, bytes(accumulated), key_id=kid
+                        cid, req_body, bytes(accumulated), key_id=kid, hold=_hold
                     )
                 except Exception as exc:
                     log.warning("Stream billing error (non-fatal): %s", exc)

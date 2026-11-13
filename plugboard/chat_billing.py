@@ -11,12 +11,15 @@ usage priced here, so what the client sees is what was recorded.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
 from plugboard import billing as _billing
 from plugboard import usage as _usage
 from plugboard.tokenizer import estimate_completion_tokens, estimate_prompt_tokens
+
+log = logging.getLogger(__name__)
 
 # Token details a provider (agy) may report next to its counts.
 USAGE_DETAIL_KEYS = ("prompt_tokens_details", "completion_tokens_details")
@@ -129,9 +132,41 @@ def charge_completion(
     return price(provider, real_model, prompt, completion)
 
 
-def record(client_id: str, key_id: str, charge: Charge) -> None:
-    """Write the call to the usage log (raises when it cannot)."""
-    _usage.append_usage(
+class BudgetHold:
+    """The hold a budgeted call took on its monthly budget (BUG-52).
+
+    ``done`` once the hold was settled into a usage entry, released, or kept
+    because the settlement failed: a hold is used at most once.
+    """
+
+    __slots__ = ("id", "done")
+
+    def __init__(self, hold_id: str) -> None:
+        self.id = hold_id
+        self.done = False
+
+    def release(self) -> None:
+        """Give the hold back (a call that was not billed). A failure is
+        logged: the hold then lapses after usage.HOLD_TTL_S."""
+        if self.done:
+            return
+        self.done = True
+        try:
+            _usage.release_hold(self.id)
+        except Exception as exc:
+            log.error("budget hold %s not released: %s", self.id, exc)
+
+
+def record(
+    client_id: str, key_id: str, charge: Charge, hold: Optional[BudgetHold] = None
+) -> None:
+    """Write the call to the usage log (raises when it cannot).
+
+    With a ``hold``, the entry replaces it in one transaction. When that
+    write fails, the hold is kept: the call's estimate stays counted on the
+    budget until the hold lapses, rather than the call counting nothing.
+    """
+    fields = dict(
         client_id=client_id,
         model=charge.model,
         provider_id=charge.provider_id,
@@ -143,6 +178,11 @@ def record(client_id: str, key_id: str, charge: Charge) -> None:
         price_key=charge.price_key,
         price_source=charge.price_source,
     )
+    if hold is not None and not hold.done:
+        hold.done = True
+        _usage.settle_hold(hold.id, **fields)
+    else:
+        _usage.append_usage(**fields)
 
 
 async def replay_as_sse(
