@@ -4176,9 +4176,11 @@ async def add_provider(
     actor = _admin_actor(request)
     if body.egress_guard:
         await _require_guard_allows("", body.base_url, actor=actor)
-    # Guarded, the guard refused (and audited) it above; unguarded, here.
-    _require_parsable_base_url(body.base_url, "Provider base_url")
     try:
+        # The domain allowlist first, so its refusals stay audited (TM-004);
+        # then an address that cannot be parsed, guard or not (BUG-66).
+        _cfg_mod.check_provider_domain_allowed(body.base_url)
+        _require_parsable_base_url(body.base_url, "Provider base_url")
         record = create_provider(
             name=body.name,
             base_url=body.base_url,
@@ -4242,9 +4244,11 @@ async def patch_provider(
     before = get_provider(provider_id)
     if before is not None:
         await _check_guard_on_edit(provider_id, before, updates)
-    if "base_url" in updates:
-        _require_parsable_base_url(updates["base_url"], "Provider base_url")
     try:
+        if before is not None and "base_url" in updates:
+            # As on creation: the audited allowlist first (TM-004), then BUG-66.
+            _cfg_mod.check_provider_domain_allowed(updates["base_url"])
+            _require_parsable_base_url(updates["base_url"], "Provider base_url")
         record = update_provider(provider_id, updates)
     except _cfg_mod.ProviderDomainNotAllowed as exc:
         _audit(
@@ -5466,6 +5470,49 @@ class KeyCreate(BaseModel):
         return value
 
 
+def _allowed_model_refusal(entry: str) -> Optional[str]:
+    """Why an allowed_models entry would grant nothing, or None (BUG-59).
+
+    Refused: an entry no provider knows (chat's own 404 model_not_found
+    rule), and one a provider knows only under another spelling, since the
+    guard compares exact IDs: an undated family name that chat promotes to a
+    listed dated ID, or another case. A ``<provider-id>:<model>`` the
+    provider does not list (yet) is accepted, as chat routes it there.
+    """
+    from plugboard.model_identity import _DISPLAY_OWNERS, registered_model_owner
+    from plugboard.router import _family_aliases, _listed_models
+
+    if is_unknown_model(entry):
+        return f"no provider knows {entry!r}; use an ID GET /v1/models lists"
+    registry = [p for p in load_providers() if not is_removed_provider(p)]
+    ids = [p["id"] for p in registry]
+    owner = registered_model_owner(entry, ids)
+    if owner is None and ":" in entry:
+        alias = entry.split(":", 1)[0]
+        owner = next((o for o, a in _DISPLAY_OWNERS.items() if a == alias), None)
+    native = (
+        entry[len(owner) + 1 :] if owner and entry.startswith(owner + ":") else entry
+    )
+    if owner and native == entry:  # a display prefix (Codex:...)
+        native = entry.split(":", 1)[1]
+    candidates = [p for p in registry if owner is None or p["id"] == owner]
+    for provider in candidates:
+        names = _listed_models(provider) + [provider.get("default_model") or ""]
+        if native in names:
+            return None
+    for provider in candidates:
+        names = [n for n in _listed_models(provider) if n]
+        if native in _family_aliases(provider) and native not in names:
+            return (
+                f"{entry!r} is served as a dated ID of {provider['id']}: "
+                "list that ID (GET /v1/models)"
+            )
+        exact = next((n for n in names if n.casefold() == native.casefold()), None)
+        if exact is not None:
+            return f"{entry!r} is spelled {exact!r} by {provider['id']}"
+    return None
+
+
 def _default_rpm_limit() -> int:
     """Production-safe default applied when a key is created without an
     explicit rpm_limit. Operators can raise/lower via env without code change."""
@@ -5496,15 +5543,9 @@ async def list_api_keys(_: None = Depends(_require_admin)):
 @app.post("/admin/keys", status_code=201)
 async def create_api_key(body: KeyCreate, _: None = Depends(_require_admin)):
     """Creates a new client key. The key is shown in plaintext ONLY in this response."""
-    # Chat's own rule (404 model_not_found): an entry no provider knows (BUG-59).
-    unknown = [m for m in body.allowed_models or [] if is_unknown_model(m)]
-    if unknown:
-        raise HTTPException(
-            422,
-            "allowed_models: no provider knows "
-            + ", ".join(repr(m) for m in unknown)
-            + "; use the IDs GET /v1/models lists, or <provider-id>:<model>",
-        )
+    refusals = [r for r in map(_allowed_model_refusal, body.allowed_models or []) if r]
+    if refusals:
+        raise HTTPException(422, "allowed_models: " + "; ".join(refusals))
     rpm = body.rpm_limit if body.rpm_limit is not None else _default_rpm_limit()
     budget = (
         body.monthly_limit_usd
@@ -5567,7 +5608,15 @@ async def rotate_api_key(key_id: str, _: None = Depends(_require_admin)):
             "This key's client ID is empty or reserved and the key is refused "
             "when used: revoke it and create a new key with a valid client ID",
         )
-    result = rotate_key(key_id)
+    try:
+        result = rotate_key(key_id)
+    except ValueError as exc:
+        # The new key cannot be written (a retired decision model): the old
+        # key is untouched (BUG-59).
+        raise HTTPException(
+            422,
+            f"This key cannot be rotated ({exc}): create a new key, then revoke this one",
+        ) from None
     if result is None:
         raise HTTPException(404, f"Key '{key_id}' not found")
     _audit("key.rotate", target_type="key", target_id=key_id)

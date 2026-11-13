@@ -66,24 +66,31 @@ def _active(keys_store, client_id):
     ]
 
 
-def test_rotation_that_fails_to_write_leaves_a_working_key(keys_store, monkeypatch):
+@pytest.mark.parametrize("failing_write", [1, 2])
+def test_rotation_that_fails_to_write_leaves_a_working_key(
+    keys_store, monkeypatch, failing_write
+):
+    # Before, the old key was revoked by one write and the new one added by a
+    # second: a failure of the second left the client with no working key.
     old = keys_store.create_key("billing", "prod")
+    assert keys_store.get_key_record(old["key"])  # cache warm
     real_write = keys_store._write
     writes = []
 
-    def _second_write_fails(data):
+    def _write(data):
         writes.append(1)
-        if len(writes) == 2:
+        if len(writes) == failing_write:
             raise OSError("disk full")
         real_write(data)
 
-    monkeypatch.setattr(keys_store, "_write", _second_write_fails)
+    monkeypatch.setattr(keys_store, "_write", _write)
     try:
         keys_store.rotate_key(old["key_id"])
     except OSError:
         pass
-    keys_store._invalidate_cache()
     assert len(_active(keys_store, "billing")) == 1
+    if failing_write == 1:  # the only write of a rotation failed: nothing changed
+        assert keys_store.get_key_record(old["key"])["key_id"] == old["key_id"]
 
 
 def test_rotation_refused_by_the_new_key_leaves_the_old_one(keys_store):
@@ -96,6 +103,18 @@ def test_rotation_refused_by_the_new_key_leaves_the_old_one(keys_store):
     with pytest.raises(ValueError):
         keys_store.rotate_key(old["key_id"])
     keys_store._invalidate_cache()
+    assert _active(keys_store, "billing") == [old["key_id"]]
+
+
+async def test_rotation_refused_by_the_new_key_answers_422(admin_client, keys_store):
+    old = keys_store.create_key("billing", "prod")
+    data = json.loads(keys_store.KEYS_FILE.read_text())
+    data["keys"][0]["allowed_decision_models"] = ["retired-model"]
+    keys_store.KEYS_FILE.write_text(json.dumps(data))
+    keys_store._invalidate_cache()
+    r = await admin_client.post(f"/admin/keys/{old['key_id']}/rotate", headers=ADMIN)
+    assert r.status_code == 422, r.text
+    assert "create a new key, then revoke this one" in r.json()["detail"]
     assert _active(keys_store, "billing") == [old["key_id"]]
 
 
@@ -143,6 +162,84 @@ async def test_allowed_models_entry_no_provider_knows_is_refused(
     assert entry in r.json()["detail"]
     assert "'other:model-v2'" not in r.json()["detail"]  # the known one
     assert keys_store.load_keys() == []
+
+
+@pytest.fixture
+def dated_provider(admin_client, tmp_path, monkeypatch):
+    """A provider that lists only a dated snapshot of a family."""
+    base = tmp_path / "dated"
+    base.mkdir()
+    dated = {
+        **PROVIDER_B,
+        "id": "anthropic-direct",
+        "models": [{"id": "claude-haiku-4-5-20251001", "name": "Haiku"}],
+    }
+    return _setup_providers(base, monkeypatch, [PROVIDER_B, dated])
+
+
+@pytest.mark.parametrize(
+    "entry, reason",
+    [
+        # Chat promotes it to the dated ID, which the guard then checks.
+        ("claude-haiku-4-5", "dated ID"),
+        ("anthropic-direct:claude-haiku-4-5", "dated ID"),
+        # The guard compares exact IDs: another case never matches.
+        ("OTHER:MODEL-V2", "spelled 'other:model-v2'"),
+    ],
+)
+async def test_allowed_models_entry_known_under_another_spelling_is_refused(
+    admin_client, keys_store, dated_provider, entry, reason
+):
+    r = await admin_client.post(
+        "/admin/keys",
+        headers=ADMIN,
+        json={"client_id": "billing", "allowed_models": [entry]},
+    )
+    assert r.status_code == 422, r.text
+    assert reason in r.json()["detail"]
+    assert keys_store.load_keys() == []
+
+
+async def test_allowed_models_dated_id_is_accepted(
+    admin_client, keys_store, dated_provider
+):
+    r = await admin_client.post(
+        "/admin/keys",
+        headers=ADMIN,
+        json={
+            "client_id": "billing",
+            "allowed_models": ["anthropic-direct:claude-haiku-4-5-20251001"],
+        },
+    )
+    assert r.status_code == 201, r.text
+
+
+async def test_provider_domain_refusal_stays_audited_before_the_parse_check(
+    client, _providers_file, monkeypatch, tmp_path
+):
+    # TM-004: with an allowlist, a refused address is audited, parsable or not.
+    from plugboard import audit as audit_mod
+
+    monkeypatch.setattr(audit_mod, "_DB_PATH", tmp_path / "audit.db")
+    monkeypatch.setenv("PLUGBOARD_PROVIDER_DOMAINS_ALLOWED", "api.allowed.test")
+    r = await client.post(
+        "/providers",
+        headers={"Authorization": "Bearer testkey"},
+        json={"name": "Bad", "base_url": "https://[x", "bearer_token": "k"},
+    )
+    assert r.status_code == 400, r.text
+    assert audit_mod.get_audit_log(action="provider.domain.rejected")
+
+
+async def test_edit_of_an_unknown_provider_is_404_whatever_the_address(
+    client, _providers_file
+):
+    r = await client.put(
+        "/providers/no-such-provider",
+        headers={"Authorization": "Bearer testkey"},
+        json={"base_url": "https://[x"},
+    )
+    assert r.status_code == 404, r.text
 
 
 @pytest.mark.parametrize(
