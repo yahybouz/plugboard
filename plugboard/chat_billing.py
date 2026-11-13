@@ -139,10 +139,11 @@ class BudgetHold:
     because the settlement failed: a hold is used at most once.
     """
 
-    __slots__ = ("id", "done")
+    __slots__ = ("id", "cost", "done")
 
-    def __init__(self, hold_id: str) -> None:
+    def __init__(self, hold_id: str, cost: float = 0.0) -> None:
         self.id = hold_id
+        self.cost = cost
         self.done = False
 
     def release(self) -> None:
@@ -154,7 +155,12 @@ class BudgetHold:
         try:
             _usage.release_hold(self.id)
         except Exception as exc:
-            log.error("budget hold %s not released: %s", self.id, exc)
+            log.error(
+                "budget hold %s not released (recorded at its estimate when it "
+                "lapses): %s",
+                self.id,
+                exc,
+            )
 
 
 def record(
@@ -181,6 +187,18 @@ def record(
     if hold is not None and not hold.done:
         hold.done = True
         _usage.settle_hold(hold.id, **fields)
+        if charge.cost_usd > hold.cost + 1e-9:
+            # The estimate was short (no max_tokens and a long answer, or a
+            # provider that ignores max_tokens): the budget took the real cost.
+            log.warning(
+                "budget hold %s overrun: estimated %.6f USD, cost %.6f USD (key %s, "
+                "model %s)",
+                hold.id,
+                hold.cost,
+                charge.cost_usd,
+                key_id or "-",
+                charge.model,
+            )
     else:
         _usage.append_usage(**fields)
 

@@ -2999,7 +2999,7 @@
             }
           },
           "503": {
-            "description": "Decision engine unavailable, or usage cannot be recorded and the key has a monthly budget (code usage_unavailable).",
+            "description": "Decision engine unavailable, or usage cannot be recorded for a key with a monthly budget (code usage_unavailable when the usage cannot be read).",
             "content": {
               "application/json": {
                 "schema": {

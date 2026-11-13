@@ -63,22 +63,30 @@ _CREATE_INDEXES = [
 # BUG-52: the estimated cost of the calls a budgeted key has in progress.
 # ``scope`` is "key:<key_id>" or "client:<client_id>" (_scope). A hold is
 # settled into a usage entry when the call is billed, released when it
-# fails; one older than HOLD_TTL_S (a process that died) counts no more.
+# fails. A hold still there after HOLD_TTL_S (its call was served but could
+# not be recorded, or its process died mid-call) becomes a usage entry at
+# its estimate (price_source "hold-lapsed"): it never just disappears.
+# Holds count whatever their month: a call is billed when it ends.
 _CREATE_HOLDS = """
 CREATE TABLE IF NOT EXISTS budget_holds (
     id        TEXT PRIMARY KEY,
     scope     TEXT NOT NULL,
     month     TEXT NOT NULL,
     cost_usd  REAL NOT NULL,
-    created   REAL NOT NULL
+    created   REAL NOT NULL,
+    client_id TEXT NOT NULL DEFAULT '',
+    key_id    TEXT NOT NULL DEFAULT '',
+    model     TEXT NOT NULL DEFAULT ''
 );
 """
 _CREATE_HOLDS_INDEX = (
-    "CREATE INDEX IF NOT EXISTS idx_holds_scope ON budget_holds(month, scope);"
+    "CREATE INDEX IF NOT EXISTS idx_holds_scope ON budget_holds(scope);"
 )
+# At least the longest provider call (900 s) and its waits.
 HOLD_TTL_S = envcompat.get_float(
-    "PLUGBOARD_BUDGET_HOLD_TTL_S", default=3600.0, minimum=60.0
+    "PLUGBOARD_BUDGET_HOLD_TTL_S", default=3600.0, minimum=1200.0
 )
+LAPSED_SOURCE = "hold-lapsed"
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -228,10 +236,11 @@ def _committed(conn: sqlite3.Connection, month: str, client_id: str, key_id: str
         f"WHERE month = ? AND {where}",
         (month, value),
     ).fetchone()[0]
+    # Every live hold, whatever its month: the call is billed when it ends.
     held = conn.execute(
         "SELECT COALESCE(SUM(cost_usd), 0.0) FROM budget_holds "
-        "WHERE month = ? AND scope = ? AND created >= ?",
-        (month, scope, time.time() - HOLD_TTL_S),
+        "WHERE scope = ? AND created >= ?",
+        (scope, time.time() - HOLD_TTL_S),
     ).fetchone()[0]
     return float(spent or 0.0), float(held or 0.0)
 
@@ -257,19 +266,63 @@ def get_held_cost(month: str, *, key_id: str = "", client_id: str = "") -> float
 
 
 _DROP_HOLD = "DELETE FROM budget_holds WHERE id = ?"
-_DROP_STALE_HOLDS = "DELETE FROM budget_holds WHERE created < ?"
+
+
+def _record_lapsed_holds(conn: sqlite3.Connection, now: float) -> None:
+    """Turn the holds past HOLD_TTL_S into usage entries at their estimate.
+
+    Such a call was served but not recorded (the usage write failed), or
+    its process died mid-call: the provider may have billed it, so its
+    estimate is counted rather than forgotten. Runs inside the caller's
+    transaction."""
+    stale = conn.execute(
+        "SELECT id, client_id, key_id, model, cost_usd FROM budget_holds "
+        "WHERE created < ?",
+        (now - HOLD_TTL_S,),
+    ).fetchall()
+    for row in stale:
+        hold_id, client_id, key_id, model, cost = tuple(row)
+        _insert(
+            conn,
+            _entry(
+                client_id=client_id,
+                model=model,
+                provider_id="",
+                prompt_tokens=0,
+                completion_tokens=0,
+                pricing_month=_billing.current_pricing_month(),
+                cost_usd=float(cost),
+                key_id=key_id,
+                price_source=LAPSED_SOURCE,
+            ),
+        )
+        conn.execute(_DROP_HOLD, (hold_id,))
+        log.warning(
+            "budget hold %s lapsed: recorded at its estimate %.6f USD (key %s)",
+            hold_id,
+            cost,
+            key_id or "-",
+        )
 
 
 def hold_budget(
-    *, client_id: str, key_id: str, month: str, limit: float, cost: float
+    *,
+    client_id: str,
+    key_id: str,
+    month: str,
+    limit: float,
+    cost: float,
+    hold_id: str = "",
+    model: str = "",
 ) -> Union[str, HoldRefused]:
     """Hold ``cost`` on the month's budget when it fits under ``limit``.
 
     The check and the hold are one write transaction (BEGIN IMMEDIATE), so
     concurrent calls, from threads or processes, never pass the limit
-    together. Returns the hold's id, or HoldRefused. Raises sqlite3.Error
-    when the usage database cannot be written: the caller refuses the call
-    (D-37). Holds past HOLD_TTL_S are dropped on the way.
+    together. Returns the hold's id (``hold_id`` when given: the caller can
+    then release it even if it stops waiting for this), or HoldRefused.
+    Raises sqlite3.Error when the usage database cannot be written: the
+    caller refuses the call (D-37). Lapsed holds are recorded on the way.
     """
     scope, _, _ = _scope(client_id, key_id)
     conn = _get_conn()
@@ -278,16 +331,17 @@ def hold_budget(
         conn.execute("BEGIN IMMEDIATE")
         try:
             now = time.time()
-            conn.execute(_DROP_STALE_HOLDS, (now - HOLD_TTL_S,))
+            _record_lapsed_holds(conn, now)
             spent, held = _committed(conn, month, client_id, key_id)
             if spent + held + cost > limit + 1e-9:
-                conn.execute("ROLLBACK")
+                conn.execute("COMMIT")  # the lapsed holds recorded above stay
                 return HoldRefused(spent=spent, held=held)
-            hold_id = secrets.token_hex(8)
+            hold_id = hold_id or secrets.token_hex(8)
             conn.execute(
-                "INSERT INTO budget_holds (id, scope, month, cost_usd, created) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (hold_id, scope, month, float(cost), now),
+                "INSERT INTO budget_holds "
+                "(id, scope, month, cost_usd, created, client_id, key_id, model) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (hold_id, scope, month, float(cost), now, client_id, key_id, model),
             )
             conn.execute("COMMIT")
             return hold_id
@@ -315,7 +369,8 @@ def settle_hold(hold_id: str, **usage_fields: Any) -> Dict[str, Any]:
 
 def release_hold(hold_id: str) -> None:
     """Drop the hold of a call that was not billed (it failed). Raises when
-    the database cannot be written: the hold then lapses after HOLD_TTL_S."""
+    the database cannot be written: the hold then lapses after HOLD_TTL_S
+    and is recorded at its estimate."""
     conn = _get_conn()
     try:
         conn.execute(_DROP_HOLD, (hold_id,))

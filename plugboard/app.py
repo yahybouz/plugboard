@@ -44,6 +44,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import logging
 import os
 import pathlib
@@ -52,7 +53,17 @@ import secrets
 import time
 import uuid
 from datetime import date
-from typing import Annotated, Any, Awaitable, Dict, List, Literal, Optional, TypeVar
+from typing import (
+    Annotated,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    TypeVar,
+)
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -843,12 +854,13 @@ async def _session_turn_dep(request: Request):
     try:
         yield
     finally:
-        release = getattr(request.state, "session_turn_release", None)
-        if release is not None:
-            release()
+        # The hold first: the session's next turn must not see it.
         hold = getattr(request.state, "budget_hold", None)
         if hold is not None and not hold.done:
             await _asyncio.to_thread(hold.release)
+        release = getattr(request.state, "session_turn_release", None)
+        if release is not None:
+            release()
 
 
 async def _take_session_turn(request: Request, client_id: str, session_id: str) -> None:
@@ -1530,28 +1542,37 @@ def _spending_scope(
 def _check_spending_limit(
     client_id: str, key_record: Optional[Dict[str, Any]] = None
 ) -> float:
-    """Raise 429 if caller exceeded their monthly spending limit. Returns current total spend."""
+    """Raise 429 when the caller's monthly spend, with the holds of its calls
+    in progress (BUG-52), reaches its limit; 503 usage_unavailable when the
+    usage cannot be read. Returns the recorded spend (holds not included)."""
     limit, key_id = _spending_scope(client_id, key_record)
     if limit <= 0:
         return 0.0  # unlimited
     month = _billing.current_pricing_month()
     try:
         if key_id:
-            total = _usage.get_total_cost_by_key(month, key_id)
+            spent = _usage.get_total_cost_by_key(month, key_id)
         else:
-            total = _usage.get_total_cost_by_client(month, client_id)
-        # Plus the holds of the calls in progress (BUG-52).
-        total += _usage.get_held_cost(month, key_id=key_id, client_id=client_id)
+            spent = _usage.get_total_cost_by_client(month, client_id)
+        held = _usage.get_held_cost(month, key_id=key_id, client_id=client_id)
     except Exception as exc:
         log.error("usage cannot be read: budgeted key refused (%s)", exc)
         raise _UsageUnavailable() from None
-    if total >= limit:
-        scope = f"key '{key_id}'" if key_id else f"client '{client_id}'"
+    scope = f"key '{key_id}'" if key_id else f"client '{client_id}'"
+    if spent >= limit:
         raise HTTPException(
             status_code=429,
-            detail=f"Monthly spending limit exceeded for {scope} (${total:.4f} >= ${limit:.4f})",
+            detail=f"Monthly spending limit exceeded for {scope} (${spent:.4f} >= ${limit:.4f})",
         )
-    return total
+    if spent + held >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Monthly spending limit reached for {scope} with the calls in "
+                f"progress (${spent:.4f} spent + ${held:.4f} held >= ${limit:.4f})"
+            ),
+        )
+    return spent
 
 
 # Completion tokens a budgeted call is assumed to produce when it sets
@@ -1586,39 +1607,99 @@ async def _usage_unavailable_handler(request: Request, exc: _UsageUnavailable):
     return JSONResponse(status_code=503, content=content, headers=headers)
 
 
+# Prompt tokens counted for each image of a budgeted call: about the most
+# a provider bills for one (a large image at high detail).
+_BUDGET_IMAGE_TOKENS = 1600
+
+
+def _whole_count(value: Any) -> Optional[int]:
+    """A positive count as a provider would read it (5, 5.0, "5"), rounded
+    up; None for anything else (a boolean, 0, a negative, text)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        try:
+            value = float(value.strip())
+        except ValueError:
+            return None
+    if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
+        return math.ceil(value)
+    return None
+
+
 def _completion_cap(body: Dict[str, Any]) -> int:
-    """Completion tokens the call may produce: its max_completion_tokens or
-    max_tokens, else _BUDGET_RESERVE_TOKENS."""
-    for name in ("max_completion_tokens", "max_tokens"):
-        value = body.get(name)
-        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
-            return value
-    return _BUDGET_RESERVE_TOKENS
+    """Completion tokens one answer may produce: the larger of
+    max_completion_tokens and max_tokens (a provider may honour either),
+    else _BUDGET_RESERVE_TOKENS."""
+    caps = [
+        cap
+        for cap in (
+            _whole_count(body.get(n)) for n in ("max_completion_tokens", "max_tokens")
+        )
+        if cap
+    ]
+    return max(caps) if caps else _BUDGET_RESERVE_TOKENS
+
+
+def _answers_asked(body: Dict[str, Any]) -> int:
+    """Answers the call asks for: n, or best_of when larger (each is billed)."""
+    return max(
+        1, _whole_count(body.get("n")) or 1, _whole_count(body.get("best_of")) or 1
+    )
+
+
+def _prompt_estimate(body: Dict[str, Any]) -> int:
+    """Prompt tokens: the messages' text, the tool definitions and the tool
+    calls sent back, and _BUDGET_IMAGE_TOKENS per image part."""
+    messages = body.get("messages") or []
+    tokens = estimate_prompt_tokens(messages)
+    extra: List[Any] = [body.get(k) for k in ("tools", "functions") if body.get(k)]
+    images = 0
+    for msg in messages if isinstance(messages, list) else []:
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("tool_calls"):
+            extra.append(msg["tool_calls"])
+        content = msg.get("content")
+        if isinstance(content, list):
+            images += sum(
+                1
+                for part in content
+                if isinstance(part, dict) and part.get("type") != "text"
+            )
+    if extra:
+        tokens += count_tokens(json.dumps(extra, default=str))
+    return tokens + images * _BUDGET_IMAGE_TOKENS
 
 
 def _estimate_call_cost(body: Dict[str, Any]) -> float:
-    """The most this call should cost: its prompt and completion cap priced
-    on the dearest of the routes it may take."""
+    """What this call should cost at most: its prompt, and its completion cap
+    for each answer it asks for, priced on the dearest route it may take.
+
+    An estimate, not a ceiling: a provider that ignores max_tokens (a CLI
+    route) or a call without max_tokens that answers longer than
+    _BUDGET_RESERVE_TOKENS costs more; the overrun is logged when billed.
+    """
     from plugboard.router import _resolve_all_providers
 
     try:
         routes = _resolve_all_providers(body.get("model", ""))
     except ValueError:
         return 0.0  # forward() stops on the same routing error, before any call
-    prompt = estimate_prompt_tokens(body.get("messages", []))
-    cap = _completion_cap(body)
+    prompt = _prompt_estimate(body)
+    completion = _completion_cap(body) * _answers_asked(body)
     return max(
-        (chat_billing.price(p, m, prompt, cap).cost_usd for p, m in routes),
+        (chat_billing.price(p, m, prompt, completion).cost_usd for p, m in routes),
         default=0.0,
     )
 
 
-async def _hold_budget(
-    request: Request,
+async def _take_budget_hold(
     client_id: Optional[str],
     key_record: Optional[Dict[str, Any]],
     body: Dict[str, Any],
-) -> None:
+    keep: Callable[[Optional[chat_billing.BudgetHold]], None],
+) -> Optional[chat_billing.BudgetHold]:
     """Hold the call's estimated cost on the key's monthly budget (BUG-52).
 
     Keys without a budget, and the admin, hold nothing. The check and the
@@ -1626,14 +1707,17 @@ async def _hold_budget(
     cannot pass the budget together: a call that does not fit is refused
     (429) and calls nothing. When the hold cannot be written the key is
     refused (503 usage_unavailable, D-37): nothing is served uncounted.
+    ``keep`` gets the hold before it is written, so a request cancelled
+    meanwhile still gives it back; then None when it was not taken.
     """
-    request.state.budget_hold = None
     if not client_id or client_id == "admin":
-        return
+        return None
     limit, key_id = _spending_scope(client_id, key_record)
     if limit <= 0:
-        return
+        return None
     cost = _estimate_call_cost(body)
+    hold = chat_billing.BudgetHold(secrets.token_hex(8), cost)
+    keep(hold)
     try:
         got = await _asyncio.to_thread(
             _usage.hold_budget,
@@ -1642,11 +1726,17 @@ async def _hold_budget(
             month=_billing.current_pricing_month(),
             limit=limit,
             cost=cost,
+            hold_id=hold.id,
+            model=str(body.get("model", "")),
         )
     except Exception as exc:
+        hold.done = True
+        keep(None)
         log.error("usage cannot be written: budgeted key refused (%s)", exc)
         raise _UsageUnavailable() from None
     if isinstance(got, _usage.HoldRefused):
+        hold.done = True
+        keep(None)
         scope = f"key '{key_id}'" if key_id else f"client '{client_id}'"
         raise HTTPException(
             status_code=429,
@@ -1656,7 +1746,31 @@ async def _hold_budget(
                 f"progress, about ${cost:.4f} for this call, limit ${limit:.4f}"
             ),
         )
-    request.state.budget_hold = chat_billing.BudgetHold(got)
+    return hold
+
+
+async def _hold_budget(
+    request: Request,
+    client_id: Optional[str],
+    key_record: Optional[Dict[str, Any]],
+    body: Dict[str, Any],
+) -> None:
+    """The chat's hold (_take_budget_hold), kept on the request: billing
+    settles it, _session_turn_dep gives back one that was not billed."""
+    request.state.budget_hold = None
+
+    def keep(hold: Optional[chat_billing.BudgetHold]) -> None:
+        request.state.budget_hold = hold
+
+    await _take_budget_hold(client_id, key_record, body, keep)
+
+
+def _keep_hold(hold: Optional[chat_billing.BudgetHold]) -> None:
+    """A served call whose billing failed keeps its hold: counted at its
+    estimate until it lapses and is recorded, never given back."""
+    if hold is not None and not hold.done:
+        hold.done = True
+        log.error("budget hold %s kept: the served call was not billed", hold.id)
 
 
 _UNPRICED_DETAIL = "Model price unavailable for this key"
@@ -1842,6 +1956,7 @@ def _charge_answer(
         )
     except Exception as exc:
         log.warning("Billing error (non-fatal): %s", exc)
+        _keep_hold(getattr(request.state, "budget_hold", None))
         return {}
     if client_id != "admin":
         try:
@@ -2776,6 +2891,7 @@ async def chat_completions(
                             )
                         except Exception as exc:
                             log.warning("Stream billing error (non-fatal): %s", exc)
+                            _keep_hold(_hold)
                     await _aclose_quietly(rest)
             # At this point `tail_buf` holds the last <=TAIL bytes and has
             # NOT been yielded yet.
@@ -2788,6 +2904,7 @@ async def chat_completions(
                     )
                 except Exception as exc:
                     log.warning("Stream billing error (non-fatal): %s", exc)
+                    _keep_hold(_hold)
             if bill is not None:
                 # Complete stream only: an interrupted one left above.
                 _record_session_turn(
@@ -3005,6 +3122,8 @@ def _preflight_refusal(
             continue
         try:
             check()
+        except _UsageUnavailable:
+            raise  # the whole batch: 503 usage_unavailable (D-37)
         except HTTPException:
             return code
     return None
@@ -3057,6 +3176,19 @@ async def preflight(
                 "messages": [{"role": "user", "content": "ping"}],
                 "max_tokens": 1,
             }
+            # BUG-52: a budgeted key's ping holds its cost, as a chat does
+            # (429 -> budget_exceeded; usage that cannot be written -> 503).
+            holds: List[Optional[chat_billing.BudgetHold]] = [None]
+            try:
+                await _take_budget_hold(
+                    client_id, key_record, ping_body, lambda h: holds.__setitem__(0, h)
+                )
+            except _UsageUnavailable:
+                raise
+            except HTTPException:
+                error = "budget_exceeded"
+        if error is None:
+            hold = holds[0]
             try:
                 # BUG-77: a ping refused after a provider's wait left the
                 # global slot; the batch takes it back before its next ping.
@@ -3065,6 +3197,8 @@ async def preflight(
                     request, forward(ping_body, timeout=10.0, **route_options)
                 )
             except _ClientGone:
+                if hold is not None:
+                    await _asyncio.to_thread(hold.release)
                 # Nobody waits for the rest of the batch: stop here.
                 return _client_gone_response(model_str)
             except _ChatOverloaded:
@@ -3086,9 +3220,14 @@ async def preflight(
             else:
                 if client_id:
                     try:
-                        _bill_completion(client_id, key_id, ping_body, result)
+                        _bill_completion(
+                            client_id, key_id, ping_body, result, hold=hold
+                        )
                     except Exception as exc:
                         log.warning("Preflight billing error (non-fatal): %s", exc)
+                        _keep_hold(hold)
+            if hold is not None and not hold.done:
+                await _asyncio.to_thread(hold.release)  # not billed: given back
         entry: Dict[str, Any] = {
             "provider": item.provider,
             "model": item.model,

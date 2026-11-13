@@ -69,7 +69,7 @@ A completed rotation also signs out every dashboard session and forgets the brow
 | `PLUGBOARD_DEFAULT_RPM_LIMIT` | `60` | RPM limit applied to a new key created without one. `0` means unlimited. |
 | `PLUGBOARD_DEFAULT_MONTHLY_LIMIT_USD` | `10` | Monthly USD budget applied to a new key created without one. `0` means unlimited. |
 | `PLUGBOARD_BUDGET_RESERVE_TOKENS` | `1024` | Completion tokens a call of a budgeted key is assumed to produce, when it sets neither `max_tokens` nor `max_completion_tokens`, to estimate the cost it holds on the budget while it runs ([monthly budget](clients-and-keys.md#how-limits-are-enforced)). |
-| `PLUGBOARD_BUDGET_HOLD_TTL_S` | `3600` | Seconds after which the hold of a call that never ended (a gateway that stopped mid-call) no longer counts on its key's budget. At least `60`. |
+| `PLUGBOARD_BUDGET_HOLD_TTL_S` | `3600` | Seconds after which the hold of a call that was never billed (served but not recorded, or a gateway stopped mid-call) is recorded at its estimate (`price_source` `hold-lapsed`). At least `1200`, longer than the longest provider call. |
 | `PLUGBOARD_SESSION_TTL_S` | `86400` | Lifetime of server-side chat sessions (`session_id`). |
 | `PLUGBOARD_SESSION_MAX_TURNS` | `50` | Turns kept per session. |
 

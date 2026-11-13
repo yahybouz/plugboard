@@ -160,11 +160,11 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 | `403` | The key may not use this model | Pick a model where `account_compatible` is true |
 | `404` | Chat only, `code` is `model_not_found`: no provider knows the model, so nothing was called (below) | Send an `id` from `GET /v1/models` |
 | `413` | Body over `MAX_BODY_BYTES` (10 MB) | Send less |
-| `429` | IP rate limit, key RPM limit or monthly budget, also when the call's estimated cost does not fit in what is left once the key's calls in progress are counted (nothing was called) | Back off, or send a smaller `max_tokens`; `GET /v1/me` shows the budget left |
-| `503` | `code` is `usage_unavailable`: the key has a monthly budget and usage cannot be recorded right now; nothing was called | Retry after `Retry-After` / `retry_after` seconds (30) |
+| `429` | IP rate limit, key RPM limit or monthly budget, also when the call's estimated cost does not fit in what is left once the key's calls in progress are counted (nothing was called) | Back off, or send a smaller `max_tokens`; `GET /v1/me` shows the budget left (calls in progress not counted) |
 | `429` | The last provider tried has exhausted its quota or rate limit (a streamed request to an HTTP provider is not offered to another one); `detail` names the provider | Retry after `Retry-After` / `retry_after` seconds when set (at most 7 days), else later or with another model |
 | `502` | The provider failed; a client key gets a sentence and an `error_ref`, never the provider's or the gateway's error text | Retry later or use another model; give the operator the `error_ref` |
 | `503` | Gateway at capacity (`code` `server_busy`: the cap of concurrent chat requests stayed full for the whole wait), an HTTP provider's timeout (`Retry-After: 10`, `error_ref`), or, with `code` `providers_busy`, every provider of the model busy at its concurrency cap after the wait; nothing was called | Retry after `Retry-After` / `retry_after` seconds (5 for `server_busy` and `providers_busy`) |
+| `503` | `code` is `usage_unavailable`: the key has a monthly budget and usage cannot be recorded right now; nothing was called | Retry after `Retry-After` / `retry_after` seconds (30) |
 | `503` | Chat only, `code` is `provider_disabled`: the model belongs to a provider the operator turned off; nothing was called and no other provider stands in (below) | Pick another model from `GET /v1/models`, or ask the operator to turn the provider back on |
 
 ### `404 model_not_found`

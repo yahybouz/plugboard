@@ -121,20 +121,48 @@ def test_settling_turns_the_hold_into_the_recorded_cost(store):
     assert usage.get_committed_cost(MONTH, key_id="k") == pytest.approx(0.01)
 
 
-def test_a_released_or_expired_hold_counts_no_more(store, monkeypatch):
+def test_a_released_hold_counts_no_more(store):
     hold = usage.hold_budget(
         client_id="c", key_id="k", month=MONTH, limit=1.0, cost=0.9
     )
     usage.release_hold(hold)
     assert usage.get_committed_cost(MONTH, key_id="k") == 0.0
-    usage.hold_budget(client_id="c", key_id="k", month=MONTH, limit=1.0, cost=0.9)
-    monkeypatch.setattr(usage, "HOLD_TTL_S", -1.0)  # every hold is now stale
-    assert usage.get_committed_cost(MONTH, key_id="k") == 0.0
-    assert isinstance(
-        usage.hold_budget(client_id="c", key_id="k", month=MONTH, limit=1.0, cost=0.9),
-        str,
+    assert usage.get_usage(MONTH) == []
+
+
+def test_a_lapsed_hold_is_recorded_at_its_estimate(store, monkeypatch):
+    """Its call was served but not recorded, or its process died: the
+    estimate is counted, never forgotten."""
+    usage.hold_budget(
+        client_id="c", key_id="k", month=MONTH, limit=1.0, cost=0.9, model="m1"
     )
-    assert len(_holds()) == 1  # the stale one was purged
+    monkeypatch.setattr(usage, "HOLD_TTL_S", -1.0)  # every hold is now stale
+    refused = usage.hold_budget(
+        client_id="c", key_id="k", month=MONTH, limit=1.0, cost=0.9
+    )
+    assert isinstance(refused, usage.HoldRefused) and refused.spent == 0.9
+    assert _holds() == []
+    [row] = usage.get_usage(MONTH)
+    assert (row["key_id"], row["client_id"], row["model"]) == ("k", "c", "m1")
+    assert (row["cost_usd"], row["price_source"]) == (0.9, usage.LAPSED_SOURCE)
+
+
+def test_a_hold_counts_after_the_month_turns(store, monkeypatch):
+    """Held in November, billed when it ends: December's checks count it."""
+    usage.hold_budget(client_id="c", key_id="k", month="2026_11", limit=1.0, cost=0.9)
+    refused = usage.hold_budget(
+        client_id="c", key_id="k", month="2026_12", limit=1.0, cost=0.9
+    )
+    assert isinstance(refused, usage.HoldRefused) and refused.held == 0.9
+
+
+def test_a_given_hold_id_is_used(store):
+    assert (
+        usage.hold_budget(
+            client_id="c", key_id="k", month=MONTH, limit=1.0, cost=0.1, hold_id="abc"
+        )
+        == "abc"
+    )
 
 
 def test_a_client_wide_budget_counts_the_client(store):
@@ -341,3 +369,251 @@ async def test_the_unlimited_key_holds_nothing(client, budget):
         )
     assert resp.status_code == 200
     assert _holds() == [] and len(usage.get_usage(MONTH)) == 1
+
+
+# ── Review follow-ups: the estimate ──────────────────────────────────────────
+
+
+def _estimate(body):
+    from plugboard.app import _estimate_call_cost
+
+    return _estimate_call_cost({"model": MODEL, "messages": [], **body})
+
+
+@pytest.mark.parametrize(
+    "body, completion",
+    [
+        ({"max_tokens": 100}, 100),
+        ({"max_tokens": 100, "n": 5}, 500),  # each answer is billed
+        ({"max_tokens": 100, "best_of": 3, "n": 2}, 300),
+        ({"max_tokens": 100000, "max_completion_tokens": 1}, 100000),  # the larger
+        ({"max_tokens": 100.0}, 100),
+        ({"max_tokens": "100"}, 100),
+        ({"max_tokens": True}, 1024),  # not a count: the reserve
+        ({"max_tokens": -5}, 1024),
+    ],
+)
+def test_the_estimate_covers_what_the_provider_may_produce(budget, body, completion):
+    assert _estimate(body) == pytest.approx(completion * 3000 / 1_000_000)
+
+
+def test_images_tools_and_tool_calls_count_in_the_prompt(budget, monkeypatch):
+    import plugboard.billing as b
+
+    match = b.PriceMatch(
+        {"input_price": 1_000_000.0, "output_price": 0.0}, "m", "models"
+    )
+    monkeypatch.setattr(b, "resolve_price", lambda *a, **k: match)
+    text_only = _estimate({"messages": [{"role": "user", "content": "hi"}]})
+    image = {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64," + "A" * 9000},
+    }
+    with_image = _estimate(
+        {
+            "messages": [
+                {"role": "user", "content": [{"type": "text", "text": "hi"}, image]}
+            ]
+        }
+    )
+    assert with_image >= text_only + 1600  # one image, at the prudent rate
+    tools = [
+        {"type": "function", "function": {"name": "f", "parameters": {"a": "x" * 400}}}
+    ]
+    assert (
+        _estimate({"messages": [], "tools": tools}) > _estimate({"messages": []}) + 50
+    )
+
+
+async def test_an_answer_longer_than_its_hold_is_billed_and_logged(
+    client, budget, caplog
+):
+    long_answer = dict(
+        FAKE_COMPLETION, usage={"prompt_tokens": 5, "completion_tokens": 200}
+    )
+    with aioresponses() as mock, caplog.at_level("WARNING"):
+        mock.post(URL_A, payload=long_answer)
+        resp = await client.post(
+            "/v1/chat/completions", headers=budget["limited"], json=_body(max_tokens=10)
+        )
+    assert resp.status_code == 200
+    [row] = usage.get_usage(MONTH)
+    assert row["cost_usd"] == pytest.approx(0.6)
+    assert any("overrun" in r.getMessage() for r in caplog.records)
+
+
+# ── Review follow-ups: every path holds and settles ──────────────────────────
+
+
+async def test_v2_and_sessions_hold_and_settle(client, budget):
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION, repeat=True)
+        for path, extra in (
+            ("/v2/chat/completions", {}),
+            ("/v1/chat/completions", {"session_id": "s1"}),
+            ("/v1/chat/completions", {"session_id": "s1"}),
+        ):
+            resp = await client.post(
+                path, headers=budget["limited"], json=_body(**extra)
+            )
+            assert resp.status_code == 200, resp.text
+    assert _holds() == [] and len(usage.get_usage(MONTH)) == 3
+
+
+async def test_a_cli_route_asked_to_stream_holds_and_settles(
+    client, budget, _providers_file, monkeypatch
+):
+    import json as _json
+
+    from plugboard import cli_subprocess
+    from tests.factories import PROVIDER_A, PROVIDER_B
+
+    cli = {
+        "id": "pbtest-cli",
+        "name": "CLI test",
+        "base_url": "subprocess://claude",
+        "bearer_token": "(via CLI)",
+        "default_model": "model-x",
+        "auth_source": "subprocess:claude",
+        "is_active": True,
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+    _providers_file.write_text(
+        _json.dumps({"providers": [PROVIDER_A, PROVIDER_B, cli]})
+    )
+    router.invalidate_models_cache()
+
+    async def complete(kind, body, *, timeout_s=None):
+        return _json.loads(_json.dumps(FAKE_COMPLETION))
+
+    monkeypatch.setattr(cli_subprocess, "complete", complete)
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=budget["limited"],
+        json=_body(model="pbtest-cli:model-x", stream=True),
+    )
+    assert resp.status_code == 200 and "data: [DONE]" in resp.text
+    assert _holds() == [] and len(usage.get_usage(MONTH)) == 1
+
+
+async def test_a_billing_error_keeps_the_hold(client, budget, monkeypatch):
+    """Served but not billed: the estimate stays counted, never given back."""
+    from plugboard import chat_billing
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("pricing grid unreadable")
+
+    monkeypatch.setattr(chat_billing, "charge_completion", broken)
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION)
+        resp = await client.post(
+            "/v1/chat/completions", headers=budget["limited"], json=_body()
+        )
+    assert resp.status_code == 200
+    assert len(_holds()) == 1
+
+
+async def test_the_hold_is_kept_on_the_request_before_it_is_written(budget):
+    """A request cancelled during the write still gives its hold back."""
+    from plugboard import app as app_module
+
+    seen = []
+
+    def hold_budget(**kwargs):
+        seen.append(kept[0].id == kwargs["hold_id"])
+        return kwargs["hold_id"]
+
+    kept = [None]
+    import plugboard.apikeys as ak
+
+    record = ak.get_key_record(budget["limited"]["Authorization"].split()[1])
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(usage, "hold_budget", hold_budget)
+        hold = await app_module._take_budget_hold(
+            "acme", record, _body(), lambda h: kept.__setitem__(0, h)
+        )
+    assert seen == [True] and kept[0] is hold
+
+
+async def test_the_spending_alert_counts_the_spend_not_the_holds(
+    client, budget, monkeypatch
+):
+    usage.hold_budget(
+        client_id="acme", key_id=budget["key_id"], month=MONTH, limit=1.0, cost=0.6
+    )
+    totals = []
+    monkeypatch.setattr(
+        "plugboard.app._send_spending_alert",
+        lambda *a, **k: totals.append(k["current_total_usd"]),
+    )
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION)
+        resp = await client.post(
+            "/v1/chat/completions", headers=budget["limited"], json=_body()
+        )
+    assert resp.status_code == 200
+    assert totals == [pytest.approx(0.006)]
+
+
+async def test_the_early_refusal_names_the_holds(client, budget):
+    usage.hold_budget(
+        client_id="acme", key_id=budget["key_id"], month=MONTH, limit=1.0, cost=1.0
+    )
+    resp = await client.post(
+        "/v1/chat/completions", headers=budget["limited"], json=_body()
+    )
+    assert resp.status_code == 429
+    assert "with the calls in progress" in resp.json()["detail"]
+
+
+# ── Review follow-ups: the preflight ─────────────────────────────────────────
+
+
+def _preflight():
+    return {"items": [{"provider": "test-provider", "model": "fake:model-v1"}]}
+
+
+async def test_preflight_pings_hold_and_settle(client, budget):
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION)
+        resp = await client.post(
+            "/v1/preflight", headers=budget["limited"], json=_preflight()
+        )
+    assert resp.json()["results"][0]["ok"] is True
+    assert _holds() == [] and len(usage.get_usage(MONTH)) == 1
+
+
+async def test_preflight_refuses_a_budgeted_key_when_usage_cannot_be_written(
+    client, budget, store, monkeypatch
+):
+    _read_only(monkeypatch, store)
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION, repeat=True)
+        resp = await client.post(
+            "/v1/preflight", headers=budget["limited"], json=_preflight()
+        )
+        assert not mock.requests
+    assert resp.status_code == 503 and resp.json()["code"] == "usage_unavailable"
+
+
+async def test_preflight_refuses_a_budgeted_key_when_usage_cannot_be_read(
+    client, budget, monkeypatch
+):
+    def broken():
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(usage, "_get_conn", broken)
+    resp = await client.post(
+        "/v1/preflight", headers=budget["limited"], json=_preflight()
+    )
+    assert resp.status_code == 503 and resp.json()["code"] == "usage_unavailable"
+
+
+async def test_a_failed_ping_gives_its_hold_back(client, budget):
+    with aioresponses() as mock:
+        mock.post(URL_A, status=500, body="down", repeat=True)
+        resp = await client.post(
+            "/v1/preflight", headers=budget["limited"], json=_preflight()
+        )
+    assert resp.json()["results"][0]["error"] == "upstream_error"
+    assert _holds() == [] and usage.get_usage(MONTH) == []

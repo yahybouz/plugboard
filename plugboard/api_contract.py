@@ -702,8 +702,9 @@ _ROUTES: List[_Route] = [
              "a key limit exceeded, or TypeSafe's quota or rate limit exhausted "
              "(Retry-After when TypeSafe gives it).",
       "502": "Invalid response from the decision engine.",
-      "503": "Decision engine unavailable, or usage cannot be recorded and the"
-             " key has a monthly budget (code usage_unavailable).",
+      "503": "Decision engine unavailable, or usage cannot be recorded for a"
+             " key with a monthly budget (code usage_unavailable when the usage"
+             " cannot be read).",
       "504": "Decision engine timed out."}, True),
     ("post", "/v1/embeddings", "Embed texts with a local engine (OpenAI-compatible, never chat)",
      EmbeddingRequest, EmbeddingList,
