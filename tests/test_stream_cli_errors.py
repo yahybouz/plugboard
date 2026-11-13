@@ -63,3 +63,62 @@ async def test_a_failed_cli_route_sends_no_event_with_its_stderr_or_pid(failing_
         ):
             sent.append(chunk)
     assert sent == []
+
+
+@pytest.fixture
+def http_then_failing_cli(failing_cli, _providers_file, monkeypatch):
+    """A streamed chat for the bare model: the HTTP provider first (it
+    fails), then the failing CLI route, last."""
+    from tests.factories import PROVIDER_A
+
+    _providers_file.write_text(json.dumps({"providers": [PROVIDER_A, CLI]}))
+    router.invalidate_models_cache()
+    monkeypatch.setattr(
+        router.metrics,
+        "get_stats",
+        lambda: {
+            "test-provider": {"latency_avg": 0.1, "requests": 10, "errors": 0},
+            "pbtest-cli": {"latency_avg": 1.0, "requests": 10, "errors": 0},
+        },
+    )
+
+
+@pytest.mark.parametrize("who", ["client-key", "admin"])
+async def test_a_failed_cli_route_shows_its_details_to_the_admin_only(
+    client, http_then_failing_cli, tmp_path, monkeypatch, who
+):
+    """BUG-75: the CLI's stderr and process are protected, not lost: the chat
+    route answers 502 with a log reference to a client key, and the details
+    to the admin, as for a non-streamed CLI error."""
+    from aioresponses import aioresponses
+
+    import plugboard.apikeys as ak
+    import plugboard.app as app_mod
+
+    if who == "admin":
+        auth = {"Authorization": "Bearer testkey"}
+    else:
+        monkeypatch.setattr(ak, "_DATA_DIR", tmp_path)
+        monkeypatch.setattr(ak, "KEYS_FILE", tmp_path / "api_keys.json")
+        monkeypatch.setattr(ak, "KEYS_LOCK", tmp_path / "api_keys.json.lock")
+        auth = {"Authorization": f"Bearer {ak.create_key('cli-c', 'c')['key']}"}
+        monkeypatch.setattr(app_mod, "_check_price_known", lambda *a, **k: None)
+    with aioresponses() as mock:
+        mock.post("http://fake-llm.test/v1/chat/completions", status=500, body="x")
+        resp = await client.post(
+            "/v1/chat/completions",
+            headers=auth,
+            json={
+                "model": "fake:model-v1",
+                "messages": [{"role": "user", "content": "hi"}],
+                "stream": True,
+                "cache": False,
+            },
+        )
+    assert resp.status_code == 502, resp.text
+    body = resp.json()
+    if who == "admin":
+        assert body["stderr"] == SECRET and body["pid"] == 4242
+    else:
+        assert SECRET not in resp.text and "4242" not in resp.text
+        assert "reference" in body["detail"]
