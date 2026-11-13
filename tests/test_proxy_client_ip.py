@@ -92,30 +92,46 @@ async def test_login_lockout_cannot_be_dodged_with_a_forged_header(limits):
 
 def test_stale_login_counters_are_purged(monkeypatch):
     # With the real client counted, every address that fails once leaves a
-    # counter: they are dropped once their window or lockout is over.
+    # counter: they are dropped once their window or lockout is over, at most
+    # once per window, and a live window or lockout is kept.
+    import collections
+
     import plugboard.ratelimit as rl
 
-    now = [1000.0]
+    now = [10_000.0]
     monkeypatch.setattr(rl.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(rl, "_auth_buckets", {})
     monkeypatch.setattr(rl, "_lockouts", {})
+    monkeypatch.setattr(rl, "_last_auth_purge", now[0])
     for n in range(300):
         rl.record_auth_failure(f"client-{n}")
     for _ in range(rl._AUTH_LIMIT):
         rl.record_auth_failure("198.51.100.1")  # locked out
-    assert len(rl._auth_buckets) == 300 and "198.51.100.1" in rl._lockouts
     now[0] += rl._LOCKOUT_DURATION + 1
-    # Purged every _AUTH_PURGE_INTERVAL failures, not on each one.
-    for _ in range(rl._AUTH_PURGE_INTERVAL):
-        rl.record_auth_failure("192.0.2.1")
-        rl._lockouts.pop("192.0.2.1", None)  # only the older entries matter here
-    assert set(rl._auth_buckets) <= {"192.0.2.1"}
-    assert rl._lockouts == {}
+    # Still in force, or still counting, at the next purge:
+    rl._lockouts["198.51.100.2"] = now[0] + 60
+    rl._auth_buckets["198.51.100.3"] = collections.deque([now[0] - 30])
+    rl._last_auth_purge = now[0] - rl._AUTH_WINDOW + 1  # not due yet
+    rl.record_auth_failure("192.0.2.1")
+    assert len(rl._auth_buckets) == 302 and "198.51.100.1" in rl._lockouts
+    now[0] += 1  # one window since the last purge
+    rl.record_auth_failure("192.0.2.1")
+    assert set(rl._auth_buckets) == {"192.0.2.1", "198.51.100.3"}
+    assert set(rl._lockouts) == {"198.51.100.2"}
 
 
 @pytest.mark.parametrize(
     "value, warned",
-    [("*", True), ("172.18.0.1, *", True), ("172.18.0.1", False), ("", False)],
+    [
+        ("*", True),
+        ("172.18.0.1, *", True),
+        ("0.0.0.0/0", True),
+        ("172.18.0.1,::/0", True),
+        ("172.18.0.1;", True),  # a typo uvicorn ignores: the proxy is not trusted
+        ("172.18.0.1", False),
+        ("172.18.0.0/24, ::1", False),
+        ("", False),
+    ],
 )
 def test_trusting_every_peer_is_reported(value, warned):
     from plugboard.app import trusted_proxy_warning

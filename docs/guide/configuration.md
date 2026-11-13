@@ -53,6 +53,7 @@ A completed rotation also signs out every dashboard session and forgets the brow
 | `PLUGBOARD_BIND_HOST` | set by `run.py` | Records the interface the server really listens on; used by auto-login. Do not set it yourself. |
 | `PLUGBOARD_SKIP_DOTENV` | empty | `1` stops the configuration module from loading `.env` (used by the test suite). |
 | `RATE_LIMIT` | `60` | Requests per minute per client IP address, all routes. `0` disables it. |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1,::1` | Addresses (or networks) of the reverse proxies whose `X-Forwarded-For` gives the client address for the rate limit, the admin-login lockout and the audit log (uvicorn setting, read by `run.py`; with the `uvicorn` command use `--env-file`). Never `*` or a `/0` network: the boot log warns. |
 | `MAX_BODY_BYTES` | `10485760` | Maximum request body size (10 MB). |
 | `PLUGBOARD_MAX_INFLIGHT_CHAT` | `8` | Maximum concurrent chat requests, streaming included. `0` means no cap. |
 | `PLUGBOARD_INFLIGHT_WAIT_S` | `10` | How long a request waits for a free slot before `503`. `0` fails immediately. A request's waits (slot, session turn, provider) share one budget, the longer of this and `PLUGBOARD_PROVIDER_WAIT_S`; with both at `0`, a session turn sent while the previous one runs gets `503` at once ([one wait per request](clients-and-keys.md#how-limits-are-enforced)). |

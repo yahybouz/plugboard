@@ -337,18 +337,43 @@ if _dotenv_warning:
 
 
 def trusted_proxy_warning(value: str) -> Optional[str]:
-    """Why FORWARDED_ALLOW_IPS is unsafe, or None (BUG-56).
+    """Why FORWARDED_ALLOW_IPS is unsafe or partly ignored, or None (BUG-56).
 
     uvicorn takes the client IP from X-Forwarded-For only for a peer listed
-    there; ``*`` lists every peer, so any client can choose its IP.
+    there: ``*`` or a ``/0`` network lists every peer, so any client can
+    choose its IP; an entry that is neither an address nor a network is
+    silently ignored by uvicorn.
     """
-    if "*" not in (part.strip() for part in value.split(",")):
-        return None
-    return (
-        "FORWARDED_ALLOW_IPS contains '*': any client can set its IP with "
-        "X-Forwarded-For and so dodge the per-IP rate limit and the admin-login "
-        "lockout. List only the reverse proxy's address."
-    )
+    import ipaddress
+
+    entries = [part.strip() for part in value.split(",") if part.strip()]
+    trust_all, ignored = [], []
+    for entry in entries:
+        if entry == "*":
+            trust_all.append(entry)
+            continue
+        try:
+            network = ipaddress.ip_network(entry, strict=False)
+        except ValueError:
+            ignored.append(entry)
+            continue
+        if network.prefixlen == 0:
+            trust_all.append(entry)
+    if trust_all:
+        return (
+            f"FORWARDED_ALLOW_IPS trusts every peer ({', '.join(trust_all)}): any "
+            "client can set its IP with X-Forwarded-For and so dodge the per-IP "
+            "rate limit and the admin-login lockout. List only the reverse "
+            "proxy's address."
+        )
+    if ignored:
+        return (
+            f"FORWARDED_ALLOW_IPS has entries that are neither an address nor a "
+            f"network ({', '.join(ignored)}): uvicorn ignores them, so a proxy "
+            "meant there is not trusted and its clients share one rate limit "
+            "and one admin-login lockout."
+        )
+    return None
 
 
 def _warn_trusted_proxies() -> None:
