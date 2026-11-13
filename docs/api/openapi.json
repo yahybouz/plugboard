@@ -1479,7 +1479,7 @@
               }
             ],
             "default": null,
-            "description": "Stable reason for programs, when the route gives one: unsupported_on_cli (chat, 400), context_length_exceeded (chat, 400), model_not_found (chat, 404), providers_busy (chat, 503), server_busy (chat and preflight, 503), provider_disabled (chat, 503).",
+            "description": "Stable reason for programs, when the route gives one: unsupported_on_cli (chat, 400), context_length_exceeded (chat, 400), model_not_found (chat, 404), providers_busy (chat, 503), server_busy (chat and preflight, 503; also a preflight item's error), provider_disabled (chat, 503).",
             "title": "Code"
           },
           "unsupported": {
@@ -2399,7 +2399,8 @@
                   "rate_limited",
                   "upstream_error",
                   "providers_busy",
-                  "provider_disabled"
+                  "provider_disabled",
+                  "server_busy"
                 ],
                 "type": "string"
               },
@@ -2408,7 +2409,7 @@
               }
             ],
             "default": null,
-            "description": "Why the pair failed (closed code, never the provider's text): the model does not resolve, is not allowed for the key, no provider knows it (the chat routes' 404 model_not_found; not pinged), the monthly budget is spent, the key has a budget and the model no known price, the key's rpm limit is reached, the provider failed, the provider stayed at its concurrency cap (nothing was called), or the model belongs to a provider the admin turned off (the chat routes' 503 provider_disabled; nothing was called).",
+            "description": "Why the pair failed (closed code, never the provider's text): the model does not resolve, is not allowed for the key, no provider knows it (the chat routes' 404 model_not_found; not pinged), the monthly budget is spent, the key has a budget and the model no known price, the key's rpm limit is reached, the provider failed, the provider stayed at its concurrency cap (nothing was called), or the model belongs to a provider the admin turned off (the chat routes' 503 provider_disabled; nothing was called), or the global cap of concurrent chat requests stayed full when the pair's turn came (the chat routes' 503 server_busy; not pinged, or its provider's slot given back).",
             "title": "Error"
           }
         },

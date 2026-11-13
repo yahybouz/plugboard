@@ -390,6 +390,7 @@ class PreflightResult(BaseModel):
             "upstream_error",
             "providers_busy",
             "provider_disabled",
+            "server_busy",
         ]
     ] = Field(
         default=None,
@@ -402,7 +403,9 @@ class PreflightResult(BaseModel):
             "provider failed, the provider stayed at its concurrency cap "
             "(nothing was called), or the model belongs to a provider the "
             "admin turned off (the chat routes' 503 provider_disabled; "
-            "nothing was called)."
+            "nothing was called), or the global cap of concurrent chat "
+            "requests stayed full when the pair's turn came (the chat routes' "
+            "503 server_busy; not pinged, or its provider's slot given back)."
         ),
     )
 
@@ -552,7 +555,8 @@ class ErrorResponse(_Open):
         description="Stable reason for programs, when the route gives one: "
         "unsupported_on_cli (chat, 400), context_length_exceeded (chat, 400), "
         "model_not_found (chat, 404), providers_busy (chat, 503), "
-        "server_busy (chat and preflight, 503), provider_disabled (chat, 503).",
+        "server_busy (chat and preflight, 503; also a preflight item's error), "
+        "provider_disabled (chat, 503).",
     )
     unsupported: Optional[List[str]] = Field(
         default=None,

@@ -3028,8 +3028,11 @@ async def preflight(
 
     Each ping goes through the chat admission checks (allowed_models, budget,
     a provider that is not turned off, a model some provider knows, known
-    price, rpm; the inflight cap holds for the whole batch) and is billed
-    like a chat call. Errors are closed codes, never the provider's text.
+    price, rpm) and is billed like a chat call. The batch holds one slot of
+    the global cap, given back while a ping waits for a full provider and
+    taken back before the next ping (BUG-77): a pair it cannot ping for want
+    of a slot answers ``server_busy``. Errors are closed codes, never the
+    provider's text.
     """
     key_record = _get_request_key_record(request, client_id=client_id)
     key_id = getattr(request.state, "key_id", "")
@@ -3058,10 +3061,10 @@ async def preflight(
                 "messages": [{"role": "user", "content": "ping"}],
                 "max_tokens": 1,
             }
-            # BUG-77: a ping refused after a provider's wait left the global
-            # slot; the batch takes it back before its next ping.
-            await _request_wait.slot_back()
             try:
+                # BUG-77: a ping refused after a provider's wait left the
+                # global slot; the batch takes it back before its next ping.
+                await _request_wait.slot_back()
                 result = await _unless_client_gone(
                     request, forward(ping_body, timeout=10.0, **route_options)
                 )
@@ -3069,7 +3072,9 @@ async def preflight(
                 # Nobody waits for the rest of the batch: stop here.
                 return _client_gone_response(model_str)
             except _ChatOverloaded:
-                raise  # the global cap, not this pair: 503 server_busy
+                # The global cap stayed full: this pair is not pinged (or its
+                # provider's slot went back), the results so far are kept.
+                error = "server_busy"
             except HTTPException:
                 error = "forbidden_model"
             except ProvidersBusyError as exc:
