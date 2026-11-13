@@ -654,6 +654,9 @@ _AUTH_ERRORS = {
 }
 _CHAT_ERRORS = {
     **_AUTH_ERRORS,
+    "401": "Missing or invalid API key; or the provider's own credentials could"
+    " not be used (a CLI login expired, an OAuth token refused) on the last"
+    " provider tried: error_ref, nothing was called on that provider.",
     "429": "Rate limit or monthly spending limit exceeded, or this call's estimated"
     " cost does not fit in what the budget has left once the calls in progress are"
     " counted (nothing was called), or the quota of the last provider tried is"
@@ -677,7 +680,9 @@ _CHAT_ERRORS = {
     " the request asked for a stream or not (PLU-26), or at once when the"
     " stream had already begun.",
     "402": "The key has a monthly budget and the model no known price; nothing was called.",
-    "403": "The key may not use this model.",
+    "403": "The key may not use this model; or the provider's own credentials"
+    " could not be used on the last provider tried (a Copilot licence missing,"
+    " for example): error_ref, nothing was called on that provider.",
     "404": "No provider knows the model: no provider ID prefixes it, no provider"
     " lists it, and every active provider has a model list. code is"
     " model_not_found, hint says what to send; nothing was called.",

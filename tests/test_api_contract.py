@@ -331,3 +331,17 @@ def test_committed_contract_names_session_busy():
         assert "session_busy" in unavailable, path
     code = doc["components"]["schemas"]["ErrorResponse"]["properties"]["code"]
     assert "session_busy" in code["description"]
+
+
+def test_committed_contract_names_the_provider_credentials_401_and_403():
+    """MIN-1 (4.13.0 review): a chat whose provider's own credentials cannot
+    be used (a CLI login, a Copilot licence) answers that cause's 401 or 403
+    (router.ProviderAuthError); the routes' 401 and 403 must say so, not only
+    "invalid API key" and "the key may not use this model"."""
+    doc = json.loads((ROOT / "docs" / "api" / "openapi.json").read_text("utf-8"))
+    for path in ("/v1/chat/completions", "/v2/chat/completions"):
+        responses = doc["paths"][path]["post"]["responses"]
+        for status in ("401", "403"):
+            text = responses[status]["description"]
+            assert "provider's own credentials" in text, (path, status)
+            assert "error_ref" in text, (path, status)
