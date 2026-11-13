@@ -577,6 +577,16 @@ def _listed_models(provider: Dict[str, Any]) -> List[str]:
     ]
 
 
+def _route_refused(provider: Dict[str, Any]) -> frozenset:
+    """The model names the route's subscription refuses (BUG-78): the ones a
+    ChatGPT sign-in refuses on a codex route, none on any other route."""
+    if provider.get("auth_source") != "subprocess:codex":
+        return frozenset()
+    from plugboard.cli_subprocess import codex_refused_models
+
+    return codex_refused_models()
+
+
 def _served_models(provider: Dict[str, Any]) -> List[str]:
     """``_listed_models`` without what the route's subscription refuses.
 
@@ -587,12 +597,20 @@ def _served_models(provider: Dict[str, Any]) -> List[str]:
     ``_listed_models``.
     """
     listed = _listed_models(provider)
-    if provider.get("auth_source") != "subprocess:codex":
-        return listed
-    from plugboard.cli_subprocess import codex_refused_models
-
-    refused = codex_refused_models()
+    refused = _route_refused(provider)
     return [m for m in listed if m not in refused] if refused else listed
+
+
+def _served_default(provider: Dict[str, Any]) -> str:
+    """The route's default model, or "" when its subscription refuses it.
+
+    A codex route that switched to a ChatGPT sign-in keeps its saved default
+    until the model refresh chooses another one (BUG-83).
+    """
+    default = provider.get("default_model") or ""
+    if not isinstance(default, str) or default in _route_refused(provider):
+        return ""
+    return default
 
 
 def _metric_model(provider: Dict[str, Any], model: str) -> str:
@@ -627,9 +645,12 @@ def _family_aliases(provider: Dict[str, Any]) -> List[str]:
     """
     from plugboard.model_catalog import dedupe_family_snapshots, enrich
 
-    native = _listed_models(provider)
-    default = provider.get("default_model")
-    if not native and isinstance(default, str) and default:
+    # What the route's subscription refuses gives no family name either: a
+    # dated snapshot does not bring back the refused bare name (BUG-83).
+    refused = _route_refused(provider)
+    native = _served_models(provider)
+    default = _served_default(provider)
+    if not _listed_models(provider) and default:
         native = [default]  # list_models publishes it only without a list
     entries = [
         {"id": f"{provider['id']}:{m}", "owned_by": provider["id"]} for m in native
@@ -638,7 +659,7 @@ def _family_aliases(provider: Dict[str, Any]) -> List[str]:
         alias
         for entry in dedupe_family_snapshots(enrich(entries))
         for alias in entry.get("aliases") or []
-        if isinstance(alias, str) and alias
+        if isinstance(alias, str) and alias and alias not in refused
     ]
 
 
@@ -671,7 +692,7 @@ def is_unknown_model(model_str: str) -> bool:
     for provider in registry:
         names = (
             _served_models(provider)
-            + [provider.get("default_model") or ""]
+            + [_served_default(provider)]
             + _family_aliases(provider)
         )
         if any(
@@ -703,7 +724,7 @@ def _known_native(
     listed = _served_models(provider)
     aliases = _family_aliases(provider)
     wanted = _loose_model_name(model_str)
-    for name in listed + [provider.get("default_model") or ""] + aliases:
+    for name in listed + [_served_default(provider)] + aliases:
         if isinstance(name, str) and name and _loose_model_name(name) == wanted:
             return name
     if published_in is not None:

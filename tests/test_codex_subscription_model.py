@@ -610,3 +610,60 @@ def test_the_sign_in_is_read_from_auth_json(codex_home, auth, chatgpt):
 
     assert cs.codex_uses_chatgpt_sign_in() is chatgpt
     assert bool(cs.codex_refused_models()) is chatgpt
+
+
+# ── The default model and family aliases follow the same rule (BUG-83) ───
+
+
+@pytest.mark.asyncio
+async def test_a_refused_default_model_does_not_pull_a_bare_name_to_codex(
+    client, client_key, http_provider, cli_process, codex_home, _providers_file
+):
+    # Signed in with ChatGPT before the model refresh re-chose the default:
+    # the codex route's default_model is a refused model it no longer lists.
+    from plugboard.router import invalidate_models_cache
+
+    received = http_provider
+    providers = json.loads(_providers_file.read_text())["providers"]
+    providers[0] = {
+        **CLI_PROVIDER,
+        "default_model": REFUSED,
+        "models": [{"id": "gpt-6-luna"}],
+    }
+    _providers_file.write_text(json.dumps({"providers": providers}))
+    invalidate_models_cache()
+    codex_home("chatgpt")
+    spawned = cli_process(b"", _STDERR_REFUSAL)
+
+    resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
+
+    assert resp.status_code == 200, resp.text
+    assert spawned == []
+    assert len(received) == 1
+
+
+@pytest.mark.parametrize("mode", ["chatgpt", "apikey"])
+def test_a_refused_default_or_family_alias_is_not_known_to_codex(
+    _providers_file, codex_home, mode
+):
+    from plugboard import router
+
+    codex_home(mode)
+    codex = {
+        **CLI_PROVIDER,
+        "default_model": REFUSED,
+        # A dated snapshot publishes its family under the bare, refused name.
+        "models": [{"id": "gpt-6-sol-20260101"}, {"id": "gpt-6-luna"}],
+    }
+    listed_http = {**PROVIDER_A, "models": [{"id": "other-model"}]}
+    _providers_file.write_text(json.dumps({"providers": [codex, listed_http]}))
+    router.invalidate_models_cache()
+
+    chatgpt = mode == "chatgpt"
+    assert (router._known_native(codex, REFUSED) is None) is chatgpt
+    assert (router._known_native(codex, "gpt-6-sol") is None) is chatgpt
+    assert router.is_unknown_model(REFUSED) is chatgpt
+    assert router.is_unknown_model("gpt-6-sol") is chatgpt
+    # What the route serves stays known, whatever the sign-in.
+    assert router._known_native(codex, "gpt-6-luna") == "gpt-6-luna"
+    assert router._known_native(codex, "gpt-6-sol-20260101") == "gpt-6-sol-20260101"
