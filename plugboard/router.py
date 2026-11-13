@@ -1851,14 +1851,22 @@ async def _stream_route(
                 if isinstance(err, ProviderQuotaError):
                     route_pauses.pause(circuit_key, err.retry_after)
                 raise err
-            cb_success(circuit_key)
-            route_pauses.clear(circuit_key)
-            record_provider_success(provider["id"])
-            streaming = True
             async for chunk in resp.content.iter_any():
+                if not streaming:
+                    # The first chunk: the route works (an empty 200 does not).
+                    streaming = True
+                    cb_success(circuit_key)
+                    route_pauses.clear(circuit_key)
+                    record_provider_success(provider["id"])
                 meter.feed(chunk)
                 yield chunk
             meter.finish()
+        if not streaming:
+            # A 200 with nothing in it: a failure of the route, which
+            # forward_stream hands over.
+            cb_failure(circuit_key)
+            await _stream_failed(provider["id"], True)
+            return
         # A whole stream: its duration feeds the routing score, as a
         # non-streamed call's does.
         metrics.record(provider["id"], _time.perf_counter() - started)

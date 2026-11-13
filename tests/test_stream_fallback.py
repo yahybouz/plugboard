@@ -502,3 +502,20 @@ async def test_a_failing_last_cli_route_shows_no_stderr_to_a_client_key(
     assert resp.status_code == 502, resp.text
     assert "error_ref" in resp.text
     assert "SECRET_STDERR" not in resp.text and "pid" not in resp.text
+
+
+async def test_an_empty_stream_counts_as_a_failure_not_a_success(client, two_routes):
+    """An answer of 200 with no event at all hands over (above) and counts
+    against the route, not for it: no circuit success, no reset of the
+    provider_down count."""
+    from plugboard import alerts
+
+    alerts._provider_failures["test-provider"] = 1
+    with aioresponses() as mock:
+        mock.post(URL_A, body=b"", status=200)
+        mock.post(URL_B, body=FAKE_STREAM_BODY, status=200)
+        resp = await client.post("/v1/chat/completions", headers=AUTH, json=_stream())
+    assert resp.status_code == 200
+    circuit = circuit_breaker._circuits.get(f"{PROVIDER_A['id']}:{BARE}")
+    assert circuit is not None and circuit.failures == 1
+    assert alerts._provider_failures.get("test-provider") == 2
