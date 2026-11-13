@@ -231,6 +231,36 @@ def run_retention(now: Optional[datetime] = None) -> Dict[str, Any]:
     return report
 
 
+# A daily pass older than this when the server starts was missed (BUG-72).
+OVERDUE_AFTER = timedelta(hours=25)
+
+
+def _last_ran_at() -> Optional[datetime]:
+    try:
+        ran_at = datetime.strptime(
+            str((last_report() or {}).get("ran_at")), "%Y-%m-%dT%H:%M:%SZ"
+        )
+    except ValueError:
+        return None
+    return ran_at.replace(tzinfo=timezone.utc)
+
+
+def pass_overdue(now: Optional[datetime] = None) -> bool:
+    """True when the last pass is more than a day old (BUG-72).
+
+    The server was not running at the daily hour: the pass runs soon after
+    the start instead of a day later (and the clock check still applies).
+    Never true before the first pass, which waits for the daily hour.
+    """
+    ran_at = _last_ran_at()
+    if ran_at is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return now - ran_at > OVERDUE_AFTER
+
+
 def clock_check(now: Optional[datetime] = None) -> Optional[str]:
     """Why a scheduled pass must not run now, or None (BUG-70).
 
@@ -244,17 +274,15 @@ def clock_check(now: Optional[datetime] = None) -> Optional[str]:
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
-    last = last_report() or {}
-    try:
-        ran_at = datetime.strptime(str(last.get("ran_at")), "%Y-%m-%dT%H:%M:%SZ")
-    except ValueError:
+    ran_at = _last_ran_at()
+    if ran_at is None:
         return None
-    gap = now - ran_at.replace(tzinfo=timezone.utc)
+    gap = now - ran_at
     if gap <= timedelta(days=MAX_CLOCK_STEP_DAYS):
         return None
     return (
         f"held: the clock reads {now:%Y-%m-%d %H:%M} UTC, {gap.days} days after "
-        f"the last pass ({last['ran_at']}); a clock running ahead would delete "
+        f"the last pass ({ran_at:%Y-%m-%dT%H:%M:%SZ}); a clock running ahead would delete "
         "data that should be kept. Check the server clock, then run the pass "
         "from the Jobs page."
     )

@@ -51,6 +51,7 @@ class PeriodicJob:
         sleep_fn: Optional[SleepFn] = None,
         now_fn: Optional[Callable[[], datetime]] = None,
         scheduled_guard: Optional[Callable[[], Optional[str]]] = None,
+        catch_up: Optional[Callable[[], bool]] = None,
     ) -> None:
         if (interval_s > 0) == (daily_hour_utc is not None):
             raise ValueError(
@@ -70,6 +71,9 @@ class PeriodicJob:
         # Asked before each scheduled run, never before a manual one: a
         # message holds the run and is recorded as its error.
         self._scheduled_guard = scheduled_guard
+        # Asked once when the loop starts: True runs a daily job after
+        # first_delay_s instead of waiting for the next daily hour (BUG-72).
+        self._catch_up = catch_up
 
         self._task: Optional[asyncio.Task] = None
         self._run_lock = asyncio.Lock()
@@ -154,10 +158,22 @@ class PeriodicJob:
             target += timedelta(days=1)
         return (target - now).total_seconds()
 
+    def catches_up(self) -> bool:
+        """Whether a daily job's first run is now, a missed one (BUG-72)."""
+        if self.daily_hour_utc is None or self._catch_up is None:
+            return False
+        try:
+            return bool(self._catch_up())
+        except Exception as exc:  # noqa: BLE001 - never stops the loop
+            log.warning("PeriodicJob %s catch-up check failed: %s", self.name, exc)
+            return False
+
     async def _loop(self) -> None:
         first = True
         while True:
-            if self.daily_hour_utc is not None:
+            if first and self.catches_up():
+                delay = self.first_delay_s
+            elif self.daily_hour_utc is not None:
                 delay = self._seconds_until_daily_hour()
             else:
                 delay = self.first_delay_s if first else self.interval_s
@@ -255,4 +271,5 @@ def retention_job() -> PeriodicJob:
         daily_hour_utc=settings["hour_utc"],
         disabled=settings["disabled"],
         scheduled_guard=retention.clock_check,
+        catch_up=retention.pass_overdue,
     )

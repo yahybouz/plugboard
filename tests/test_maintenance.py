@@ -284,3 +284,42 @@ def test_constructor_needs_exactly_one_schedule():
         PeriodicJob("both", work, interval_s=300, daily_hour_utc=4)
     with pytest.raises(ValueError):
         PeriodicJob("bad hour", work, daily_hour_utc=24)
+
+
+async def test_a_missed_daily_run_is_caught_up_after_the_first_delay():
+    # BUG-72: a server down at the daily hour waited a whole day more.
+    calls: List[int] = []
+
+    async def work() -> Dict[str, Any]:
+        calls.append(1)
+        return {}
+
+    sleep = _FakeSleep(stop_after=2)
+    job = PeriodicJob(
+        "retention",
+        work,
+        daily_hour_utc=4,
+        sleep_fn=sleep,
+        now_fn=_clock(),
+        catch_up=lambda: True,
+    )
+    await _run_loop_to_the_end(job)
+    assert sleep.calls == [60.0, 19800]
+    assert calls == [1]
+
+
+async def test_no_catch_up_when_the_last_run_is_recent():
+    async def work() -> Dict[str, Any]:
+        return {}
+
+    sleep = _FakeSleep(stop_after=1)
+    job = PeriodicJob(
+        "retention",
+        work,
+        daily_hour_utc=4,
+        sleep_fn=sleep,
+        now_fn=_clock(),
+        catch_up=lambda: False,
+    )
+    await _run_loop_to_the_end(job)
+    assert sleep.calls == [19800]

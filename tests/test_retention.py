@@ -564,3 +564,25 @@ def test_zero_still_keeps_everything_and_the_floor_holds_rows(stores, monkeypatc
     seed_audit([_audit_row("a30", (NOW - timedelta(days=30)).isoformat())])
     retention.run_retention(NOW)
     assert column(stores["audit"], "audit_log", "id") == ["a30"]
+
+
+# --- BUG-72: catching up a missed daily pass ---------------------------------
+
+
+def test_a_pass_is_overdue_a_day_after_the_last_one(stores):
+    from plugboard import retention
+
+    assert retention.pass_overdue(NOW) is False  # never ran: wait for the hour
+    _last_pass_at(stores, NOW - timedelta(hours=23))
+    assert retention.pass_overdue(NOW) is False
+    _last_pass_at(stores, NOW - timedelta(hours=26))
+    assert retention.pass_overdue(NOW) is True
+
+
+def test_the_retention_job_catches_up_an_overdue_pass(stores):
+    from plugboard import maintenance, retention
+
+    _last_pass_at(stores, datetime.now(timezone.utc) - timedelta(days=2))
+    job = maintenance.retention_job()
+    assert job.catches_up() is True
+    assert retention.pass_overdue() is True
