@@ -2816,7 +2816,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API key.",
+            "description": "Missing or invalid API key; or the provider's own credentials could not be used (a CLI login expired, an OAuth token refused) on the last provider tried: error_ref, nothing was called on that provider.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2856,7 +2856,7 @@
             }
           },
           "403": {
-            "description": "The key may not use this model.",
+            "description": "The key may not use this model; or the provider's own credentials could not be used on the last provider tried (a Copilot licence missing, for example): error_ref, nothing was called on that provider.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3673,7 +3673,7 @@
             }
           },
           "401": {
-            "description": "Missing or invalid API key.",
+            "description": "Missing or invalid API key; or the provider's own credentials could not be used (a CLI login expired, an OAuth token refused) on the last provider tried: error_ref, nothing was called on that provider.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3713,7 +3713,7 @@
             }
           },
           "403": {
-            "description": "The key may not use this model.",
+            "description": "The key may not use this model; or the provider's own credentials could not be used on the last provider tried (a Copilot licence missing, for example): error_ref, nothing was called on that provider.",
             "content": {
               "application/json": {
                 "schema": {
