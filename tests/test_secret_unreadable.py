@@ -108,6 +108,10 @@ async def test_chat_to_that_provider_calls_nobody(
     # The answer to a provider that is turned off (PLU-12).
     assert r.status_code == 503, r.text
     assert r.json()["code"] == "provider_disabled"
+    # Review 4.13.0 MIN-2: not "turned off by the administrator", but why.
+    body = r.json()
+    assert "administrator" not in body["detail"]
+    assert "ENCRYPTION_KEY" in body["detail"] and "ENCRYPTION_KEY" in body["hint"]
 
 
 async def test_unreadable_key_is_logged_audited_and_alerted_once(
