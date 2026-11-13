@@ -11,7 +11,7 @@ from datetime import date
 
 import pytest
 
-from plugboard import billing, pricing_scraper
+from plugboard import billing, official_prices, pricing_scraper
 
 ANTHROPIC = "https://platform.claude.com/docs/en/about-claude/pricing"
 TYPESAFE = "https://docs.typesafe.ai/models#current-models"
@@ -492,3 +492,19 @@ async def test_laya_grid_price_is_published_and_named(
     assert row["price_source"] == f"grid:manual:{month}"
     listing = (await client.get("/v1/decisions/models", headers=headers)).json()
     assert listing["data"][0]["pricing"]["input_usd_per_mtok"] == 1.0
+
+
+def test_table_rechecked_on_2026_11_13_stays_fresh_until_mid_december():
+    # PLU-40: every price was read again on the vendors' pages on 2026-11-13;
+    # checked 2026-10-24, the table would turn stale on 2026-11-29.
+    assert official_prices.CHECKED == "2026-11-13"
+    assert official_prices.status(date(2026, 12, 18))["stale"] is False
+    assert official_prices.status(date(2026, 12, 19))["stale"] is True
+
+
+def test_gpt_4o_mini_points_at_the_page_that_shows_its_price():
+    # The OpenAI pricing page no longer lists gpt-4o-mini; its model page does.
+    [entry] = [e for e in official_prices.entries() if e["model"] == "gpt-4o-mini"]
+    assert entry["source_url"] == (
+        "https://developers.openai.com/api/docs/models/gpt-4o-mini"
+    )

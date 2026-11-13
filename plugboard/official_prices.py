@@ -26,10 +26,13 @@ log = logging.getLogger(__name__)
 MAX_AGE_ENV = "PLUGBOARD_OFFICIAL_PRICES_MAX_AGE_DAYS"
 DEFAULT_MAX_AGE_DAYS = 35
 
-CHECKED = "2026-10-24"
+# Every price below was read again on its official page on this day (PLU-40).
+CHECKED = "2026-11-13"
 _ANTHROPIC = "https://platform.claude.com/docs/en/about-claude/pricing"
 _GOOGLE = "https://ai.google.dev/gemini-api/docs/pricing"
-_OPENAI = "https://developers.openai.com/api/docs/pricing"
+# The pricing page no longer lists gpt-4o-mini (deprecated): its model page
+# shows its price.
+_OPENAI = "https://developers.openai.com/api/docs/models/gpt-4o-mini"
 _TYPESAFE = "https://docs.typesafe.ai/models#current-models"
 _LAYA = "https://github.com/NandhaKishorM/laya"
 

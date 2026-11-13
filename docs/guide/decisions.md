@@ -108,7 +108,7 @@ Their grid entries do not make them chat models. Official prices (checked
 
 | Engine | Price | `billing` in the answer | Ledger tokens / `price_source` |
 | --- | --- | --- | --- |
-| Jev | official: $0.042 per million input tokens, output free ([docs.typesafe.ai/models](https://docs.typesafe.ai/models#current-models), checked 2026-10-24) | `{"status":"billed","cost_usd":<input_tokens × 0.042 / 10⁶>}` | `usage.input_tokens` / `usage.output_tokens` reported by Jev; `official:<url>` |
+| Jev | official: $0.042 per million input tokens, output free ([docs.typesafe.ai/models](https://docs.typesafe.ai/models#current-models), checked 2026-11-13) | `{"status":"billed","cost_usd":<input_tokens × 0.042 / 10⁶>}` | `usage.input_tokens` / `usage.output_tokens` reported by Jev; `official:<url>` |
 | Jev | usage missing or invalid (absent, not an integer, negative, above 2²⁰ = 1,048,576) | `{"status":"estimated","cost_usd":0.002688}`: 64,000 tokens, Jev's default request context | 64,000 / `official-estimate:<url>` |
 | Laya | free (runs locally) | `{"status":"billed","cost_usd":0.0}` | 0 / `builtin:laya-free` |
 | any | the engine answered but the ledger write failed | `{"status":"unrecorded","cost_usd":null}`, answers returned, error logged without the request; budgeted keys then get 503 until a write succeeds | not recorded |

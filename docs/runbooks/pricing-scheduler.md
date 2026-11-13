@@ -66,7 +66,7 @@ export ADMIN_KEY=$(grep '^ADMIN_KEY=' .env | cut -d= -f2-)
      "cb_consecutive_failures": 0,
      "cb_open_until": null,
      "cb_cooldown_s": 3600,
-     "official": {"checked": "2026-10-24", "stale": false, "max_age_days": 35}
+     "official": {"checked": "2026-11-13", "stale": false, "max_age_days": 35}
    }
    ```
 
