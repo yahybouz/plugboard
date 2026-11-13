@@ -827,7 +827,7 @@ async def test_preflight_reports_server_busy_for_a_pair_it_could_not_ping(
     pinged) instead of the whole batch losing its results to a 503."""
     from plugboard import provider_admission
 
-    _waits(app_mod, monkeypatch, cap=2, slot_s=1.0, provider_s=0.4)
+    _waits(app_mod, monkeypatch, cap=2, slot_s=2.0, provider_s=1.0)
     from plugboard.config import get_provider
 
     held = provider_admission.try_acquire(get_provider(PROVIDER_A["id"]))
