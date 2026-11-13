@@ -733,45 +733,38 @@ class _AllGated:
 async def test_slot_not_back_after_the_provider_wait_gives_the_provider_back(
     client, app_mod, a_at_one_b_free, monkeypatch, stream
 ):
-    """A request granted A's slot while the global cap is full of running
+    """A request granted A's slot while the global cap stays full of running
     requests gets 503 server_busy when its slot wait ends, and A's slot goes
     back at once: it is not held idle by a request that will not run."""
     from plugboard import provider_admission
+    from plugboard.config import get_provider
 
-    _waits(app_mod, monkeypatch, cap=2, slot_s=0.5, provider_s=5.0)
-    a, b = _Upstream(), _AllGated()
+    _waits(app_mod, monkeypatch, cap=1, slot_s=0.5, provider_s=5.0)
+    held = provider_admission.try_acquire(get_provider(PROVIDER_A["id"]))
+    b = _AllGated()
     with aioresponses() as mock:
-        mock.post(URL_A, callback=a.reply, repeat=True)
+        mock.post(URL_A, callback=lambda url, **kw: _reply_for(kw), repeat=True)
         mock.post(URL_B, callback=b.reply, repeat=True)
-
-        def post(model, **extra):
-            return asyncio.create_task(
-                client.post(
-                    "/v1/chat/completions", headers=AUTH, json=_chat(model, **extra)
-                )
-            )
-
-        first_a = post(ONLY_A)
-        await _until(lambda: a.calls == 1)
-        second_a = post(ONLY_A, stream=stream)  # waits for A, without a global slot
+        waiting_a = asyncio.create_task(
+            client.post("/v1/chat/completions", headers=AUTH, json=_chat(stream=stream))
+        )
         await _until(lambda: provider_admission.waiting(PROVIDER_A["id"]) == 1)
-        on_b = [post(ONLY_B)]  # takes the free global slot
+        on_b = asyncio.create_task(  # takes the only global slot, and keeps it
+            client.post("/v1/chat/completions", headers=AUTH, json=_chat(ONLY_B))
+        )
         await _until(lambda: b.calls == 1)
-        on_b.append(post(ONLY_B))  # waits for a global slot
-        sem = app_mod._get_inflight_sem()
-        await _until(lambda: bool(sem._waiters))
         try:
-            a.gate.set()  # first_a ends; its slot goes to the queued B request
-            refused = await asyncio.wait_for(second_a, 3.0)
+            held.release()  # waiting_a gets A's slot, not the global one
+            refused = await asyncio.wait_for(waiting_a, 3.0)
             a_slots_after = provider_admission.in_flight(PROVIDER_A["id"])
         finally:
             b.gate.set()
-        assert (await first_a).status_code == 200
-        assert [r.status_code for r in await asyncio.gather(*on_b)] == [200, 200]
+        assert (await on_b).status_code == 200
     assert refused.status_code == 503, refused.text
     assert refused.json()["code"] == "server_busy"
     assert a_slots_after == 0
-    assert sem._value == 2 and app_mod._inflight_chat_active == 0
+    sem = app_mod._get_inflight_sem()
+    assert sem._value == 1 and app_mod._inflight_chat_active == 0
 
 
 async def test_slot_not_back_after_the_turn_gives_the_turn_back(
@@ -957,3 +950,142 @@ async def test_request_wait_counts_each_refusal_once_and_no_401(
     )
     assert unknown.status_code == 401
     assert request_waits.count == 1
+
+
+# ── PLU-48, PLU-49, PLU-51: the slot is taken back right before the call ────
+
+
+class _Recorder:
+    """Fake provider: records the order of calls; ``gate`` holds the first."""
+
+    def __init__(self, name, order, gate_first=False):
+        self.name, self.order, self.gate_first = name, order, gate_first
+        self.calls, self.gate = 0, asyncio.Event()
+
+    async def reply(self, url, **kwargs):
+        self.calls += 1
+        self.order.append(self.name)
+        if self.gate_first and self.calls == 1:
+            await self.gate.wait()
+        return _reply_for(kwargs)
+
+
+async def test_a_request_holding_a_provider_slot_takes_the_global_slot_first(
+    client, app_mod, a_at_one_b_free, monkeypatch
+):
+    """PLU-48: cap 1. R2 waited for A without a global slot; R1, a new
+    request for B, queued for the global slot before R2 got A's slot. When
+    the slot frees, R2 (already holding A's slot) goes first: A is not kept
+    idle behind a request that holds nothing."""
+    from plugboard import provider_admission
+    from plugboard.config import get_provider
+
+    _waits(app_mod, monkeypatch, cap=1, slot_s=3.0, provider_s=3.0)
+    held = provider_admission.try_acquire(get_provider(PROVIDER_A["id"]))
+    order: list = []
+    a, b = _Recorder("A", order), _Recorder("B", order, gate_first=True)
+    sem = app_mod._get_inflight_sem()
+
+    def post(model):
+        return asyncio.create_task(
+            client.post("/v1/chat/completions", headers=AUTH, json=_chat(model))
+        )
+
+    with aioresponses() as mock:
+        mock.post(URL_A, callback=a.reply, repeat=True)
+        mock.post(URL_B, callback=b.reply, repeat=True)
+        r2 = post(ONLY_A)
+        await _until(lambda: provider_admission.waiting(PROVIDER_A["id"]) == 1)
+        r0 = post(ONLY_B)  # takes the slot R2 gave back
+        await _until(lambda: b.calls == 1)
+        r1 = post(ONLY_B)  # queues for the global slot
+        await _until(lambda: len(sem._waiters) == 1)
+        held.release()  # R2 gets A's slot, then queues for the global one
+        await _until(lambda: len(sem._waiters) == 2)
+        b.gate.set()  # R0 ends: its slot goes to R2 first
+        answers = await asyncio.wait_for(asyncio.gather(r0, r1, r2), 5.0)
+    assert [r.status_code for r in answers] == [200, 200, 200]
+    assert order == ["B", "A", "B"], order
+    assert sem._value == 1 and app_mod._inflight_chat_active == 0
+
+
+async def test_a_provider_turned_off_while_waited_for_answers_without_a_slot_wait(
+    client, app_mod, a_at_one_b_free, _providers_file, monkeypatch
+):
+    """PLU-49: R waited for A without a global slot; A is turned off before
+    its slot frees. R answers 503 provider_disabled at once, without first
+    waiting for a global slot it would not use."""
+    from plugboard import provider_admission, router
+    from plugboard.config import get_provider
+    from tests.factories import PROVIDER_B
+
+    _waits(app_mod, monkeypatch, cap=1, slot_s=2.0, provider_s=3.0)
+    held = provider_admission.try_acquire(get_provider(PROVIDER_A["id"]))
+    b = _Recorder("B", [], gate_first=True)
+    with aioresponses() as mock:
+        mock.post(URL_B, callback=b.reply, repeat=True)
+        r = asyncio.create_task(
+            client.post("/v1/chat/completions", headers=AUTH, json=_chat(ONLY_A))
+        )
+        await _until(lambda: provider_admission.waiting(PROVIDER_A["id"]) == 1)
+        on_b = asyncio.create_task(
+            client.post("/v1/chat/completions", headers=AUTH, json=_chat(ONLY_B))
+        )
+        await _until(lambda: b.calls == 1)  # the global slot is taken
+        off = {**PROVIDER_A, "max_concurrency": 1, "is_active": False}
+        _providers_file.write_text(json.dumps({"providers": [off, PROVIDER_B]}))
+        router.invalidate_models_cache()
+        started = time.monotonic()
+        held.release()
+        try:
+            refused = await asyncio.wait_for(r, 3.0)
+        finally:
+            b.gate.set()
+        elapsed = time.monotonic() - started
+        assert (await on_b).status_code == 200
+    assert refused.status_code == 503, refused.text
+    assert refused.json()["code"] == "provider_disabled"
+    assert elapsed < 1.0, f"answered after {elapsed:.2f} s"
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+async def test_no_provider_call_without_a_global_slot(
+    client, app_mod, a_at_one_b_free, session_db, monkeypatch, stream
+):
+    """PLU-51: whatever waits came first (a provider's slot, a session's
+    turn), a provider is called only by a request holding a global slot: with
+    a cap of 2, never more than 2 calls at once."""
+    from plugboard import provider_admission
+
+    _waits(app_mod, monkeypatch, cap=2, slot_s=3.0, provider_s=3.0)
+    running, peak = [0], [0]
+
+    async def reply(url, **kwargs):
+        running[0] += 1
+        peak[0] = max(peak[0], running[0])
+        await asyncio.sleep(0.05)
+        running[0] -= 1
+        return _reply_for(kwargs)
+
+    def post(model, sid=None):
+        headers = {**AUTH, "X-LLM-Session-ID": sid} if sid else AUTH
+        return asyncio.create_task(
+            client.post(
+                "/v1/chat/completions",
+                headers=headers,
+                json=_chat(model, stream=stream),
+            )
+        )
+
+    with aioresponses() as mock:
+        mock.post(URL_A, callback=reply, repeat=True)
+        mock.post(URL_B, callback=reply, repeat=True)
+        tasks = [post(ONLY_A, "s") for _ in range(3)]
+        tasks += [post(ONLY_A) for _ in range(3)]
+        tasks += [post(ONLY_B) for _ in range(4)]
+        answers = await asyncio.wait_for(asyncio.gather(*tasks), 10.0)
+    assert {r.status_code for r in answers} <= {200, 503}
+    assert sum(r.status_code == 200 for r in answers) >= 4
+    assert peak[0] <= 2, f"{peak[0]} provider calls at once with a cap of 2"
+    assert provider_admission._active == {}
+    assert app_mod._get_inflight_sem()._value == 2

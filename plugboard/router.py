@@ -1079,15 +1079,14 @@ async def forward(
                     deadline = loop.time() + provider_admission.WAIT_S
                 _live.update(phase="waiting_provider")
                 wait_t0 = loop.time()
-                # BUG-77: the global chat slot is given back while the request
-                # waits, and taken back when it got a provider's slot.
-                async with request_wait.slot_released() as step:
-                    with request_wait.waiting(deadline - loop.time()) as wait_s:
-                        granted = await provider_admission.wait_acquire(
-                            [p for p, _ in busy], wait_s
-                        )
-                    pending_wait += loop.time() - wait_t0
-                    step.come_back = granted is not None
+                # BUG-77: no global chat slot held while the request waits;
+                # it is taken back right before a provider is called.
+                request_wait.release_slot()
+                with request_wait.waiting(deadline - loop.time()) as wait_s:
+                    granted = await provider_admission.wait_acquire(
+                        [p for p, _ in busy], wait_s
+                    )
+                pending_wait += loop.time() - wait_t0
                 _live.update(phase="running")
                 if granted is None:
                     break
@@ -1111,6 +1110,13 @@ async def forward(
                 if lease is None:
                     busy.append((provider, real_model))
                     continue
+                try:
+                    # PLU-51: the global slot right before the call, ahead of
+                    # the requests that hold no provider's slot (PLU-48).
+                    await request_wait.slot_back(first=True)
+                except BaseException:
+                    lease.release()
+                    raise
                 try:
                     kind = auth_source.removeprefix("subprocess:")
                     from plugboard import cli_subprocess
@@ -1233,6 +1239,9 @@ async def forward(
                 busy.append((provider, real_model))
                 continue
             with lease:
+                # PLU-51: the global slot right before the call, ahead of the
+                # requests that hold no provider's slot (PLU-48).
+                await request_wait.slot_back(first=True)
                 for attempt, delay in enumerate([0] + _DELAYS):
                     if delay:
                         log.warning(
@@ -1434,16 +1443,10 @@ async def forward_stream(
     wait_t0 = _time.perf_counter()
     if waited:
         _live.update(phase="waiting_provider")
-        try:
-            # BUG-77: no global chat slot held while the request waits.
-            async with request_wait.slot_released() as step:
-                with request_wait.waiting(provider_admission.WAIT_S) as wait_s:
-                    lease = await provider_admission.wait_acquire([provider], wait_s)
-                step.come_back = lease is not None
-        except BaseException:
-            if lease is not None:
-                lease.release()  # granted, but the global slot was not
-            raise
+        # BUG-77: no global chat slot held while the request waits.
+        request_wait.release_slot()
+        with request_wait.waiting(provider_admission.WAIT_S) as wait_s:
+            lease = await provider_admission.wait_acquire([provider], wait_s)
         _live.update(phase="running")
     if lease is None:
         if _turned_off(provider["id"]):
@@ -1455,6 +1458,10 @@ async def forward_stream(
             raise ProviderDisabledError(provider["id"])  # off while it waited
         wait_s = _time.perf_counter() - wait_t0 if waited else 0.0
         metrics.record_admission_wait(provider["id"], label, wait_s)
+        # PLU-51: the global slot right before the call, ahead of the requests
+        # that hold no provider's slot (PLU-48); a provider turned off while
+        # this request waited was refused above, before any wait (PLU-49).
+        await request_wait.slot_back(first=True)
         async with contextlib.aclosing(
             _stream_route(body, provider, real_model, timeout)
         ) as chunks:

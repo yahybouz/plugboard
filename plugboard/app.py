@@ -635,19 +635,18 @@ _INFLIGHT_WAIT_S = envcompat.get_float(
     "PLUGBOARD_INFLIGHT_WAIT_S", default=10.0, minimum=0.0
 )
 _INFLIGHT_RETRY_AFTER_S = 5
-_inflight_chat_sem: Optional["_asyncio.Semaphore"] = None
+_inflight_chat_sem: Optional["_request_wait.ChatCap"] = None
 _inflight_chat_active = 0  # observability counter; only accurate when sem is used
 
 
-def _get_inflight_sem() -> Optional["_asyncio.Semaphore"]:
-    """Lazily create the semaphore so it binds to the running event loop
-    (prod uvicorn loop, pytest-asyncio loop, etc.) instead of whatever
-    loop existed at import time."""
+def _get_inflight_sem() -> Optional["_request_wait.ChatCap"]:
+    """The global cap, created on first use (``request_wait.ChatCap``: first
+    come first served, a request holding a provider's slot first, PLU-48)."""
     global _inflight_chat_sem
     if _INFLIGHT_CHAT_MAX <= 0:
         return None
     if _inflight_chat_sem is None:
-        _inflight_chat_sem = _asyncio.Semaphore(_INFLIGHT_CHAT_MAX)
+        _inflight_chat_sem = _request_wait.ChatCap(_INFLIGHT_CHAT_MAX)
     return _inflight_chat_sem
 
 
@@ -717,19 +716,24 @@ class _ChatSlot:
         self.held = False
         self.wait_s = _INFLIGHT_WAIT_S
 
-    async def take(self, wait_s: float) -> None:
+    async def take(self, wait_s: float, first: bool = False) -> None:
         global _inflight_chat_active
-        if self.sem.locked():
+        # A plain asyncio semaphore (a test's) has no front of the line.
+        if first and isinstance(self.sem, _request_wait.ChatCap):
+            acquire, waits = self.sem.acquire_first, self.sem.would_wait(True)
+        else:
+            acquire, waits = self.sem.acquire, self.sem.locked()
+        if waits:
             if wait_s <= 0:
                 raise _ChatOverloaded()
             _live.update(self.rid, phase="waiting_slot")
             try:
-                await _asyncio.wait_for(self.sem.acquire(), timeout=wait_s)
+                await _asyncio.wait_for(acquire(), timeout=wait_s)
             except _asyncio.TimeoutError:
                 raise _ChatOverloaded() from None
             _live.update(self.rid, phase="running")
         else:
-            await self.sem.acquire()  # free: taken at once, without suspending
+            await acquire()  # free: taken at once, without suspending
         self.held = True
         _inflight_chat_active += 1
 
@@ -891,12 +895,14 @@ async def _take_session_turn(request: Request, client_id: str, session_id: str) 
             client_id, session_id
         )
         return
+    # BUG-77: no global slot held while the turn runs elsewhere; it is taken
+    # back right before a provider is called (PLU-51).
+    _request_wait.release_slot()
     try:
-        async with _request_wait.slot_released():
-            with _request_wait.waiting() as timeout:
-                request.state.session_turn_release = await session_turns.acquire(
-                    client_id, session_id, timeout=timeout
-                )
+        with _request_wait.waiting() as timeout:
+            request.state.session_turn_release = await session_turns.acquire(
+                client_id, session_id, timeout=timeout
+            )
     except TimeoutError:
         log.info("session turn busy: the request's wait ended")
         raise _SessionBusy() from None
@@ -3084,9 +3090,8 @@ async def preflight(
                 "max_tokens": 1,
             }
             try:
-                # BUG-77: a ping refused after a provider's wait left the
-                # global slot; the batch takes it back before its next ping.
-                await _request_wait.slot_back()
+                # BUG-77: a ping that waited for a full provider gave the
+                # global slot back; the router takes it back before a call.
                 result = await _unless_client_gone(
                     request, forward(ping_body, timeout=10.0, **route_options)
                 )
