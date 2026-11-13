@@ -128,6 +128,7 @@ from plugboard.router import (
     ProviderNetworkError,
     ProvidersBusyError,
     ProviderQuotaError,
+    ProviderTimeoutError,
     UnsupportedOnCliError,
     cli_refusal,
     disabled_route,
@@ -1907,6 +1908,12 @@ def _quota_error_response(
     client key gets the provider, the reason and the provider's Retry-After
     delay when it gave one.
     """
+    log.warning(
+        "provider quota exhausted: provider=%s retry_after=%s: %s",
+        exc.provider_id,
+        exc.retry_after,
+        exc,
+    )
     if client_id == "admin":
         detail = str(exc)
     else:
@@ -2014,9 +2021,11 @@ def _chat_error_response(
     log.error("%s error ref=%s (%s): %s", phase, ref, type(exc).__name__, err_str)
     headers: Dict[str, str] = {}
     content: Dict[str, Any] = {}
-    if "timeout" in err_str.lower():
+    if isinstance(exc, ProviderTimeoutError) or "timeout" in err_str.lower():
         status_code = 503
-        detail = "The provider did not answer in time"
+        who = getattr(exc, "provider_id", "")
+        detail = f"The {who} provider" if who else "The provider"
+        detail += " did not answer in time"
         content["retry_after"] = 10
         headers["Retry-After"] = "10"
     elif isinstance(exc, AuthError):

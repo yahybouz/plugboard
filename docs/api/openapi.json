@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "2.1.0",
+    "version": "2.2.0",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
@@ -1439,7 +1439,7 @@
       },
       "ErrorResponse": {
         "additionalProperties": true,
-        "description": "FastAPI's error body. Upstream timeouts (503) add `retry_after` and a\nRetry-After header, as does an exhausted provider quota (429) when the\nprovider gave a delay; a failing CLI provider (502) adds its exit details\nfor the admin only. A chat model no provider knows (404) adds `code` and\n`hint`. A chat whose candidate providers all stayed at their concurrency\ncap (503) adds `code` providers_busy, `retry_after` and Retry-After; one\nthe global chat cap kept waiting for a slot (503) adds `code`\nserver_busy, `retry_after` and Retry-After. A\nchat model of a provider the admin turned off (503) adds `code`\nprovider_disabled and `hint`, without Retry-After. A chat request only\nCLI subscription routes could serve, asking for what they cannot serve\n(400), adds `code` unsupported_on_cli, `unsupported` (the refused fields)\nand `hint`. A prompt a CLI subscription route finds too long (400) adds\n`code` context_length_exceeded, `error_ref`, `provider_name` and\n`model_id`.",
+        "description": "FastAPI's error body. Upstream timeouts (503) add `retry_after` and a\nRetry-After header, as does an exhausted provider quota (429) when the\nprovider gave a delay; a failing CLI provider (502) adds its exit details\nfor the admin only. A chat model no provider knows (404) adds `code` and\n`hint`. A chat whose candidate providers all stayed at their concurrency\ncap (503) adds `code` providers_busy, `retry_after` and Retry-After; one\nthe global chat cap kept waiting for a slot (503) adds `code`\nserver_busy, `retry_after` and Retry-After. A\nchat model of a provider the admin turned off (503) adds `code`\nprovider_disabled and `hint`, without Retry-After. A chat request only\nCLI subscription routes could serve, asking for what they cannot serve\n(400), adds `code` unsupported_on_cli, `unsupported` (the refused fields)\nand `hint`. A prompt a CLI subscription route finds too long (400) adds\n`code` context_length_exceeded, `error_ref`, `provider_name` and\n`model_id`. A chat the provider failed (400 rejected request, 401 or 403\nprovider credentials, 502, a 503 timeout) adds `error_ref`; a client\nkey's `detail` is then a sentence written by the gateway, never the\nprovider's or the exception's text.",
         "properties": {
           "detail": {
             "anyOf": [
@@ -1468,6 +1468,19 @@
             ],
             "default": null,
             "title": "Retry After"
+          },
+          "error_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Reference of the gateway log entry that holds the error's own text (search the log for ref=<error_ref>).",
+            "title": "Error Ref"
           },
           "code": {
             "anyOf": [

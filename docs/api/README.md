@@ -155,14 +155,15 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 | `400` | Chat only, `code` is `unsupported_on_cli`: only CLI subscription routes serve the model and the request asks for tools, a structured `response_format` or a non-text content part, listed in `unsupported`; nothing was called ([details](../guide/providers-and-subscriptions.md#what-a-cli-subscription-route-does-not-do)) | Send plain text, or pick a model an API or Ollama provider serves |
 | `400` | Chat only, `code` is `context_length_exceeded`: a CLI subscription route found the prompt too long for the model's context; no other provider was tried | Shorten the messages or pick a model with a larger context |
 | `401` | Missing, unknown or revoked key | Check the key |
+| `401`, `403` | Chat: the provider's own credentials (a CLI login, a Copilot licence) could not be used; `error_ref` | Tell the operator the `error_ref` |
 | `402` | The key has a monthly budget and the model has no known price; nothing was called | Ask the operator to price the model, or use a priced one |
 | `403` | The key may not use this model | Pick a model where `account_compatible` is true |
 | `404` | Chat only, `code` is `model_not_found`: no provider knows the model, so nothing was called (below) | Send an `id` from `GET /v1/models` |
 | `413` | Body over `MAX_BODY_BYTES` (10 MB) | Send less |
 | `429` | IP rate limit, key RPM limit or monthly budget | Back off; `GET /v1/me` shows the budget left |
 | `429` | The last provider tried has exhausted its quota or rate limit (a streamed request to an HTTP provider is not offered to another one); `detail` names the provider | Retry after `Retry-After` / `retry_after` seconds when set (at most 7 days), else later or with another model |
-| `502` | The provider failed | Retry later or use another model |
-| `503` | Gateway at capacity (`code` `server_busy`: the cap of concurrent chat requests stayed full for the whole wait), provider timeout, or, with `code` `providers_busy`, every provider of the model busy at its concurrency cap after the wait; nothing was called | Retry after `Retry-After` / `retry_after` seconds (5 for `server_busy` and `providers_busy`) |
+| `502` | The provider failed; a client key gets a sentence and an `error_ref`, never the provider's or the gateway's error text | Retry later or use another model; give the operator the `error_ref` |
+| `503` | Gateway at capacity (`code` `server_busy`: the cap of concurrent chat requests stayed full for the whole wait), an HTTP provider's timeout (`Retry-After: 10`, `error_ref`), or, with `code` `providers_busy`, every provider of the model busy at its concurrency cap after the wait; nothing was called | Retry after `Retry-After` / `retry_after` seconds (5 for `server_busy` and `providers_busy`) |
 | `503` | Chat only, `code` is `provider_disabled`: the model belongs to a provider the operator turned off; nothing was called and no other provider stands in (below) | Pick another model from `GET /v1/models`, or ask the operator to turn the provider back on |
 
 ### `404 model_not_found`

@@ -1,7 +1,11 @@
 """PLU-28: a client key never gets an exception's raw text, only a generic
 message and an ``error_ref`` that finds it in the gateway log; the admin
 keeps the text. A chat answered whole (a CLI route) is counted, priced,
-recorded and replayed as a stream in one place, ``plugboard.chat_billing``."""
+recorded and replayed as a stream in one place, ``plugboard.chat_billing``.
+
+``plugboard.app`` is patched by its dotted name, never through a module
+object imported here: another test file reloads it. Nothing here reaches a
+real CLI nor the network (``no_real_calls``)."""
 
 import ast
 import asyncio
@@ -13,7 +17,6 @@ from pathlib import Path
 import pytest
 from aioresponses import aioresponses
 
-from plugboard import app as app_module
 from plugboard import chat_billing, cli_subprocess, router
 from plugboard.cli_auth import AuthError
 from tests.factories import FAKE_COMPLETION, PROVIDER_A, PROVIDER_B
@@ -32,6 +35,17 @@ CLI = {
     "created_at": "2026-01-01T00:00:00+00:00",
 }
 PRICE = {"input_price": 2.0, "output_price": 10.0}  # USD per million tokens
+
+
+@pytest.fixture(autouse=True)
+def no_real_calls(monkeypatch):
+    """A CLI route is never run for real (the error tests also take away the
+    router's HTTP session: a missed patch fails instead of calling out)."""
+
+    async def no_cli(kind, body, *, timeout_s=None):
+        raise AssertionError("a test reached a CLI it did not fake")
+
+    monkeypatch.setattr(cli_subprocess, "complete", no_cli)
 
 
 @pytest.fixture
@@ -70,8 +84,12 @@ def _fail_forward(monkeypatch, exc):
         raise exc
         yield b""  # pragma: no cover - makes it an async generator
 
-    monkeypatch.setattr(app_module, "forward", forward)
-    monkeypatch.setattr(app_module, "forward_stream", forward_stream)
+    async def no_network(provider):
+        raise AssertionError("a test reached the network it did not fake")
+
+    monkeypatch.setattr("plugboard.app.forward", forward)
+    monkeypatch.setattr("plugboard.app.forward_stream", forward_stream)
+    monkeypatch.setattr("plugboard.http_pool.session_for", no_network)
 
 
 # ── Generic errors ───────────────────────────────────────────────────────────
@@ -164,7 +182,7 @@ async def test_a_streamed_cli_chat_is_billed_like_a_plain_one(
 ):
     alerts = []
     monkeypatch.setattr(
-        app_module, "_send_spending_alert", lambda *a, **k: alerts.append(a)
+        "plugboard.app._send_spending_alert", lambda *a, **k: alerts.append(a)
     )
     model = "pbtest-cli:model-x"
     plain = await client.post(
@@ -283,3 +301,98 @@ async def test_plain_chat_still_records_and_reports_its_cost(client, keys):
     assert resp.json()["billing"]["cost_usd"] == row["cost_usd"]
     assert resp.headers["X-Cost-USD"] == str(row["cost_usd"])
     await asyncio.sleep(0)
+
+
+# ── Review follow-ups ────────────────────────────────────────────────────────
+
+
+async def test_v2_answers_the_same_generic_error(client, keys, monkeypatch):
+    _fail_forward(monkeypatch, RuntimeError(SECRET))
+    resp = await client.post(
+        "/v2/chat/completions",
+        headers=keys["client"],
+        json=_body("test-provider:fake:model-v1"),
+    )
+    assert resp.status_code == 502 and "secret" not in resp.text
+    assert resp.headers["X-API-Version"] == "2"
+
+
+async def test_a_provider_credential_error_keeps_its_status(client, keys, monkeypatch):
+    _fail_forward(monkeypatch, AuthError(f"Copilot licence missing {SECRET}", 403))
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=keys["client"],
+        json=_body("test-provider:fake:model-v1"),
+    )
+    assert resp.status_code == 403 and "secret" not in resp.text
+    assert resp.json()["detail"].startswith("The provider's credentials")
+
+
+async def test_a_timeout_names_the_provider_only(client, keys, monkeypatch):
+    import asyncio as _asyncio
+
+    monkeypatch.setattr(router, "_DELAYS", [])
+    with aioresponses() as mock:
+        mock.post(
+            "http://fake-llm.test/v1/chat/completions",
+            exception=_asyncio.TimeoutError(),
+        )
+        resp = await client.post(
+            "/v1/chat/completions",
+            headers=keys["client"],
+            json=_body("test-provider:fake:model-v1", cache=False),
+        )
+    assert resp.status_code == 503 and resp.headers["Retry-After"] == "10"
+    detail = resp.json()["detail"]
+    assert detail.startswith("The test-provider provider did not answer in time")
+    assert "model=" not in detail and "900" not in detail
+
+
+async def test_the_router_cli_stream_raises_before_its_first_chunk(keys):
+    """Nothing is sent yet: the error goes to the chat route, which writes the
+    answer (the CLI's text and stderr go to the admin only)."""
+
+    async def failing(kind, body, *, timeout_s=None):
+        raise cli_subprocess.CliSubprocessError(
+            "CLI failed: /home/ops/.claude/creds", stderr="ops@example.invalid"
+        )
+
+    provider = next(p for p in router.load_providers() if p["id"] == "pbtest-cli")
+    import pytest as _pytest
+
+    with _pytest.MonkeyPatch.context() as mp:
+        mp.setattr(cli_subprocess, "complete", failing)
+        gen = router._stream_route(_body("model-x"), provider, "model-x", 30)
+        with _pytest.raises(cli_subprocess.CliSubprocessError):
+            await gen.__anext__()
+
+
+async def test_a_cli_stream_billing_error_still_serves_the_answer(
+    client, keys, monkeypatch, cli_answers
+):
+    def broken(*args, **kwargs):
+        raise OSError("usage.db is read-only")
+
+    monkeypatch.setattr(chat_billing, "record", broken)
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=keys["client"],
+        json=_body("pbtest-cli:model-x", stream=True, cache=False),
+    )
+    assert resp.status_code == 200 and "data: [DONE]" in resp.text
+    assert _usage_rows() == []
+
+
+async def test_the_admin_gets_no_spending_alert(client, keys, monkeypatch, cli_answers):
+    alerts = []
+    monkeypatch.setattr(
+        "plugboard.app._send_spending_alert", lambda *a, **k: alerts.append(a)
+    )
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=ADMIN,
+        json=_body("pbtest-cli:model-x", stream=True, cache=False),
+    )
+    assert resp.status_code == 200 and alerts == []
+    [row] = _usage_rows()
+    assert row["client_id"] == "admin"

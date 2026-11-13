@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "2.1.0"
+CONTRACT_VERSION = "2.2.0"
 _JSON = "application/json"
 
 
@@ -546,10 +546,18 @@ class ErrorResponse(_Open):
     (400), adds `code` unsupported_on_cli, `unsupported` (the refused fields)
     and `hint`. A prompt a CLI subscription route finds too long (400) adds
     `code` context_length_exceeded, `error_ref`, `provider_name` and
-    `model_id`."""
+    `model_id`. A chat the provider failed (400 rejected request, 401 or 403
+    provider credentials, 502, a 503 timeout) adds `error_ref`; a client
+    key's `detail` is then a sentence written by the gateway, never the
+    provider's or the exception's text."""
 
     detail: Union[str, List[Any], Dict[str, Any]]
     retry_after: Optional[int] = None
+    error_ref: Optional[str] = Field(
+        default=None,
+        description="Reference of the gateway log entry that holds the error's "
+        "own text (search the log for ref=<error_ref>).",
+    )
     code: Optional[str] = Field(
         default=None,
         description="Stable reason for programs, when the route gives one: "

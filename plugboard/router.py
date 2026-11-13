@@ -104,6 +104,16 @@ class ProviderHTTPError(RuntimeError):
         self.request_rejected = request_rejected
 
 
+class ProviderTimeoutError(RuntimeError):
+    """A provider gave no answer within the timeout. The message names the
+    provider and the model: the chat routes give a client key a sentence
+    naming the provider only (PLU-28)."""
+
+    def __init__(self, message: str, *, provider_id: str):
+        super().__init__(message)
+        self.provider_id = provider_id
+
+
 class ProviderNetworkError(RuntimeError):
     """An HTTP provider could not be reached, or its answer could not be read.
 
@@ -1306,8 +1316,9 @@ async def forward(
                             metrics.record(provider["id"], 0.0, error=True)
                         except Exception:
                             pass
-                        last_err = RuntimeError(
-                            f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}"
+                        last_err = ProviderTimeoutError(
+                            f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}",
+                            provider_id=provider["id"],
                         )
                         provider_fault = True
                         log.warning(
@@ -1489,7 +1500,6 @@ async def _stream_route(
     # the text into pseudo-deltas so the Playground works end-to-end.
     auth_source = provider.get("auth_source", "")
     if auth_source.startswith("subprocess:"):
-        import json as _json
         from plugboard import cli_subprocess
 
         kind = auth_source.removeprefix("subprocess:")
@@ -1530,19 +1540,9 @@ async def _stream_route(
                     route_pauses.pause(circuit_key, exc.retry_after)
             except Exception:
                 pass
-            err_payload: Dict[str, Any] = {
-                "error": {"message": str(exc), "type": "subprocess_error"}
-            }
-            if isinstance(exc, CliSubprocessError):
-                err_payload["error"]["exit_code"] = exc.exit_code
-                err_payload["error"]["stderr"] = exc.stderr
-                err_payload["error"]["pid"] = exc.pid
-                err_payload["error"]["provider_name"] = exc.provider_name
-                err_payload["error"]["model_id"] = exc.model_id
-            err_evt = _json.dumps(err_payload)
-            yield f"data: {err_evt}\n\n".encode("utf-8")
-            yield b"data: [DONE]\n\n"
-            return
+            # Nothing was sent yet: the chat route answers the error, and only
+            # the admin gets the CLI's text, stderr and pid (PLU-28).
+            raise
         cb_success(circuit_key)
         route_pauses.clear(circuit_key)
         # Counted, priced and replayed by chat_billing, as the chat routes do
@@ -1551,10 +1551,13 @@ async def _stream_route(
 
         reported = _pop_reported_usage(result)
         reported_usage = result.get("usage") or {}
-        charge = chat_billing.charge_completion(
-            body, result, provider, real_model, reported=reported
-        )
-        result["usage"] = charge.usage_block(reported_usage if reported else None)
+        try:
+            charge = chat_billing.charge_completion(
+                body, result, provider, real_model, reported=reported
+            )
+            result["usage"] = charge.usage_block(reported_usage if reported else None)
+        except Exception as exc:  # the answer is there: serve it, as counted
+            log.warning("subprocess stream pricing failed: %s", exc)
         async for chunk in chat_billing.replay_as_sse(
             result,
             completion_id=result.get("id", "chatcmpl-subproc"),
@@ -1613,8 +1616,9 @@ async def _stream_route(
         # Once the stream has begun, its success is already recorded.
         if not streaming:
             cb_failure(circuit_key)
-        raise RuntimeError(
-            f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}"
+        raise ProviderTimeoutError(
+            f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}",
+            provider_id=provider["id"],
         ) from exc
     except aiohttp.ClientError as exc:
         if netguard.is_egress_refusal(exc):

@@ -360,7 +360,9 @@ async def test_forward_stream_cli_failure_is_judged_the_same(
 
     cli("claude", **process)
     body = {"model": _CLI_MODEL, "messages": _MESSAGES, "stream": True}
-    chunks = [chunk async for chunk in forward_stream(body)]
+    # Nothing was sent: the error goes up to the chat route (PLU-28), which
+    # gives the CLI's text to the admin only.
+    with pytest.raises(Exception):
+        [chunk async for chunk in forward_stream(body)]
 
-    assert b"subprocess_error" in chunks[0]
     assert _failures(_CLI_KEY) == counted
