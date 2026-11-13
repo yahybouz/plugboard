@@ -168,6 +168,18 @@ class PeriodicJob:
             log.warning("PeriodicJob %s catch-up check failed: %s", self.name, exc)
             return False
 
+    def _guard_reason(self) -> Optional[str]:
+        """The scheduled guard's reason to hold the run; a guard that fails
+        holds it too, rather than ending the loop (M-1)."""
+        if self._scheduled_guard is None:
+            return None
+        try:
+            return self._scheduled_guard()
+        except Exception as exc:  # noqa: BLE001 - recorded as the held reason
+            return (
+                f"held: the check before the run failed ({type(exc).__name__}: {exc})"
+            )
+
     async def _loop(self) -> None:
         first = True
         while True:
@@ -193,11 +205,7 @@ class PeriodicJob:
             )
             return
         async with self._run_lock:
-            held = (
-                self._scheduled_guard()
-                if kind != "manual" and self._scheduled_guard
-                else None
-            )
+            held = self._guard_reason() if kind != "manual" else None
             if held:
                 log.warning("PeriodicJob %s %s run %s", self.name, kind, held)
                 self.last_error = held[:_ERROR_MAX_CHARS]
