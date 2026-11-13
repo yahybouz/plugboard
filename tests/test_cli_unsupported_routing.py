@@ -5,9 +5,9 @@ conversation to a CLI as plain text: tools, a structured response format or a
 non-text content part used to be dropped silently. forward() now leaves such
 a route out of the candidates; when no other candidate is left it raises
 ``UnsupportedOnCliError`` before the key's route guard, any provider slot, any
-circuit read and any CLI call. forward_stream(), which has one route, raises
-the same error after the route guard. ``cli_refusal(body)`` tells the chat
-route beforehand whether forward() would raise it.
+circuit read and any CLI call. forward_stream() takes its routes the same way
+(PLU-26). ``cli_refusal(body)`` tells the chat route beforehand whether
+forward() would raise it.
 
 No CLI runs: ``cli_subprocess.complete`` is replaced by a counter. The HTTP
 provider is a real server on 127.0.0.1 that records the body it received.

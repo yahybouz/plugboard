@@ -356,13 +356,16 @@ async def test_streamed_success_closes_the_circuit_after_cooldown(
 async def test_forward_stream_cli_failure_is_judged_the_same(
     cli, breaker, process, counted
 ):
+    from plugboard.cli_subprocess import CliSubprocessError
     from plugboard.router import forward_stream
 
     cli("claude", **process)
     body = {"model": _CLI_MODEL, "messages": _MESSAGES, "stream": True}
-    chunks = [chunk async for chunk in forward_stream(body)]
-
-    assert b"subprocess_error" in chunks[0]
+    # PLU-26: raised, not sent as an event: the next route may take over,
+    # and the chat route shows the CLI's details to the admin only.
+    with pytest.raises(CliSubprocessError):
+        async for _ in forward_stream(body):
+            pass
     assert _failures(_CLI_KEY) == counted
 
 

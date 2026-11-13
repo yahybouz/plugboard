@@ -50,6 +50,7 @@ from plugboard import (
 )
 from plugboard.alerts import record_provider_failure, record_provider_success
 from plugboard.circuit_breaker import is_request_too_long
+from plugboard.cli_auth import AuthError
 from plugboard.cli_limits import unsupported_on_cli
 from plugboard.cli_subprocess import MAX_RETRY_AFTER_S, CliSubprocessError
 from plugboard.config import load_providers
@@ -112,6 +113,17 @@ class ProviderHTTPError(RuntimeError):
         self.provider_id = provider_id
         self.status = status
         self.request_rejected = request_rejected
+
+
+class ProviderAuthError(AuthError):
+    """The gateway could not get a provider's credentials (an OAuth token a
+    CLI or the broker holds). The provider was not called: a stream hands
+    over to its next route (PLU-26), as forward() does. ``status_code`` is
+    the original ``AuthError``'s, else 502."""
+
+    def __init__(self, provider_id: str, cause: Exception):
+        super().__init__(str(cause), getattr(cause, "status_code", 502))
+        self.provider_id = provider_id
 
 
 class ProviderTimeoutError(RuntimeError):
@@ -1494,6 +1506,7 @@ async def forward_stream(
     loop = asyncio.get_running_loop()
     deadline: Optional[float] = None
     last_err: Optional[Exception] = None
+    disabled_seen: Optional[str] = None
     recheck = False  # the first route was checked by _refuse_if_disabled
     while queue:
         route: Optional[tuple] = None
@@ -1502,7 +1515,7 @@ async def forward_stream(
         for candidate in list(queue):
             provider = candidate[0]
             if recheck and _turned_off(provider["id"]):
-                last_err = ProviderDisabledError(provider["id"])
+                disabled_seen = provider["id"]
                 queue = [c for c in queue if c[0]["id"] != provider["id"]]
                 continue
             lease = provider_admission.try_acquire(provider)
@@ -1526,11 +1539,12 @@ async def forward_stream(
             _live.update(phase="running")
             if lease is None:
                 still_on = [c for c in queue if not _turned_off(c[0]["id"])]
-                if not still_on:
-                    raise ProviderDisabledError(queue[0][0]["id"])
-                raise ProvidersBusyError(
-                    [p["id"] for p in providers], _metric_model(*still_on[0])
-                )
+                if still_on:
+                    raise ProvidersBusyError(
+                        [p["id"] for p in providers], _metric_model(*still_on[0])
+                    )
+                disabled_seen = queue[0][0]["id"]  # off, not full
+                break
             route = next(c for c in queue if c[0]["id"] == lease.provider_id)
         if lease is None or route is None:
             break
@@ -1539,10 +1553,17 @@ async def forward_stream(
         try:
             first = await chunks.__anext__()
         except StopAsyncIteration:
-            return
+            # An answer with no event at all: the next route may do better.
+            last_err = ProviderNetworkError(
+                f"[{route[0]['id']}] empty stream", provider_id=route[0]["id"]
+            )
+            continue
         except Exception as exc:
             if not _stream_hands_over(exc):
                 raise
+            if isinstance(exc, ProviderDisabledError):
+                disabled_seen = exc.provider_id
+                continue
             last_err = exc
             log.warning(
                 "Stream from %s failed before its first chunk: %s",
@@ -1557,6 +1578,8 @@ async def forward_stream(
         finally:
             await chunks.aclose()
         return
+    if disabled_seen is not None and refused is None and last_err is None:
+        raise ProviderDisabledError(disabled_seen)
     raise refused or last_err or RuntimeError("All providers failed")
 
 
@@ -1575,6 +1598,7 @@ def _stream_hands_over(exc: Exception) -> bool:
             ProviderNetworkError,
             ProviderTimeoutError,
             ProviderDisabledError,
+            ProviderAuthError,
         ),
     )
 
@@ -1609,6 +1633,21 @@ async def _stream_with_lease(
                 yield chunk
     finally:
         lease.release()
+
+
+async def _stream_failed(provider_id: str, fault: bool) -> None:
+    """A streamed route failed before its first chunk: the error counts in
+    the provider's metrics (its routing score), and a provider failure in
+    its provider_down alert, as in forward(). Never raises."""
+    try:
+        metrics.record(provider_id, 0.0, error=True)
+    except Exception as exc:
+        log.debug("metrics: %s", exc)
+    if fault:
+        try:
+            await record_provider_failure(provider_id)
+        except Exception as exc:
+            log.debug("provider_down alert failed: %s", exc)
 
 
 async def _stream_route(
@@ -1681,19 +1720,10 @@ async def _stream_route(
             # quarantine's try (BUG-51).
             if isinstance(exc, CliSubprocessError) and exc.quota:
                 route_pauses.pause(circuit_key, exc.retry_after)
-            err_payload: Dict[str, Any] = {
-                "error": {"message": str(exc), "type": "subprocess_error"}
-            }
-            if isinstance(exc, CliSubprocessError):
-                err_payload["error"]["exit_code"] = exc.exit_code
-                err_payload["error"]["stderr"] = exc.stderr
-                err_payload["error"]["pid"] = exc.pid
-                err_payload["error"]["provider_name"] = exc.provider_name
-                err_payload["error"]["model_id"] = exc.model_id
-            err_evt = _json.dumps(err_payload)
-            yield f"data: {err_evt}\n\n".encode("utf-8")
-            yield b"data: [DONE]\n\n"
-            return
+            # Nothing was sent: forward_stream hands over to the next route,
+            # or the chat route answers the error, its CLI details for the
+            # admin only (PLU-26). An error event here showed them to anyone.
+            raise
         cb_success(circuit_key)
         route_pauses.clear(circuit_key)
         reported = _pop_reported_usage(result)
@@ -1773,7 +1803,11 @@ async def _stream_route(
     # PLU-16: the time to first token counts from here, the slot granted.
     meter = metrics.StreamMeter(provider["id"], _metric_model(provider, real_model))
     url = openai_url(provider["base_url"], "chat/completions")
-    auth_header = await _build_auth_header_async(provider)
+    try:
+        auth_header = await _build_auth_header_async(provider)
+    except RuntimeError as exc:
+        log.warning("Auth resolution failed for %s: %s", provider["id"], exc)
+        raise ProviderAuthError(provider["id"], exc) from exc
     headers = {
         "Content-Type": "application/json",
         **auth_header,
@@ -1801,8 +1835,10 @@ async def _stream_route(
         ) as resp:
             if resp.status != 200:
                 text = await resp.text()
-                if is_provider_fault(text, resp.status):
+                fault = is_provider_fault(text, resp.status)
+                if fault:
                     cb_failure(circuit_key)
+                await _stream_failed(provider["id"], fault)
                 err = _http_error(provider["id"], resp.status, text, resp.headers)
                 if isinstance(err, ProviderQuotaError):
                     route_pauses.pause(circuit_key, err.retry_after)
@@ -1819,6 +1855,7 @@ async def _stream_route(
         # Once the stream has begun, its success is already recorded.
         if not streaming:
             cb_failure(circuit_key)
+            await _stream_failed(provider["id"], True)
         raise ProviderTimeoutError(
             f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}"
         ) from exc
@@ -1830,6 +1867,7 @@ async def _stream_route(
             raise ProviderEgressRefused(provider["id"], exc.host) from exc
         if not streaming:
             cb_failure(circuit_key)
+            await _stream_failed(provider["id"], True)
         detail = str(exc) or type(exc).__name__
         raise ProviderNetworkError(
             f"[{provider['id']}] network error: {detail[:200]}",

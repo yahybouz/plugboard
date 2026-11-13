@@ -854,6 +854,27 @@ async def _unless_client_gone(request: Request, awaitable: Awaitable[_T]) -> _T:
     return result
 
 
+_EVENT_ENDS = (b"\n\n", b"\r\n\r\n")
+
+
+def _complete_events(buf: bytearray) -> bytes:
+    """Take from ``buf`` the complete SSE events that may go out now: up to
+    the last event end, but never `data: [DONE]` nor what follows it. What
+    is left stays in ``buf``."""
+    done = buf.rfind(b"data: [DONE]")
+    limit = len(buf) if done == -1 else done
+    end = 0
+    for sep in _EVENT_ENDS:
+        at = buf.rfind(sep, 0, limit)
+        if at != -1:
+            end = max(end, at + len(sep))
+    if not end:
+        return b""
+    out = bytes(buf[:end])
+    del buf[:end]
+    return out
+
+
 def _stream_cut_event() -> bytes:
     """The SSE event that ends a stream the provider broke off after its
     first chunk (PLU-26), in OpenAI's streamed error shape."""
@@ -2715,6 +2736,10 @@ async def chat_completions(
                 return _unsupported_on_cli_response(exc)
             log.error("stream error: %s", exc)
             err_str = str(exc)
+            if isinstance(exc, CliSubprocessError):
+                # A CLI route among a stream's routes (PLU-26): its details
+                # for the admin only, as on the non-streamed path.
+                return _cli_error_response(exc, client_id)
             if isinstance(exc, ProviderQuotaError):
                 return _quota_error_response(exc, client_id)
             # Before the timeout test: the provider's body can say "timeout".
@@ -2740,41 +2765,31 @@ async def chat_completions(
             Without this injection, the Playground
             never sees tokens/cost for those upstreams.
 
-            We must preserve the real-time streaming UX — so we yield each
-            chunk as it arrives and only buffer enough state at the end
-            (the tail around [DONE]) to splice the usage chunk in.
+            We must preserve the real-time streaming UX — so each complete
+            event goes out as soon as it is in; only an event cut by a read,
+            and `[DONE]` with what follows, are held back (``tail_buf``), so
+            the usage chunk can be spliced in before `[DONE]` (OpenAI
+            clients stop reading there) and a cut stream ends between two
+            events (PLU-26).
             """
             import json as _json_mod
 
-            accumulated = bytearray()
-            # 1) First chunk is already consumed by the caller's probe —
-            # accumulate and yield immediately. A short answer can arrive
-            # whole in this one read: then `[DONE]` is held back with the
-            # tail, or the usage chunk would land after it and OpenAI
-            # clients, which stop reading at `[DONE]`, would never see it.
-            accumulated.extend(first_chunk)
-            done_in_first = first_chunk.rfind(b"data: [DONE]")
-            if done_in_first == -1:
-                yield first_chunk
-            elif done_in_first:
-                yield first_chunk[:done_in_first]
-            # 2) Keep the very last bytes buffered so we can detect `[DONE]`.
-            # Most upstreams end with `data: [DONE]\n\n` — 16 bytes is enough
-            # to disambiguate. We buffer the trailing window only.
-            TAIL = 64
-            tail_buf = bytearray(
-                first_chunk[done_in_first:] if done_in_first != -1 else b""
-            )
+            accumulated = bytearray(first_chunk)
+            # The first chunk is already consumed by the caller's probe; a
+            # short answer can arrive whole in this one read.
+            tail_buf = bytearray(first_chunk)
+            ready = _complete_events(tail_buf)
+            if ready:
+                yield ready
             completed = False
             cut: Optional[Exception] = None
             try:
                 async for chunk in rest:
                     accumulated.extend(chunk)
                     tail_buf.extend(chunk)
-                    if len(tail_buf) > TAIL:
-                        overflow = bytes(tail_buf[:-TAIL])
-                        yield overflow
-                        del tail_buf[:-TAIL]
+                    ready = _complete_events(tail_buf)
+                    if ready:
+                        yield ready
                 completed = True
             except Exception as exc:
                 if b"data: [DONE]" in tail_buf:
@@ -2804,15 +2819,14 @@ async def chat_completions(
                             log.warning("Stream billing error (non-fatal): %s", exc)
                     await _aclose_quietly(rest)
             if cut is not None:
-                # What came, then a readable end: an error event and [DONE],
-                # never the provider's own text (it may name its address).
-                if tail_buf:
-                    yield bytes(tail_buf)
+                # What came, in whole events, then a readable end: an error
+                # event and [DONE], never the provider's own text (it may name
+                # its address). An event the cut broke in two is dropped.
                 yield _stream_cut_event()
                 yield b"data: [DONE]\n\n"
                 return
-            # At this point `tail_buf` holds the last <=TAIL bytes and has
-            # NOT been yielded yet.
+            # At this point `tail_buf` holds what was held back (an event cut
+            # by a read, `[DONE]` and what follows) and has NOT been yielded.
 
             bill = None
             if cid:
