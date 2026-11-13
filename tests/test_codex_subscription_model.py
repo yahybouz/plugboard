@@ -333,6 +333,7 @@ async def test_forward_does_not_send_the_refused_model_elsewhere(
 async def test_the_stream_route_neither_quarantines_nor_counts(
     isolated, http_provider, cli_process
 ):
+    import plugboard.alerts as alerts
     import plugboard.router as router
     from plugboard import circuit_breaker as cb
     from plugboard.cli_subprocess import CliSubprocessError
@@ -350,6 +351,7 @@ async def test_the_stream_route_neither_quarantines_nor_counts(
 
     assert raised.value.model_unsupported
     assert all(state.failures == 0 for state in cb._circuits.values())
+    assert alerts._provider_failures == {}
     assert not isolated.exists()
 
 
@@ -565,6 +567,7 @@ def test_a_name_only_the_refusing_route_lists_is_unknown(
 async def test_exit_0_refusal_is_named_and_not_counted_on_the_stream_route(
     isolated, http_provider, cli_process
 ):
+    import plugboard.alerts as alerts
     import plugboard.router as router
     from plugboard import circuit_breaker as cb
     from plugboard import cli_subprocess as cs
@@ -585,6 +588,7 @@ async def test_exit_0_refusal_is_named_and_not_counted_on_the_stream_route(
 
     assert raised.value.model_unsupported
     assert all(state.failures == 0 for state in cb._circuits.values())
+    assert alerts._provider_failures == {}
     assert not isolated.exists()
 
 
