@@ -53,8 +53,31 @@ _TRUE = {"1", "true", "yes"}
 _ERROR_MAX_CHARS = 200
 
 
+# Shortest retention a non-zero value may give (BUG-71): an audit kept 12
+# days, or usage kept one month, leaves too little to investigate or bill.
+FLOORS = {
+    "PLUGBOARD_USAGE_RETENTION_MONTHS": 3,
+    "PLUGBOARD_AUDIT_RETENTION_DAYS": 90,
+    "PLUGBOARD_WATCHDOG_RETENTION_DAYS": 7,
+    "PLUGBOARD_MONITORING_RETENTION_DAYS": 7,
+}
+_floor_warned: set = set()
+
+
 def _retention(name: str, default: int) -> int:
-    return envcompat.get_int(name, default=default, minimum=0)
+    value = envcompat.get_int(name, default=default, minimum=0)
+    floor = FLOORS.get(name, 0)
+    if 0 < value < floor:
+        if (name, value) not in _floor_warned:
+            _floor_warned.add((name, value))
+            log.warning(
+                "%s=%d is below its floor: %d is used (0 keeps everything)",
+                name,
+                value,
+                floor,
+            )
+        return floor
+    return value
 
 
 def settings() -> Dict[str, Any]:

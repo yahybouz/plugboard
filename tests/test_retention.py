@@ -527,3 +527,40 @@ _COLUMNS = {
     "watchdog": ("watchdog_events", "id"),
     "monitoring": ("monitoring_snapshots", "id"),
 }
+
+
+# --- BUG-71: floors on the configured retentions -----------------------------
+
+
+@pytest.mark.parametrize(
+    "variable, key, value, floor",
+    [
+        ("PLUGBOARD_AUDIT_RETENTION_DAYS", "audit_days", "12", 90),
+        ("PLUGBOARD_USAGE_RETENTION_MONTHS", "usage_months", "1", 3),
+        ("PLUGBOARD_WATCHDOG_RETENTION_DAYS", "watchdog_days", "2", 7),
+        ("PLUGBOARD_MONITORING_RETENTION_DAYS", "monitoring_days", "1", 7),
+    ],
+)
+def test_a_retention_below_its_floor_is_raised_to_it(
+    stores, monkeypatch, caplog, variable, key, value, floor
+):
+    import logging
+
+    from plugboard import retention
+
+    monkeypatch.setattr(retention, "_floor_warned", set())
+    monkeypatch.setenv(variable, value)
+    with caplog.at_level(logging.WARNING, logger="plugboard.retention"):
+        assert retention.settings()[key] == floor
+    assert any(variable in r.getMessage() for r in caplog.records)
+
+
+def test_zero_still_keeps_everything_and_the_floor_holds_rows(stores, monkeypatch):
+    from plugboard import retention
+
+    monkeypatch.setenv("PLUGBOARD_AUDIT_RETENTION_DAYS", "0")
+    assert retention.settings()["audit_days"] == 0
+    monkeypatch.setenv("PLUGBOARD_AUDIT_RETENTION_DAYS", "12")
+    seed_audit([_audit_row("a30", (NOW - timedelta(days=30)).isoformat())])
+    retention.run_retention(NOW)
+    assert column(stores["audit"], "audit_log", "id") == ["a30"]

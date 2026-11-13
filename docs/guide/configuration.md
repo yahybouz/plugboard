@@ -268,12 +268,14 @@ Rows are deleted in short batches, so the server's own writes get through during
 
 | Variable | Default | Description |
 |---|---|---|
-| `PLUGBOARD_USAGE_RETENTION_MONTHS` | `13` | Whole months of usage entries kept before the current month (`data/usage.db`): with `13`, in November 2026 the oldest month kept is October 2025. Lowering it deletes the older months, and their cost history, for good. |
-| `PLUGBOARD_AUDIT_RETENTION_DAYS` | `365` | Days an audit entry is kept (`data/audit.db`). |
-| `PLUGBOARD_WATCHDOG_RETENTION_DAYS` | `14` | Days a watchdog event is kept (`data/watchdog.db`). |
-| `PLUGBOARD_MONITORING_RETENTION_DAYS` | `90` | Days a monitoring snapshot is kept (`data/monitoring.db`). |
+| `PLUGBOARD_USAGE_RETENTION_MONTHS` | `13` | Whole months of usage entries kept before the current month (`data/usage.db`), at least `3`: with `13`, in November 2026 the oldest month kept is October 2025. Lowering it deletes the older months, and their cost history, for good. |
+| `PLUGBOARD_AUDIT_RETENTION_DAYS` | `365` | Days an audit entry is kept (`data/audit.db`); at least `90`. |
+| `PLUGBOARD_WATCHDOG_RETENTION_DAYS` | `14` | Days a watchdog event is kept (`data/watchdog.db`); at least `7`. |
+| `PLUGBOARD_MONITORING_RETENTION_DAYS` | `90` | Days a monitoring snapshot is kept (`data/monitoring.db`); at least `7`. |
 | `PLUGBOARD_RETENTION_HOUR_UTC` | `4` | Hour (UTC, `0` to `23`) of the daily pass; a value above `23` gives `23`. |
 | `PLUGBOARD_RETENTION_DISABLED` | empty | `1`, `true` or `yes` turns the daily pass off; **Run now** still runs it. |
+
+A non-zero retention below its floor (usage 3 months, audit 90 days, watchdog and monitoring 7 days) is raised to the floor, with a warning in the log; `0` still keeps everything.
 
 ## MCP server and scripts
 
