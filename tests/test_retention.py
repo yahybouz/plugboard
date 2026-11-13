@@ -6,7 +6,7 @@ import os
 import sqlite3
 import stat
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -466,3 +466,64 @@ def test_a_failure_after_committed_batches_keeps_their_count(stores, monkeypatch
     entries = audit.get_audit_log(action="retention.run")
     assert len(entries) == 1
     assert "watchdog=5000" in entries[0]["details"]
+
+
+# --- BUG-70: a clock running ahead -------------------------------------------
+
+
+def _last_pass_at(stores, when: datetime) -> None:
+    import json
+
+    stores["report"].write_text(
+        json.dumps({"ran_at": when.strftime("%Y-%m-%dT%H:%M:%SZ"), "stores": {}})
+    )
+
+
+def test_clock_check_refuses_a_pass_long_after_the_last_one(stores):
+    from plugboard import retention
+
+    _last_pass_at(stores, NOW - timedelta(days=1))
+    assert retention.clock_check(NOW) is None
+    _last_pass_at(stores, NOW - timedelta(days=retention.MAX_CLOCK_STEP_DAYS + 1))
+    message = retention.clock_check(NOW)
+    assert message and "clock" in message and "Jobs" in message
+
+
+def test_clock_check_passes_without_a_previous_pass(stores):
+    from plugboard import retention
+
+    assert retention.clock_check(NOW) is None
+
+
+async def test_scheduled_pass_with_a_clock_far_ahead_deletes_nothing(stores):
+    # A server clock a year ahead would have emptied every store.
+    from plugboard import maintenance, retention
+
+    seed_one_old_and_one_recent_row_everywhere()
+    before = {name: column(stores[name], *spec) for name, spec in _COLUMNS.items()}
+    _last_pass_at(stores, datetime.now(timezone.utc) - timedelta(days=365))
+    job = maintenance.retention_job()
+    await job._run_once("scheduled")
+    assert "clock" in job.status_dict["last_error"]
+    assert {
+        name: column(stores[name], *spec) for name, spec in _COLUMNS.items()
+    } == before
+    assert retention.last_report()["stores"] == {}  # the last pass is unchanged
+
+
+async def test_a_manual_pass_is_not_held_by_the_clock_check(stores):
+    from plugboard import maintenance, retention
+
+    _last_pass_at(stores, datetime.now(timezone.utc) - timedelta(days=365))
+    job = maintenance.retention_job()
+    await job.run_now("manual")
+    assert job.status_dict["last_error"] is None
+    assert retention.last_report()["stores"]  # a new report was written
+
+
+_COLUMNS = {
+    "usage": ("usage_entries", "id"),
+    "audit": ("audit_log", "id"),
+    "watchdog": ("watchdog_events", "id"),
+    "monitoring": ("monitoring_snapshots", "id"),
+}

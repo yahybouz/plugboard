@@ -45,6 +45,9 @@ DEFAULT_AUDIT_DAYS = 365
 DEFAULT_WATCHDOG_DAYS = 14
 DEFAULT_MONITORING_DAYS = 90
 DEFAULT_HOUR_UTC = 4
+# A scheduled pass more than this long after the last one is held: a clock
+# running ahead would delete rows that should be kept (BUG-70).
+MAX_CLOCK_STEP_DAYS = 7
 
 _TRUE = {"1", "true", "yes"}
 _ERROR_MAX_CHARS = 200
@@ -203,6 +206,35 @@ def run_retention(now: Optional[datetime] = None) -> Dict[str, Any]:
     except Exception:
         log.exception("Retention pass: cannot write %s", report_path())
     return report
+
+
+def clock_check(now: Optional[datetime] = None) -> Optional[str]:
+    """Why a scheduled pass must not run now, or None (BUG-70).
+
+    The clock is compared with the last pass: more than
+    ``MAX_CLOCK_STEP_DAYS`` after it, the server clock may be running ahead,
+    and a pass would delete every row older than that wrong date. A pass
+    held this way writes nothing, so the next one is held too until an
+    admin checks the clock and runs it from the Jobs page (manual runs are
+    not held). Without a previous pass there is nothing to compare with.
+    """
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    last = last_report() or {}
+    try:
+        ran_at = datetime.strptime(str(last.get("ran_at")), "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        return None
+    gap = now - ran_at.replace(tzinfo=timezone.utc)
+    if gap <= timedelta(days=MAX_CLOCK_STEP_DAYS):
+        return None
+    return (
+        f"held: the clock reads {now:%Y-%m-%d %H:%M} UTC, {gap.days} days after "
+        f"the last pass ({last['ran_at']}); a clock running ahead would delete "
+        "data that should be kept. Check the server clock, then run the pass "
+        "from the Jobs page."
+    )
 
 
 def last_report() -> Optional[Dict[str, Any]]:

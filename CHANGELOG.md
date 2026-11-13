@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A server clock running ahead could empty the data stores** (BUG-70): the daily retention pass deletes the rows older than each retention counted from the server clock, so a clock a year ahead would have deleted every usage, audit, watchdog and monitoring row. A daily pass that finds the clock more than 7 days after the last pass (`data/retention.json`) is now held: it deletes nothing, writes no report, and the Jobs page shows why; **Run now** is never held, for an admin who checked the clock. Without a previous pass there is nothing to compare with.
+
 ## [4.12.1] — 2026-11-13
 
 ### Fixed

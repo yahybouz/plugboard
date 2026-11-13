@@ -50,6 +50,7 @@ class PeriodicJob:
         disabled: bool = False,
         sleep_fn: Optional[SleepFn] = None,
         now_fn: Optional[Callable[[], datetime]] = None,
+        scheduled_guard: Optional[Callable[[], Optional[str]]] = None,
     ) -> None:
         if (interval_s > 0) == (daily_hour_utc is not None):
             raise ValueError(
@@ -66,6 +67,9 @@ class PeriodicJob:
         self.disabled = disabled
         self._sleep = sleep_fn or asyncio.sleep
         self._now = now_fn or (lambda: datetime.now(timezone.utc))
+        # Asked before each scheduled run, never before a manual one: a
+        # message holds the run and is recorded as its error.
+        self._scheduled_guard = scheduled_guard
 
         self._task: Optional[asyncio.Task] = None
         self._run_lock = asyncio.Lock()
@@ -173,6 +177,17 @@ class PeriodicJob:
             )
             return
         async with self._run_lock:
+            held = (
+                self._scheduled_guard()
+                if kind != "manual" and self._scheduled_guard
+                else None
+            )
+            if held:
+                log.warning("PeriodicJob %s %s run %s", self.name, kind, held)
+                self.last_error = held[:_ERROR_MAX_CHARS]
+                self.runs += 1
+                self.last_run_at = self._now().isoformat()
+                return
             self.running_since = self._now().isoformat()
             try:
                 result = await self._work()
@@ -239,4 +254,5 @@ def retention_job() -> PeriodicJob:
         _retention_pass,
         daily_hour_utc=settings["hour_utc"],
         disabled=settings["disabled"],
+        scheduled_guard=retention.clock_check,
     )
