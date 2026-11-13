@@ -333,6 +333,7 @@ async def test_forward_does_not_send_the_refused_model_elsewhere(
 async def test_the_stream_route_neither_quarantines_nor_counts(
     isolated, http_provider, cli_process
 ):
+    import plugboard.alerts as alerts
     import plugboard.router as router
     from plugboard import circuit_breaker as cb
     from plugboard.cli_subprocess import CliSubprocessError
@@ -350,6 +351,7 @@ async def test_the_stream_route_neither_quarantines_nor_counts(
 
     assert raised.value.model_unsupported
     assert all(state.failures == 0 for state in cb._circuits.values())
+    assert alerts._provider_failures == {}
     assert not isolated.exists()
 
 
@@ -565,6 +567,7 @@ def test_a_name_only_the_refusing_route_lists_is_unknown(
 async def test_exit_0_refusal_is_named_and_not_counted_on_the_stream_route(
     isolated, http_provider, cli_process
 ):
+    import plugboard.alerts as alerts
     import plugboard.router as router
     from plugboard import circuit_breaker as cb
     from plugboard import cli_subprocess as cs
@@ -585,6 +588,7 @@ async def test_exit_0_refusal_is_named_and_not_counted_on_the_stream_route(
 
     assert raised.value.model_unsupported
     assert all(state.failures == 0 for state in cb._circuits.values())
+    assert alerts._provider_failures == {}
     assert not isolated.exists()
 
 
@@ -610,3 +614,109 @@ def test_the_sign_in_is_read_from_auth_json(codex_home, auth, chatgpt):
 
     assert cs.codex_uses_chatgpt_sign_in() is chatgpt
     assert bool(cs.codex_refused_models()) is chatgpt
+
+
+# ── The default model and family aliases follow the same rule (BUG-83) ───
+
+
+@pytest.mark.asyncio
+async def test_a_refused_default_model_does_not_pull_a_bare_name_to_codex(
+    client, client_key, http_provider, cli_process, codex_home, _providers_file
+):
+    # Signed in with ChatGPT before the model refresh re-chose the default:
+    # the codex route's default_model is a refused model it no longer lists.
+    from plugboard.router import invalidate_models_cache
+
+    received = http_provider
+    providers = json.loads(_providers_file.read_text())["providers"]
+    providers[0] = {
+        **CLI_PROVIDER,
+        "default_model": REFUSED,
+        "models": [{"id": "gpt-6-luna"}],
+    }
+    _providers_file.write_text(json.dumps({"providers": providers}))
+    invalidate_models_cache()
+    codex_home("chatgpt")
+    spawned = cli_process(b"", _STDERR_REFUSAL)
+
+    resp = await client.post("/v1/chat/completions", headers=client_key, json=_chat())
+
+    assert resp.status_code == 200, resp.text
+    assert spawned == []
+    assert len(received) == 1
+
+
+@pytest.mark.parametrize("mode", ["chatgpt", "apikey"])
+def test_a_refused_default_or_family_alias_is_not_known_to_codex(
+    _providers_file, codex_home, mode
+):
+    from plugboard import router
+
+    codex_home(mode)
+    codex = {
+        **CLI_PROVIDER,
+        "default_model": REFUSED,
+        # A dated snapshot publishes its family under the bare, refused name.
+        "models": [{"id": "gpt-6-sol-20260101"}, {"id": "gpt-6-luna"}],
+    }
+    listed_http = {**PROVIDER_A, "models": [{"id": "other-model"}]}
+    _providers_file.write_text(json.dumps({"providers": [codex, listed_http]}))
+    router.invalidate_models_cache()
+
+    chatgpt = mode == "chatgpt"
+    assert (router._known_native(codex, REFUSED) is None) is chatgpt
+    assert (router._known_native(codex, "gpt-6-sol") is None) is chatgpt
+    assert router.is_unknown_model(REFUSED) is chatgpt
+    assert router.is_unknown_model("gpt-6-sol") is chatgpt
+    # What the route serves stays known, whatever the sign-in.
+    assert router._known_native(codex, "gpt-6-luna") == "gpt-6-luna"
+    assert router._known_native(codex, "gpt-6-sol-20260101") == "gpt-6-sol-20260101"
+
+
+# ── An error the request caused leaves the routing score alone (MIN-5) ────
+
+_STDERR_TOO_LONG = b"prompt is too long: 250000 tokens > 200000 maximum\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stderr", [_STDERR_REFUSAL, _STDERR_TOO_LONG], ids=["refused", "too-long"]
+)
+@pytest.mark.parametrize("stream", [False, True], ids=["forward", "stream"])
+async def test_a_request_caused_cli_error_is_not_a_provider_error(
+    isolated, http_provider, cli_process, stderr, stream
+):
+    import plugboard.metrics as metrics
+    import plugboard.router as router
+    from plugboard.cli_subprocess import CliSubprocessError
+
+    cli_process(b"", stderr)
+
+    with pytest.raises(CliSubprocessError):
+        if stream:
+            [
+                chunk
+                async for chunk in router.forward_stream(
+                    _chat(f"{CLI_ID}:{REFUSED}", True)
+                )
+            ]
+        else:
+            await router.forward(_chat(f"{CLI_ID}:{REFUSED}"))
+
+    assert metrics._stats.get(CLI_ID, {}).get("errors", 0) == 0
+    assert metrics.get_stats().get(CLI_ID, {}).get("errors", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_a_failed_cli_run_still_counts_as_a_provider_error(
+    isolated, http_provider, cli_process
+):
+    import plugboard.metrics as metrics
+    import plugboard.router as router
+
+    cli_process(b'{"type":"turn.failed","error":{"message":"model overloaded"}}\n')
+
+    with pytest.raises(Exception):
+        await router.forward(_chat(f"{CLI_ID}:{REFUSED}"))
+
+    assert metrics._stats[CLI_ID]["errors"] == 1
