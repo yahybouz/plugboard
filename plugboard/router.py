@@ -1636,18 +1636,23 @@ async def _stream_with_lease(
 
 
 async def _stream_failed(provider_id: str, fault: bool) -> None:
-    """A streamed route failed before its first chunk: the error counts in
-    the provider's metrics (its routing score), and a provider failure in
-    its provider_down alert, as in forward(). Never raises."""
+    """A streamed route failed: the error counts in the provider's metrics
+    (its routing score), and, with ``fault`` (a provider failure before the
+    first chunk), in its provider_down alert, as in forward(). A complete
+    stream resets the alert's count. Never raises."""
     try:
         metrics.record(provider_id, 0.0, error=True)
     except Exception as exc:
         log.debug("metrics: %s", exc)
     if fault:
-        try:
-            await record_provider_failure(provider_id)
-        except Exception as exc:
-            log.debug("provider_down alert failed: %s", exc)
+        await _alert_failure(provider_id)
+
+
+async def _alert_failure(provider_id: str) -> None:
+    try:
+        await record_provider_failure(provider_id)
+    except Exception as exc:
+        log.debug("provider_down alert failed: %s", exc)
 
 
 async def _stream_route(
@@ -1695,6 +1700,7 @@ async def _stream_route(
             metrics.record(provider["id"], _time.perf_counter() - _t_cli, error=True)
             if is_provider_fault(str(exc)):
                 cb_failure(circuit_key)
+                await _alert_failure(provider["id"])
             try:
                 from plugboard.model_quarantine import (
                     is_account_unsupported_error,
@@ -1726,6 +1732,7 @@ async def _stream_route(
             raise
         cb_success(circuit_key)
         route_pauses.clear(circuit_key)
+        record_provider_success(provider["id"])
         reported = _pop_reported_usage(result)
         reported_usage = result.get("usage") or {}
         content = result["choices"][0]["message"]["content"]
@@ -1825,6 +1832,8 @@ async def _stream_route(
 
     session = await session_for(provider)
     streaming = False
+    started = _time.perf_counter()
+    refused_fault: Optional[bool] = None  # set when the provider answered an error
     # aiohttp's text names the provider's host and port: typed like forward().
     try:
         async with session.post(
@@ -1835,27 +1844,35 @@ async def _stream_route(
         ) as resp:
             if resp.status != 200:
                 text = await resp.text()
-                fault = is_provider_fault(text, resp.status)
-                if fault:
+                refused_fault = is_provider_fault(text, resp.status)
+                if refused_fault:
                     cb_failure(circuit_key)
-                await _stream_failed(provider["id"], fault)
                 err = _http_error(provider["id"], resp.status, text, resp.headers)
                 if isinstance(err, ProviderQuotaError):
                     route_pauses.pause(circuit_key, err.retry_after)
                 raise err
             cb_success(circuit_key)
             route_pauses.clear(circuit_key)
+            record_provider_success(provider["id"])
             streaming = True
             async for chunk in resp.content.iter_any():
                 meter.feed(chunk)
                 yield chunk
             meter.finish()
+        # A whole stream: its duration feeds the routing score, as a
+        # non-streamed call's does.
+        metrics.record(provider["id"], _time.perf_counter() - started)
+    except (ProviderHTTPError, ProviderQuotaError):
+        # Counted once the connection is given back (the alert may post a
+        # webhook): the error answer, before any chunk.
+        await _stream_failed(provider["id"], bool(refused_fault))
+        raise
     except asyncio.TimeoutError as exc:
         # No answer: a timeout or a network error counts, as in forward().
         # Once the stream has begun, its success is already recorded.
         if not streaming:
             cb_failure(circuit_key)
-            await _stream_failed(provider["id"], True)
+        await _stream_failed(provider["id"], not streaming)
         raise ProviderTimeoutError(
             f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}"
         ) from exc
@@ -1867,7 +1884,7 @@ async def _stream_route(
             raise ProviderEgressRefused(provider["id"], exc.host) from exc
         if not streaming:
             cb_failure(circuit_key)
-            await _stream_failed(provider["id"], True)
+        await _stream_failed(provider["id"], not streaming)
         detail = str(exc) or type(exc).__name__
         raise ProviderNetworkError(
             f"[{provider['id']}] network error: {detail[:200]}",

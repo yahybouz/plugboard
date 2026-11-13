@@ -418,3 +418,87 @@ async def test_a_cli_route_finding_the_prompt_too_long_answers_400(
         calls = (_calls(mock, URL_A), _calls(mock, URL_B))
     assert resp.status_code == 400, resp.text
     assert calls == (1, 0)
+
+
+def test_done_quoted_in_content_is_not_the_end():
+    from plugboard.app import _complete_events, _done_event_at
+
+    quoted = b'data: {"choices":[{"delta":{"content":"say data: [DONE] now"}}]}\n\n'
+    buf = bytearray(quoted + b'data: {"x"')
+    assert _done_event_at(buf) == -1
+    assert _complete_events(buf) == quoted
+    buf = bytearray(quoted + b"data: [DONE]\n\n")
+    assert _done_event_at(buf) == len(quoted)
+
+
+def test_a_stream_without_event_ends_is_not_held_whole():
+    from plugboard.app import _MAX_HELD, _complete_events
+
+    buf = bytearray(b"x" * (_MAX_HELD + 100))
+    out = _complete_events(buf)
+    assert len(out) == _MAX_HELD + 36 and len(buf) == 64
+
+
+async def test_a_cut_after_a_quoted_done_is_still_a_cut(
+    client, two_routes, monkeypatch
+):
+    import plugboard.app as app_mod
+
+    quoted = b'data: {"choices":[{"index":0,"delta":{"content":"data: [DONE]"}}]}\n\n'
+
+    async def cut(body, **options):
+        yield quoted
+        raise router.ProviderNetworkError("reset", provider_id="test-provider")
+
+    monkeypatch.setattr(app_mod, "forward_stream", cut)
+    resp = await client.post("/v1/chat/completions", headers=AUTH, json=_stream())
+    assert '"code": "stream_interrupted"' in resp.text
+    assert resp.text.rstrip().endswith("data: [DONE]")
+
+
+async def test_stream_successes_reset_the_provider_failures(client, two_routes):
+    from plugboard import alerts
+
+    alerts._provider_failures.clear()
+    router.metrics._stats.pop("test-provider", None)
+    with aioresponses() as mock:
+        mock.post(URL_A, status=500, body="down")
+        mock.post(URL_B, body=FAKE_STREAM_BODY, status=200)
+        await client.post("/v1/chat/completions", headers=AUTH, json=_stream())
+        assert alerts._provider_failures.get("test-provider") == 1
+        for _ in range(3):
+            mock.post(URL_A, body=FAKE_STREAM_BODY, status=200)
+            ok = await client.post(
+                "/v1/chat/completions",
+                headers=AUTH,
+                json=_stream(f"{PROVIDER_A['id']}:{BARE}"),
+            )
+            assert ok.status_code == 200
+    assert alerts._provider_failures.get("test-provider") == 0
+
+
+async def test_a_failing_last_cli_route_shows_no_stderr_to_a_client_key(
+    client, http_cli_http, _providers_file, tmp_path, monkeypatch
+):
+    import plugboard.apikeys as ak
+    import plugboard.app as app_mod
+
+    # A, then the CLI route, last: its error is the answer.
+    _providers_file.write_text(json.dumps({"providers": [PROVIDER_A, CLI]}))
+    router.invalidate_models_cache()
+
+    monkeypatch.setattr(ak, "_DATA_DIR", tmp_path)
+    monkeypatch.setattr(ak, "KEYS_FILE", tmp_path / "api_keys.json")
+    monkeypatch.setattr(ak, "KEYS_LOCK", tmp_path / "api_keys.json.lock")
+    key = ak.create_key("stream-client", "stream")["key"]
+    monkeypatch.setattr(app_mod, "_check_price_known", lambda *a, **k: None)
+    with aioresponses() as mock:
+        mock.post(URL_A, status=500, body="down")
+        resp = await client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}"},
+            json=_stream(),
+        )
+    assert resp.status_code == 502, resp.text
+    assert "error_ref" in resp.text
+    assert "SECRET_STDERR" not in resp.text and "pid" not in resp.text

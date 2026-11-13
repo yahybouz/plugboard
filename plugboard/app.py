@@ -857,17 +857,44 @@ async def _unless_client_gone(request: Request, awaitable: Awaitable[_T]) -> _T:
 _EVENT_ENDS = (b"\n\n", b"\r\n\r\n")
 
 
+_DONE = b"data: [DONE]"
+# Held without an event end past this, a provider's stream goes out as it
+# comes (all but its last bytes): a stream that never ends its events must
+# not be buffered whole.
+_MAX_HELD = 1 << 16
+
+
+def _done_event_at(buf: bytearray) -> int:
+    """Where the `data: [DONE]` event starts in ``buf``, -1 when there is
+    none. Only a whole event counts: at the start of ``buf`` (which starts
+    at an event's start) or right after an event end, followed by a line
+    end or nothing yet; `data: [DONE]` quoted inside an event's JSON does
+    not."""
+    end = len(buf)
+    while True:
+        at = buf.rfind(_DONE, 0, end)
+        if at == -1:
+            return -1
+        after = buf[at + len(_DONE) : at + len(_DONE) + 1]
+        starts_event = at == 0 or any(buf.endswith(sep, 0, at) for sep in _EVENT_ENDS)
+        if starts_event and after in (b"", b"\n", b"\r"):
+            return at
+        end = at
+
+
 def _complete_events(buf: bytearray) -> bytes:
     """Take from ``buf`` the complete SSE events that may go out now: up to
-    the last event end, but never `data: [DONE]` nor what follows it. What
-    is left stays in ``buf``."""
-    done = buf.rfind(b"data: [DONE]")
+    the last event end, but never the `data: [DONE]` event nor what follows
+    it. What is left stays in ``buf``."""
+    done = _done_event_at(buf)
     limit = len(buf) if done == -1 else done
     end = 0
     for sep in _EVENT_ENDS:
         at = buf.rfind(sep, 0, limit)
         if at != -1:
             end = max(end, at + len(sep))
+    if not end and done == -1 and len(buf) > _MAX_HELD:
+        end = len(buf) - 64  # no event end in sight: let it flow
     if not end:
         return b""
     out = bytes(buf[:end])
@@ -2792,7 +2819,7 @@ async def chat_completions(
                         yield ready
                 completed = True
             except Exception as exc:
-                if b"data: [DONE]" in tail_buf:
+                if _done_event_at(tail_buf) != -1:
                     # The provider had finished: a late read error is moot.
                     completed = True
                 else:
@@ -2863,7 +2890,7 @@ async def chat_completions(
             }
             usage_sse = f"data: {_json_mod.dumps(usage_evt)}\n\n".encode("utf-8")
 
-            done_idx = tail_buf.rfind(b"data: [DONE]")
+            done_idx = _done_event_at(tail_buf)
             if done_idx == -1:
                 if tail_buf:
                     yield bytes(tail_buf)
