@@ -54,7 +54,7 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 `GET /health` is public and cheap, suitable for container and deployment health checks. It always answers `200` while the process runs, reads no file, and shows only the status and the version:
 
 ```json
-{"ok": true, "version": "4.12.0"}
+{"ok": true, "version": "4.12.1"}
 ```
 
 The list of providers is on the admin `GET /providers`. The client authentication posture is the `auth` check of `GET /health/ready`: a deployment gate that must refuse an instance whose client authentication is off reads that route, which answers `503` when `API_KEY` is empty outside dev mode.
