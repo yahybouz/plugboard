@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A stored secret the encryption key could not decrypt was sent as is** (BUG-57): when `ENCRYPTION_KEY` did not decrypt a stored secret (another key, a damaged value), the gateway used the encrypted text instead: a provider's requests carried `Authorization: Bearer enc:...`, and an OAuth sign-in its encrypted token. Such a secret is now never returned. The provider is turned off in memory (its stored key and on/off switch are left as they are): its models answer `503` `provider_disabled` and nothing is called; `GET /providers` shows it with `"is_active": false` and `"secret_unreadable": true`. The first time, the log says so at critical level, the audit records `provider.secret_unreadable` (actor `system`) and `ALERT_WEBHOOK_URL` receives `provider_secret_unreadable`. An OAuth sign-in that cannot be decrypted counts as signed out. At boot, a critical log line names every stored secret (provider keys, OAuth sign-ins, the admin MFA secret) that the key cannot decrypt, never its value. To recover, restore the key that encrypted them, or enter the keys again.
+
 ## [4.12.1] — 2026-11-13
 
 ### Fixed

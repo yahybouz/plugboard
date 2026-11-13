@@ -336,10 +336,38 @@ if _dotenv_warning:
     log.warning(_dotenv_warning)
 
 
+def _check_stored_secrets() -> None:
+    """Say at boot which stored secrets ENCRYPTION_KEY cannot decrypt (BUG-57).
+
+    Never stops the boot: the providers concerned are turned off (and
+    audited and alerted by load_providers), the rest keeps working.
+    """
+    from plugboard import config as _config
+    from plugboard.secrets_rekey import unreadable_secrets
+
+    unreadable = unreadable_secrets(
+        _config.PROVIDERS_FILE.parent, _config._ENCRYPTION_KEY
+    )
+    if unreadable:
+        log.critical(
+            "ENCRYPTION_KEY cannot decrypt %d stored secret(s): %s. Restore the "
+            "key that encrypted them (ENCRYPTION_KEY or data/.encryption_key) and "
+            "restart, or enter these secrets again. Until then the providers "
+            "concerned are turned off and none of these secrets is sent.",
+            len(unreadable),
+            "; ".join(unreadable),
+        )
+        load_providers()  # reports each provider turned off (audit, alert)
+
+
 @asynccontextmanager
 async def _lifespan(application: FastAPI):  # noqa: ARG001
     """Start background services on startup, stop on shutdown."""
     _issue_local_login_token()
+    try:
+        _check_stored_secrets()
+    except Exception as exc:  # the check must never stop the boot
+        log.error("Stored secrets check failed: %s", exc)
     # Auto-start provider watchdog
     from plugboard.provider_watchdog import start_watchdog, stop_watchdog
 

@@ -235,6 +235,15 @@ def rotate(
     return report
 
 
+def unreadable_secrets(data: Path, key: str) -> List[str]:
+    """Where a secret stored under ``data`` cannot be decrypted with ``key``.
+
+    A dry rotation from the key to itself: nothing is written, and the
+    locations are named, never the values (BUG-57's boot check).
+    """
+    return rotate(data, key, key, dry_run=True).unreadable
+
+
 def replace_key_file(data: Path, new_key: str) -> Path:
     """Write ``new_key`` to ``<data>/.encryption_key`` (0600) and return its path.
 

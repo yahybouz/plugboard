@@ -101,6 +101,34 @@ async def send_egress_refused_alert(provider_id: str, host: str) -> None:
         log.warning("Egress refused alert webhook failed: %s", exc)
 
 
+async def send_secret_unreadable_alert(provider_id: str) -> None:
+    """Alert that a provider's stored key cannot be decrypted (BUG-57)."""
+    if not _WEBHOOK_URL:
+        return
+    payload = {
+        "type": "provider_secret_unreadable",
+        "provider_id": provider_id,
+        "message": (
+            f"Provider '{provider_id}' is turned off: its stored key cannot be "
+            "decrypted with the current ENCRYPTION_KEY"
+        ),
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                _WEBHOOK_URL,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=5),
+            ) as resp:
+                log.info(
+                    "Unreadable key alert sent for %s (HTTP %d)",
+                    provider_id,
+                    resp.status,
+                )
+    except Exception as exc:
+        log.warning("Unreadable key alert webhook failed: %s", exc)
+
+
 # -- Spending alerts ----------------------------------------------------------
 
 

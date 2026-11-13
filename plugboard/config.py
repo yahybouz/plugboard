@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -9,6 +10,7 @@ import logging
 import os
 import re
 import stat
+import threading
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
@@ -164,18 +166,25 @@ def _encrypt_token(token: str) -> str:
     return "enc:" + _get_fernet().encrypt(token.encode()).decode()
 
 
+class SecretUnreadable(Exception):
+    """A stored secret the current ENCRYPTION_KEY cannot decrypt (BUG-57)."""
+
+
 def _decrypt_token(stored: str) -> str:
-    """Decrypt a stored token, tolerating legacy plain-text values."""
+    """Decrypt a stored token, tolerating legacy plain-text values.
+
+    Raises SecretUnreadable when the current key cannot decrypt it: the
+    ciphertext is never handed back, so it is never sent as a token (BUG-57).
+    """
     if not stored.startswith("enc:"):
         return stored  # legacy plain text — will be re-encrypted on next write
     try:
         return _get_fernet().decrypt(stored[4:].encode()).decode()
     except Exception as exc:
-        log.warning(
-            "Failed to decrypt stored token (key rotated? corrupted value?): %s",
-            exc,
-        )
-        return stored
+        raise SecretUnreadable(
+            "stored secret cannot be decrypted with the current ENCRYPTION_KEY "
+            f"({type(exc).__name__})"
+        ) from None
 
 
 try:
@@ -297,14 +306,66 @@ def _write(data: Dict[str, Any]) -> None:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
+# Provider keys the current ENCRYPTION_KEY cannot decrypt, as (provider id,
+# digest of the stored value): each is reported once per process (BUG-57).
+_unreadable_secret_reported: set = set()
+_unreadable_secret_lock = threading.Lock()
+_report_tasks: set = set()  # alert tasks, referenced until they finish
+
+
 def load_providers() -> List[Dict[str, Any]]:
+    unreadable = []
     with _lock():
         data = _read()
         providers = data.get("providers", [])
         for p in providers:
             if "bearer_token" in p and not is_removed_provider(p):
-                p["bearer_token"] = _decrypt_token(p["bearer_token"])
-        return providers
+                try:
+                    p["bearer_token"] = _decrypt_token(p["bearer_token"])
+                except SecretUnreadable:
+                    # Turned off in memory only (BUG-57): the stored key and
+                    # switch wait for the key that encrypted them.
+                    unreadable.append((p.get("id", ""), p["bearer_token"]))
+                    p.update(bearer_token="", is_active=False, secret_unreadable=True)
+    for provider_id, stored in unreadable:
+        _report_unreadable_secret(provider_id, stored)
+    return providers
+
+
+def _report_unreadable_secret(provider_id: str, stored: str) -> None:
+    """Log, audit and alert a provider whose key cannot be decrypted, once."""
+    mark = (provider_id, hashlib.sha256(stored.encode()).hexdigest())
+    with _unreadable_secret_lock:
+        if mark in _unreadable_secret_reported:
+            return
+        _unreadable_secret_reported.add(mark)
+    log.critical(
+        "[%s] provider turned off: its stored key cannot be decrypted with the "
+        "current ENCRYPTION_KEY, and it is never sent. Restore the key that "
+        "encrypted it (ENCRYPTION_KEY or data/.encryption_key), or enter the "
+        "provider's key again.",
+        provider_id,
+    )
+    try:
+        from plugboard import audit
+
+        audit.log_action(
+            "provider.secret_unreadable",
+            actor="system",
+            target_type="provider",
+            target_id=provider_id,
+        )
+    except Exception as exc:
+        log.warning("Unreadable key audit failed for %s: %s", provider_id, exc)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # no event loop here (a script): logged and audited only
+    from plugboard import alerts
+
+    task = loop.create_task(alerts.send_secret_unreadable_alert(provider_id))
+    _report_tasks.add(task)
+    task.add_done_callback(_report_tasks.discard)
 
 
 def get_provider(provider_id: str) -> Optional[Dict[str, Any]]:

@@ -213,3 +213,20 @@ async def test_boot_warms_the_tiktoken_encoding(quiet_lifespan, monkeypatch):
     monkeypatch.setattr(_tokenizer_in_use(), "_get_encoding", _load)
     async with app_module._lifespan(app_module.app):
         assert await asyncio.to_thread(loaded.wait, 5)
+
+
+@pytest.mark.asyncio
+async def test_lifespan_checks_the_stored_secrets_without_stopping(
+    quiet_lifespan, monkeypatch
+):
+    # BUG-57: the boot says which stored secrets ENCRYPTION_KEY cannot read;
+    # a failing check never stops the boot.
+    calls = []
+
+    def _failing_check():
+        calls.append(1)
+        raise OSError("disk")
+
+    monkeypatch.setattr(app_module, "_check_stored_secrets", _failing_check)
+    async with app_module._lifespan(app_module.app):
+        assert calls == [1]

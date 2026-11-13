@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote
 
-from plugboard.config import _decrypt_token, _encrypt_token
+from plugboard.config import SecretUnreadable, _decrypt_token, _encrypt_token
 from plugboard.storage import atomic_write_json, data_dir
 
 log = logging.getLogger(__name__)
@@ -174,20 +174,15 @@ def _stored_secret() -> Optional[str]:
     if not enc:
         return None
     try:
-        secret = _decrypt_token(enc)
-    except Exception as exc:  # pragma: no cover — decrypt already logs
-        log.error("Failed to decrypt admin MFA secret: %s", exc)
-        return None
-    if secret.startswith("enc:"):
-        # _decrypt_token hands the ciphertext back when the key cannot read
-        # it (ENCRYPTION_KEY changed without scripts/rotate_encryption_key.py).
+        return _decrypt_token(enc)
+    except SecretUnreadable:
+        # ENCRYPTION_KEY changed without scripts/rotate_encryption_key.py.
         log.error(
             "The admin MFA secret cannot be decrypted with the current "
             "ENCRYPTION_KEY: MFA codes are refused until it is re-enrolled "
             "or the previous key is restored."
         )
         return None
-    return secret
 
 
 def verify(code: str, at: Optional[float] = None) -> bool:
