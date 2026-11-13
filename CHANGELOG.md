@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **The official price table would have turned stale on 2026-11-29** (PLU-40): it was checked on 2026-10-24 and is reported stale 35 days later. Every price was read again on its vendor's official page on 2026-11-13 and none changed: Claude Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 5.5 (with its prompts over 100,000 tokens), Gemini 4 Argon and Gemini 3.8 Flash with their dated increases, `gpt-4o-mini` and Jev. The table is now dated 2026-11-13 (fresh until 2026-12-18), and `gpt-4o-mini` cites its model page, since OpenAI's pricing page no longer lists it. Laya stays free by user decision: its repository publishes no price.
+
 ## [4.12.1] — 2026-11-13
 
 ### Fixed
