@@ -145,6 +145,14 @@ and final reviews are not validated by these examples.
 
 With `"stream": true` the answer is `text/event-stream`: `data: <chunk>` events, each a `ChatCompletionChunk`, then `data: [DONE]`. A chunk carrying `usage` (with `cost_usd` when Plugboard computed it) always comes **before** `[DONE]`, even when the provider sends none, so clients that stop at `[DONE]` still get tokens and cost. Billing headers are not sent on streamed answers.
 
+For a model without provider prefix, a provider that fails before the first chunk (an error status, a timeout, a dropped connection, a full or turned-off provider) hands the request over to the next candidate, as for a non-streamed request: the client sees only the stream that worked, or the last error. Once the first chunk is out, nothing is replayed: if the provider breaks off, the stream ends with an error event in OpenAI's shape, then `data: [DONE]`:
+
+```
+data: {"error": {"message": "The provider stopped the answer before its end: what came before this event is all there is.", "type": "server_error", "code": "stream_interrupted"}}
+```
+
+What was received is billed; a session turn ended this way is not recorded.
+
 ## Errors
 
 Errors are JSON with a `detail` field (`ErrorResponse` in the schema):

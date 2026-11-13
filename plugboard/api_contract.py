@@ -189,6 +189,9 @@ class ChatCompletionChunk(_Open):
 
     The stream ends with `data: [DONE]`. A chunk carrying `usage` (and
     `cost_usd` when the gateway computed it) always comes before `[DONE]`.
+    A stream the provider breaks off after its first chunk ends instead with
+    `data: {"error": {"message", "type": "server_error", "code":
+    "stream_interrupted"}}`, then `data: [DONE]`.
     """
 
     id: str
@@ -823,7 +826,10 @@ def _ok_response(
                 "type": "string",
                 "description": (
                     "When stream is true: `data: <ChatCompletionChunk>` events, "
-                    "then `data: [DONE]`. The usage chunk comes before [DONE]."
+                    "then `data: [DONE]`. The usage chunk comes before [DONE]. "
+                    "A stream the provider breaks off after its first chunk ends "
+                    'with `data: {"error": {..., "code": '
+                    '"stream_interrupted"}}`, then `data: [DONE]`.'
                 ),
             }
         }

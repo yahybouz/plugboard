@@ -854,6 +854,22 @@ async def _unless_client_gone(request: Request, awaitable: Awaitable[_T]) -> _T:
     return result
 
 
+def _stream_cut_event() -> bytes:
+    """The SSE event that ends a stream the provider broke off after its
+    first chunk (PLU-26), in OpenAI's streamed error shape."""
+    event = {
+        "error": {
+            "message": (
+                "The provider stopped the answer before its end: what came "
+                "before this event is all there is."
+            ),
+            "type": "server_error",
+            "code": "stream_interrupted",
+        }
+    }
+    return f"data: {json.dumps(event)}\n\n".encode("utf-8")
+
+
 def _client_gone_response(model: str) -> Response:
     """Answer nobody reads: it only lets the inflight slot go at once."""
     log.info(
@@ -2750,6 +2766,7 @@ async def chat_completions(
                 first_chunk[done_in_first:] if done_in_first != -1 else b""
             )
             completed = False
+            cut: Optional[Exception] = None
             try:
                 async for chunk in rest:
                     accumulated.extend(chunk)
@@ -2759,6 +2776,15 @@ async def chat_completions(
                         yield overflow
                         del tail_buf[:-TAIL]
                 completed = True
+            except Exception as exc:
+                if b"data: [DONE]" in tail_buf:
+                    # The provider had finished: a late read error is moot.
+                    completed = True
+                else:
+                    # The provider broke off after the first chunk (PLU-26):
+                    # no other provider can take over a stream already begun.
+                    cut = exc
+                    log.warning("Stream cut by the provider: %s", exc)
             finally:
                 if not completed:
                     # Client gone (cancellation or generator close) or upstream
@@ -2777,6 +2803,14 @@ async def chat_completions(
                         except Exception as exc:
                             log.warning("Stream billing error (non-fatal): %s", exc)
                     await _aclose_quietly(rest)
+            if cut is not None:
+                # What came, then a readable end: an error event and [DONE],
+                # never the provider's own text (it may name its address).
+                if tail_buf:
+                    yield bytes(tail_buf)
+                yield _stream_cut_event()
+                yield b"data: [DONE]\n\n"
+                return
             # At this point `tail_buf` holds the last <=TAIL bytes and has
             # NOT been yielded yet.
 

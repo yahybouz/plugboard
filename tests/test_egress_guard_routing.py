@@ -221,7 +221,7 @@ async def test_stream_refusal_gives_the_provider_slot_back(
     closed_port, monkeypatch, recorders
 ):
     refused = {**_provider("acme", closed_port, protected=True), "max_concurrency": 1}
-    monkeypatch.setattr(router, "resolve_provider_and_model", lambda m: (refused, "m"))
+    monkeypatch.setattr(router, "_resolve_all_providers", lambda m: [(refused, "m")])
     monkeypatch.setattr(provider_admission, "WAIT_S", 0.0)
     for _ in range(2):  # a slot left held would make the second one busy
         with pytest.raises(router.ProviderEgressRefused):

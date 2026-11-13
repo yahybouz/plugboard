@@ -221,7 +221,7 @@
       },
       "ChatCompletionChunk": {
         "additionalProperties": true,
-        "description": "One `data:` event of a streamed completion (SSE).\n\nThe stream ends with `data: [DONE]`. A chunk carrying `usage` (and\n`cost_usd` when the gateway computed it) always comes before `[DONE]`.",
+        "description": "One `data:` event of a streamed completion (SSE).\n\nThe stream ends with `data: [DONE]`. A chunk carrying `usage` (and\n`cost_usd` when the gateway computed it) always comes before `[DONE]`.\nA stream the provider breaks off after its first chunk ends instead with\n`data: {\"error\": {\"message\", \"type\": \"server_error\", \"code\":\n\"stream_interrupted\"}}`, then `data: [DONE]`.",
         "properties": {
           "id": {
             "title": "Id",
@@ -2765,7 +2765,7 @@
               "text/event-stream": {
                 "schema": {
                   "type": "string",
-                  "description": "When stream is true: `data: <ChatCompletionChunk>` events, then `data: [DONE]`. The usage chunk comes before [DONE]."
+                  "description": "When stream is true: `data: <ChatCompletionChunk>` events, then `data: [DONE]`. The usage chunk comes before [DONE]. A stream the provider breaks off after its first chunk ends with `data: {\"error\": {..., \"code\": \"stream_interrupted\"}}`, then `data: [DONE]`."
                 }
               }
             },
@@ -3622,7 +3622,7 @@
               "text/event-stream": {
                 "schema": {
                   "type": "string",
-                  "description": "When stream is true: `data: <ChatCompletionChunk>` events, then `data: [DONE]`. The usage chunk comes before [DONE]."
+                  "description": "When stream is true: `data: <ChatCompletionChunk>` events, then `data: [DONE]`. The usage chunk comes before [DONE]. A stream the provider breaks off after its first chunk ends with `data: {\"error\": {..., \"code\": \"stream_interrupted\"}}`, then `data: [DONE]`."
                 }
               }
             },
