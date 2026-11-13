@@ -14,6 +14,12 @@ Outside a chat request (an admin probe, a direct call) there is no budget:
 a wait lasts its own ceiling, as before. The budget lives in a context
 variable, set by the chat admission once the key is checked; the router and
 the session turn use it in the same request.
+
+The budget also carries the request's slot under the global chat cap
+(BUG-77): a request gives it back while it waits for a provider or for its
+session's turn (``slot_released``), so requests waiting for a full provider
+never keep the requests for the other providers out, and takes it back,
+within the budget, before it goes on.
 """
 
 from __future__ import annotations
@@ -21,17 +27,31 @@ from __future__ import annotations
 import contextlib
 import time
 from contextvars import ContextVar
-from typing import Iterator, Optional
+from typing import AsyncIterator, Iterator, Optional, Protocol
+
+
+class ChatSlot(Protocol):
+    """A request's slot under the global chat cap (owned by the chat admission)."""
+
+    held: bool
+    wait_s: float  # ceiling of a wait for it
+
+    async def take(self, wait_s: float) -> None:
+        """Take the slot, waiting at most ``wait_s``; raise when it cannot."""
+
+    def release(self) -> None:
+        """Give the slot back (no-op when not held)."""
 
 
 class RequestWait:
     """The wait budget of one request: ``length`` seconds of waiting in all."""
 
-    __slots__ = ("length", "spent")
+    __slots__ = ("length", "spent", "slot")
 
-    def __init__(self, length: float) -> None:
+    def __init__(self, length: float, slot: Optional[ChatSlot] = None) -> None:
         self.length = max(0.0, length)
         self.spent = 0.0
+        self.slot = slot
 
     def left(self) -> float:
         return max(0.0, self.length - self.spent)
@@ -42,9 +62,10 @@ _current: ContextVar[Optional[RequestWait]] = ContextVar(
 )
 
 
-def start(length: float) -> RequestWait:
-    """Give the current request a fresh budget of ``length`` seconds."""
-    budget = RequestWait(length)
+def start(length: float, slot: Optional[ChatSlot] = None) -> RequestWait:
+    """Give the current request a fresh budget of ``length`` seconds, and the
+    slot it holds under the global chat cap, if any."""
+    budget = RequestWait(length, slot)
     _current.set(budget)
     return budget
 
@@ -69,3 +90,50 @@ def waiting(ceiling: Optional[float] = None) -> Iterator[Optional[float]]:
         yield left if ceiling is None else min(left, ceiling)
     finally:
         budget.spent += time.monotonic() - started
+
+
+class StepOut:
+    """Yielded by ``slot_released``: set ``come_back`` to False when the
+    request will not call a provider after this wait (it ends with a refusal)."""
+
+    __slots__ = ("come_back",)
+
+    def __init__(self) -> None:
+        self.come_back = True
+
+
+def _held_slot() -> Optional[ChatSlot]:
+    budget = _current.get()
+    return budget.slot if budget is not None else None
+
+
+@contextlib.asynccontextmanager
+async def slot_released() -> AsyncIterator[StepOut]:
+    """Give the request's global slot back while it waits, then take it back.
+
+    For a wait for something else than the slot itself: a provider's slot or
+    the session's turn. The slot is taken back, within the wait budget (its
+    own ceiling ``PLUGBOARD_INFLIGHT_WAIT_S`` included), only when the wait
+    ends normally and ``come_back`` is still True; a wait that raises (timed
+    out, client gone) leaves the request without it. Without a slot (no
+    global cap, outside a chat request), nothing happens.
+    """
+    step = StepOut()
+    slot = _held_slot()
+    if slot is None or not slot.held:
+        yield step
+        return
+    slot.release()
+    yield step
+    if step.come_back:
+        with waiting(slot.wait_s) as wait_s:
+            await slot.take(wait_s)
+
+
+async def slot_back() -> None:
+    """Take the request's global slot back when a wait left without it (a
+    preflight goes on with its next ping after a refusal)."""
+    slot = _held_slot()
+    if slot is not None and not slot.held:
+        with waiting(slot.wait_s) as wait_s:
+            await slot.take(wait_s)

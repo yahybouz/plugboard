@@ -15,6 +15,9 @@ Phases, in order of appearance:
 * ``cli_running``   CLI provider: child process started (``pid``)
 * ``cli_parse``     CLI provider: process exited, reading its answer
 
+A request that waited for a provider or for its session's turn shows
+``waiting_slot`` again while it takes its global slot back (BUG-77).
+
 Nothing is persisted and no prompt, answer or secret is stored: only ids,
 the model name the caller asked for, the provider id and timings.
 """

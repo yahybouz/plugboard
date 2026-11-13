@@ -65,7 +65,16 @@ class _Upstream:
         self.calls += 1
         if self.calls == 1:
             await self.gate.wait()
-        return CallbackResult(payload=FAKE_COMPLETION)
+        return _reply_for(kwargs)
+
+
+def _reply_for(kwargs):
+    """A JSON answer, or an SSE stream when the request asked for one."""
+    from tests.factories import FAKE_STREAM_BODY
+
+    if (kwargs.get("json") or {}).get("stream"):
+        return CallbackResult(body=FAKE_STREAM_BODY, content_type="text/event-stream")
+    return CallbackResult(payload=FAKE_COMPLETION)
 
 
 def _chat(model=ONLY_A, **extra):
@@ -117,8 +126,8 @@ async def test_second_chat_waits_for_a_provider_at_one_instead_of_503(
     client, one_at_a_time, ovh_settings, path
 ):
     """PLU-14 criterion, with the OVH settings: the second request passes the
-    global cap, queues behind the first one at the provider and is served
-    when it ends, no 503 at once."""
+    global cap, queues behind the first one at the provider (without a global
+    slot, BUG-77) and is served when it ends, no 503 at once."""
     from plugboard import provider_admission
 
     upstream = _Upstream()
@@ -129,13 +138,15 @@ async def test_second_chat_waits_for_a_provider_at_one_instead_of_503(
         second = asyncio.create_task(client.post(path, headers=AUTH, json=_chat()))
         await _until(lambda: provider_admission.waiting(PROVIDER_A["id"]) == 1)
         sem = ovh_settings._get_inflight_sem()
-        both_hold_a_slot = sem._value == ovh_settings._INFLIGHT_CHAT_MAX - 2
+        # BUG-77: only the running request holds a global slot; the waiting
+        # one gave its slot back for the requests to other providers.
+        only_the_running_one = sem._value == ovh_settings._INFLIGHT_CHAT_MAX - 1
         await asyncio.sleep(0.3)
         waited = not second.done()
         upstream.gate.set()
         r1, r2 = await asyncio.gather(first, second)
     assert waited, f"answered at once: {r2.status_code} {r2.text}"
-    assert both_hold_a_slot
+    assert only_the_running_one
     assert r1.status_code == r2.status_code == 200, r2.text
     assert upstream.calls == 2
     assert ovh_settings._get_inflight_sem()._value == ovh_settings._INFLIGHT_CHAT_MAX
@@ -629,3 +640,224 @@ async def test_internet_check_calls_only_the_provider_it_checks(
     assert checked["internet_access"] is True
     [untouched] = get_provider("pbtest-claude")["models"]
     assert "internet_access" not in untouched
+
+
+# ── BUG-77: a request waiting for a provider holds no global slot ───────────
+
+URL_B = "http://other-llm.test/v1/chat/completions"
+ONLY_B = "other-provider:other:model-v2"
+
+
+@pytest.fixture
+def a_at_one_b_free(_providers_file):
+    """Provider A takes one request at a time; provider B has no cap."""
+    from plugboard import router
+    from tests.factories import PROVIDER_B
+
+    capped = {**PROVIDER_A, "max_concurrency": 1}
+    _providers_file.write_text(json.dumps({"providers": [capped, PROVIDER_B]}))
+    router.invalidate_models_cache()
+
+
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v2/chat/completions"])
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+async def test_requests_waiting_for_a_full_provider_leave_the_others_served(
+    client, app_mod, a_at_one_b_free, session_db, monkeypatch, path, stream
+):
+    """BUG-77, the review's probe: with a global cap of 2, one request runs on
+    A and two wait for it (for A's slot, and for a session's turn); a request
+    for B, which is free, is served at once instead of 503 after the wait. It
+    needs the slots of both waiting requests: each wait must give its own back
+    (streamed requests take forward_stream's wait)."""
+    from plugboard import provider_admission, session_turns
+
+    _waits(app_mod, monkeypatch, cap=2, slot_s=0.5, provider_s=5.0)
+    upstream = _Upstream()
+    in_session = {**AUTH, "X-LLM-Session-ID": "s"}
+
+    def post(headers, model=ONLY_A):
+        return asyncio.create_task(
+            client.post(path, headers=headers, json=_chat(model, stream=stream))
+        )
+
+    with aioresponses() as mock:
+        mock.post(URL_A, callback=upstream.reply, repeat=True)
+        mock.post(URL_B, callback=lambda url, **kw: _reply_for(kw), repeat=True)
+        on_a = [post(in_session)]
+        await _until(lambda: upstream.calls == 1)
+        on_a.append(post(AUTH))  # waits for A's slot
+        await _until(lambda: provider_admission.waiting(PROVIDER_A["id"]) == 1)
+        on_a.append(post(in_session))  # waits for its session's turn
+        await _until(lambda: session_turns.waiting("admin", "s") == 1)
+        try:
+            on_b = await asyncio.wait_for(post(AUTH, ONLY_B), 3.0)
+            a_still_waiting = not any(t.done() for t in on_a)
+        finally:
+            upstream.gate.set()
+        answers = await asyncio.gather(*on_a)
+    # Before the fix: 503 "Server overloaded" once the 0.5 s slot wait ended.
+    assert on_b.status_code == 200, on_b.text
+    assert a_still_waiting
+    assert [r.status_code for r in answers] == [200, 200, 200]
+    sem = app_mod._get_inflight_sem()
+    assert sem._value == 2 and app_mod._inflight_chat_active == 0
+
+
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v2/chat/completions"])
+async def test_full_global_cap_answers_503_server_busy(
+    client, full_cap, app_mod, monkeypatch, path
+):
+    """The global cap's 503 carries a code for programs, like providers_busy."""
+    monkeypatch.setattr(app_mod, "_INFLIGHT_WAIT_S", 0.0)
+    resp = await client.post(path, headers=AUTH, json=_chat())
+    assert resp.status_code == 503, resp.text
+    body = resp.json()
+    assert body["code"] == "server_busy"
+    assert body["retry_after"] == 5 and resp.headers["Retry-After"] == "5"
+    assert "limit of concurrent chat requests" in body["detail"]
+
+
+class _AllGated:
+    """Fake provider whose every answer waits for ``gate``."""
+
+    def __init__(self):
+        self.calls, self.gate = 0, asyncio.Event()
+
+    async def reply(self, url, **kwargs):
+        self.calls += 1
+        await self.gate.wait()
+        return CallbackResult(payload=FAKE_COMPLETION)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+async def test_slot_not_back_after_the_provider_wait_gives_the_provider_back(
+    client, app_mod, a_at_one_b_free, monkeypatch, stream
+):
+    """A request granted A's slot while the global cap is full of running
+    requests gets 503 server_busy when its slot wait ends, and A's slot goes
+    back at once: it is not held idle by a request that will not run."""
+    from plugboard import provider_admission
+
+    _waits(app_mod, monkeypatch, cap=2, slot_s=0.5, provider_s=5.0)
+    a, b = _Upstream(), _AllGated()
+    with aioresponses() as mock:
+        mock.post(URL_A, callback=a.reply, repeat=True)
+        mock.post(URL_B, callback=b.reply, repeat=True)
+
+        def post(model, **extra):
+            return asyncio.create_task(
+                client.post(
+                    "/v1/chat/completions", headers=AUTH, json=_chat(model, **extra)
+                )
+            )
+
+        first_a = post(ONLY_A)
+        await _until(lambda: a.calls == 1)
+        second_a = post(ONLY_A, stream=stream)  # waits for A, without a global slot
+        await _until(lambda: provider_admission.waiting(PROVIDER_A["id"]) == 1)
+        on_b = [post(ONLY_B)]  # takes the free global slot
+        await _until(lambda: b.calls == 1)
+        on_b.append(post(ONLY_B))  # waits for a global slot
+        sem = app_mod._get_inflight_sem()
+        await _until(lambda: bool(sem._waiters))
+        try:
+            a.gate.set()  # first_a ends; its slot goes to the queued B request
+            refused = await asyncio.wait_for(second_a, 3.0)
+            a_slots_after = provider_admission.in_flight(PROVIDER_A["id"])
+        finally:
+            b.gate.set()
+        assert (await first_a).status_code == 200
+        assert [r.status_code for r in await asyncio.gather(*on_b)] == [200, 200]
+    assert refused.status_code == 503, refused.text
+    assert refused.json()["code"] == "server_busy"
+    assert a_slots_after == 0
+    assert sem._value == 2 and app_mod._inflight_chat_active == 0
+
+
+async def test_slot_not_back_after_the_turn_gives_the_turn_back(
+    client, app_mod, a_at_one_b_free, session_db, monkeypatch
+):
+    """A turn obtained while the global cap is full of running requests gets
+    503 server_busy when its slot wait ends; the session's turn goes back, and
+    the session's next turn is served."""
+    from plugboard import session_turns
+
+    _waits(app_mod, monkeypatch, cap=2, slot_s=0.5, provider_s=5.0)
+    a, b = _Upstream(), _AllGated()
+    in_session = {**AUTH, "X-LLM-Session-ID": "t"}
+    with aioresponses() as mock:
+        mock.post(URL_A, callback=a.reply, repeat=True)
+        mock.post(URL_B, callback=b.reply, repeat=True)
+
+        def post(headers, model):
+            return asyncio.create_task(
+                client.post("/v1/chat/completions", headers=headers, json=_chat(model))
+            )
+
+        first_turn = post(in_session, ONLY_A)
+        await _until(lambda: a.calls == 1)
+        second_turn = post(in_session, ONLY_A)  # waits for the turn, no slot
+        await _until(lambda: session_turns.waiting("admin", "t") == 1)
+        on_b = [post(AUTH, ONLY_B)]
+        await _until(lambda: b.calls == 1)
+        on_b.append(post(AUTH, ONLY_B))  # waits for a global slot
+        sem = app_mod._get_inflight_sem()
+        await _until(lambda: bool(sem._waiters))
+        try:
+            a.gate.set()
+            refused = await asyncio.wait_for(second_turn, 3.0)
+            turns_after = dict(session_turns._turns)
+        finally:
+            b.gate.set()
+        assert (await first_turn).status_code == 200
+        assert [r.status_code for r in await asyncio.gather(*on_b)] == [200, 200]
+        third_turn = await post(in_session, ONLY_A)
+    assert refused.status_code == 503, refused.text
+    assert refused.json()["code"] == "server_busy"
+    assert turns_after == {}
+    assert third_turn.status_code == 200, third_turn.text
+    assert sem._value == 2 and app_mod._inflight_chat_active == 0
+
+
+async def test_preflight_reports_server_busy_for_a_pair_it_could_not_ping(
+    client, app_mod, a_at_one_b_free, monkeypatch
+):
+    """A ping refused after waiting for A leaves the batch without its global
+    slot; when the cap stays full, the next pair answers server_busy (not
+    pinged) instead of the whole batch losing its results to a 503."""
+    from plugboard import provider_admission
+
+    _waits(app_mod, monkeypatch, cap=2, slot_s=2.0, provider_s=1.0)
+    from plugboard.config import get_provider
+
+    held = provider_admission.try_acquire(get_provider(PROVIDER_A["id"]))
+    b = _AllGated()
+    with aioresponses() as mock:
+        mock.post(URL_B, callback=b.reply, repeat=True)
+        sem = app_mod._get_inflight_sem()
+        items = [
+            {"provider": PROVIDER_A["id"], "model": "fake:model-v1"},
+            {"provider": "other-provider", "model": "other:model-v2"},
+        ]
+        batch = asyncio.create_task(
+            client.post("/v1/preflight", headers=AUTH, json={"items": items})
+        )
+        await _until(lambda: provider_admission.waiting(PROVIDER_A["id"]) == 1)
+        on_b = [
+            asyncio.create_task(
+                client.post("/v1/chat/completions", headers=AUTH, json=_chat(ONLY_B))
+            )
+            for _ in range(2)
+        ]  # they fill the cap while the batch waits for A
+        await _until(lambda: b.calls == 2)
+        try:
+            resp = await asyncio.wait_for(batch, 3.0)
+        finally:
+            b.gate.set()
+            held.release()
+        assert [r.status_code for r in await asyncio.gather(*on_b)] == [200, 200]
+    assert resp.status_code == 200, resp.text
+    errors = [r.get("error") for r in resp.json()["results"]]
+    assert errors == ["providers_busy", "server_busy"]
+    assert b.calls == 2  # the second pair was not pinged
+    assert sem._value == 2 and app_mod._inflight_chat_active == 0
