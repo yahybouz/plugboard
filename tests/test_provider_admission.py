@@ -263,3 +263,21 @@ async def test_no_limit_when_max_waiting_is_zero(monkeypatch):
     for task in waits:
         (await task).release()
     assert pa._active == {}
+
+
+async def test_a_raised_cap_serves_a_full_queue_before_the_bound_applies(monkeypatch):
+    """A cap raised from 1 to 3 while the queue is full: the next wait first
+    serves the queued requests, then has room."""
+    monkeypatch.setattr(pa, "MAX_WAITING", 2)
+    held = pa.try_acquire(LOCAL)
+    waits = [asyncio.create_task(pa.wait_acquire([LOCAL], 5.0)) for _ in range(2)]
+    await asyncio.sleep(0)
+    raised = {**LOCAL, "max_concurrency": 3}
+    # The queued two are served first (3 in flight, the new cap): this one
+    # then waits its 0.2 s for a slot and gets none.
+    assert await pa.wait_acquire([raised], 0.2) is None
+    served = [await asyncio.wait_for(task, 1.0) for task in waits]
+    assert all(s is not None for s in served)
+    for granted in [held, *served]:
+        granted.release()
+    assert pa._active == {}

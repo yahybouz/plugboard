@@ -24,6 +24,11 @@ from plugboard import envcompat
 # turns hold no global chat slot (BUG-77): this bounds them.
 MAX_WAITING = envcompat.get_int("PLUGBOARD_SESSION_MAX_WAITING", default=8, minimum=0)
 
+
+class QueueFull(TimeoutError):
+    """``MAX_WAITING`` turns of the session already wait: this one does not."""
+
+
 # (client_id, session_id) -> [lock, users]: users counts the turn running
 # plus the turns waiting behind it.
 _turns: Dict[Tuple[str, str], List] = {}
@@ -50,11 +55,11 @@ async def acquire(
     the queue without taking the turn; None waits without limit. A free
     turn is taken at once, whatever the timeout (0 included). With
     ``MAX_WAITING`` turns already waiting, the turn does not wait:
-    ``TimeoutError`` at once (PLU-50).
+    ``QueueFull`` (a ``TimeoutError``) at once (PLU-50).
     """
     key = (client_id, session_id)
     if MAX_WAITING and waiting(client_id, session_id) >= MAX_WAITING:
-        raise TimeoutError("too many turns of this session are waiting")
+        raise QueueFull("too many turns of this session are waiting")
     entry = _turns.get(key)
     if entry is None:
         entry = _turns[key] = [asyncio.Lock(), 0]
@@ -79,8 +84,12 @@ async def acquire(
 
 
 def waiting(client_id: str, session_id: str) -> int:
-    """Turns of this session waiting behind the one that runs."""
+    """Turns of this session waiting behind the one that runs.
+
+    The entry counts the running turn and the waiting ones; while the turn is
+    handed over (released, the next one not yet resumed), that next one is
+    the running turn already."""
     entry = _turns.get((client_id, session_id))
     if entry is None:
         return 0
-    return entry[1] - (1 if entry[0].locked() else 0)
+    return entry[1] - 1

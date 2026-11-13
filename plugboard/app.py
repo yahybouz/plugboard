@@ -906,6 +906,9 @@ async def _take_session_turn(request: Request, client_id: str, session_id: str) 
             request.state.session_turn_release = await session_turns.acquire(
                 client_id, session_id, timeout=timeout
             )
+    except session_turns.QueueFull:
+        log.info("session turn busy: %d turns already wait", session_turns.MAX_WAITING)
+        raise _SessionBusy() from None
     except TimeoutError:
         log.info("session turn busy: the request's wait ended")
         raise _SessionBusy() from None

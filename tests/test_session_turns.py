@@ -424,3 +424,31 @@ async def test_a_session_queue_is_bounded(monkeypatch):
     release()
     (await second)()
     assert session_turns._turns == {}
+
+
+async def test_waiting_count_is_exact_while_the_turn_is_handed_over(monkeypatch):
+    monkeypatch.setattr(session_turns, "MAX_WAITING", 2)
+    release = await session_turns.acquire("c", "h")
+    second = asyncio.create_task(session_turns.acquire("c", "h", timeout=5.0))
+    await asyncio.sleep(0)
+    release()  # handed to ``second``, which has not resumed yet
+    assert session_turns.waiting("c", "h") == 0
+    third = asyncio.create_task(session_turns.acquire("c", "h", timeout=5.0))
+    (await second)()
+    (await third)()
+    assert session_turns._turns == {}
+
+
+async def test_no_session_bound_when_max_waiting_is_zero(monkeypatch):
+    monkeypatch.setattr(session_turns, "MAX_WAITING", 0)
+    release = await session_turns.acquire("c", "z")
+    waits = [
+        asyncio.create_task(session_turns.acquire("c", "z", timeout=5.0))
+        for _ in range(12)
+    ]
+    await asyncio.sleep(0)
+    assert session_turns.waiting("c", "z") == 12
+    release()
+    for task in waits:
+        (await task)()
+    assert session_turns._turns == {}

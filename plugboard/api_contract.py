@@ -537,10 +537,12 @@ class ErrorResponse(_Open):
     provider gave a delay; a failing CLI provider (502) adds its exit details
     for the admin only. A chat model no provider knows (404) adds `code` and
     `hint`. A chat whose candidate providers all stayed at their concurrency
-    cap (503) adds `code` providers_busy, `retry_after` and Retry-After; one
+    cap, or had too many requests already waiting (503), adds `code`
+    providers_busy, `retry_after` and Retry-After; one
     the global chat cap kept waiting for a slot (503) adds `code`
     server_busy, `retry_after` and Retry-After; one whose session's previous
-    turn was still being answered when its wait ended (503) adds `code`
+    turn was still being answered when its wait ended, or with too many turns
+    already waiting (503), adds `code`
     session_busy, `retry_after` and Retry-After. A
     chat model of a provider the admin turned off (503) adds `code`
     provider_disabled and `hint`, without Retry-After. A chat request only
@@ -660,9 +662,11 @@ _CHAT_ERRORS = {
     "502": "The provider failed or answered with an error.",
     "503": "Provider timeout (retry_after), the global cap of concurrent chat"
     " requests full for the whole wait (code server_busy, Retry-After 5), the"
-    " previous turn of the request's session still answered when its wait ended"
+    " previous turn of the request's session still answered when its wait ended,"
+    " or too many of its turns already waiting"
     " (code session_busy, Retry-After 5), every"
-    " candidate provider at its concurrency cap (code providers_busy, Retry-After 5),"
+    " candidate provider at its concurrency cap, or with too many requests already"
+    " waiting for it (code providers_busy, Retry-After 5),"
     " or the model belongs to a provider the admin turned off (code"
     " provider_disabled, hint, no Retry-After); nothing was called.",
 }
