@@ -22,6 +22,7 @@ event loop.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sqlite3
@@ -241,6 +242,8 @@ def run_retention(now: Optional[datetime] = None) -> Dict[str, Any]:
         storage.atomic_write_json(report_path(), report, mode=0o600)
     except Exception:
         log.exception("Retention pass: cannot write %s", report_path())
+    global _hold
+    _hold = None  # a pass ran: nothing is held any more (BUG-81)
     return report
 
 
@@ -274,6 +277,43 @@ def pass_overdue(now: Optional[datetime] = None) -> bool:
     return now - ran_at > OVERDUE_AFTER
 
 
+# The pass held by the clock check, until a pass runs (BUG-81): shown by
+# GET /admin/retention, and alerted once per hold.
+_hold: Optional[Dict[str, Any]] = None
+_hold_alerted: set = set()
+_alert_tasks: set = set()
+
+
+def held() -> Optional[Dict[str, Any]]:
+    """``{reason, since}`` while the daily pass is held, else None."""
+    return dict(_hold) if _hold else None
+
+
+def _record_hold(reason: str, now: datetime) -> str:
+    global _hold
+    anchor = (last_report() or {}).get("ran_at") or "unreadable"
+    if _hold is None or _hold.get("anchor") != anchor:
+        _hold = {
+            "reason": reason,
+            "since": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "anchor": anchor,
+        }
+    else:
+        _hold["reason"] = reason
+    if anchor not in _hold_alerted:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return reason  # alerted from the next check made under a loop
+        _hold_alerted.add(anchor)
+        from plugboard import alerts
+
+        task = loop.create_task(alerts.send_retention_held_alert(reason))
+        _alert_tasks.add(task)
+        task.add_done_callback(_alert_tasks.discard)
+    return reason
+
+
 def clock_check(now: Optional[datetime] = None) -> Optional[str]:
     """Why a scheduled pass must not run now, or None (BUG-70).
 
@@ -294,19 +334,21 @@ def clock_check(now: Optional[datetime] = None) -> Optional[str]:
     if ran_at is None:
         # Present but unreadable, or no valid ran_at: the clock cannot be
         # checked, so the pass is held rather than let through (review M-2).
-        return (
+        return _record_hold(
             f"held: {report_path().name} cannot be read or has no valid ran_at, "
             "so the clock cannot be checked. Check the server clock, then run "
-            "the pass from the Jobs page."
+            "the pass from the Jobs page.",
+            now,
         )
     gap = now - ran_at
     if gap <= timedelta(days=MAX_CLOCK_STEP_DAYS):
         return None
-    return (
+    return _record_hold(
         f"held: the clock reads {now:%Y-%m-%d %H:%M} UTC, {gap.days} days after "
         f"the last pass ({ran_at:%Y-%m-%dT%H:%M:%SZ}); a clock running ahead would delete "
         "data that should be kept. Check the server clock, then run the pass "
-        "from the Jobs page."
+        "from the Jobs page.",
+        now,
     )
 
 

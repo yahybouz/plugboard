@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 NOW = datetime(2026, 11, 12, 4, 0, tzinfo=timezone.utc)
+ADMIN = {"Authorization": "Bearer adminkey"}
 
 _VARIABLES = (
     "PLUGBOARD_USAGE_RETENTION_MONTHS",
@@ -652,3 +653,47 @@ async def test_a_missed_pass_caught_up_after_a_long_stop_is_held(stores):
     assert {
         name: column(stores[name], *spec) for name, spec in _COLUMNS.items()
     } == before
+
+
+# --- BUG-81: a held pass is alerted and visible ------------------------------
+
+
+@pytest.fixture
+def held_alerts(monkeypatch):
+    from plugboard import alerts, retention
+
+    sent = []
+
+    async def _alert(reason):
+        sent.append(reason)
+
+    monkeypatch.setattr(alerts, "send_retention_held_alert", _alert, raising=False)
+    monkeypatch.setattr(retention, "_hold", None, raising=False)
+    monkeypatch.setattr(retention, "_hold_alerted", set(), raising=False)
+    return sent
+
+
+async def test_a_held_pass_is_alerted_once_per_hold(stores, held_alerts):
+    from plugboard import maintenance, retention
+
+    _last_pass_at(stores, datetime.now(timezone.utc) - timedelta(days=365))
+    job = maintenance.retention_job()
+    for _ in range(3):  # held again on each daily tick
+        await job._run_once("scheduled")
+    await asyncio.gather(*list(retention._alert_tasks))
+    assert len(held_alerts) == 1 and "clock" in held_alerts[0]
+
+
+async def test_get_admin_retention_shows_the_hold_until_a_pass_runs(
+    stores, held_alerts, admin_client
+):
+    from plugboard import maintenance
+
+    _last_pass_at(stores, datetime.now(timezone.utc) - timedelta(days=365))
+    job = maintenance.retention_job()
+    await job._run_once("scheduled")
+    body = (await admin_client.get("/admin/retention", headers=ADMIN)).json()
+    assert "clock" in body["held"]["reason"] and body["held"]["since"]
+    await job.run_now("manual")  # an admin checked the clock
+    body = (await admin_client.get("/admin/retention", headers=ADMIN)).json()
+    assert body["held"] is None

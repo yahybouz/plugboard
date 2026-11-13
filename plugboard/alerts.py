@@ -72,6 +72,21 @@ async def _send_provider_alert(provider_id: str, failure_count: int) -> None:
         log.warning("Provider alert webhook failed: %s", exc)
 
 
+async def send_retention_held_alert(reason: str) -> None:
+    """Alert that the daily retention pass is held by its clock check (BUG-81)."""
+    if not _WEBHOOK_URL:
+        return
+    payload = {"type": "retention_held", "message": f"Data retention pass {reason}"}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                _WEBHOOK_URL, json=payload, timeout=aiohttp.ClientTimeout(total=5)
+            ) as resp:
+                log.info("Retention held alert sent (HTTP %d)", resp.status)
+    except Exception as exc:
+        log.warning("Retention held alert webhook failed: %s", exc)
+
+
 async def send_egress_refused_alert(provider_id: str, host: str) -> None:
     """Alert that a protected provider's host resolves to a non-public address."""
     if not _WEBHOOK_URL:
