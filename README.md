@@ -29,12 +29,12 @@ Python 3.12 · FastAPI · no external database (JSON files and SQLite under `dat
 ## Features
 
 - **One API for every provider**: `POST /v1/chat/completions` (streaming over SSE), `GET /v1/models`, `GET /health` (status and version), in the standard chat format, whatever provider answers behind it. Existing chat SDKs, LangChain, LlamaIndex and curl work unchanged.
-- **Many providers, one model namespace**: models are addressed as `<provider>:<model>`. Built-in presets (Anthropic, Google Gemini, GitHub Models...), the providers of the [models.dev](https://models.dev) catalog (OpenRouter, OpenCode, Kimi, Groq, DeepSeek, Mistral...) in one click, custom endpoints, Ollama (auto-detected), and subscription access through the Claude Code, Codex and Antigravity (`agy`) CLIs or the GitHub CLI. Model lists refresh every 6 hours and changes are journaled and sent as webhooks.
+- **Many providers, one model namespace**: models are addressed as `<provider>:<model>`. Built-in presets (Anthropic, Google Gemini, GitHub Models...), the providers of the [models.dev](https://models.dev) catalog (OpenRouter, OpenCode, Kimi, Groq, DeepSeek, Mistral...) in one click, custom endpoints, Ollama (auto-detected), and subscription access through the Claude Code, Codex and Antigravity (`agy`) CLIs or the GitHub CLI. Model lists refresh every 6 hours (those of CLI providers every 24 hours) and changes are journaled and sent as webhooks.
 - **Per-client keys**: create `pb_` keys from the dashboard, each with a monthly USD budget, a requests-per-minute limit and an optional list of allowed models, as exact IDs such as the ones `/v1/models` lists (set through the admin API). Keys are stored as SHA-256 hashes and shown once.
 - **Usage and billing**: tokens and cost are recorded for every request, per client, per key and per month. Responses carry `X-Cost-USD`, `X-Prompt-Tokens` and `X-Completion-Tokens`. CSV export and a read-only client portal.
 - **Automatic pricing grid**: one grid per month (USD per million tokens), refreshed every 6 hours from several sources (your own JSON, OpenRouter, models.dev, LiteLLM), with the source of every price, reseller prices per provider, large changes held for your review, and manual prices that no source overwrites. Optionally, a model reads provider pricing pages and proposes prices for you to approve.
 - **Caching**: an exact-match response cache scoped per client, and an optional semantic cache for near-duplicate prompts.
-- **Fallback and resilience**: retries with backoff on 429/5xx, fallback to other providers for unprefixed model names, a per-model circuit breaker, latency- and error-aware load balancing.
+- **Fallback and resilience**: retries with backoff on 429, 500, 502, 503 and 529, fallback to other providers for unprefixed model names, a per-route circuit breaker, latency- and error-aware load balancing.
 - **Monitoring**: admin dashboard, provider health history, a provider watchdog, a JSON and Prometheus metrics endpoint, an admin audit log, and webhook alerts for failing providers and clients nearing their budget.
 - **Admin security**: dashboard auto-login only for a local install opened in the local browser; everywhere else an `ADMIN_KEY` login with brute-force lockout and optional TOTP MFA. Provider credentials are encrypted at rest.
 - **MCP server**: exposes chat, model listing, usage and provider status to MCP clients, plus an update registry that tells client projects what to change when the gateway changes, and opt-in admin tools (stdio only) that add a provider and refresh its catalog.
@@ -61,7 +61,7 @@ make init    # creates .env (mode 0600) with a random ADMIN_KEY and API_KEY
 make dev     # starts the server on http://localhost:8765 with hot reload
 ```
 
-Check that `.env` contains `HOST=127.0.0.1` (set by `.env.example`; without it `run.py` listens on `0.0.0.0`). With that setting the server is a **local install**: open <http://localhost:8765> in a browser on the same machine and you land on the dashboard without typing a key.
+Check that `.env` contains `HOST=127.0.0.1` (set by `.env.example`; without it `run.py` listens on `0.0.0.0`). With that setting the server is a **local install**: `make dev` opens the dashboard in a browser on the same machine, signed in through a one-time link, and that browser is then remembered, so you never type a key.
 
 Then, in the dashboard:
 
@@ -133,7 +133,7 @@ A model is addressed as `<provider-id>:<model>`. The provider ID is shown on the
 | Local models | Ollama | None; detected at `OLLAMA_URL` |
 | Subscription through an official CLI | Claude Code (`claude`), Codex (`codex`), Antigravity (`agy`) | The CLI's own login on the gateway host |
 | Subscription through CLI credentials | ChatGPT via Codex CLI, Gemini via Gemini CLI, GitHub Copilot and GitHub Models via `gh` | Tokens the CLI already stored on the gateway host |
-| GitHub device flow | GitHub Models, GitHub Copilot | Sign-in from the dashboard's *Connections* page |
+| GitHub device flow | GitHub Models, GitHub Copilot | Sign-in from the dashboard, with the *(OAuth via dashboard)* presets |
 
 Step-by-step setup for each kind, from the dashboard or from `.env`: [Providers and subscriptions](docs/guide/providers-and-subscriptions.md).
 
@@ -166,8 +166,8 @@ Choose **Plugboard** if you want one small self-hosted gateway for a handful of 
 
 ## Security notes
 
-- **Auto-login is for a local install only.** It applies when the server listens on a loopback address (`HOST=127.0.0.1`), the request comes directly from the same machine through a browser navigation, no proxy header is present, `ADMIN_KEY` is set and MFA is not enforced. Any deployed instance (`HOST=0.0.0.0`, Docker, reverse proxy) asks for `ADMIN_KEY`. Set `PLUGBOARD_LOCAL_AUTO_LOGIN=0` on servers.
-- **Known limit of auto-login.** It trusts a connection from the loopback interface. Containers or VMs whose networking ends on the host loopback (Docker Desktop, Podman, Lima/Colima, OrbStack), a port forwarder placed in front of the install, or a local process sending browser-like headers can obtain an admin session. On a shared machine, or when untrusted containers run on it, set `PLUGBOARD_LOCAL_AUTO_LOGIN=0`.
+- **Auto-login is for a local install only.** It applies when the server listens on a loopback address (`HOST=127.0.0.1`), the request comes directly from the same machine through a browser navigation, no proxy header is present, the browser holds the operator's secret (the one-time link `make dev` opens, then a remembered-browser cookie), `ADMIN_KEY` is set and MFA is not enforced. Any deployed instance (`HOST=0.0.0.0`, Docker, reverse proxy) asks for `ADMIN_KEY`. Set `PLUGBOARD_LOCAL_AUTO_LOGIN=0` on servers.
+- **Known limit of auto-login.** It trusts a connection from the loopback interface that shows the operator's secret. Containers or VMs whose networking ends on the host loopback (Docker Desktop, Podman, Lima/Colima, OrbStack), a port forwarder placed in front of the install, or a local process sending browser-like headers pass the loopback checks but not that one; anything that can read `data/.login_token` (mode 0600) or a remembered browser's cookie can obtain an admin session. On a shared machine, or when untrusted containers run on it, set `PLUGBOARD_LOCAL_AUTO_LOGIN=0`.
 - **Behind a reverse proxy, list it in `FORWARDED_ALLOW_IPS`** (uvicorn setting, default `127.0.0.1,::1`). In Docker behind a proxy on the host, add the bridge gateway (e.g. `172.18.0.1`, see `docker network inspect`). Otherwise every client appears with the proxy IP: the per-IP rate limit (`RATE_LIMIT`, 60 requests/min) and the admin-login lockout are shared by all users, and audit logs lose the client IP. The proxy must set or append `X-Forwarded-For`. Never use `*` or a `/0` network: any client could then choose its IP and dodge both limits; the server logs a warning at boot when it finds one.
 - **CLI providers are isolated.** `claude`, `codex` and `gemini` run a client's prompt with an allowlisted environment (never `ADMIN_KEY`, `API_KEY` or `ENCRYPTION_KEY`) from a private temporary directory; the server logs a warning when `.env` is readable by other users (`make init` creates it with mode `0600`).
 - **Set `API_KEY`.** A non-empty `API_KEY` turns on client authentication for `/v1/*`; clients then use `pb_` keys. With an empty `API_KEY` the server logs a critical warning and `/health/ready` answers `503` with `checks.auth: "fail"`.

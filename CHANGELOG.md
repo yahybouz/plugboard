@@ -20,6 +20,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **A refused session turn says so with a code** (PLU-45): a chat turn whose session's previous turn was still being answered when its wait ended got `503` with only a `detail`; it now also carries `"code": "session_busy"` and `retry_after` 5 (`Retry-After: 5` and the `detail` are unchanged), like `server_busy` and `providers_busy`. API contract 2.2.0 (`docs/api/openapi.json`, `docs/api/mcp.json`): `session_busy` in `ErrorResponse.code` and in the `503` of both chat routes.
 
+- **The documentation matches the code again** (PLU-44): `docs/ARCHITECTURE.md` lists every module of `plugboard/` with what it does (39 before, all 78 and `probes/` now), and its state and client-plane notes are corrected; the README and `.env.example` no longer describe auto-login without the operator's secret, a dashboard *Connections* page, a per-model circuit breaker, retries on every 5xx, a single-key `API_KEY` mode or the unused `PLUGBOARD_JOB_PYTHON`.
+
 ### Fixed
 
 - **Ping and Discover still called a provider whose key cannot be decrypted** (BUG-79): such a provider is turned off (BUG-57), but `GET /providers/{id}/health` and `POST /providers/{id}/discover` (the dashboard's *Ping* and *Discover*) called it with an empty token, and showed a connection or discovery error. They now answer `409` saying the key cannot be decrypted with the current `ENCRYPTION_KEY`, and call nobody.
