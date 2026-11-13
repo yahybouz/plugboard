@@ -364,3 +364,67 @@ async def test_forward_stream_cli_failure_is_judged_the_same(
 
     assert b"subprocess_error" in chunks[0]
     assert _failures(_CLI_KEY) == counted
+
+
+# ── BUG-51 ──────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cli_failure_counts_even_when_the_quarantine_fails(
+    cli, breaker, monkeypatch
+):
+    """BUG-51 (audit K2-04): the circuit and the provider_down alert counted a
+    CLI failure inside the quarantine's try: a quarantine error skipped them."""
+    import plugboard.model_quarantine as quarantine
+    import plugboard.router as router
+    from plugboard.router import forward
+
+    def broken(*args, **kwargs):
+        raise OSError("quarantine store unreadable")
+
+    monkeypatch.setattr(quarantine, "is_account_unsupported_error", broken)
+    alerted = []
+
+    async def alert(provider_id):
+        alerted.append(provider_id)
+
+    monkeypatch.setattr(router, "record_provider_failure", alert)
+    cli("claude", stderr=b"Error: rate limit exceeded, try again later")
+    with pytest.raises(RuntimeError):
+        await forward({"model": _CLI_MODEL, "messages": _MESSAGES})
+    assert _failures(_CLI_KEY) == 1
+    assert alerted == [_CLI_ID]
+
+
+@pytest.mark.asyncio
+async def test_a_route_refused_by_the_key_does_not_count(_providers_file, breaker):
+    """BUG-51: the key's 403 (route_guard) is the request's answer, not a
+    provider failure."""
+    from fastapi import HTTPException
+
+    from plugboard.router import forward
+
+    def guard(provider, model):
+        raise HTTPException(403, "model not allowed")
+
+    for _ in range(4):
+        with pytest.raises(HTTPException):
+            await forward(
+                {"model": _HTTP_MODEL, "messages": _MESSAGES}, route_guard=guard
+            )
+    assert _failures(_HTTP_KEY) == 0
+
+
+def test_the_breaker_keeps_a_bounded_number_of_circuits(breaker, monkeypatch):
+    """BUG-51 (audit A-20): one circuit per route name, arbitrary names
+    included; past the bound, the closed circuits without failures go first,
+    then the oldest, so an open circuit outlives a burst of new names."""
+    monkeypatch.setattr(breaker, "_MAX_CIRCUITS", 3)
+    for _ in range(3):
+        breaker.record_failure("p:open")
+    assert breaker._circuits["p:open"].state == breaker.OPEN
+    for n in range(10):
+        breaker.check_circuit(f"p:name-{n}")
+    assert len(breaker._circuits) == 3
+    assert "p:open" in breaker._circuits
+    assert not breaker.check_circuit("p:open")["allowed"]

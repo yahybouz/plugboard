@@ -1185,6 +1185,23 @@ async def forward(
                     # no other candidate; the chat route answers 400.
                     if isinstance(exc, CliSubprocessError) and exc.request_too_long:
                         raise
+                    reason = str(exc)
+                    # A quota, an unavailable model or a failed run counts, for
+                    # the circuit and the provider_down alert alike; a prompt
+                    # the CLI found too long is the request's fault. Outside
+                    # the quarantine's try: its failure never skips them
+                    # (BUG-51).
+                    if is_provider_fault(reason):
+                        cb_failure(_circuit_key(provider, real_model))
+                        try:
+                            await record_provider_failure(provider["id"])
+                        except Exception as alert_exc:
+                            log.debug("provider_down alert failed: %s", alert_exc)
+                    # A CLI quota pauses the route, as an HTTP 429 does.
+                    if isinstance(exc, CliSubprocessError) and exc.quota:
+                        route_pauses.pause(
+                            _circuit_key(provider, real_model), exc.retry_after
+                        )
                     try:
                         from plugboard.model_quarantine import (
                             is_account_unsupported_error,
@@ -1193,7 +1210,6 @@ async def forward(
                             record_terminal_unavailable,
                         )
 
-                        reason = str(exc)
                         if is_account_unsupported_error(reason):
                             record_account_unsupported(real_model, reason=reason[:200])
                             invalidate_models_cache()
@@ -1204,19 +1220,8 @@ async def forward(
                                 terminal_reason="model_unavailable",
                             )
                             invalidate_models_cache()
-                        # A quota, an unavailable model or a failed run counts,
-                        # for the circuit and the provider_down alert alike; a
-                        # prompt the CLI found too long is the request's fault.
-                        if is_provider_fault(reason):
-                            cb_failure(_circuit_key(provider, real_model))
-                            await record_provider_failure(provider["id"])
-                        # A CLI quota pauses the route, as an HTTP 429 does.
-                        if isinstance(exc, CliSubprocessError) and exc.quota:
-                            route_pauses.pause(
-                                _circuit_key(provider, real_model), exc.retry_after
-                            )
-                    except Exception:
-                        pass
+                    except Exception as quarantine_exc:
+                        log.warning("model quarantine failed: %s", quarantine_exc)
                     continue
                 finally:
                     lease.release()

@@ -4,9 +4,10 @@ Circuit breaker — track the routes whose provider keeps failing.
 When a route (``provider-id:model``) fails N times in a row on the
 provider's side, it's marked "open": check_circuit() answers
 ``allowed: False``, the LLM pricing pass skips the route and
-/admin/circuits shows it. forward() still sends requests to it. After a
-cooldown period, the circuit moves to "half-open" and the next success
-closes it.
+/admin/circuits shows it. forward() still sends requests to it, after the
+other candidates. After a cooldown period, the circuit moves to "half-open"
+and the next success closes it. At most ``_MAX_CIRCUITS`` circuits are kept
+(BUG-51).
 
 Also provides per-tier timeout recommendations.
 """
@@ -103,14 +104,32 @@ class _CircuitState:
         self.opened_at: float = 0
 
 
-# Global circuit states per model
+# Global circuit states per route, least recently used first.
 _circuits: Dict[str, _CircuitState] = {}
+# Circuits kept at most (BUG-51): a route name may come from a client (a
+# provider prefix followed by any model name). Past it, a closed circuit
+# without failures goes first, then the least recently used.
+_MAX_CIRCUITS = 1024
 
 
 def _get_circuit(model: str) -> _CircuitState:
-    if model not in _circuits:
-        _circuits[model] = _CircuitState()
-    return _circuits[model]
+    circuit = _circuits.pop(model, None)
+    if circuit is None:
+        circuit = _CircuitState()
+        while len(_circuits) >= _MAX_CIRCUITS:
+            _evict_one()
+    _circuits[model] = circuit  # most recently used last
+    return circuit
+
+
+def _evict_one() -> None:
+    """Forget the circuit that says the least: a closed one without
+    failures, else the least recently used."""
+    for key, circuit in _circuits.items():
+        if circuit.state == CLOSED and circuit.failures == 0:
+            del _circuits[key]
+            return
+    del _circuits[next(iter(_circuits))]
 
 
 def _extract_suffix(model_id: str) -> str:
