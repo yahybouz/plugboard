@@ -307,10 +307,12 @@ def _write(data: Dict[str, Any]) -> None:
 
 
 # Provider keys the current ENCRYPTION_KEY cannot decrypt, as (provider id,
-# digest of the stored value): each is reported once per process (BUG-57).
+# digest of the stored value): each is logged and audited once per process,
+# and alerted once from a call made under an event loop (BUG-57).
 _unreadable_secret_reported: set = set()
+_unreadable_secret_alerted: set = set()
 _unreadable_secret_lock = threading.Lock()
-_report_tasks: set = set()  # alert tasks, referenced until they finish
+_report_tasks: set = set()  # audit and alert tasks, kept until they finish
 
 
 def load_providers() -> List[Dict[str, Any]]:
@@ -326,26 +328,57 @@ def load_providers() -> List[Dict[str, Any]]:
                     # Turned off in memory only (BUG-57): the stored key and
                     # switch wait for the key that encrypted them.
                     unreadable.append((p.get("id", ""), p["bearer_token"]))
-                    p.update(bearer_token="", is_active=False, secret_unreadable=True)
+                    p.update(
+                        bearer_token="",
+                        # The stored switch, for an edit form to send back
+                        # unchanged: the effective one is off.
+                        stored_is_active=p.get("is_active", True) is not False,
+                        is_active=False,
+                        secret_unreadable=True,
+                    )
     for provider_id, stored in unreadable:
         _report_unreadable_secret(provider_id, stored)
     return providers
 
 
 def _report_unreadable_secret(provider_id: str, stored: str) -> None:
-    """Log, audit and alert a provider whose key cannot be decrypted, once."""
+    """Log, audit and alert a provider whose key cannot be decrypted, once.
+
+    Under an event loop the audit and alert run in a background task, so the
+    caller never waits for them; without one (a thread, a script) the audit
+    is written here and the alert waits for a call made under a loop.
+    """
     mark = (provider_id, hashlib.sha256(stored.encode()).hexdigest())
     with _unreadable_secret_lock:
-        if mark in _unreadable_secret_reported:
-            return
+        first = mark not in _unreadable_secret_reported
         _unreadable_secret_reported.add(mark)
-    log.critical(
-        "[%s] provider turned off: its stored key cannot be decrypted with the "
-        "current ENCRYPTION_KEY, and it is never sent. Restore the key that "
-        "encrypted it (ENCRYPTION_KEY or data/.encryption_key), or enter the "
-        "provider's key again.",
-        provider_id,
-    )
+        alert_due = mark not in _unreadable_secret_alerted
+    if first:
+        log.critical(
+            "[%s] provider turned off: its stored key cannot be decrypted with "
+            "the current ENCRYPTION_KEY, and it is never sent. Restore the key "
+            "that encrypted it (ENCRYPTION_KEY or data/.encryption_key), or "
+            "enter the provider's key again.",
+            provider_id,
+        )
+    if not alert_due:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        if first:
+            _audit_unreadable_secret(provider_id)
+        return
+    with _unreadable_secret_lock:
+        if mark in _unreadable_secret_alerted:
+            return
+        _unreadable_secret_alerted.add(mark)
+    task = loop.create_task(_audit_and_alert_unreadable(provider_id, audit=first))
+    _report_tasks.add(task)
+    task.add_done_callback(_report_tasks.discard)
+
+
+def _audit_unreadable_secret(provider_id: str) -> None:
     try:
         from plugboard import audit
 
@@ -357,15 +390,17 @@ def _report_unreadable_secret(provider_id: str, stored: str) -> None:
         )
     except Exception as exc:
         log.warning("Unreadable key audit failed for %s: %s", provider_id, exc)
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return  # no event loop here (a script): logged and audited only
+
+
+async def _audit_and_alert_unreadable(provider_id: str, *, audit: bool) -> None:
+    if audit:
+        await asyncio.to_thread(_audit_unreadable_secret, provider_id)
     from plugboard import alerts
 
-    task = loop.create_task(alerts.send_secret_unreadable_alert(provider_id))
-    _report_tasks.add(task)
-    task.add_done_callback(_report_tasks.discard)
+    try:
+        await alerts.send_secret_unreadable_alert(provider_id)
+    except Exception as exc:
+        log.warning("Unreadable key alert failed for %s: %s", provider_id, exc)
 
 
 def get_provider(provider_id: str) -> Optional[Dict[str, Any]]:

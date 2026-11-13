@@ -183,6 +183,9 @@ def _stored_secret() -> Optional[str]:
             "or the previous key is restored."
         )
         return None
+    except Exception as exc:  # a damaged value: refused, never a 500
+        log.error("Failed to read the admin MFA secret: %s", type(exc).__name__)
+        return None
 
 
 def verify(code: str, at: Optional[float] = None) -> bool:

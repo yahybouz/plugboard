@@ -51,6 +51,7 @@ class RekeyReport:
     encrypted_plain: int = 0  # legacy plain-text values now encrypted
     already_new: int = 0  # values the new key already reads
     unreadable: List[str] = field(default_factory=list)  # locations only
+    damaged: List[str] = field(default_factory=list)  # files that cannot be read
     backup_dir: Optional[Path] = None
     written: bool = False
 
@@ -101,9 +102,11 @@ def _read_json(path: Path, report: RekeyReport) -> Optional[Dict[str, Any]]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
+        report.damaged.append(f"{path.name} (not readable JSON)")
         report.unreadable.append(f"{path.name} (not readable JSON)")
         return None
     if not isinstance(data, dict):
+        report.damaged.append(f"{path.name} (unexpected content)")
         report.unreadable.append(f"{path.name} (unexpected content)")
         return None
     return data
@@ -129,6 +132,7 @@ def _read_credentials(path: Path, report: RekeyReport) -> List[Dict[str, Any]]:
         finally:
             conn.close()
     except sqlite3.Error:
+        report.damaged.append(f"{path.name} (cannot read the database)")
         report.unreadable.append(f"{path.name} (cannot read the database)")
         return []
     return [
@@ -235,13 +239,14 @@ def rotate(
     return report
 
 
-def unreadable_secrets(data: Path, key: str) -> List[str]:
-    """Where a secret stored under ``data`` cannot be decrypted with ``key``.
+def unreadable_secrets(data: Path, key: str) -> RekeyReport:
+    """Which secrets stored under ``data`` ``key`` cannot decrypt.
 
-    A dry rotation from the key to itself: nothing is written, and the
-    locations are named, never the values (BUG-57's boot check).
+    A dry rotation from the key to itself: nothing is written. ``unreadable``
+    names their locations (never the values); ``damaged`` lists the files
+    that cannot be read at all, whatever the key (BUG-57's boot check).
     """
-    return rotate(data, key, key, dry_run=True).unreadable
+    return rotate(data, key, key, dry_run=True)
 
 
 def replace_key_file(data: Path, new_key: str) -> Path:

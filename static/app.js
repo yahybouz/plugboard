@@ -1147,7 +1147,9 @@ async function loadProviders() {
         h("td", null, h("code", null, p.base_url)),
         h("td", null, p.default_model || "—"),
         h("td", null, (p.timeout || 60) + "s"),
-        h("td", null, p.is_active
+        h("td", null, p.secret_unreadable === true
+          ? h("span", { className: "badge badge-red", title: "Its stored key cannot be decrypted with the current ENCRYPTION_KEY: restore that key, or enter the provider's key again." }, "key unreadable")
+          : p.is_active
           ? h("span", { className: "badge badge-green" }, "active")
           : h("span", { className: "badge badge-red" }, "inactive")),
         h("td", { id: "health-" + p.id }, "—"),
@@ -1170,7 +1172,9 @@ function editProvider(p) {
   document.getElementById("pf-name").value = p.name;
   document.getElementById("pf-url").value = p.base_url;
   document.getElementById("pf-model").value = p.default_model || "";
-  document.getElementById("pf-active").checked = p.is_active;
+  // A provider whose key cannot be decrypted is off in effect only: the form
+  // sends its stored switch back unchanged (BUG-57).
+  document.getElementById("pf-active").checked = p.secret_unreadable === true ? p.stored_is_active !== false : p.is_active;
   document.getElementById("pf-timeout").value = p.timeout || 60;
   document.getElementById("pf-auto-discover").checked = p.auto_discover === true;
   document.getElementById("pf-pinned").value = (p.pinned_models || []).join(", ");

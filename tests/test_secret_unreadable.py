@@ -35,7 +35,8 @@ def other_key_store(tmp_path, monkeypatch):
     pfile = _setup_providers(
         base, monkeypatch, [{**PROVIDER_A, "bearer_token": sealed}, PROVIDER_B]
     )
-    monkeypatch.setattr(config, "_unreadable_secret_reported", set(), raising=False)
+    monkeypatch.setattr(config, "_unreadable_secret_reported", set())
+    monkeypatch.setattr(config, "_unreadable_secret_alerted", set())
     return pfile, sealed
 
 
@@ -187,3 +188,107 @@ def test_oauth_credential_that_cannot_be_decrypted_is_not_returned(
     )
     monkeypatch.setattr(config, "_ENCRYPTION_KEY", Fernet.generate_key().decode())
     assert oauth_store.get_credential("github") is None
+
+
+async def test_editing_a_cut_provider_keeps_its_switch_for_the_right_key(
+    client, other_key_store, audit_db, alerts_sent, monkeypatch
+):
+    # The dashboard sends the stored switch back (stored_is_active), not the
+    # effective one: an edit must not leave the provider off for good.
+    from plugboard import config
+
+    pfile, sealed = other_key_store
+    [listed] = [
+        p
+        for p in (await client.get("/providers", headers=AUTH)).json()
+        if p["id"] == "test-provider"
+    ]
+    assert (listed["is_active"], listed["stored_is_active"]) == (False, True)
+    assert listed["secret_unreadable"] is True
+    r = await client.put(
+        "/providers/test-provider",
+        headers=AUTH,
+        json={"timeout": 30, "is_active": listed["stored_is_active"]},
+    )
+    assert r.status_code == 200, r.text
+    stored = json.loads(pfile.read_text())["providers"][0]
+    assert (stored["is_active"], stored["bearer_token"]) == (True, sealed)
+    assert "secret_unreadable" not in stored and "stored_is_active" not in stored
+    # Entering the key again brings the provider back.
+    r = await client.put(
+        "/providers/test-provider",
+        headers=AUTH,
+        json={"bearer_token": "sk-provider-a-new", "is_active": True},
+    )
+    assert r.status_code == 200, r.text
+    back = config.get_provider("test-provider")
+    assert (back["is_active"], back["bearer_token"]) == (True, "sk-provider-a-new")
+    assert "secret_unreadable" not in back
+
+
+def test_restoring_the_key_brings_the_provider_back(monkeypatch, tmp_path):
+    from plugboard import config
+
+    key = Fernet.generate_key()
+    _setup_providers(
+        tmp_path,
+        monkeypatch,
+        [{**PROVIDER_A, "bearer_token": _sealed("sk-provider-a", key)}],
+    )
+    monkeypatch.setattr(config, "_unreadable_secret_reported", set())
+    monkeypatch.setattr(config, "_unreadable_secret_alerted", set())
+    monkeypatch.setattr(config, "_audit_unreadable_secret", lambda pid: None)
+    monkeypatch.setattr(config, "_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    assert config.get_provider("test-provider")["is_active"] is False
+    monkeypatch.setattr(config, "_ENCRYPTION_KEY", key.decode())
+    back = config.get_provider("test-provider")
+    assert (back["is_active"], back["bearer_token"]) == (True, "sk-provider-a")
+
+
+async def test_found_outside_an_event_loop_the_alert_waits_for_one(
+    other_key_store, audit_db, alerts_sent
+):
+    import asyncio
+
+    from plugboard import config
+
+    await asyncio.to_thread(config.load_providers)  # a thread: no event loop
+    assert alerts_sent == []
+    assert len(audit_db.get_audit_log(action="provider.secret_unreadable")) == 1
+    config.load_providers()
+    await asyncio.gather(*list(config._report_tasks))
+    assert alerts_sent == ["test-provider"]
+    assert len(audit_db.get_audit_log(action="provider.secret_unreadable")) == 1
+
+
+def test_boot_check_tells_a_damaged_file_from_a_wrong_key(
+    tmp_path, monkeypatch, caplog
+):
+    from plugboard import app as app_mod
+
+    pfile = _setup_providers(tmp_path, monkeypatch, [])
+    pfile.write_text("{not json")
+    with caplog.at_level(logging.CRITICAL):
+        app_mod._check_stored_secrets()
+    [line] = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.CRITICAL and r.name == "plugboard.app"
+    ]
+    assert "providers.json (not readable JSON)" in line
+    assert "ENCRYPTION_KEY" not in line and "backup" in line
+
+
+def test_dashboard_edit_form_sends_the_stored_switch_back():
+    import re
+    from pathlib import Path
+
+    js = (Path(__file__).resolve().parent.parent / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+    assert re.search(
+        r'getElementById\("pf-active"\)\.checked = p\.secret_unreadable === true '
+        r"\? p\.stored_is_active !== false : p\.is_active;",
+        js,
+    )
+    assert '"key unreadable"' in js

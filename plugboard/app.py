@@ -345,9 +345,16 @@ def _check_stored_secrets() -> None:
     from plugboard import config as _config
     from plugboard.secrets_rekey import unreadable_secrets
 
-    unreadable = unreadable_secrets(
-        _config.PROVIDERS_FILE.parent, _config._ENCRYPTION_KEY
-    )
+    report = unreadable_secrets(_config.PROVIDERS_FILE.parent, _config._ENCRYPTION_KEY)
+    damaged = report.damaged
+    if damaged:
+        # Not a key problem: changing the key would not help.
+        log.critical(
+            "Stored secrets cannot be read, whatever the key: %s. Restore these "
+            "files from a backup.",
+            "; ".join(damaged),
+        )
+    unreadable = [where for where in report.unreadable if where not in damaged]
     if unreadable:
         log.critical(
             "ENCRYPTION_KEY cannot decrypt %d stored secret(s): %s. Restore the "
