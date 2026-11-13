@@ -43,7 +43,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from plugboard import envcompat
 from plugboard.circuit_breaker import (
@@ -773,27 +773,46 @@ CHATGPT_REFUSED_CODEX_MODELS = frozenset(
 )
 
 
+# (auth.json path, mtime, size) -> sign-in read from it: the routing asks on
+# every chat request, the file is read again only when it changes.
+_CODEX_SIGN_IN_SEEN: Optional[Tuple[Tuple[str, int, int], bool]] = None
+
+
 def codex_uses_chatgpt_sign_in() -> bool:
     """Whether codex runs on a ChatGPT sign-in (a subscription), not an API key.
 
     ``CODEX_API_KEY`` in the gateway's environment (passed to codex) means an
     API key. Otherwise codex's ``auth.json`` says: ``auth_mode`` ``chatgpt``,
-    or, without ``auth_mode``, sign-in tokens and no API key. Signed out or
-    unreadable: False (nothing is filtered on a guess). Only these two fields
-    are read, never a token.
+    or, in a file without ``auth_mode``, sign-in tokens and no API key.
+    Signed out, unreadable or no home directory: False (nothing is filtered
+    on a guess). Only ``auth_mode`` and whether ``tokens`` and
+    ``OPENAI_API_KEY`` are set are looked at; nothing of the file is logged
+    or returned.
     """
+    global _CODEX_SIGN_IN_SEEN
     if os.environ.get("CODEX_API_KEY", "").strip():
         return False
     try:
-        data = json.loads((_codex_home() / "auth.json").read_text(encoding="utf-8"))
+        path = _codex_home() / "auth.json"
+        st = path.stat()
+    except (OSError, RuntimeError):
+        return False
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    if _CODEX_SIGN_IN_SEEN is not None and _CODEX_SIGN_IN_SEEN[0] == key:
+        return _CODEX_SIGN_IN_SEEN[1]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    if not isinstance(data, dict):
-        return False
-    mode = str(data.get("auth_mode") or "").strip().lower()
-    if mode:
-        return mode.startswith("chatgpt")
-    return bool(data.get("tokens")) and not data.get("OPENAI_API_KEY")
+    chatgpt = False
+    if isinstance(data, dict):
+        mode = str(data.get("auth_mode") or "").strip().lower()
+        if mode:
+            chatgpt = mode.startswith("chatgpt")
+        else:
+            chatgpt = bool(data.get("tokens")) and not data.get("OPENAI_API_KEY")
+    _CODEX_SIGN_IN_SEEN = (key, chatgpt)
+    return chatgpt
 
 
 def codex_refused_models() -> frozenset:
@@ -1945,8 +1964,9 @@ async def complete(
         # ("Reconnecting... 5/5") does not, stderr does as before.
         ended_error = _extract_cli_error(stdout_text, kind, terminal_only=True)
         raise CliSubprocessError(
-            f"CLI {backend.command!r} returned empty content "
-            f"(stderr: {stderr_text[:200]!r})",
+            f"CLI {backend.command!r} returned empty content"
+            + (f": {ended_error}" if ended_error else "")
+            + f" (stderr: {stderr_text[:200]!r})",
             exit_code=proc.returncode,
             stderr=stderr_text[:500],
             pid=proc.pid,

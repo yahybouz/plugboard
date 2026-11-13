@@ -577,6 +577,24 @@ def _listed_models(provider: Dict[str, Any]) -> List[str]:
     ]
 
 
+def _served_models(provider: Dict[str, Any]) -> List[str]:
+    """``_listed_models`` without what the route's subscription refuses.
+
+    A codex route signed in with ChatGPT does not serve the models that
+    sign-in refuses (BUG-78), even while its saved list still holds them:
+    an unprefixed name is not sent to it, and /v1/models does not publish
+    them. Whether a provider has a list at all is still read from
+    ``_listed_models``.
+    """
+    listed = _listed_models(provider)
+    if provider.get("auth_source") != "subprocess:codex":
+        return listed
+    from plugboard.cli_subprocess import codex_refused_models
+
+    refused = codex_refused_models()
+    return [m for m in listed if m not in refused] if refused else listed
+
+
 def _metric_model(provider: Dict[str, Any], model: str) -> str:
     """The label of ``model`` in the metrics (PLU-16): a model ``provider``
     lists or its default model, else ``metrics.UNLISTED_MODEL``, so a
@@ -652,7 +670,7 @@ def is_unknown_model(model_str: str) -> bool:
     wanted = _loose_model_name(model_str)
     for provider in registry:
         names = (
-            _listed_models(provider)
+            _served_models(provider)
             + [provider.get("default_model") or ""]
             + _family_aliases(provider)
         )
@@ -664,7 +682,7 @@ def is_unknown_model(model_str: str) -> bool:
     return not any(
         _clean_model_id(f"{p['id']}:{native}") == requested_clean
         for p in active
-        for native in _listed_models(p) + _family_aliases(p)
+        for native in _served_models(p) + _family_aliases(p)
     )
 
 
@@ -682,7 +700,7 @@ def _known_native(
     last match is the exact spelling /v1/models gave the model
     (``Codex:gpt-6.1-sol``), never a vendor prefix guessed from its name.
     """
-    listed = _listed_models(provider)
+    listed = _served_models(provider)
     aliases = _family_aliases(provider)
     wanted = _loose_model_name(model_str)
     for name in listed + [provider.get("default_model") or ""] + aliases:
@@ -1709,12 +1727,15 @@ async def _stream_route(
             metrics.record(provider["id"], _time.perf_counter() - _t_cli)
         except Exception as exc:
             metrics.record(provider["id"], _time.perf_counter() - _t_cli, error=True)
-            if is_provider_fault(str(exc)):
+            # A model the route's subscription does not serve is valid on
+            # other providers: never quarantined nor counted (BUG-78). The
+            # wrapper's flags decide, even when the message does not quote
+            # the CLI's error (exit 0 without an answer).
+            refused = isinstance(exc, CliSubprocessError) and exc.model_unsupported
+            too_long = isinstance(exc, CliSubprocessError) and exc.request_too_long
+            if not (refused or too_long) and is_provider_fault(str(exc)):
                 cb_failure(circuit_key)
                 await _alert_failure(provider["id"])
-            # A model the route's subscription does not serve is valid on
-            # other providers: never quarantined (BUG-78).
-            refused = isinstance(exc, CliSubprocessError) and exc.model_unsupported
             try:
                 from plugboard.model_quarantine import (
                     is_account_unsupported_error,
