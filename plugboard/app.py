@@ -704,13 +704,15 @@ class _ChatSlot:
     """A request's slot under the global cap (``request_wait.ChatSlot``).
 
     The request gives it back while it waits for a provider or for its
-    session's turn, and takes it back to go on (BUG-77): requests waiting for
-    a full provider no longer keep out the requests for the other ones.
+    session's turn (BUG-77), so requests waiting for a full provider no
+    longer keep out the requests for the other ones, and takes it back right
+    before a provider is called (``request_wait.slot_back``, PLU-51), ahead
+    of the requests that hold no scarce provider's slot (PLU-48).
     """
 
     __slots__ = ("sem", "rid", "held", "wait_s")
 
-    def __init__(self, sem: "_asyncio.Semaphore", rid: str) -> None:
+    def __init__(self, sem: Any, rid: str) -> None:
         self.sem = sem
         self.rid = rid
         self.held = False
@@ -759,7 +761,8 @@ async def _inflight_chat_dep(request: Request):
     a slot. The request's wait budget (``request_wait``) starts here: the
     waits for a slot, for the session's turn and for a provider share it.
     BUG-77: the slot is given back while the request waits for a provider or
-    for its session's turn, and taken back after (``_ChatSlot``).
+    for its session's turn, and taken back right before a provider is called
+    (``_ChatSlot``, PLU-51).
     """
     # PLU-13: every chat call is listed in /v1/inflight, cap or not.
     rid = _request_id_var.get()
@@ -3058,8 +3061,8 @@ async def preflight(
     a provider that is not turned off, a model some provider knows, known
     price, rpm) and is billed like a chat call. The batch holds one slot of
     the global cap, given back while a ping waits for a full provider and
-    taken back before the next ping (BUG-77): a pair it cannot ping for want
-    of a slot answers ``server_busy``. Errors are closed codes, never the
+    taken back right before a provider is called (BUG-77, PLU-51): a pair it
+    cannot ping for want of a slot answers ``server_busy``. Errors are closed codes, never the
     provider's text.
     """
     key_record = _get_request_key_record(request, client_id=client_id)

@@ -45,7 +45,7 @@ async def test_a_new_request_queues_behind_waiters_but_the_front_does_not():
     await cap.acquire()
     waiter = asyncio.create_task(cap.acquire())
     await asyncio.sleep(0)
-    cap._value += 1  # a permit not yet handed over (as between two steps)
+    cap._value += 1  # an artificial state: a free permit beside a waiter
     assert cap.would_wait(first=False)
     assert not cap.would_wait(first=True)
     waiter.cancel()

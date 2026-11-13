@@ -1112,11 +1112,20 @@ async def forward(
                     continue
                 try:
                     # PLU-51: the global slot right before the call, ahead of
-                    # the requests that hold no provider's slot (PLU-48).
-                    await request_wait.slot_back(first=True)
+                    # the requests that hold no scarce provider's slot (PLU-48).
+                    took = await request_wait.slot_back(
+                        first=provider_admission.max_inflight(provider) > 0
+                    )
                 except BaseException:
                     lease.release()
                     raise
+                if took and _turned_off(provider["id"]):
+                    # Turned off while this request waited for the slot (PLU-12).
+                    lease.release()
+                    disabled_seen = provider["id"]
+                    queue = deque(c for c in queue if c[0]["id"] != disabled_seen)
+                    busy[:] = [c for c in busy if c[0]["id"] != disabled_seen]
+                    continue
                 try:
                     kind = auth_source.removeprefix("subprocess:")
                     from plugboard import cli_subprocess
@@ -1240,8 +1249,16 @@ async def forward(
                 continue
             with lease:
                 # PLU-51: the global slot right before the call, ahead of the
-                # requests that hold no provider's slot (PLU-48).
-                await request_wait.slot_back(first=True)
+                # requests that hold no scarce provider's slot (PLU-48).
+                took = await request_wait.slot_back(
+                    first=provider_admission.max_inflight(provider) > 0
+                )
+                if took and _turned_off(provider["id"]):
+                    # Turned off while this request waited for the slot (PLU-12).
+                    disabled_seen = provider["id"]
+                    queue = deque(c for c in queue if c[0]["id"] != disabled_seen)
+                    busy[:] = [c for c in busy if c[0]["id"] != disabled_seen]
+                    continue
                 for attempt, delay in enumerate([0] + _DELAYS):
                     if delay:
                         log.warning(
@@ -1459,9 +1476,14 @@ async def forward_stream(
         wait_s = _time.perf_counter() - wait_t0 if waited else 0.0
         metrics.record_admission_wait(provider["id"], label, wait_s)
         # PLU-51: the global slot right before the call, ahead of the requests
-        # that hold no provider's slot (PLU-48); a provider turned off while
-        # this request waited was refused above, before any wait (PLU-49).
-        await request_wait.slot_back(first=True)
+        # that hold no scarce provider's slot (PLU-48); a provider turned off
+        # while this request waited was refused above, before any wait for
+        # the slot (PLU-49), and again after it (PLU-12).
+        took = await request_wait.slot_back(
+            first=provider_admission.max_inflight(provider) > 0
+        )
+        if took and _turned_off(provider["id"]):
+            raise ProviderDisabledError(provider["id"])
         async with contextlib.aclosing(
             _stream_route(body, provider, real_model, timeout)
         ) as chunks:

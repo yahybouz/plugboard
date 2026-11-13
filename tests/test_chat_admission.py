@@ -1089,3 +1089,84 @@ async def test_no_provider_call_without_a_global_slot(
     assert peak[0] <= 2, f"{peak[0]} provider calls at once with a cap of 2"
     assert provider_admission._active == {}
     assert app_mod._get_inflight_sem()._value == 2
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+async def test_a_provider_turned_off_while_the_slot_is_awaited_is_not_called(
+    client, app_mod, a_at_one_b_free, _providers_file, monkeypatch, stream
+):
+    """PLU-12 after PLU-51: R got A's slot, then waits for the global slot
+    (held by a request for B); A is turned off meanwhile. When R gets the
+    global slot, A is not called: 503 provider_disabled."""
+    from plugboard import provider_admission, router
+    from plugboard.config import get_provider
+    from tests.factories import PROVIDER_B
+
+    _waits(app_mod, monkeypatch, cap=1, slot_s=3.0, provider_s=3.0)
+    held = provider_admission.try_acquire(get_provider(PROVIDER_A["id"]))
+    a, b = _Recorder("A", []), _Recorder("B", [], gate_first=True)
+    sem = app_mod._get_inflight_sem()
+    with aioresponses() as mock:
+        mock.post(URL_A, callback=a.reply, repeat=True)
+        mock.post(URL_B, callback=b.reply, repeat=True)
+        r = asyncio.create_task(
+            client.post("/v1/chat/completions", headers=AUTH, json=_chat(stream=stream))
+        )
+        await _until(lambda: provider_admission.waiting(PROVIDER_A["id"]) == 1)
+        on_b = asyncio.create_task(
+            client.post("/v1/chat/completions", headers=AUTH, json=_chat(ONLY_B))
+        )
+        await _until(lambda: b.calls == 1)
+        held.release()  # R gets A's slot, then waits for the global one
+        await _until(lambda: len(sem._waiters) == 1)
+        off = {**PROVIDER_A, "max_concurrency": 1, "is_active": False}
+        _providers_file.write_text(json.dumps({"providers": [off, PROVIDER_B]}))
+        router.invalidate_models_cache()
+        b.gate.set()
+        refused = await asyncio.wait_for(r, 3.0)
+        assert (await on_b).status_code == 200
+    assert refused.status_code == 503, refused.text
+    assert refused.json()["code"] == "provider_disabled"
+    assert a.calls == 0
+    assert provider_admission.in_flight(PROVIDER_A["id"]) == 0
+    assert sem._value == 1 and app_mod._inflight_chat_active == 0
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+async def test_a_cli_granted_its_slot_runs_only_with_a_global_slot(
+    client, app_mod, two_clis, monkeypatch, stream
+):
+    """PLU-51 on the CLI branch: R got the CLI's slot while the only global
+    slot stays held; the CLI never runs, R gets 503 server_busy and the CLI's
+    slot goes back."""
+    from plugboard import provider_admission
+
+    runs, gates = two_clis
+    _waits(app_mod, monkeypatch, cap=1, slot_s=0.5, provider_s=3.0)
+    claude = _cli_provider("claude")
+    held = provider_admission.try_acquire(claude)
+    r = asyncio.create_task(
+        client.post(
+            "/v1/chat/completions",
+            headers=AUTH,
+            json=_chat("pbtest-claude:model-x", stream=stream),
+        )
+    )
+    await _until(lambda: provider_admission.waiting("pbtest-claude") == 1)
+    other = asyncio.create_task(  # the codex CLI takes the only global slot
+        client.post(
+            "/v1/chat/completions", headers=AUTH, json=_chat("pbtest-codex:model-x")
+        )
+    )
+    await _until(lambda: runs["codex"] == 1)
+    try:
+        held.release()
+        refused = await asyncio.wait_for(r, 3.0)
+        cli_slots_after = provider_admission.in_flight("pbtest-claude")
+    finally:
+        gates["codex"].set()
+    assert (await other).status_code == 200
+    assert refused.status_code == 503, refused.text
+    assert refused.json()["code"] == "server_busy"
+    assert runs["claude"] == 0
+    assert cli_slots_after == 0

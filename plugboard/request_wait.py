@@ -60,10 +60,15 @@ class ChatCap:
         return self.would_wait(first=False)
 
     def would_wait(self, first: bool) -> bool:
-        """Whether an ``acquire`` (``first``: ``acquire_first``) would wait."""
+        """Whether an ``acquire`` (``first``: ``acquire_first``) would wait.
+
+        ``release`` hands a free permit to a waiter at once, so a free permit
+        and a live waiter never coexist; the waiter test is a safety net."""
         if first:
             return self._value <= 0
-        return self._value <= 0 or bool(self._waiters)
+        return self._value <= 0 or any(
+            not f.done() for line in (self._front, self._back) for f in line
+        )
 
     async def acquire(self) -> bool:
         return await self._acquire(self._back)
@@ -84,6 +89,10 @@ class ChatCap:
                 self.release()  # handed over as the wait ended: pass it on
             else:
                 fut.cancel()
+                try:
+                    line.remove(fut)
+                except ValueError:
+                    pass
             raise
         return True
 
@@ -186,14 +195,20 @@ def release_slot() -> None:
         slot.release()
 
 
-async def slot_back(first: bool = False) -> None:
+async def slot_back(first: bool = False) -> bool:
     """Make sure the request holds its global slot before a provider is
     called (PLU-51): take it back if a wait gave it away, within the wait
     budget (its own ceiling ``PLUGBOARD_INFLIGHT_WAIT_S`` included). With
-    ``first``, the request holds a provider's slot and goes ahead of those
-    that hold none (PLU-48). Raises the slot's refusal when the cap stays
-    full. Without a slot, nothing happens."""
+    ``first``, the request holds a scarce provider's slot and goes ahead of
+    those that hold none (PLU-48). Raises the slot's refusal when the cap
+    stays full. Without a slot, nothing happens.
+
+    True when the slot had to be taken back: time may have passed, and the
+    caller checks again what may have changed meanwhile (a provider turned
+    off, PLU-12)."""
     slot = _held_slot()
-    if slot is not None and not slot.held:
-        with waiting(slot.wait_s) as wait_s:
-            await slot.take(wait_s, first=first)
+    if slot is None or slot.held:
+        return False
+    with waiting(slot.wait_s) as wait_s:
+        await slot.take(wait_s, first=first)
+    return True
