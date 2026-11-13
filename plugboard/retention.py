@@ -1,7 +1,8 @@
 """Data retention: purge old rows from the SQLite stores.
 
 One synchronous pass deletes the rows older than each store's retention,
-compacts the store when enough pages are free, writes a report to
+compacts the store when enough pages are free (never the usage and session
+stores, which requests write: BUG-76), writes a report to
 ``data/retention.json`` and records an audit line when rows were deleted.
 
 - usage (``usage_entries``): whole months, ``PLUGBOARD_USAGE_RETENTION_MONTHS``;
@@ -135,7 +136,9 @@ def _day_cutoff(now: datetime, days: int) -> Optional[str]:
     return cutoff.replace(tzinfo=None).isoformat(timespec="seconds")
 
 
-def _purge_and_compact(path: Path, purge: Callable[[], int]) -> Dict[str, Any]:
+def _purge_and_compact(
+    path: Path, purge: Callable[[], int], *, compact: bool = True
+) -> Dict[str, Any]:
     """Purge one store, then compact it; a failure is reported, never raised.
 
     The purge is committed before compaction starts: when compaction fails,
@@ -147,7 +150,8 @@ def _purge_and_compact(path: Path, purge: Callable[[], int]) -> Dict[str, Any]:
     entry: Dict[str, Any] = {"deleted": 0, "compacted": False}
     try:
         entry["deleted"] = purge()
-        entry["compacted"] = storage.compact_sqlite(path)
+        if compact:
+            entry["compacted"] = storage.compact_sqlite(path)
     except (sqlite3.Error, OSError) as exc:
         reported: BaseException = exc
         if isinstance(exc, storage.PartialPurgeError):
@@ -160,12 +164,14 @@ def _purge_and_compact(path: Path, purge: Callable[[], int]) -> Dict[str, Any]:
 
 
 def _purge_store(
-    path: Path, table: str, where: str, cutoff: Optional[str]
+    path: Path, table: str, where: str, cutoff: Optional[str], *, compact: bool = True
 ) -> Dict[str, Any]:
     if cutoff is None:
         return {"deleted": 0, "compacted": False, "kept": "all"}
     return _purge_and_compact(
-        path, lambda: storage.purge_sqlite_rows(path, table, where, (cutoff,))
+        path,
+        lambda: storage.purge_sqlite_rows(path, table, where, (cutoff,)),
+        compact=compact,
     )
 
 
@@ -186,6 +192,10 @@ def run_retention(now: Optional[datetime] = None) -> Dict[str, Any]:
             "usage_entries",
             "month < ? AND month GLOB '[0-9][0-9][0-9][0-9]_[0-9][0-9]'",
             month_cutoff,
+            # Never compacted (BUG-76): VACUUM locks the store while it runs,
+            # and every billing write waited up to 5 s on the event loop, then
+            # failed. SQLite reuses the freed pages for the next rows instead.
+            compact=False,
         ),
         "audit": _purge_store(
             audit._DB_PATH,
@@ -206,7 +216,10 @@ def run_retention(now: Optional[datetime] = None) -> Dict[str, Any]:
             _day_cutoff(now, conf["monitoring_days"]),
         ),
         "sessions": _purge_and_compact(
-            session_store._DB_PATH, session_store.purge_expired
+            # Written by chat requests too: not compacted, as usage (BUG-76).
+            session_store._DB_PATH,
+            session_store.purge_expired,
+            compact=False,
         ),
     }
     deleted_total = sum(store["deleted"] for store in stores.values())

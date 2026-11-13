@@ -586,3 +586,30 @@ def test_the_retention_job_catches_up_an_overdue_pass(stores):
     job = maintenance.retention_job()
     assert job.catches_up() is True
     assert retention.pass_overdue() is True
+
+
+# --- BUG-76: no compaction of the stores the requests write ------------------
+
+
+def test_the_stores_written_by_requests_are_never_compacted(stores, monkeypatch):
+    # VACUUM locks the store while it runs: a billing write (usage) or a chat
+    # session write waited up to its 5 s busy timeout on the event loop, and
+    # failed after it. Their free pages are reused by later writes instead.
+    from plugboard import retention, storage
+
+    seed_one_old_and_one_recent_row_everywhere()
+    compacted = []
+    real_compact = storage.compact_sqlite
+
+    def spy(path, *args, **kwargs):
+        compacted.append(path)
+        return real_compact(path, *args, **kwargs)
+
+    monkeypatch.setattr(storage, "compact_sqlite", spy)
+    report = retention.run_retention(NOW)
+
+    assert stores["usage"] not in compacted
+    assert stores["sessions"] not in compacted
+    assert {stores["audit"], stores["watchdog"], stores["monitoring"]} <= set(compacted)
+    assert report["stores"]["usage"]["deleted"] >= 1
+    assert report["stores"]["usage"]["compacted"] is False
