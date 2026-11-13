@@ -157,8 +157,13 @@ async def test_registered_canonical_colon_owner_not_legacy(direct, monkeypatch, 
 
         monkeypatch.setattr(app, "_API_KEY", "synthetic-api")
         monkeypatch.setattr(app, "_ADMIN_KEY", "synthetic-api")
-        monkeypatch.setattr(app, "estimate_prompt_tokens", lambda _: 1)
-        monkeypatch.setattr(app, "estimate_completion_tokens", lambda _: 1)
+        # A whole answer is counted by chat_billing (PLU-28).
+        monkeypatch.setattr(
+            "plugboard.chat_billing.estimate_prompt_tokens", lambda _: 1
+        )
+        monkeypatch.setattr(
+            "plugboard.chat_billing.estimate_completion_tokens", lambda _: 1
+        )
 
         async def forward(body):
             return {

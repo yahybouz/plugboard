@@ -15,6 +15,7 @@ Supported sources:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -76,6 +77,8 @@ class CLIAuthLoader:
     def __init__(self) -> None:
         self._cache: Optional[TokenBundle] = None
         self._cached_at = 0.0
+        # Bumped by invalidate(): a read that started before is not cached.
+        self._generation = 0
 
     def available(self) -> Dict[str, Any]:
         """Return availability info: {ok: bool, account: str, error: str}."""
@@ -106,13 +109,27 @@ class CLIAuthLoader:
         """Forget the cached token: the next call reads the source again."""
         self._cache = None
         self._cached_at = 0.0
+        self._generation += 1
+
+    async def _read_off_loop(self, read) -> Any:
+        """Run a source read (a file, `gh auth token`, the credential store)
+        in a worker thread (PLU-27). Read again if the token was invalidated
+        meanwhile (an admin disconnected the account): the old one is never
+        kept."""
+        for _ in range(2):
+            generation = self._generation
+            result = await asyncio.to_thread(read)
+            if generation == self._generation:
+                return result
+        return result
 
     async def get_token(self) -> Optional[TokenBundle]:
         """Return a valid token, refreshing if expired. Cached in memory."""
         cached = self._cached()
         if cached:
             return cached
-        self._store(self._fetch_token())
+        # A file read, or `gh auth token` (up to 5 s): off the loop (PLU-27).
+        self._store(await self._read_off_loop(self._fetch_token))
         if self._cache and not self._cache.is_valid():
             refreshed = await self._refresh(self._cache)
             if refreshed:
@@ -370,8 +387,8 @@ class GHCopilotAuthLoader(GHAuthLoader):
         cached = self._cached(skew=60)
         if cached:
             return cached
-        # Get GH PAT first
-        pat = self._fetch_token()
+        # Get GH PAT first: `gh auth token`, off the loop (PLU-27)
+        pat = await self._read_off_loop(self._fetch_token)
         if not pat:
             return None
         # Exchange for Copilot token
@@ -520,7 +537,8 @@ class StoredOAuthCopilotLoader(StoredOAuthLoader):
         from plugboard.oauth_store import get_credential
         from plugboard.oauth_manager import refresh
 
-        cred = get_credential("github")
+        # The credential store is SQLite: off the loop (PLU-27).
+        cred = await self._read_off_loop(lambda: get_credential("github"))
         if cred is None:
             return None
         if cred.is_expired():

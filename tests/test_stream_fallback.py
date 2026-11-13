@@ -211,7 +211,9 @@ async def test_a_cut_inside_an_event_still_ends_with_a_parsable_error(
     async def cut_mid_event(body, **options):
         yield FAKE_STREAM_CHUNK_1
         yield b'data: {"id":"chatcmpl-s1","object":"chat.compl'
-        raise router.ProviderTimeoutError("[test-provider] timeout (>900s)")
+        raise router.ProviderTimeoutError(
+            "[test-provider] timeout (>900s)", provider_id="test-provider"
+        )
 
     monkeypatch.setattr(app_mod, "forward_stream", cut_mid_event)
     resp = await client.post("/v1/chat/completions", headers=AUTH, json=_stream())
@@ -268,7 +270,7 @@ async def test_a_handed_over_stream_is_billed_to_the_provider_that_streamed(
 
     billed = []
 
-    def bill(client_id, body, raw, key_id=None):
+    def bill(client_id, body, raw, key_id=None, hold=None):
         billed.append(router.served_by()[0]["id"])
         return None
 

@@ -301,6 +301,14 @@ def _write(data: Dict[str, Any]) -> None:
     # Atomic, owner-only (provider tokens live here), and never over an
     # unreadable file that _read() reported as empty.
     atomic_write_json(PROVIDERS_FILE, data, mode=0o600)
+    _providers_cache.clear()
+
+
+# PLU-27: a chat reads the provider list about ten times. The decrypted list
+# is kept as JSON text, keyed by the file's path and raw bytes: while the
+# file is unchanged a read costs a file read and a JSON parse (a fresh copy
+# for each caller), no lock and no decryption.
+_providers_cache: Dict[str, Any] = {}
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -315,9 +323,36 @@ _unreadable_secret_lock = threading.Lock()
 _report_tasks: set = set()  # audit and alert tasks, kept until they finish
 
 
+def _key_digest() -> str:
+    """Which encryption key decrypted the cached list: a key restored or
+    changed while the server runs decrypts the file again (BUG-57)."""
+    return hashlib.sha256(str(_ENCRYPTION_KEY).encode()).hexdigest()
+
+
 def load_providers() -> List[Dict[str, Any]]:
+    """The providers, tokens decrypted; each call gets its own copy.
+
+    The decrypted list is kept while providers.json is byte for byte the same
+    (PLU-27). A provider whose key cannot be decrypted is turned off in
+    memory (BUG-57) and reported on every call, cached or not: the report is
+    once per process, and its alert waits for a call made under a loop.
+    """
+    try:
+        raw = PROVIDERS_FILE.read_bytes()
+    except OSError:
+        raw = None
+    key = (str(PROVIDERS_FILE), raw, _key_digest())
+    if raw is not None and _providers_cache.get("key") == key:
+        providers = json.loads(_providers_cache["json"])
+        for provider_id, stored in _providers_cache.get("unreadable", ()):
+            _report_unreadable_secret(provider_id, stored)
+        return providers
     unreadable = []
     with _lock():
+        try:
+            raw = PROVIDERS_FILE.read_bytes()  # what _read() parses, under the lock
+        except OSError:
+            raw = None
         data = _read()
         providers = data.get("providers", [])
         for p in providers:
@@ -336,6 +371,13 @@ def load_providers() -> List[Dict[str, Any]]:
                         is_active=False,
                         secret_unreadable=True,
                     )
+    if raw is not None:
+        _providers_cache.clear()
+        _providers_cache.update(
+            key=(str(PROVIDERS_FILE), raw, _key_digest()),
+            json=json.dumps(providers),
+            unreadable=list(unreadable),
+        )
     for provider_id, stored in unreadable:
         _report_unreadable_secret(provider_id, stored)
     return providers

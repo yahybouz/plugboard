@@ -164,14 +164,16 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 | `400` | Chat only, `code` is `model_not_supported_by_subscription`: the account plan of a CLI subscription route does not serve the model (codex with a ChatGPT account); no other provider was tried | Pick another model from `GET /v1/models`, or use a route with an API key |
 | `400` | Chat only, `code` is `context_length_exceeded`: a CLI subscription route found the prompt too long for the model's context; no other provider was tried | Shorten the messages or pick a model with a larger context |
 | `401` | Missing, unknown or revoked key | Check the key |
+| `401`, `403` | Chat: the provider's own credentials (a CLI login, a Copilot licence) could not be used; `error_ref` | Tell the operator the `error_ref` |
 | `402` | The key has a monthly budget and the model has no known price; nothing was called | Ask the operator to price the model, or use a priced one |
 | `403` | The key may not use this model | Pick a model where `account_compatible` is true |
 | `404` | Chat only, `code` is `model_not_found`: no provider knows the model, so nothing was called (below) | Send an `id` from `GET /v1/models` |
 | `413` | Body over `MAX_BODY_BYTES` (10 MB) | Send less |
-| `429` | IP rate limit, key RPM limit or monthly budget | Back off; `GET /v1/me` shows the budget left |
-| `429` | The last provider tried has exhausted its quota or rate limit (a streamed request to an HTTP provider is not offered to another one); `detail` names the provider | Retry after `Retry-After` / `retry_after` seconds when set (at most 7 days), else later or with another model |
-| `502` | The provider failed | Retry later or use another model |
-| `503` | Gateway at capacity (`code` `server_busy`: the cap of concurrent chat requests stayed full for the whole wait), provider timeout, with `code` `session_busy` the previous turn of the request's session was still being answered when its wait ended, or, with `code` `providers_busy`, every provider of the model busy at its concurrency cap after the wait; nothing was called | Retry after `Retry-After` / `retry_after` seconds (5 for `server_busy`, `session_busy` and `providers_busy`) |
+| `429` | IP rate limit, key RPM limit or monthly budget, also when the call's estimated cost does not fit in what is left once the key's calls in progress are counted (nothing was called) | Back off, or send a smaller `max_tokens`; `GET /v1/me` shows the budget left (calls in progress not counted) |
+| `429` | The last provider tried has exhausted its quota or rate limit (a streamed request is offered to the next provider only before its first chunk); `detail` names the provider | Retry after `Retry-After` / `retry_after` seconds when set (at most 7 days), else later or with another model |
+| `502` | The provider failed; a client key gets a sentence and an `error_ref`, never the provider's or the gateway's error text | Retry later or use another model; give the operator the `error_ref` |
+| `503` | Gateway at capacity (`code` `server_busy`: the cap of concurrent chat requests stayed full for the whole wait), an HTTP provider's timeout (`Retry-After: 10`, `error_ref`), with `code` `session_busy` the previous turn of the request's session was still being answered when its wait ended, or too many of its turns were already waiting, or, with `code` `providers_busy`, every provider of the model busy at its concurrency cap after the wait, or with too many requests already waiting for it; nothing was called | Retry after `Retry-After` / `retry_after` seconds (5 for `server_busy`, `session_busy` and `providers_busy`) |
+| `503` | `code` is `usage_unavailable`: the key has a monthly budget and usage cannot be recorded right now; nothing was called | Retry after `Retry-After` / `retry_after` seconds (30) |
 | `503` | Chat only, `code` is `provider_disabled`: the model belongs to a provider the operator turned off; nothing was called and no other provider stands in (below) | Pick another model from `GET /v1/models`, or ask the operator to turn the provider back on |
 
 ### `404 model_not_found`

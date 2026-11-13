@@ -18,6 +18,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+import threading
 import time
 
 
@@ -93,17 +94,30 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
         pass
 
 
+# Schema set-up runs once per database per process, under a lock: chats
+# open connections from worker threads at once (PLU-27), and concurrent
+# schema writes could fail with "database is locked".
+_schema_ready: Dict[str, str] = {}
+_schema_lock = threading.Lock()
+
+
 def _get_conn() -> sqlite3.Connection:
+    if not _DB_PATH.exists():
+        _schema_ready.clear()  # deleted or not created yet: set it up again
     private_sqlite_file(_DB_PATH)
     conn = sqlite3.connect(str(_DB_PATH), timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.row_factory = sqlite3.Row
-    conn.execute(_CREATE_TABLE)
-    conn.execute(_CREATE_INDEX)
-    conn.execute(_CREATE_INDEX_TENANT)  # ARCH-DEBT-024
-    _migrate_schema(conn)
-    conn.commit()
+    if _schema_ready.get("path") != str(_DB_PATH):
+        with _schema_lock:
+            if _schema_ready.get("path") != str(_DB_PATH):
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute(_CREATE_TABLE)
+                conn.execute(_CREATE_INDEX)
+                conn.execute(_CREATE_INDEX_TENANT)  # ARCH-DEBT-024
+                _migrate_schema(conn)
+                conn.commit()
+                _schema_ready["path"] = str(_DB_PATH)
     return conn
 
 

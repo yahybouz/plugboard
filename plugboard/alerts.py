@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import time as _time
-from typing import Dict
+from typing import Any, Coroutine, Dict, Set
 
 import aiohttp
 
@@ -21,6 +22,23 @@ _ALERT_THRESHOLD = envcompat.get_int("ALERT_FAILURE_THRESHOLD", default=3)
 _provider_failures: Dict[str, int] = {}
 _provider_alerted: Dict[str, float] = {}  # last alert timestamp (monotonic)
 _ALERT_COOLDOWN = 300.0  # 5 minutes between alerts for same provider
+# Webhooks sent in the background (PLU-27), kept until done so they are not
+# collected mid-flight.
+_pending: Set["asyncio.Task[None]"] = set()
+
+
+def in_background(coro: Coroutine[Any, Any, None]) -> None:
+    """Send a webhook without holding the request that triggered it; kept
+    until done and waited for at shutdown (drain)."""
+    task = asyncio.get_running_loop().create_task(coro)
+    _pending.add(task)
+    task.add_done_callback(_pending.discard)
+
+
+async def drain() -> None:
+    """Wait for the webhooks sent in the background (tests, shutdown)."""
+    while _pending:
+        await asyncio.gather(*list(_pending), return_exceptions=True)
 
 
 async def record_provider_failure(provider_id: str) -> None:
@@ -39,7 +57,7 @@ async def record_provider_failure(provider_id: str) -> None:
         last = _provider_alerted.get(provider_id, 0)
         if now - last > _ALERT_COOLDOWN:
             _provider_alerted[provider_id] = now
-            await _send_provider_alert(provider_id, count)
+            in_background(_send_provider_alert(provider_id, count))
 
 
 def record_provider_success(provider_id: str) -> None:

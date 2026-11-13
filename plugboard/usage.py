@@ -16,10 +16,14 @@ import logging
 import re
 import secrets
 import sqlite3
+import threading
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 from plugboard import billing as _billing
+from plugboard import envcompat
 from plugboard.storage import data_dir, private_sqlite_file
 
 _DATA_DIR = data_dir()
@@ -58,6 +62,34 @@ _CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_usage_key ON usage_entries(month, key_id);",
 ]
 
+# BUG-52: the estimated cost of the calls a budgeted key has in progress.
+# ``scope`` is "key:<key_id>" or "client:<client_id>" (_scope). A hold is
+# settled into a usage entry when the call is billed, released when it
+# fails. A hold still there after HOLD_TTL_S (its call was served but could
+# not be recorded, or its process died mid-call) becomes a usage entry at
+# its estimate (price_source "hold-lapsed"): it never just disappears.
+# Holds count whatever their month: a call is billed when it ends.
+_CREATE_HOLDS = """
+CREATE TABLE IF NOT EXISTS budget_holds (
+    id        TEXT PRIMARY KEY,
+    scope     TEXT NOT NULL,
+    month     TEXT NOT NULL,
+    cost_usd  REAL NOT NULL,
+    created   REAL NOT NULL,
+    client_id TEXT NOT NULL DEFAULT '',
+    key_id    TEXT NOT NULL DEFAULT '',
+    model     TEXT NOT NULL DEFAULT ''
+);
+"""
+_CREATE_HOLDS_INDEX = (
+    "CREATE INDEX IF NOT EXISTS idx_holds_scope ON budget_holds(scope);"
+)
+# At least the longest provider call (900 s) and its waits.
+HOLD_TTL_S = envcompat.get_float(
+    "PLUGBOARD_BUDGET_HOLD_TTL_S", default=3600.0, minimum=1200.0
+)
+LAPSED_SOURCE = "hold-lapsed"
+
 
 def _get_conn() -> sqlite3.Connection:
     """Get a thread-local SQLite connection with WAL mode."""
@@ -65,30 +97,40 @@ def _get_conn() -> sqlite3.Connection:
         _schema_ready.clear()  # deleted or not created yet: set the schema up again
     private_sqlite_file(_DB_PATH)
     conn = sqlite3.connect(str(_DB_PATH), timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.row_factory = sqlite3.Row
     if _schema_ready.get("path") != str(_DB_PATH):
-        conn.execute(_CREATE_TABLE)
-        existing = {row[1] for row in conn.execute("PRAGMA table_info(usage_entries)")}
-        for column, decl in _ADDED_COLUMNS.items():
-            if column not in existing:
-                try:
-                    conn.execute(
-                        f"ALTER TABLE usage_entries ADD COLUMN {column} {decl}"
-                    )
-                except sqlite3.OperationalError as exc:
-                    if "duplicate column" not in str(exc).lower():
-                        raise  # another process added it first: fine
-        for idx in _CREATE_INDEXES:
-            conn.execute(idx)
-        conn.commit()
-        _schema_ready["path"] = str(_DB_PATH)
+        # Worker threads open connections at once (PLU-27): one sets the
+        # database up, the others wait for it instead of racing its writes.
+        with _schema_lock:
+            if _schema_ready.get("path") != str(_DB_PATH):
+                _set_up(conn)
+                _schema_ready["path"] = str(_DB_PATH)
     return conn
+
+
+def _set_up(conn: sqlite3.Connection) -> None:
+    """WAL mode (kept in the file), tables, added columns and indexes."""
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(_CREATE_TABLE)
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(usage_entries)")}
+    for column, decl in _ADDED_COLUMNS.items():
+        if column not in existing:
+            try:
+                conn.execute(f"ALTER TABLE usage_entries ADD COLUMN {column} {decl}")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise  # another process added it first: fine
+    for idx in _CREATE_INDEXES:
+        conn.execute(idx)
+    conn.execute(_CREATE_HOLDS)
+    conn.execute(_CREATE_HOLDS_INDEX)
+    conn.commit()
 
 
 # Schema creation and column migration run once per database per process.
 _schema_ready: Dict[str, str] = {}
+_schema_lock = threading.Lock()
 
 
 def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
@@ -113,8 +155,41 @@ def append_usage(
     ``provider_id`` is the provider that served the call; ``price_key`` and
     ``price_source`` say which grid entry priced it.
     """
+    entry = _entry(
+        client_id,
+        model,
+        provider_id,
+        prompt_tokens,
+        completion_tokens,
+        pricing_month,
+        cost_usd,
+        key_id,
+        price_key,
+        price_source,
+    )
+    conn = _get_conn()
+    try:
+        _insert(conn, entry)
+        conn.commit()
+    finally:
+        conn.close()
+    return entry
+
+
+def _entry(
+    client_id: str,
+    model: str,
+    provider_id: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    pricing_month: str,
+    cost_usd: float,
+    key_id: str = "",
+    price_key: str = "",
+    price_source: str = "",
+) -> Dict[str, Any]:
     month = _billing.current_pricing_month()
-    entry: Dict[str, Any] = {
+    return {
         "id": secrets.token_hex(8),
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
         "month": month,
@@ -130,22 +205,188 @@ def append_usage(
         "price_key": price_key,
         "price_source": price_source,
     }
-    conn = _get_conn()
-    try:
-        conn.execute(
-            """INSERT INTO usage_entries
+
+
+def _insert(conn: sqlite3.Connection, entry: Dict[str, Any]) -> None:
+    conn.execute(
+        """INSERT INTO usage_entries
                (id, ts, month, client_id, key_id, model, provider_id,
                 prompt_tokens, completion_tokens, total_tokens, pricing_month, cost_usd,
                 price_key, price_source)
                VALUES (:id, :ts, :month, :client_id, :key_id, :model, :provider_id,
                        :prompt_tokens, :completion_tokens, :total_tokens, :pricing_month, :cost_usd,
                        :price_key, :price_source)""",
-            entry,
+        entry,
+    )
+
+
+# -- Budget holds (BUG-52) -----------------------------------------------------
+
+
+@dataclass(frozen=True)
+class HoldRefused:
+    """The call does not fit: ``spent`` is recorded, ``held`` is the
+    estimate of the calls in progress, both for the month and the scope."""
+
+    spent: float
+    held: float
+
+
+def _scope(client_id: str, key_id: str) -> tuple:
+    """(scope of the holds, SQL filter and value of the usage entries)."""
+    if key_id:
+        return f"key:{key_id}", "key_id = ?", key_id
+    return f"client:{client_id}", "client_id = ?", client_id
+
+
+def _committed(conn: sqlite3.Connection, month: str, client_id: str, key_id: str):
+    scope, where, value = _scope(client_id, key_id)
+    spent = conn.execute(
+        "SELECT COALESCE(SUM(cost_usd), 0.0) FROM usage_entries "  # nosec B608
+        f"WHERE month = ? AND {where}",
+        (month, value),
+    ).fetchone()[0]
+    # Every live hold, whatever its month: the call is billed when it ends.
+    held = conn.execute(
+        "SELECT COALESCE(SUM(cost_usd), 0.0) FROM budget_holds "
+        "WHERE scope = ? AND created >= ?",
+        (scope, time.time() - HOLD_TTL_S),
+    ).fetchone()[0]
+    return float(spent or 0.0), float(held or 0.0)
+
+
+def get_committed_cost(month: str, *, key_id: str = "", client_id: str = "") -> float:
+    """What the month's budget of the key (or else the client) has used:
+    the recorded spend plus the holds of the calls in progress."""
+    conn = _get_conn()
+    try:
+        spent, held = _committed(conn, month, client_id, key_id)
+        return spent + held
+    finally:
+        conn.close()
+
+
+def get_held_cost(month: str, *, key_id: str = "", client_id: str = "") -> float:
+    """The holds of the calls in progress for the key (or else the client)."""
+    conn = _get_conn()
+    try:
+        return _committed(conn, month, client_id, key_id)[1]
+    finally:
+        conn.close()
+
+
+_DROP_HOLD = "DELETE FROM budget_holds WHERE id = ?"
+
+
+def _record_lapsed_holds(conn: sqlite3.Connection, now: float) -> None:
+    """Turn the holds past HOLD_TTL_S into usage entries at their estimate.
+
+    Such a call was served but not recorded (the usage write failed), or
+    its process died mid-call: the provider may have billed it, so its
+    estimate is counted rather than forgotten. Runs inside the caller's
+    transaction."""
+    stale = conn.execute(
+        "SELECT id, client_id, key_id, model, cost_usd FROM budget_holds "
+        "WHERE created < ?",
+        (now - HOLD_TTL_S,),
+    ).fetchall()
+    for row in stale:
+        hold_id, client_id, key_id, model, cost = tuple(row)
+        _insert(
+            conn,
+            _entry(
+                client_id=client_id,
+                model=model,
+                provider_id="",
+                prompt_tokens=0,
+                completion_tokens=0,
+                pricing_month=_billing.current_pricing_month(),
+                cost_usd=float(cost),
+                key_id=key_id,
+                price_source=LAPSED_SOURCE,
+            ),
         )
+        conn.execute(_DROP_HOLD, (hold_id,))
+        log.warning(
+            "budget hold %s lapsed: recorded at its estimate %.6f USD (key %s)",
+            hold_id,
+            cost,
+            key_id or "-",
+        )
+
+
+def hold_budget(
+    *,
+    client_id: str,
+    key_id: str,
+    month: str,
+    limit: float,
+    cost: float,
+    hold_id: str = "",
+    model: str = "",
+) -> Union[str, HoldRefused]:
+    """Hold ``cost`` on the month's budget when it fits under ``limit``.
+
+    The check and the hold are one write transaction (BEGIN IMMEDIATE), so
+    concurrent calls, from threads or processes, never pass the limit
+    together. Returns the hold's id (``hold_id`` when given: the caller can
+    then release it even if it stops waiting for this), or HoldRefused.
+    Raises sqlite3.Error when the usage database cannot be written: the
+    caller refuses the call (D-37). Lapsed holds are recorded on the way.
+    """
+    scope, _, _ = _scope(client_id, key_id)
+    conn = _get_conn()
+    conn.isolation_level = None  # explicit transaction below
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            now = time.time()
+            _record_lapsed_holds(conn, now)
+            spent, held = _committed(conn, month, client_id, key_id)
+            if spent + held + cost > limit + 1e-9:
+                conn.execute("COMMIT")  # the lapsed holds recorded above stay
+                return HoldRefused(spent=spent, held=held)
+            hold_id = hold_id or secrets.token_hex(8)
+            conn.execute(
+                "INSERT INTO budget_holds "
+                "(id, scope, month, cost_usd, created, client_id, key_id, model) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (hold_id, scope, month, float(cost), now, client_id, key_id, model),
+            )
+            conn.execute("COMMIT")
+            return hold_id
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.close()
+
+
+def settle_hold(hold_id: str, **usage_fields: Any) -> Dict[str, Any]:
+    """Record the call's usage (append_usage's fields) and drop its hold, in
+    one transaction. Raises when it cannot be written."""
+    entry = _entry(**usage_fields)
+    conn = _get_conn()
+    try:
+        _insert(conn, entry)
+        conn.execute(_DROP_HOLD, (hold_id,))
         conn.commit()
     finally:
         conn.close()
     return entry
+
+
+def release_hold(hold_id: str) -> None:
+    """Drop the hold of a call that was not billed (it failed). Raises when
+    the database cannot be written: the hold then lapses after HOLD_TTL_S
+    and is recorded at its estimate."""
+    conn = _get_conn()
+    try:
+        conn.execute(_DROP_HOLD, (hold_id,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_usage(month: str) -> List[Dict[str, Any]]:

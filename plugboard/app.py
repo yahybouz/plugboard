@@ -43,7 +43,9 @@ import asyncio as _asyncio
 import hashlib
 import hmac
 import ipaddress
+import functools
 import json
+import math
 import logging
 import os
 import pathlib
@@ -52,7 +54,17 @@ import secrets
 import time
 import uuid
 from datetime import date
-from typing import Annotated, Any, Awaitable, Dict, List, Literal, Optional, TypeVar
+from typing import (
+    Annotated,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    TypeVar,
+)
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -106,6 +118,8 @@ from plugboard import live_requests as _live
 from plugboard import provider_admission as _provider_admission
 from plugboard import request_wait as _request_wait
 from plugboard.logging_config import _request_id_var, setup_logging
+from plugboard import chat_billing
+from plugboard.storage import to_thread_to_the_end as _to_thread_to_the_end
 from plugboard.metrics import get_stats, record_busy_refusal, record_request_wait
 from plugboard.ratelimit import check_client_rate_limit, check_rate_limit
 from plugboard.decision_api import router as decision_router
@@ -128,6 +142,7 @@ from plugboard.router import (
     ProviderNetworkError,
     ProvidersBusyError,
     ProviderQuotaError,
+    ProviderTimeoutError,
     UnsupportedOnCliError,
     cli_refusal,
     disabled_route,
@@ -143,7 +158,6 @@ from plugboard.router import (
 )
 from plugboard.tokenizer import (
     count_tokens,
-    estimate_completion_tokens,
     estimate_prompt_tokens,
 )
 
@@ -599,19 +613,23 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
         await _job.stop()
     await _model_availability_scheduler.stop()
     await _pricing_scheduler.stop()
-    # Webhooks still being delivered get a short grace period.
+    # The watchdog first: it can raise a provider_down alert. Then the
+    # webhooks still being delivered (changes, alerts) share one grace period.
+    stop_watchdog()
+    log.info("Provider watchdog stopped")
+    from plugboard import alerts as _alerts
     from plugboard import change_events
 
     try:
-        await _asyncio.wait_for(change_events.drain(), timeout=10)
+        await _asyncio.wait_for(
+            _asyncio.gather(change_events.drain(), _alerts.drain()), timeout=10
+        )
     except _asyncio.TimeoutError:
-        log.warning("Shutdown: some change webhooks were not delivered")
+        log.warning("Shutdown: some change or alert webhooks were not delivered")
     if _nag_task:
         _nag_task.cancel()
     for task in _boot_tasks:
         task.cancel()
-    stop_watchdog()
-    log.info("Provider watchdog stopped")
     # Close the shared HTTP pool so pooled sockets don't leak at shutdown.
     from plugboard.http_pool import close_session
 
@@ -1016,7 +1034,8 @@ def _client_gone_response(model: str) -> Response:
 
 
 async def _session_turn_dep(request: Request):
-    """Give the session's turn back once the response is sent.
+    """Give the session's turn back once the response is sent, and the
+    budget hold of a call that was not billed (BUG-52).
 
     The handler takes the turn (``_take_session_turn``) only when the call
     carries a session id; a yield dependency (scope "request") exits after
@@ -1025,6 +1044,10 @@ async def _session_turn_dep(request: Request):
     try:
         yield
     finally:
+        # The hold first: the session's next turn must not see it.
+        hold = getattr(request.state, "budget_hold", None)
+        if hold is not None and not hold.done:
+            await _asyncio.to_thread(hold.release)
         release = getattr(request.state, "session_turn_release", None)
         if release is not None:
             release()
@@ -1708,22 +1731,236 @@ def _spending_scope(
 def _check_spending_limit(
     client_id: str, key_record: Optional[Dict[str, Any]] = None
 ) -> float:
-    """Raise 429 if caller exceeded their monthly spending limit. Returns current total spend."""
+    """Raise 429 when the caller's monthly spend, with the holds of its calls
+    in progress (BUG-52), reaches its limit; 503 usage_unavailable when the
+    usage cannot be read. Returns the recorded spend (holds not included)."""
     limit, key_id = _spending_scope(client_id, key_record)
     if limit <= 0:
         return 0.0  # unlimited
     month = _billing.current_pricing_month()
-    if key_id:
-        total = _usage.get_total_cost_by_key(month, key_id)
-    else:
-        total = _usage.get_total_cost_by_client(month, client_id)
-    if total >= limit:
+    try:
+        if key_id:
+            spent = _usage.get_total_cost_by_key(month, key_id)
+        else:
+            spent = _usage.get_total_cost_by_client(month, client_id)
+        held = _usage.get_held_cost(month, key_id=key_id, client_id=client_id)
+    except Exception as exc:
+        log.error("usage cannot be read: budgeted key refused (%s)", exc)
+        raise _UsageUnavailable() from None
+    scope = f"key '{key_id}'" if key_id else f"client '{client_id}'"
+    if spent >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Monthly spending limit exceeded for {scope} (${spent:.4f} >= ${limit:.4f})",
+        )
+    if spent + held >= limit:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Monthly spending limit reached for {scope} with the calls in "
+                f"progress (${spent:.4f} spent + ${held:.4f} held >= ${limit:.4f})"
+            ),
+        )
+    return spent
+
+
+# Completion tokens a budgeted call is assumed to produce when it sets
+# neither max_tokens nor max_completion_tokens (BUG-52).
+_BUDGET_RESERVE_TOKENS = envcompat.get_int(
+    "PLUGBOARD_BUDGET_RESERVE_TOKENS", default=1024, minimum=1
+)
+_USAGE_RETRY_AFTER_S = 30
+
+
+class _UsageUnavailable(HTTPException):
+    """503 ``usage_unavailable``: usage cannot be read or written, so a key
+    with a monthly budget is refused before any provider call (D-37); the
+    other keys are served. An HTTPException, so the chat handlers let it
+    through; its own handler adds ``code`` and ``retry_after``."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=503,
+            detail=(
+                "Usage cannot be recorded right now, so a key with a monthly "
+                f"budget is refused: retry in {_USAGE_RETRY_AFTER_S} s"
+            ),
+            headers={"Retry-After": str(_USAGE_RETRY_AFTER_S)},
+        )
+
+
+@app.exception_handler(_UsageUnavailable)
+async def _usage_unavailable_handler(request: Request, exc: _UsageUnavailable):
+    content: Dict[str, Any] = {"detail": exc.detail, "code": "usage_unavailable"}
+    headers = _retry_after_headers(content, _USAGE_RETRY_AFTER_S)
+    return JSONResponse(status_code=503, content=content, headers=headers)
+
+
+# Prompt tokens counted for each image of a budgeted call: about the most
+# a provider bills for one (a large image at high detail).
+_BUDGET_IMAGE_TOKENS = 1600
+
+
+def _whole_count(value: Any) -> Optional[int]:
+    """A positive count as a provider would read it (5, 5.0, "5"), rounded
+    up; None for anything else (a boolean, 0, a negative, text)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        try:
+            value = float(value.strip())
+        except ValueError:
+            return None
+    if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
+        return math.ceil(value)
+    return None
+
+
+def _completion_cap(body: Dict[str, Any]) -> int:
+    """Completion tokens one answer may produce: the larger of
+    max_completion_tokens and max_tokens (a provider may honour either),
+    else _BUDGET_RESERVE_TOKENS."""
+    caps = [
+        cap
+        for cap in (
+            _whole_count(body.get(n)) for n in ("max_completion_tokens", "max_tokens")
+        )
+        if cap
+    ]
+    return max(caps) if caps else _BUDGET_RESERVE_TOKENS
+
+
+def _answers_asked(body: Dict[str, Any]) -> int:
+    """Answers the call asks for: n, or best_of when larger (each is billed)."""
+    return max(
+        1, _whole_count(body.get("n")) or 1, _whole_count(body.get("best_of")) or 1
+    )
+
+
+def _prompt_estimate(body: Dict[str, Any]) -> int:
+    """Prompt tokens: the messages' text, the tool definitions and the tool
+    calls sent back, and _BUDGET_IMAGE_TOKENS per image part."""
+    messages = body.get("messages") or []
+    tokens = estimate_prompt_tokens(messages)
+    extra: List[Any] = [body.get(k) for k in ("tools", "functions") if body.get(k)]
+    images = 0
+    for msg in messages if isinstance(messages, list) else []:
+        if not isinstance(msg, dict):
+            continue
+        if msg.get("tool_calls"):
+            extra.append(msg["tool_calls"])
+        content = msg.get("content")
+        if isinstance(content, list):
+            images += sum(
+                1
+                for part in content
+                if isinstance(part, dict) and part.get("type") != "text"
+            )
+    if extra:
+        tokens += count_tokens(json.dumps(extra, default=str))
+    return tokens + images * _BUDGET_IMAGE_TOKENS
+
+
+def _estimate_call_cost(body: Dict[str, Any]) -> float:
+    """What this call should cost at most: its prompt, and its completion cap
+    for each answer it asks for, priced on the dearest route it may take.
+
+    An estimate, not a ceiling: a provider that ignores max_tokens (a CLI
+    route) or a call without max_tokens that answers longer than
+    _BUDGET_RESERVE_TOKENS costs more; the overrun is logged when billed.
+    """
+    from plugboard.router import _resolve_all_providers
+
+    try:
+        routes = _resolve_all_providers(body.get("model", ""))
+    except ValueError:
+        return 0.0  # forward() stops on the same routing error, before any call
+    prompt = _prompt_estimate(body)
+    completion = _completion_cap(body) * _answers_asked(body)
+    return max(
+        (chat_billing.price(p, m, prompt, completion).cost_usd for p, m in routes),
+        default=0.0,
+    )
+
+
+async def _take_budget_hold(
+    client_id: Optional[str],
+    key_record: Optional[Dict[str, Any]],
+    body: Dict[str, Any],
+    keep: Callable[[Optional[chat_billing.BudgetHold]], None],
+) -> Optional[chat_billing.BudgetHold]:
+    """Hold the call's estimated cost on the key's monthly budget (BUG-52).
+
+    Keys without a budget, and the admin, hold nothing. The check and the
+    hold are one transaction of the usage database, so simultaneous calls
+    cannot pass the budget together: a call that does not fit is refused
+    (429) and calls nothing. When the hold cannot be written the key is
+    refused (503 usage_unavailable, D-37): nothing is served uncounted.
+    ``keep`` gets the hold before it is written, so a request cancelled
+    meanwhile still gives it back; then None when it was not taken.
+    """
+    if not client_id or client_id == "admin":
+        return None
+    limit, key_id = _spending_scope(client_id, key_record)
+    if limit <= 0:
+        return None
+    cost = _estimate_call_cost(body)
+    hold = chat_billing.BudgetHold(secrets.token_hex(8), cost)
+    keep(hold)
+    try:
+        got = await _asyncio.to_thread(
+            _usage.hold_budget,
+            client_id=client_id,
+            key_id=key_id,
+            month=_billing.current_pricing_month(),
+            limit=limit,
+            cost=cost,
+            hold_id=hold.id,
+            model=str(body.get("model", "")),
+        )
+    except Exception as exc:
+        hold.done = True
+        keep(None)
+        log.error("usage cannot be written: budgeted key refused (%s)", exc)
+        raise _UsageUnavailable() from None
+    if isinstance(got, _usage.HoldRefused):
+        hold.done = True
+        keep(None)
         scope = f"key '{key_id}'" if key_id else f"client '{client_id}'"
         raise HTTPException(
             status_code=429,
-            detail=f"Monthly spending limit exceeded for {scope} (${total:.4f} >= ${limit:.4f})",
+            detail=(
+                f"Monthly spending limit would be exceeded for {scope}: "
+                f"${got.spent:.4f} spent, ${got.held:.4f} held for calls in "
+                f"progress, about ${cost:.4f} for this call, limit ${limit:.4f}"
+            ),
         )
-    return total
+    return hold
+
+
+async def _hold_budget(
+    request: Request,
+    client_id: Optional[str],
+    key_record: Optional[Dict[str, Any]],
+    body: Dict[str, Any],
+) -> None:
+    """The chat's hold (_take_budget_hold), kept on the request: billing
+    settles it, _session_turn_dep gives back one that was not billed."""
+    request.state.budget_hold = None
+
+    def keep(hold: Optional[chat_billing.BudgetHold]) -> None:
+        request.state.budget_hold = hold
+
+    await _take_budget_hold(client_id, key_record, body, keep)
+
+
+def _keep_hold(hold: Optional[chat_billing.BudgetHold]) -> None:
+    """A served call whose billing failed keeps its hold: counted at its
+    estimate until it lapses and is recorded, never given back."""
+    if hold is not None and not hold.done:
+        hold.done = True
+        hold.settling = False
+        log.error("budget hold %s kept: the served call was not billed", hold.id)
 
 
 _UNPRICED_DETAIL = "Model price unavailable for this key"
@@ -1808,7 +2045,11 @@ async def _aclose_quietly(agen: Any) -> None:
 
 
 def _bill_streaming(
-    client_id: str, body: dict, raw_sse: bytes, key_id: str = ""
+    client_id: str,
+    body: dict,
+    raw_sse: bytes,
+    key_id: str = "",
+    hold: Optional[chat_billing.BudgetHold] = None,
 ) -> Dict[str, Any]:
     """Record usage from accumulated SSE chunks and return the billing dict.
 
@@ -1849,28 +2090,13 @@ def _bill_streaming(
     )
 
     provider, real_model = _billing_target(body)
-    pricing_month = _billing.current_pricing_month()
-    match = _billing.resolve_price(real_model, pricing_month, provider=provider)
-    cost = _billing.calculate_cost(
-        prompt_tokens, completion_tokens, match.entry if match else None
-    )
-    _usage.append_usage(
-        client_id=client_id,
-        model=real_model,
-        provider_id=provider["id"],
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        pricing_month=pricing_month,
-        cost_usd=cost,
-        key_id=key_id,
-        price_key=match.price_key if match else "",
-        price_source=match.source if match else "",
-    )
+    charge = chat_billing.price(provider, real_model, prompt_tokens, completion_tokens)
+    chat_billing.record(client_id, key_id, charge, hold=hold)
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
-        "total_tokens": prompt_tokens + completion_tokens,
-        "cost_usd": round(cost, 6),
+        "total_tokens": charge.total_tokens,
+        "cost_usd": round(charge.cost_usd, 6),
         "model": real_model,
         "upstream_usage_present": bool(upstream_usage),
         "text": completion_text,
@@ -1878,48 +2104,66 @@ def _bill_streaming(
 
 
 def _bill_completion(
-    client_id: str, key_id: str, body: Dict[str, Any], result: Dict[str, Any]
+    client_id: str,
+    key_id: str,
+    body: Dict[str, Any],
+    result: Dict[str, Any],
+    hold: Optional[chat_billing.BudgetHold] = None,
 ) -> Dict[str, Any]:
-    """Record the usage of a non-streamed completion; return the billing dict."""
+    """Record the usage of a whole answer; return the billing dict.
+
+    A zero count is estimated, unless the CLI reported it (a reported 0 is a
+    count, see router.usage_reported()).
+    """
     provider, real_model = _billing_target(body)
-    usage_data = result.get("usage") or {}
-    prompt_tokens = usage_data.get("prompt_tokens", 0)
-    completion_tokens = usage_data.get("completion_tokens", 0)
-
-    # Estimate tokens if backend returned 0, unless the CLI reported them
-    # (a reported 0 is a count, see router.usage_reported()).
-    if not _usage_reported():
-        if prompt_tokens == 0:
-            prompt_tokens = estimate_prompt_tokens(body.get("messages", []))
-        if completion_tokens == 0:
-            completion_tokens = estimate_completion_tokens(result)
-
-    pricing_month = _billing.current_pricing_month()
-    match = _billing.resolve_price(real_model, pricing_month, provider=provider)
-    cost = _billing.calculate_cost(
-        prompt_tokens, completion_tokens, match.entry if match else None
+    charge = chat_billing.charge_completion(
+        body, result, provider, real_model, reported=_usage_reported()
     )
-    _usage.append_usage(
-        client_id=client_id,
-        model=real_model,
-        provider_id=provider["id"],
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        pricing_month=pricing_month,
-        cost_usd=cost,
-        key_id=key_id,
-        price_key=match.price_key if match else "",
-        price_source=match.source if match else "",
-    )
-    return {
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": prompt_tokens + completion_tokens,
-        "cost_usd": cost,
-        "model": real_model,
-        "pricing_month": pricing_month,
-        "price_key": match.price_key if match else "",
-    }
+    chat_billing.record(client_id, key_id, charge, hold=hold)
+    return charge.billing_info()
+
+
+async def _charge_answer(
+    request: Request,
+    client_id: Optional[str],
+    key_record: Optional[Dict[str, Any]],
+    spending_total: float,
+    body: Dict[str, Any],
+    result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Bill a whole answer (a non-streamed chat, or one a CLI route answered
+    for a stream) and check the spending alert; {} when nothing was billed.
+    A billing error does not fail the answer: it is logged. The usage write
+    runs off the event loop (PLU-27)."""
+    if not client_id:
+        return {}
+    hold = getattr(request.state, "budget_hold", None)
+    if hold is not None:
+        hold.settling = True  # never given back while it is billed
+    try:
+        billing_info = await _asyncio.to_thread(
+            _bill_completion,
+            client_id,
+            getattr(request.state, "key_id", ""),
+            body,
+            result,
+            hold=getattr(request.state, "budget_hold", None),
+        )
+    except Exception as exc:
+        log.warning("Billing error (non-fatal): %s", exc)
+        _keep_hold(getattr(request.state, "budget_hold", None))
+        return {}
+    if client_id != "admin":
+        try:
+            _send_spending_alert(
+                client_id,
+                billing_info["pricing_month"],
+                key_record=key_record,
+                current_total_usd=spending_total + billing_info["cost_usd"],
+            )
+        except Exception as exc:
+            log.warning("Spending alert error (non-fatal): %s", exc)
+    return billing_info
 
 
 def _billing_target(body: Dict[str, Any]) -> tuple:
@@ -2021,8 +2265,6 @@ def _send_spending_alert(
     current_total_usd: Optional[float] = None,
 ) -> None:
     """Fire-and-forget: check if client needs a spending alert."""
-    import asyncio
-
     limit = 0.0
     key_id = ""
     if key_record:
@@ -2044,8 +2286,10 @@ def _send_spending_alert(
     else:
         total = _usage.get_total_cost_by_client(pricing_month, client_id)
     try:
-        loop = asyncio.get_event_loop()
-        loop.create_task(_check_and_alert(client_id, total, limit))
+        # Kept until sent and drained at shutdown (PLU-27).
+        from plugboard.alerts import in_background
+
+        in_background(_check_and_alert(client_id, total, limit))
     except Exception as exc:
         log.debug("Failed to schedule spending alert check for %s: %s", client_id, exc)
 
@@ -2101,6 +2345,12 @@ def _quota_error_response(
     client key gets the provider, the reason and the provider's Retry-After
     delay when it gave one.
     """
+    log.warning(
+        "provider quota exhausted: provider=%s retry_after=%s: %s",
+        exc.provider_id,
+        exc.retry_after,
+        exc,
+    )
     if client_id == "admin":
         detail = str(exc)
     else:
@@ -2173,61 +2423,60 @@ def _unsupported_on_cli_response(exc: UnsupportedOnCliError) -> JSONResponse:
     )
 
 
-async def _replay_completion_as_sse(
-    completion: Dict[str, Any], *, completion_id: str, created: int, model: str
-):
-    """Replay a complete chat completion as OpenAI SSE chunks.
+# A whole answer asked as a stream is replayed by chat_billing (PLU-28).
+_replay_completion_as_sse = chat_billing.replay_as_sse
 
-    Used when a streamed request is answered from a complete answer: a CLI
-    route (or the provider that served the request in its place) and the
-    response cache. The text goes out word by word, then the tool calls in
-    one delta (``index`` = position), then a final chunk with the answer's
-    own ``finish_reason`` and its ``usage``, then ``[DONE]``. An empty or
-    missing ``content`` sends no content delta.
+
+def _chat_error_response(
+    exc: Exception, client_id: Optional[str], phase: str
+) -> JSONResponse:
+    """The answer to a chat whose provider call raised ``exc`` (every chat
+    path: plain, stream, a CLI route asked to stream).
+
+    Typed errors keep their own answers. Any other text can name a host, a
+    port, a path, an account or a CLI hint (PLU-28): only the admin gets it.
+    A client key gets a sentence written here and an ``error_ref`` that
+    finds the text in the gateway log. A timeout is a 503 with Retry-After
+    10, a failed provider authentication keeps its status, the rest is 502.
     """
-    choice = (completion.get("choices") or [{}])[0]
-    message = choice.get("message") or {}
-    content = message.get("content") or ""
-    tool_calls = message.get("tool_calls") or []
-    finish_reason = choice.get("finish_reason") or "stop"
-    usage = completion.get("usage") or {}
-
-    def _chunk(delta: Dict[str, Any], finish: Optional[str]) -> Dict[str, Any]:
-        return {
-            "id": completion_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model,
-            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
-        }
-
-    if content:
-        tokens = content.split(" ")
-        for i, tok in enumerate(tokens):
-            delta = tok + (" " if i < len(tokens) - 1 else "")
-            evt = _chunk({"content": delta}, None)
-            yield f"data: {json.dumps(evt)}\n\n".encode("utf-8")
-    if tool_calls:
-        calls = []
-        for i, tc in enumerate(tool_calls):
-            fn = tc.get("function") or {}
-            calls.append(
-                {
-                    "index": i,
-                    "id": tc.get("id"),
-                    "type": tc.get("type") or "function",
-                    "function": {
-                        "name": fn.get("name"),
-                        "arguments": fn.get("arguments") or "",
-                    },
-                }
-            )
-        evt = _chunk({"tool_calls": calls}, None)
-        yield f"data: {json.dumps(evt)}\n\n".encode("utf-8")
-    final_evt = _chunk({}, finish_reason)
-    final_evt["usage"] = usage
-    yield f"data: {json.dumps(final_evt)}\n\n".encode("utf-8")
-    yield b"data: [DONE]\n\n"
+    if isinstance(exc, ProvidersBusyError):
+        return _providers_busy_response(exc, client_id)
+    if isinstance(exc, ProviderDisabledError):
+        return _provider_disabled_response(exc.provider_id)
+    if isinstance(exc, UnsupportedOnCliError):
+        return _unsupported_on_cli_response(exc)
+    # Before the timeout test: a CLI message quotes its stderr.
+    if isinstance(exc, CliSubprocessError):
+        return _cli_error_response(exc, client_id)
+    if isinstance(exc, ProviderQuotaError):
+        return _quota_error_response(exc, client_id)
+    # Before the timeout test: the provider's body can say "timeout".
+    if isinstance(exc, (ProviderHTTPError, ProviderNetworkError)):
+        return _provider_http_error_response(exc, client_id)
+    ref = secrets.token_hex(4)
+    err_str = str(exc)
+    log.error("%s error ref=%s (%s): %s", phase, ref, type(exc).__name__, err_str)
+    headers: Dict[str, str] = {}
+    content: Dict[str, Any] = {}
+    if isinstance(exc, ProviderTimeoutError) or "timeout" in err_str.lower():
+        status_code = 503
+        who = getattr(exc, "provider_id", "")
+        detail = f"The {who} provider" if who else "The provider"
+        detail += " did not answer in time"
+        content["retry_after"] = 10
+        headers["Retry-After"] = "10"
+    elif isinstance(exc, AuthError):
+        status_code = exc.status_code
+        detail = "The provider's credentials could not be used"
+    else:
+        status_code = 502
+        detail = "The provider call failed"
+    if client_id == "admin":
+        content["detail"] = err_str
+    else:
+        content["detail"] = f"{detail} (reference {ref} in the gateway log)."
+    content["error_ref"] = ref
+    return JSONResponse(status_code=status_code, content=content, headers=headers)
 
 
 def _provider_http_error_response(
@@ -2521,7 +2770,9 @@ async def chat_completions(
 
     # Issue #5: check spending limit before processing request
     if client_id and client_id != "admin":
-        spending_total = _check_spending_limit(client_id, key_record=key_record)
+        spending_total = await _asyncio.to_thread(
+            _check_spending_limit, client_id, key_record=key_record
+        )
 
     # Check model access (per-key allowed_models). A model of a disabled
     # provider is checked as its owner's, then refused (PLU-12).
@@ -2593,7 +2844,9 @@ async def chat_completions(
             client_id=client_id or "",
             **key_params(body),
         )
-        cached = get_cached(_cache_key, client_id=client_id or "")
+        cached = await _asyncio.to_thread(
+            get_cached, _cache_key, client_id=client_id or ""
+        )
         if not cached and not _is_streaming:
             # Exact miss → try semantic (paraphrase) match. Off by default;
             # enable via PLUGBOARD_SEMANTIC_CACHE=1. Phase 2 (embedding-
@@ -2674,6 +2927,12 @@ async def chat_completions(
                 },
             )
 
+    # BUG-52: a budgeted key holds this call's estimated cost before any
+    # provider is called (429 when it does not fit, 503 when usage cannot be
+    # written); the hold is settled when the call is billed, else released
+    # once the response is sent (_session_turn_dep).
+    await _hold_budget(request, client_id, key_record, body)
+
     if body.get("stream") is True:
         # Fast path: subprocess providers execute synchronously (CLI returns
         # the full text), so we can call forward() to populate the non-stream
@@ -2698,96 +2957,18 @@ async def chat_completions(
             except HTTPException:
                 raise
             except Exception as exc:
-                if isinstance(exc, ProvidersBusyError):
-                    return _providers_busy_response(exc, client_id)
-                if isinstance(exc, ProviderDisabledError):
-                    return _provider_disabled_response(exc.provider_id)
-                if isinstance(exc, UnsupportedOnCliError):
-                    return _unsupported_on_cli_response(exc)
-                log.error("subprocess stream forward error: %s", exc)
-                err_str = str(exc)
-                # Before the timeout test: a CLI message quotes its stderr.
-                if isinstance(exc, CliSubprocessError):
-                    return _cli_error_response(exc, client_id)
-                if isinstance(exc, ProviderQuotaError):
-                    return _quota_error_response(exc, client_id)
-                if isinstance(exc, (ProviderHTTPError, ProviderNetworkError)):
-                    return _provider_http_error_response(exc, client_id)
-                if "timeout" in err_str.lower():
-                    return JSONResponse(
-                        status_code=503,
-                        content={"detail": err_str, "retry_after": 10},
-                        headers={"Retry-After": "10"},
-                    )
-                if isinstance(exc, AuthError):
-                    raise HTTPException(status_code=exc.status_code, detail=err_str)
-                raise HTTPException(status_code=502, detail=err_str)
+                return _chat_error_response(exc, client_id, "subprocess stream")
 
-            # Billing + cache (mirror non-stream path)
-            _billing_for_cache = {}
-            try:
-                if client_id:
-                    provider, real_model = _billing_target(body)
-                    usage_data = result.get("usage") or {}
-                    reported = _usage_reported()
-                    if reported:
-                        # Counts the CLI reported, zeros included.
-                        prompt_tokens = usage_data["prompt_tokens"]
-                        completion_tokens = usage_data["completion_tokens"]
-                    else:
-                        prompt_tokens = usage_data.get(
-                            "prompt_tokens", 0
-                        ) or estimate_prompt_tokens(body.get("messages", []))
-                        completion_tokens = usage_data.get(
-                            "completion_tokens", 0
-                        ) or estimate_completion_tokens(result)
-                    pricing_month = _billing.current_pricing_month()
-                    match = _billing.resolve_price(
-                        real_model, pricing_month, provider=provider
-                    )
-                    cost = _billing.calculate_cost(
-                        prompt_tokens, completion_tokens, match.entry if match else None
-                    )
-                    _key_id = getattr(request.state, "key_id", "")
-                    _usage.append_usage(
-                        client_id=client_id,
-                        model=real_model,
-                        provider_id=provider["id"],
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        pricing_month=pricing_month,
-                        cost_usd=cost,
-                        key_id=_key_id,
-                        price_key=match.price_key if match else "",
-                        price_source=match.source if match else "",
-                    )
-                    _billing_for_cache = {
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "total_tokens": prompt_tokens + completion_tokens,
-                        "cost_usd": cost,
-                        "model": real_model,
-                        "pricing_month": pricing_month,
-                    }
-                    result["billing"] = _billing_for_cache
-                    # Ensure usage in result matches billing (so cache replay emits
-                    # the same numbers).
-                    new_usage = {
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "total_tokens": prompt_tokens + completion_tokens,
-                        "cost_usd": round(cost, 6),
-                    }
-                    if reported:
-                        for key in (
-                            "prompt_tokens_details",
-                            "completion_tokens_details",
-                        ):
-                            if isinstance(usage_data.get(key), dict):
-                                new_usage[key] = usage_data[key]
-                    result["usage"] = new_usage
-            except Exception as exc:
-                log.warning("subprocess stream billing error (non-fatal): %s", exc)
+            # Billed as a plain chat; the replay ends with what was billed.
+            reported_usage = dict(result.get("usage") or {})
+            _billing_for_cache = await _charge_answer(
+                request, client_id, key_record, spending_total, body, result
+            )
+            if _billing_for_cache:
+                result["billing"] = _billing_for_cache
+                result["usage"] = chat_billing.usage_block(
+                    _billing_for_cache, reported_usage if _usage_reported() else None
+                )
 
             # Write to cache (same cache the non-stream branch uses, so future
             # requests — stream or not — hit instantly).
@@ -2796,7 +2977,8 @@ async def chat_completions(
                     from plugboard.cache import set_cached
 
                     _cost = _billing_for_cache.get("cost_usd", 0)
-                    set_cached(
+                    await _asyncio.to_thread(
+                        set_cached,
                         _cache_key,
                         body.get("model", ""),
                         _cache_key[:16],
@@ -2859,34 +3041,10 @@ async def chat_completions(
         except HTTPException:
             raise
         except Exception as exc:
-            if isinstance(exc, ProvidersBusyError):
-                return _providers_busy_response(exc, client_id)
-            if isinstance(exc, ProviderDisabledError):
-                return _provider_disabled_response(exc.provider_id)
-            if isinstance(exc, UnsupportedOnCliError):
-                return _unsupported_on_cli_response(exc)
-            log.error("stream error: %s", exc)
-            err_str = str(exc)
-            if isinstance(exc, CliSubprocessError):
-                # A CLI route among a stream's routes (PLU-26): its details
-                # for the admin only, as on the non-streamed path.
-                return _cli_error_response(exc, client_id)
-            if isinstance(exc, ProviderQuotaError):
-                return _quota_error_response(exc, client_id)
-            # Before the timeout test: the provider's body can say "timeout".
-            if isinstance(exc, (ProviderHTTPError, ProviderNetworkError)):
-                return _provider_http_error_response(exc, client_id)
-            if "timeout" in err_str.lower():
-                return JSONResponse(
-                    status_code=503,
-                    content={"detail": err_str, "retry_after": 10},
-                    headers={"Retry-After": "10"},
-                )
-            if isinstance(exc, AuthError):
-                raise HTTPException(status_code=exc.status_code, detail=err_str)
-            raise HTTPException(status_code=502, detail=err_str)
+            return _chat_error_response(exc, client_id, "stream")
 
         _key_id = getattr(request.state, "key_id", "")
+        _hold = getattr(request.state, "budget_hold", None)
 
         async def _stream_and_bill(first_chunk: bytes, rest, cid, req_body, kid):
             """Yield chunks in real-time and append a final usage chunk.
@@ -2938,8 +3096,14 @@ async def chat_completions(
                     # tokens, so record them before letting the error through.
                     if cid:
                         try:
+                            # On the loop: a cancelled request cannot await
+                            # here (the rare path; PLU-27 moves the others).
                             _bill_streaming(
-                                cid, req_body, bytes(accumulated), key_id=kid
+                                cid,
+                                req_body,
+                                bytes(accumulated),
+                                key_id=kid,
+                                hold=_hold,
                             )
                             log.info(
                                 "Stream interrupted: billed the partial answer "
@@ -2948,6 +3112,7 @@ async def chat_completions(
                             )
                         except Exception as exc:
                             log.warning("Stream billing error (non-fatal): %s", exc)
+                            _keep_hold(_hold)
                     await _aclose_quietly(rest)
             if cut is not None:
                 # What came, in whole events, then a readable end: an error
@@ -2960,18 +3125,34 @@ async def chat_completions(
             # by a read, `[DONE]` and what follows) and has NOT been yielded.
 
             bill = None
+            cancelled: Optional[BaseException] = None
             if cid:
+                if _hold is not None:
+                    _hold.settling = True  # never given back while it is billed
                 try:
-                    bill = _bill_streaming(
-                        cid, req_body, bytes(accumulated), key_id=kid
+                    # Off the loop, waited for to the end (PLU-27): a client
+                    # that hangs up now cannot leave the hold given back and
+                    # the session's turn unrecorded before the usage is written.
+                    bill, cancelled = await _to_thread_to_the_end(
+                        functools.partial(
+                            _bill_streaming,
+                            cid,
+                            req_body,
+                            bytes(accumulated),
+                            key_id=kid,
+                            hold=_hold,
+                        )
                     )
                 except Exception as exc:
                     log.warning("Stream billing error (non-fatal): %s", exc)
+                    _keep_hold(_hold)
             if bill is not None:
                 # Complete stream only: an interrupted one left above.
                 _record_session_turn(
                     cid, session_id, list(req_body.get("messages") or []), bill["text"]
                 )
+            if cancelled is not None:
+                raise cancelled
 
             usage_needed = bill is not None and not bill["upstream_usage_present"]
             if not usage_needed:
@@ -3018,52 +3199,14 @@ async def chat_completions(
     except HTTPException:
         raise
     except Exception as exc:
-        if isinstance(exc, ProvidersBusyError):
-            return _providers_busy_response(exc, client_id)
-        if isinstance(exc, ProviderDisabledError):
-            return _provider_disabled_response(exc.provider_id)
-        if isinstance(exc, UnsupportedOnCliError):
-            return _unsupported_on_cli_response(exc)
-        log.error("forward error: %s", exc)
-        err_str = str(exc)
-        # Before the timeout test: a CLI message quotes its stderr.
-        if isinstance(exc, CliSubprocessError):
-            return _cli_error_response(exc, client_id)
-        if isinstance(exc, ProviderQuotaError):
-            return _quota_error_response(exc, client_id)
-        # Before the timeout test: the provider's body can say "timeout".
-        if isinstance(exc, (ProviderHTTPError, ProviderNetworkError)):
-            return _provider_http_error_response(exc, client_id)
-        # 503 + Retry-After for timeouts (client can retry), 502 for other errors
-        if "timeout" in err_str.lower():
-            return JSONResponse(
-                status_code=503,
-                content={"detail": err_str, "retry_after": 10},
-                headers={"Retry-After": "10"},
-            )
-        if isinstance(exc, AuthError):
-            raise HTTPException(status_code=exc.status_code, detail=err_str)
-        raise HTTPException(status_code=502, detail=err_str)
+        return _chat_error_response(exc, client_id, "forward")
     elapsed = time.perf_counter() - t0
     log.info("<- OK | model=%s | %.2fs", body.get("model", "?"), elapsed)
 
     # -- Billing --------------------------------------------------------------
-    billing_info = {}
-    try:
-        if client_id:
-            billing_info = _bill_completion(
-                client_id, getattr(request.state, "key_id", ""), body, result
-            )
-            # Spending alert (non-blocking)
-            if client_id != "admin":
-                _send_spending_alert(
-                    client_id,
-                    billing_info["pricing_month"],
-                    key_record=key_record,
-                    current_total_usd=spending_total + billing_info["cost_usd"],
-                )
-    except Exception as exc:
-        log.warning("Billing error (non-fatal): %s", exc)
+    billing_info = await _charge_answer(
+        request, client_id, key_record, spending_total, body, result
+    )
 
     # Inject billing into response + headers
     if billing_info:
@@ -3086,7 +3229,8 @@ async def chat_completions(
             from plugboard.cache import set_cached
 
             cost = billing_info.get("cost_usd", 0) if billing_info else 0
-            set_cached(
+            await _asyncio.to_thread(
+                set_cached,
                 _cache_key,
                 body.get("model", ""),
                 _cache_key[:16],
@@ -3222,6 +3366,8 @@ def _preflight_refusal(
             continue
         try:
             check()
+        except _UsageUnavailable:
+            raise  # the whole batch: 503 usage_unavailable (D-37)
         except HTTPException:
             return code
     return None
@@ -3274,6 +3420,19 @@ async def preflight(
                 "messages": [{"role": "user", "content": "ping"}],
                 "max_tokens": 1,
             }
+            # BUG-52: a budgeted key's ping holds its cost, as a chat does
+            # (429 -> budget_exceeded; usage that cannot be written -> 503).
+            holds: List[Optional[chat_billing.BudgetHold]] = [None]
+            try:
+                await _take_budget_hold(
+                    client_id, key_record, ping_body, lambda h: holds.__setitem__(0, h)
+                )
+            except _UsageUnavailable:
+                raise
+            except HTTPException:
+                error = "budget_exceeded"
+        if error is None:
+            hold = holds[0]
             try:
                 # BUG-77: a ping that waited for a full provider gave the
                 # global slot back; the router takes it back before a call.
@@ -3281,6 +3440,8 @@ async def preflight(
                     request, forward(ping_body, timeout=10.0, **route_options)
                 )
             except _ClientGone:
+                if hold is not None:
+                    await _asyncio.to_thread(hold.release)
                 # Nobody waits for the rest of the batch: stop here.
                 return _client_gone_response(model_str)
             except _ChatOverloaded:
@@ -3302,9 +3463,14 @@ async def preflight(
             else:
                 if client_id:
                     try:
-                        _bill_completion(client_id, key_id, ping_body, result)
+                        _bill_completion(
+                            client_id, key_id, ping_body, result, hold=hold
+                        )
                     except Exception as exc:
                         log.warning("Preflight billing error (non-fatal): %s", exc)
+                        _keep_hold(hold)
+            if hold is not None and not hold.done:
+                await _asyncio.to_thread(hold.release)  # not billed: given back
         entry: Dict[str, Any] = {
             "provider": item.provider,
             "model": item.model,

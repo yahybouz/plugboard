@@ -58,6 +58,9 @@ async def test_failure_triggers_alert_at_threshold(monkeypatch):
         await record_provider_failure("f2")
         assert len(mock.requests) == 0  # below threshold
         await record_provider_failure("f2")
+        from plugboard import alerts
+
+        await alerts.drain()  # sent in the background (PLU-27)
     # webhook should have been called at threshold
     assert _provider_failures["f2"] == 2
 
@@ -98,6 +101,9 @@ async def test_failure_sends_after_cooldown_expired(monkeypatch):
 
     monkeypatch.setattr("plugboard.alerts._send_provider_alert", mock_send)
     await record_provider_failure("f4")
+    from plugboard import alerts
+
+    await alerts.drain()  # the webhook goes out in the background (PLU-27)
     assert len(sent) == 1
 
 

@@ -548,17 +548,27 @@ class ErrorResponse(_Open):
     already waiting (503), adds `code`
     session_busy, `retry_after` and Retry-After. A
     chat model of a provider the admin turned off (503) adds `code`
-    provider_disabled and `hint`, without Retry-After. A chat request only
+    provider_disabled and `hint`, without Retry-After. A key with a monthly
+    budget, while usage cannot be recorded (503), gets `code`
+    usage_unavailable, `retry_after` and Retry-After. A chat request only
     CLI subscription routes could serve, asking for what they cannot serve
     (400), adds `code` unsupported_on_cli, `unsupported` (the refused fields)
     and `hint`. A prompt a CLI subscription route finds too long (400) adds
     `code` context_length_exceeded, `error_ref`, `provider_name` and
     `model_id`. A model a CLI subscription route's account plan does not serve
     (400) adds `code` model_not_supported_by_subscription, `hint`,
-    `error_ref`, `provider_name` and `model_id`."""
+    `error_ref`, `provider_name` and `model_id`. A chat the provider failed
+    (400 rejected request, 401 or 403 provider credentials, 502, a 503
+    timeout) adds `error_ref`; a client key's `detail` is then a sentence
+    written by the gateway, never the provider's or the exception's text."""
 
     detail: Union[str, List[Any], Dict[str, Any]]
     retry_after: Optional[int] = None
+    error_ref: Optional[str] = Field(
+        default=None,
+        description="Reference of the gateway log entry that holds the error's "
+        "own text (search the log for ref=<error_ref>).",
+    )
     code: Optional[str] = Field(
         default=None,
         description="Stable reason for programs, when the route gives one: "
@@ -567,7 +577,9 @@ class ErrorResponse(_Open):
         "model_not_found (chat, 404), providers_busy (chat, 503), "
         "server_busy (chat and preflight, 503; also a preflight item's error), "
         "session_busy (chat, 503), "
-        "provider_disabled (chat, 503).",
+        "provider_disabled (chat, 503), usage_unavailable (a key with a monthly "
+        "budget while usage cannot be recorded: chat, preflight, embeddings and "
+        "decisions, 503).",
     )
     unsupported: Optional[List[str]] = Field(
         default=None,
@@ -642,8 +654,10 @@ _AUTH_ERRORS = {
 }
 _CHAT_ERRORS = {
     **_AUTH_ERRORS,
-    "429": "Rate limit or monthly spending limit exceeded, or the quota of the last"
-    " provider tried is exhausted (retry_after and Retry-After when it gives a delay).",
+    "429": "Rate limit or monthly spending limit exceeded, or this call's estimated"
+    " cost does not fit in what the budget has left once the calls in progress are"
+    " counted (nothing was called), or the quota of the last provider tried is"
+    " exhausted (retry_after and Retry-After when it gives a delay).",
     "400": "Invalid request; nothing was billed."
     " code unsupported_on_cli: only CLI subscription routes (subprocess"
     " providers) serve the model and the request asks for what they cannot serve:"
@@ -677,7 +691,9 @@ _CHAT_ERRORS = {
     " candidate provider at its concurrency cap, or with too many requests already"
     " waiting for it (code providers_busy, Retry-After 5),"
     " or the model belongs to a provider the admin turned off (code"
-    " provider_disabled, hint, no Retry-After); nothing was called.",
+    " provider_disabled, hint, no Retry-After), or the key has a monthly budget"
+    " and usage cannot be recorded (code usage_unavailable, Retry-After 30);"
+    " nothing was called.",
 }
 _CHAT_HEADERS = {
     "X-Cache": "HIT, MISS or SEMANTIC-HIT-<layer>.",
@@ -704,7 +720,9 @@ _ROUTES: List[_Route] = [
              "a key limit exceeded, or TypeSafe's quota or rate limit exhausted "
              "(Retry-After when TypeSafe gives it).",
       "502": "Invalid response from the decision engine.",
-      "503": "Decision engine unavailable.",
+      "503": "Decision engine unavailable, or usage cannot be recorded for a"
+             " key with a monthly budget (code usage_unavailable when the usage"
+             " cannot be read).",
       "504": "Decision engine timed out."}, True),
     ("post", "/v1/embeddings", "Embed texts with a local engine (OpenAI-compatible, never chat)",
      EmbeddingRequest, EmbeddingList,
@@ -717,7 +735,9 @@ _ROUTES: List[_Route] = [
       "422": "Invalid request, input out of bounds, or input the engine refused "
              "(never truncated).",
       "502": "Engine error or invalid vectors (count, dimension, values).",
-      "503": "Provider inactive, not a loopback local engine, or engine unreachable.",
+      "503": "Provider inactive, not a loopback local engine, or engine unreachable;"
+             " or usage cannot be read and the key has a monthly budget (code"
+             " usage_unavailable).",
       "504": "Engine timed out."}, True),
     ("get", "/v1/embeddings/models", "List the embedding identities this key may use",
      None, EmbeddingModelList,
@@ -742,7 +762,9 @@ _ROUTES: List[_Route] = [
      {**_AUTH_ERRORS,
       "422": "More than 10 items, or an invalid item.",
       "503": "The global cap of concurrent chat requests stayed full for the"
-      " whole wait (code server_busy, Retry-After 5)."}, True),
+      " whole wait (code server_busy, Retry-After 5), or the key has a monthly"
+      " budget and usage cannot be read (code usage_unavailable, Retry-After"
+      " 30)."}, True),
     ("get", "/v1/me", "The calling key: limits and this month's usage",
      None, ClientInfo, _AUTH_ERRORS, True),
     ("get", "/v1/me/keys", "The calling client's keys (masked)",
