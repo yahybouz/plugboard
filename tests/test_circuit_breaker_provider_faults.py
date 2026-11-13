@@ -389,11 +389,15 @@ async def test_cli_failure_counts_even_when_the_quarantine_fails(
         alerted.append(provider_id)
 
     monkeypatch.setattr(router, "record_provider_failure", alert)
+    from plugboard import route_pauses
+
+    monkeypatch.setattr(route_pauses, "_pauses", {})
     cli("claude", stderr=b"Error: rate limit exceeded, try again later")
     with pytest.raises(RuntimeError):
         await forward({"model": _CLI_MODEL, "messages": _MESSAGES})
     assert _failures(_CLI_KEY) == 1
     assert alerted == [_CLI_ID]
+    assert route_pauses.paused_for(_CLI_KEY) > 0
 
 
 @pytest.mark.asyncio
@@ -428,3 +432,20 @@ def test_the_breaker_keeps_a_bounded_number_of_circuits(breaker, monkeypatch):
     assert len(breaker._circuits) == 3
     assert "p:open" in breaker._circuits
     assert not breaker.check_circuit("p:open")["allowed"]
+
+
+def test_eviction_follows_use_and_spares_failing_circuits(breaker, monkeypatch):
+    monkeypatch.setattr(breaker, "_MAX_CIRCUITS", 3)
+    breaker.check_circuit("p:a")
+    breaker.check_circuit("p:b")
+    breaker.check_circuit("p:c")
+    breaker.check_circuit("p:a")  # used again: "p:b" is now the oldest
+    breaker.check_circuit("p:d")
+    assert list(breaker._circuits) == ["p:c", "p:a", "p:d"]
+    for key in ("p:c", "p:a", "p:d"):
+        breaker.record_failure(key)  # all closed with one failure
+    for _ in range(3):
+        breaker.record_failure("p:c")  # open now
+    breaker.check_circuit("p:e")
+    assert "p:c" in breaker._circuits  # a closed one with failures went first
+    assert "p:a" not in breaker._circuits

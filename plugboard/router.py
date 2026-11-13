@@ -1221,7 +1221,7 @@ async def forward(
                             )
                             invalidate_models_cache()
                     except Exception as quarantine_exc:
-                        log.warning("model quarantine failed: %s", quarantine_exc)
+                        log.warning("model quarantine failed: %r", quarantine_exc)
                     continue
                 finally:
                     lease.release()
@@ -1562,11 +1562,12 @@ async def _stream_route(
                         terminal_reason="model_unavailable",
                     )
                     invalidate_models_cache()
-                # A CLI quota pauses the route, as an HTTP 429 does.
-                if isinstance(exc, CliSubprocessError) and exc.quota:
-                    route_pauses.pause(circuit_key, exc.retry_after)
-            except Exception:
-                pass
+            except Exception as quarantine_exc:
+                log.warning("model quarantine failed: %r", quarantine_exc)
+            # A CLI quota pauses the route, as an HTTP 429 does; outside the
+            # quarantine's try (BUG-51).
+            if isinstance(exc, CliSubprocessError) and exc.quota:
+                route_pauses.pause(circuit_key, exc.retry_after)
             err_payload: Dict[str, Any] = {
                 "error": {"message": str(exc), "type": "subprocess_error"}
             }

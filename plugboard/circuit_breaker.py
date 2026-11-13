@@ -107,8 +107,9 @@ class _CircuitState:
 # Global circuit states per route, least recently used first.
 _circuits: Dict[str, _CircuitState] = {}
 # Circuits kept at most (BUG-51): a route name may come from a client (a
-# provider prefix followed by any model name). Past it, a closed circuit
-# without failures goes first, then the least recently used.
+# provider prefix followed by any model name). Past it, the least recently
+# used closed circuit without failures goes first, then a closed one with
+# failures, then the least recently used of all (an open one last resort).
 _MAX_CIRCUITS = 1024
 
 
@@ -123,12 +124,13 @@ def _get_circuit(model: str) -> _CircuitState:
 
 
 def _evict_one() -> None:
-    """Forget the circuit that says the least: a closed one without
-    failures, else the least recently used."""
-    for key, circuit in _circuits.items():
-        if circuit.state == CLOSED and circuit.failures == 0:
-            del _circuits[key]
-            return
+    """Forget the circuit that says the least, the least recently used first:
+    a closed one without failures, else a closed one, else any."""
+    for keep_failures in (False, True):
+        for key, circuit in _circuits.items():
+            if circuit.state == CLOSED and (keep_failures or circuit.failures == 0):
+                del _circuits[key]
+                return
     del _circuits[next(iter(_circuits))]
 
 

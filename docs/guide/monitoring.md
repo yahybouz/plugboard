@@ -86,7 +86,7 @@ The body names no provider and carries no error text: a check that raises gives 
 | `GET /admin/monitoring` | Full health check of all providers with 24-hour and 7-day uptime computed from the stored snapshots; the check itself is not stored. `uptime_pct` is `null` when the period holds no snapshot |
 | `GET /admin/monitoring/history?provider_id=&limit=` | Availability snapshots (`data/monitoring.db`): one row per active provider every 5 minutes; a probe that does not answer within 30 seconds is stored as down |
 | `GET /admin/retention` | Retention settings in force (`settings`) and the report of the last retention pass (`last_run`, `null` before the first pass): when it ran, rows deleted per store, errors ([data retention](configuration.md#data-retention)) |
-| `GET /admin/circuits` | Per-route circuit breaker state (at most 1024 routes are kept: a closed route without failures is forgotten first, then the least recently used) |
+| `GET /admin/circuits` | Per-route circuit breaker state (at most 1024 routes are kept: the least recently used closed route without failures is forgotten first, then a closed one with failures, then any) |
 | `GET /admin/cache/stats` | Response cache statistics |
 
 Request metrics live in memory and restart from zero with the server. Prometheus must send the admin key as a bearer token.
