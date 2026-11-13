@@ -57,6 +57,8 @@ _INDEX = "CREATE INDEX IF NOT EXISTS idx_sessions_updated ON chat_sessions(updat
 
 def _get_conn() -> sqlite3.Connection:
     global _INITIALISED
+    if not _DB_PATH.exists():
+        _INITIALISED = False  # deleted or not created yet: set it up again
     private_sqlite_file(_DB_PATH)
     conn = sqlite3.connect(str(_DB_PATH), timeout=10)
     conn.execute("PRAGMA journal_mode=WAL")

@@ -430,10 +430,10 @@ async def decide(body: DecisionRequest, record: dict = Depends(require_decision_
             return _quota_error_response(quota, record["client_id"])
         if error is not None:
             if charge is not None and body.model == "jev":
-                _record_decision(record, body.model, charge)
+                await asyncio.to_thread(_record_decision, record, body.model, charge)
             raise error
-        # Recorded before the key may call again.
-        billing = _record_decision(record, body.model, raw)
+        # Recorded before the key may call again; off the loop (PLU-27).
+        billing = await asyncio.to_thread(_record_decision, record, body.model, raw)
     finally:
         _active_keys.discard(key_id)
     return {"model": body.model, "answers": answers, "billing": billing}

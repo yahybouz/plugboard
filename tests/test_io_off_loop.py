@@ -147,6 +147,11 @@ async def test_cache_sqlite_runs_off_the_event_loop(client, tmp_path, monkeypatc
 
 
 async def test_a_slow_disk_no_longer_stalls_the_loop(client, budget_key, monkeypatch):
+    # A first chat pays the process's one-time costs (imports, tokenizer):
+    # what is measured below is the SQLite of a chat, wherever it runs.
+    with aioresponses() as mock:
+        mock.post(URL_A, payload=FAKE_COMPLETION)
+        await client.post("/v1/chat/completions", headers=budget_key, json=_body())
     real_connect = sqlite3.connect
 
     def slow_connect(*a, **k):
@@ -250,3 +255,59 @@ def test_a_fresh_database_set_up_from_many_threads(tmp_path, monkeypatch, store)
     for t in threads:
         t.join()
     assert errors == []
+
+
+# ── Review follow-ups ────────────────────────────────────────────────────────
+
+
+async def test_copilot_token_reads_run_off_the_loop(monkeypatch):
+    threads = []
+
+    def run(*a, **k):
+        threads.append(threading.current_thread() is threading.main_thread())
+        return subprocess.CompletedProcess(a[0], 0, stdout="gho_test_only\n", stderr="")
+
+    monkeypatch.setattr(cli_auth.subprocess, "run", run)
+    loader = cli_auth.GHCopilotAuthLoader()
+    with aioresponses() as mock:
+        mock.get(loader.COPILOT_TOKEN_ENDPOINT, status=500, repeat=True)
+        await loader.get_token()
+    assert threads == [False]
+
+
+async def test_a_token_invalidated_during_its_read_is_not_kept(monkeypatch):
+    """An admin disconnects the account while the token is being read: the
+    old token is read again, never cached."""
+    loader = cli_auth.GHAuthLoader()
+    tokens = iter(["old-account-token", "new-account-token"])
+
+    def fetch():
+        value = next(tokens)
+        if value == "old-account-token":
+            loader.invalidate()  # the disconnect lands during this read
+        return cli_auth.TokenBundle(access_token=value)
+
+    monkeypatch.setattr(loader, "_fetch_token", fetch)
+    bundle = await loader.get_token()
+    assert bundle.access_token == "new-account-token"
+
+
+async def test_the_spending_alert_is_kept_until_sent(monkeypatch):
+    from plugboard import app as app_module
+
+    seen = []
+
+    async def check(client_id, total, limit):
+        await asyncio.sleep(0)
+        seen.append((client_id, total, limit))
+
+    monkeypatch.setattr(app_module, "_check_and_alert", check)
+    app_module._send_spending_alert(
+        "acme",
+        "2026_11",
+        key_record={"key_id": "k", "monthly_limit_usd": 1.0},
+        current_total_usd=0.9,
+    )
+    assert alerts._pending  # a strong reference, drained at shutdown
+    await alerts.drain()
+    assert seen == [("acme", 0.9, 1.0)]

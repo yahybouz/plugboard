@@ -617,3 +617,81 @@ async def test_a_failed_ping_gives_its_hold_back(client, budget):
         )
     assert resp.json()["results"][0]["error"] == "upstream_error"
     assert _holds() == [] and usage.get_usage(MONTH) == []
+
+
+# ── PLU-27 review: a client that hangs up while the stream is billed ─────────
+
+
+async def test_hanging_up_during_stream_billing_keeps_the_order(
+    client, budget, monkeypatch
+):
+    """The usage is written before the hold could be given back and before
+    the session's turn ends, and the turn is recorded (BUG-52, D-24)."""
+    import json as _json
+    import time as _time
+
+    from plugboard import chat_billing
+    from plugboard.app import app
+
+    loop = asyncio.get_running_loop()
+    billing_started = asyncio.Event()
+    events = []
+    real_record = chat_billing.record
+
+    def slow_record(*args, **kwargs):
+        loop.call_soon_threadsafe(billing_started.set)
+        _time.sleep(0.3)  # the client leaves meanwhile
+        real_record(*args, **kwargs)
+        events.append("usage written")
+
+    real_release = usage.release_hold
+
+    def release(hold_id):
+        events.append("hold given back")
+        real_release(hold_id)
+
+    monkeypatch.setattr(chat_billing, "record", slow_record)
+    monkeypatch.setattr(usage, "release_hold", release)
+    monkeypatch.setattr(
+        "plugboard.app._record_session_turn",
+        lambda *a, **k: events.append("turn recorded"),
+    )
+    raw = _json.dumps(_body(stream=True)).encode()
+    delivered = False
+
+    async def receive():
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": raw, "more_body": False}
+        await billing_started.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        pass
+
+    token = budget["limited"]["Authorization"].encode()
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/v1/chat/completions",
+        "raw_path": b"/v1/chat/completions",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"host", b"test"),
+            (b"content-type", b"application/json"),
+            (b"authorization", token),
+            (b"content-length", str(len(raw)).encode()),
+        ],
+        "client": ("127.0.0.1", 50000),
+        "server": ("test", 80),
+    }
+    with aioresponses() as mock:
+        mock.post(URL_A, body=FAKE_STREAM_BODY)
+        await asyncio.wait_for(app(scope, receive, send), timeout=10)
+    assert events == ["usage written", "turn recorded"]
+    assert _holds() == [] and len(usage.get_usage(MONTH)) == 1

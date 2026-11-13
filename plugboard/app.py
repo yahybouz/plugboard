@@ -43,6 +43,7 @@ import asyncio as _asyncio
 import hashlib
 import hmac
 import ipaddress
+import functools
 import json
 import math
 import logging
@@ -117,6 +118,7 @@ from plugboard import provider_admission as _provider_admission
 from plugboard import request_wait as _request_wait
 from plugboard.logging_config import _request_id_var, setup_logging
 from plugboard import chat_billing
+from plugboard.storage import to_thread_to_the_end as _to_thread_to_the_end
 from plugboard.metrics import get_stats, record_busy_refusal
 from plugboard.ratelimit import check_client_rate_limit, check_rate_limit
 from plugboard.decision_api import router as decision_router
@@ -526,25 +528,23 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
         await _job.stop()
     await _model_availability_scheduler.stop()
     await _pricing_scheduler.stop()
-    # Webhooks still being delivered get a short grace period.
+    # The watchdog first: it can raise a provider_down alert. Then the
+    # webhooks still being delivered (changes, alerts) share one grace period.
+    stop_watchdog()
+    log.info("Provider watchdog stopped")
+    from plugboard import alerts as _alerts
     from plugboard import change_events
 
     try:
-        await _asyncio.wait_for(change_events.drain(), timeout=10)
+        await _asyncio.wait_for(
+            _asyncio.gather(change_events.drain(), _alerts.drain()), timeout=10
+        )
     except _asyncio.TimeoutError:
-        log.warning("Shutdown: some change webhooks were not delivered")
-    from plugboard import alerts as _alerts  # provider_down, sent in the background
-
-    try:
-        await _asyncio.wait_for(_alerts.drain(), timeout=10)
-    except _asyncio.TimeoutError:
-        log.warning("Shutdown: some alert webhooks were not delivered")
+        log.warning("Shutdown: some change or alert webhooks were not delivered")
     if _nag_task:
         _nag_task.cancel()
     for task in _boot_tasks:
         task.cancel()
-    stop_watchdog()
-    log.info("Provider watchdog stopped")
     # Close the shared HTTP pool so pooled sockets don't leak at shutdown.
     from plugboard.http_pool import close_session
 
@@ -1776,6 +1776,7 @@ def _keep_hold(hold: Optional[chat_billing.BudgetHold]) -> None:
     estimate until it lapses and is recorded, never given back."""
     if hold is not None and not hold.done:
         hold.done = True
+        hold.settling = False
         log.error("budget hold %s kept: the served call was not billed", hold.id)
 
 
@@ -1953,6 +1954,9 @@ async def _charge_answer(
     runs off the event loop (PLU-27)."""
     if not client_id:
         return {}
+    hold = getattr(request.state, "budget_hold", None)
+    if hold is not None:
+        hold.settling = True  # never given back while it is billed
     try:
         billing_info = await _asyncio.to_thread(
             _bill_completion,
@@ -2078,8 +2082,6 @@ def _send_spending_alert(
     current_total_usd: Optional[float] = None,
 ) -> None:
     """Fire-and-forget: check if client needs a spending alert."""
-    import asyncio
-
     limit = 0.0
     key_id = ""
     if key_record:
@@ -2101,8 +2103,10 @@ def _send_spending_alert(
     else:
         total = _usage.get_total_cost_by_client(pricing_month, client_id)
     try:
-        loop = asyncio.get_event_loop()
-        loop.create_task(_check_and_alert(client_id, total, limit))
+        # Kept until sent and drained at shutdown (PLU-27).
+        from plugboard.alerts import in_background
+
+        in_background(_check_and_alert(client_id, total, limit))
     except Exception as exc:
         log.debug("Failed to schedule spending alert check for %s: %s", client_id, exc)
 
@@ -2912,15 +2916,23 @@ async def chat_completions(
             # NOT been yielded yet.
 
             bill = None
+            cancelled: Optional[BaseException] = None
             if cid:
+                if _hold is not None:
+                    _hold.settling = True  # never given back while it is billed
                 try:
-                    bill = await _asyncio.to_thread(
-                        _bill_streaming,
-                        cid,
-                        req_body,
-                        bytes(accumulated),
-                        key_id=kid,
-                        hold=_hold,
+                    # Off the loop, waited for to the end (PLU-27): a client
+                    # that hangs up now cannot leave the hold given back and
+                    # the session's turn unrecorded before the usage is written.
+                    bill, cancelled = await _to_thread_to_the_end(
+                        functools.partial(
+                            _bill_streaming,
+                            cid,
+                            req_body,
+                            bytes(accumulated),
+                            key_id=kid,
+                            hold=_hold,
+                        )
                     )
                 except Exception as exc:
                     log.warning("Stream billing error (non-fatal): %s", exc)
@@ -2930,6 +2942,8 @@ async def chat_completions(
                 _record_session_turn(
                     cid, session_id, list(req_body.get("messages") or []), bill["text"]
                 )
+            if cancelled is not None:
+                raise cancelled
 
             usage_needed = bill is not None and not bill["upstream_usage_present"]
             if not usage_needed:

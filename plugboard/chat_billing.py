@@ -136,20 +136,23 @@ class BudgetHold:
     """The hold a budgeted call took on its monthly budget (BUG-52).
 
     ``done`` once the hold was settled into a usage entry, released, or kept
-    because the settlement failed: a hold is used at most once.
+    because the settlement failed: a hold is used at most once. ``settling``
+    while its call is being billed in a worker thread: it is not given back
+    meanwhile, even if the request ends first (PLU-27).
     """
 
-    __slots__ = ("id", "cost", "done")
+    __slots__ = ("id", "cost", "done", "settling")
 
     def __init__(self, hold_id: str, cost: float = 0.0) -> None:
         self.id = hold_id
         self.cost = cost
         self.done = False
+        self.settling = False
 
     def release(self) -> None:
         """Give the hold back (a call that was not billed). A failure is
         logged: the hold then lapses after usage.HOLD_TTL_S."""
-        if self.done:
+        if self.done or self.settling:
             return
         self.done = True
         try:

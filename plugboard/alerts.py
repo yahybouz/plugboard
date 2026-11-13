@@ -27,8 +27,9 @@ _ALERT_COOLDOWN = 300.0  # 5 minutes between alerts for same provider
 _pending: Set["asyncio.Task[None]"] = set()
 
 
-def _in_background(coro: Coroutine[Any, Any, None]) -> None:
-    """Send a webhook without holding the request that triggered it."""
+def in_background(coro: Coroutine[Any, Any, None]) -> None:
+    """Send a webhook without holding the request that triggered it; kept
+    until done and waited for at shutdown (drain)."""
     task = asyncio.get_running_loop().create_task(coro)
     _pending.add(task)
     task.add_done_callback(_pending.discard)
@@ -56,7 +57,7 @@ async def record_provider_failure(provider_id: str) -> None:
         last = _provider_alerted.get(provider_id, 0)
         if now - last > _ALERT_COOLDOWN:
             _provider_alerted[provider_id] = now
-            _in_background(_send_provider_alert(provider_id, count))
+            in_background(_send_provider_alert(provider_id, count))
 
 
 def record_provider_success(provider_id: str) -> None:
