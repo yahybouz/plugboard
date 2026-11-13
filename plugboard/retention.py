@@ -287,9 +287,18 @@ def clock_check(now: Optional[datetime] = None) -> Optional[str]:
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+    if not report_path().exists():
+        return None  # the first pass: nothing to compare with
     ran_at = _last_ran_at()
     if ran_at is None:
-        return None
+        # Present but unreadable, or no valid ran_at: the clock cannot be
+        # checked, so the pass is held rather than let through (review M-2).
+        return (
+            f"held: {report_path().name} cannot be read or has no valid ran_at, "
+            "so the clock cannot be checked. Check the server clock, then run "
+            "the pass from the Jobs page."
+        )
     gap = now - ran_at
     if gap <= timedelta(days=MAX_CLOCK_STEP_DAYS):
         return None

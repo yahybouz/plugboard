@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
 import stat
@@ -516,6 +517,8 @@ async def test_a_manual_pass_is_not_held_by_the_clock_check(stores):
 
     _last_pass_at(stores, datetime.now(timezone.utc) - timedelta(days=365))
     job = maintenance.retention_job()
+    await job._run_once("scheduled")  # the same setup holds a scheduled pass
+    assert "clock" in job.status_dict["last_error"]
     await job.run_now("manual")
     assert job.status_dict["last_error"] is None
     assert retention.last_report()["stores"]  # a new report was written
@@ -613,3 +616,39 @@ def test_the_stores_written_by_requests_are_never_compacted(stores, monkeypatch)
     assert {stores["audit"], stores["watchdog"], stores["monitoring"]} <= set(compacted)
     assert report["stores"]["usage"]["deleted"] >= 1
     assert report["stores"]["usage"]["compacted"] is False
+
+
+@pytest.mark.parametrize("content", ["{not json", '{"ran_at": "13/11/2026"}', "[]"])
+def test_an_unreadable_last_report_holds_the_pass(stores, content):
+    # Review M-2: only a missing report lets the first pass through.
+    from plugboard import retention
+
+    stores["report"].write_text(content)
+    message = retention.clock_check(NOW)
+    assert message and "retention.json" in message
+
+
+async def test_a_missed_pass_caught_up_after_a_long_stop_is_held(stores):
+    # Review M-9: the catch-up goes through the loop and the clock check.
+    from plugboard import maintenance
+
+    seed_one_old_and_one_recent_row_everywhere()
+    before = {name: column(stores[name], *spec) for name, spec in _COLUMNS.items()}
+    _last_pass_at(stores, datetime.now(timezone.utc) - timedelta(days=30))
+    job = maintenance.retention_job()
+    sleeps = []
+
+    async def _sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            raise asyncio.CancelledError()
+
+    job._sleep = _sleep
+    await job.start()
+    with pytest.raises(asyncio.CancelledError):
+        await job.task
+    assert sleeps[0] == job.first_delay_s  # caught up a minute after the start
+    assert "clock" in job.status_dict["last_error"]
+    assert {
+        name: column(stores[name], *spec) for name, spec in _COLUMNS.items()
+    } == before
