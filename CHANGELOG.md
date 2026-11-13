@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **The documentation matches the code again** (PLU-44): `docs/ARCHITECTURE.md` lists every module of `plugboard/` with what it does (39 before, all 78 and `probes/` now), and its state and client-plane notes are corrected; the README and `.env.example` no longer describe auto-login without the operator's secret, a dashboard *Connections* page, a per-model circuit breaker, retries on every 5xx, a single-key `API_KEY` mode or the unused `PLUGBOARD_JOB_PYTHON`.
+
 ## [4.12.1] — 2026-11-13
 
 ### Fixed
