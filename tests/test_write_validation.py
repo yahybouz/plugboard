@@ -106,6 +106,32 @@ def test_rotation_refused_by_the_new_key_leaves_the_old_one(keys_store):
     assert _active(keys_store, "billing") == [old["key_id"]]
 
 
+def test_rotating_a_revoked_key_issues_nothing(keys_store):
+    # BUG-80: a revoked key gave a new active key, so a revoke could be undone
+    # and a repeated rotation left two live keys.
+    old = keys_store.create_key("billing", "prod")
+    keys_store.revoke_key(old["key_id"])
+    with pytest.raises(keys_store.KeyRevoked):
+        keys_store.rotate_key(old["key_id"])
+    keys_store._invalidate_cache()
+    assert _active(keys_store, "billing") == []
+    assert len(keys_store.load_keys()) == 1
+
+
+async def test_rotating_twice_answers_409_the_second_time(admin_client, keys_store):
+    old = keys_store.create_key("billing", "prod")
+    first = await admin_client.post(
+        f"/admin/keys/{old['key_id']}/rotate", headers=ADMIN
+    )
+    assert first.status_code == 201, first.text
+    again = await admin_client.post(
+        f"/admin/keys/{old['key_id']}/rotate", headers=ADMIN
+    )
+    assert again.status_code == 409, again.text
+    assert "already revoked" in again.json()["detail"]
+    assert _active(keys_store, "billing") == [first.json()["key_id"]]
+
+
 async def test_rotation_refused_by_the_new_key_answers_422(admin_client, keys_store):
     old = keys_store.create_key("billing", "prod")
     data = json.loads(keys_store.KEYS_FILE.read_text())

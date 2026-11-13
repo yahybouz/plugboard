@@ -315,10 +315,15 @@ def get_orgs() -> List[Dict[str, Any]]:
     ]
 
 
+class KeyRevoked(Exception):
+    """Rotation asked for a key that is already revoked (BUG-80)."""
+
+
 def rotate_key(key_id: str) -> Optional[Dict[str, Any]]:
     """Rotate a key: revoke the old one and create a new one with same settings.
 
     Returns the new key record (with plaintext key) or None if key_id not found.
+    Raises KeyRevoked for a key already revoked (BUG-80).
     All or nothing (BUG-59): the new key is built first, then the old one is
     revoked and the new one added in a single write; a refusal or a failed
     write leaves the old key working.
@@ -329,6 +334,10 @@ def rotate_key(key_id: str) -> Optional[Dict[str, Any]]:
         old = next((k for k in keys if k["key_id"] == key_id), None)
         if not old:
             return None
+        if not old.get("is_active", True):
+            # A revoked key stays revoked: rotating it again (a retry, a
+            # double click) would issue a second live key (BUG-80).
+            raise KeyRevoked(key_id)
         record, raw_key = _new_key(
             client_id=old["client_id"],
             label=old.get("label", ""),

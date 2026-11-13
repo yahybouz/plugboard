@@ -79,6 +79,7 @@ from plugboard.audit import count_audit_log, get_audit_log, log_action as _audit
 from plugboard.webhooks import emit_fire_and_forget as _webhook
 from plugboard.apikeys import (
     KEY_PREFIXES,  # ARCH-DEBT-029
+    KeyRevoked,
     create_key,
     delete_key,
     get_key_record,
@@ -5610,6 +5611,12 @@ async def rotate_api_key(key_id: str, _: None = Depends(_require_admin)):
         )
     try:
         result = rotate_key(key_id)
+    except KeyRevoked:
+        raise HTTPException(
+            409,
+            f"Key '{key_id}' is already revoked: rotate its replacement, or "
+            "create a new key",
+        ) from None
     except ValueError as exc:
         # The new key cannot be written (a retired decision model): the old
         # key is untouched (BUG-59).

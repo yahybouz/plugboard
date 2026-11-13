@@ -114,7 +114,7 @@ When `ALERT_WEBHOOK_URL` is set, every billed request from a client at or above 
 | Action | Dashboard | API |
 |---|---|---|
 | Revoke (keep the record, refuse the key) | API keys → Revoke | `POST /admin/keys/{key_id}/revoke` |
-| Rotate (revoke and issue a new key with the same settings, in one write: on a failure the old key keeps working) | not in the dashboard | `POST /admin/keys/{key_id}/rotate` |
+| Rotate (revoke and issue a new key with the same settings, in one write: on a failure the old key keeps working; a key already revoked answers `409`, so a retried rotation never leaves two live keys) | not in the dashboard | `POST /admin/keys/{key_id}/rotate` |
 | Delete | API keys → Delete | `DELETE /admin/keys/{key_id}` |
 | List | API keys | `GET /admin/keys`, `GET /admin/keys/client/{client_id}` |
 
