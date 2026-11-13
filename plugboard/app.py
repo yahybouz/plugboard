@@ -105,6 +105,7 @@ from plugboard import live_requests as _live
 from plugboard import provider_admission as _provider_admission
 from plugboard import request_wait as _request_wait
 from plugboard.logging_config import _request_id_var, setup_logging
+from plugboard import chat_billing
 from plugboard.metrics import get_stats, record_busy_refusal
 from plugboard.ratelimit import check_client_rate_limit, check_rate_limit
 from plugboard.decision_api import router as decision_router
@@ -142,7 +143,6 @@ from plugboard.router import (
 )
 from plugboard.tokenizer import (
     count_tokens,
-    estimate_completion_tokens,
     estimate_prompt_tokens,
 )
 
@@ -1666,28 +1666,13 @@ def _bill_streaming(
     )
 
     provider, real_model = _billing_target(body)
-    pricing_month = _billing.current_pricing_month()
-    match = _billing.resolve_price(real_model, pricing_month, provider=provider)
-    cost = _billing.calculate_cost(
-        prompt_tokens, completion_tokens, match.entry if match else None
-    )
-    _usage.append_usage(
-        client_id=client_id,
-        model=real_model,
-        provider_id=provider["id"],
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        pricing_month=pricing_month,
-        cost_usd=cost,
-        key_id=key_id,
-        price_key=match.price_key if match else "",
-        price_source=match.source if match else "",
-    )
+    charge = chat_billing.price(provider, real_model, prompt_tokens, completion_tokens)
+    chat_billing.record(client_id, key_id, charge)
     return {
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
-        "total_tokens": prompt_tokens + completion_tokens,
-        "cost_usd": round(cost, 6),
+        "total_tokens": charge.total_tokens,
+        "cost_usd": round(charge.cost_usd, 6),
         "model": real_model,
         "upstream_usage_present": bool(upstream_usage),
         "text": completion_text,
@@ -1697,46 +1682,50 @@ def _bill_streaming(
 def _bill_completion(
     client_id: str, key_id: str, body: Dict[str, Any], result: Dict[str, Any]
 ) -> Dict[str, Any]:
-    """Record the usage of a non-streamed completion; return the billing dict."""
+    """Record the usage of a whole answer; return the billing dict.
+
+    A zero count is estimated, unless the CLI reported it (a reported 0 is a
+    count, see router.usage_reported()).
+    """
     provider, real_model = _billing_target(body)
-    usage_data = result.get("usage") or {}
-    prompt_tokens = usage_data.get("prompt_tokens", 0)
-    completion_tokens = usage_data.get("completion_tokens", 0)
-
-    # Estimate tokens if backend returned 0, unless the CLI reported them
-    # (a reported 0 is a count, see router.usage_reported()).
-    if not _usage_reported():
-        if prompt_tokens == 0:
-            prompt_tokens = estimate_prompt_tokens(body.get("messages", []))
-        if completion_tokens == 0:
-            completion_tokens = estimate_completion_tokens(result)
-
-    pricing_month = _billing.current_pricing_month()
-    match = _billing.resolve_price(real_model, pricing_month, provider=provider)
-    cost = _billing.calculate_cost(
-        prompt_tokens, completion_tokens, match.entry if match else None
+    charge = chat_billing.charge_completion(
+        body, result, provider, real_model, reported=_usage_reported()
     )
-    _usage.append_usage(
-        client_id=client_id,
-        model=real_model,
-        provider_id=provider["id"],
-        prompt_tokens=prompt_tokens,
-        completion_tokens=completion_tokens,
-        pricing_month=pricing_month,
-        cost_usd=cost,
-        key_id=key_id,
-        price_key=match.price_key if match else "",
-        price_source=match.source if match else "",
-    )
-    return {
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "total_tokens": prompt_tokens + completion_tokens,
-        "cost_usd": cost,
-        "model": real_model,
-        "pricing_month": pricing_month,
-        "price_key": match.price_key if match else "",
-    }
+    chat_billing.record(client_id, key_id, charge)
+    return charge.billing_info()
+
+
+def _charge_answer(
+    request: Request,
+    client_id: Optional[str],
+    key_record: Optional[Dict[str, Any]],
+    spending_total: float,
+    body: Dict[str, Any],
+    result: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Bill a whole answer (a non-streamed chat, or one a CLI route answered
+    for a stream) and check the spending alert; {} when nothing was billed.
+    A billing error does not fail the answer: it is logged."""
+    if not client_id:
+        return {}
+    try:
+        billing_info = _bill_completion(
+            client_id, getattr(request.state, "key_id", ""), body, result
+        )
+    except Exception as exc:
+        log.warning("Billing error (non-fatal): %s", exc)
+        return {}
+    if client_id != "admin":
+        try:
+            _send_spending_alert(
+                client_id,
+                billing_info["pricing_month"],
+                key_record=key_record,
+                current_total_usd=spending_total + billing_info["cost_usd"],
+            )
+        except Exception as exc:
+            log.warning("Spending alert error (non-fatal): %s", exc)
+    return billing_info
 
 
 def _billing_target(body: Dict[str, Any]) -> tuple:
@@ -1990,61 +1979,58 @@ def _unsupported_on_cli_response(exc: UnsupportedOnCliError) -> JSONResponse:
     )
 
 
-async def _replay_completion_as_sse(
-    completion: Dict[str, Any], *, completion_id: str, created: int, model: str
-):
-    """Replay a complete chat completion as OpenAI SSE chunks.
+# A whole answer asked as a stream is replayed by chat_billing (PLU-28).
+_replay_completion_as_sse = chat_billing.replay_as_sse
 
-    Used when a streamed request is answered from a complete answer: a CLI
-    route (or the provider that served the request in its place) and the
-    response cache. The text goes out word by word, then the tool calls in
-    one delta (``index`` = position), then a final chunk with the answer's
-    own ``finish_reason`` and its ``usage``, then ``[DONE]``. An empty or
-    missing ``content`` sends no content delta.
+
+def _chat_error_response(
+    exc: Exception, client_id: Optional[str], phase: str
+) -> JSONResponse:
+    """The answer to a chat whose provider call raised ``exc`` (every chat
+    path: plain, stream, a CLI route asked to stream).
+
+    Typed errors keep their own answers. Any other text can name a host, a
+    port, a path, an account or a CLI hint (PLU-28): only the admin gets it.
+    A client key gets a sentence written here and an ``error_ref`` that
+    finds the text in the gateway log. A timeout is a 503 with Retry-After
+    10, a failed provider authentication keeps its status, the rest is 502.
     """
-    choice = (completion.get("choices") or [{}])[0]
-    message = choice.get("message") or {}
-    content = message.get("content") or ""
-    tool_calls = message.get("tool_calls") or []
-    finish_reason = choice.get("finish_reason") or "stop"
-    usage = completion.get("usage") or {}
-
-    def _chunk(delta: Dict[str, Any], finish: Optional[str]) -> Dict[str, Any]:
-        return {
-            "id": completion_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model,
-            "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
-        }
-
-    if content:
-        tokens = content.split(" ")
-        for i, tok in enumerate(tokens):
-            delta = tok + (" " if i < len(tokens) - 1 else "")
-            evt = _chunk({"content": delta}, None)
-            yield f"data: {json.dumps(evt)}\n\n".encode("utf-8")
-    if tool_calls:
-        calls = []
-        for i, tc in enumerate(tool_calls):
-            fn = tc.get("function") or {}
-            calls.append(
-                {
-                    "index": i,
-                    "id": tc.get("id"),
-                    "type": tc.get("type") or "function",
-                    "function": {
-                        "name": fn.get("name"),
-                        "arguments": fn.get("arguments") or "",
-                    },
-                }
-            )
-        evt = _chunk({"tool_calls": calls}, None)
-        yield f"data: {json.dumps(evt)}\n\n".encode("utf-8")
-    final_evt = _chunk({}, finish_reason)
-    final_evt["usage"] = usage
-    yield f"data: {json.dumps(final_evt)}\n\n".encode("utf-8")
-    yield b"data: [DONE]\n\n"
+    if isinstance(exc, ProvidersBusyError):
+        return _providers_busy_response(exc, client_id)
+    if isinstance(exc, ProviderDisabledError):
+        return _provider_disabled_response(exc.provider_id)
+    if isinstance(exc, UnsupportedOnCliError):
+        return _unsupported_on_cli_response(exc)
+    # Before the timeout test: a CLI message quotes its stderr.
+    if isinstance(exc, CliSubprocessError):
+        return _cli_error_response(exc, client_id)
+    if isinstance(exc, ProviderQuotaError):
+        return _quota_error_response(exc, client_id)
+    # Before the timeout test: the provider's body can say "timeout".
+    if isinstance(exc, (ProviderHTTPError, ProviderNetworkError)):
+        return _provider_http_error_response(exc, client_id)
+    ref = secrets.token_hex(4)
+    err_str = str(exc)
+    log.error("%s error ref=%s (%s): %s", phase, ref, type(exc).__name__, err_str)
+    headers: Dict[str, str] = {}
+    content: Dict[str, Any] = {}
+    if "timeout" in err_str.lower():
+        status_code = 503
+        detail = "The provider did not answer in time"
+        content["retry_after"] = 10
+        headers["Retry-After"] = "10"
+    elif isinstance(exc, AuthError):
+        status_code = exc.status_code
+        detail = "The provider's credentials could not be used"
+    else:
+        status_code = 502
+        detail = "The provider call failed"
+    if client_id == "admin":
+        content["detail"] = err_str
+    else:
+        content["detail"] = f"{detail} (reference {ref} in the gateway log)."
+    content["error_ref"] = ref
+    return JSONResponse(status_code=status_code, content=content, headers=headers)
 
 
 def _provider_http_error_response(
@@ -2496,96 +2482,18 @@ async def chat_completions(
             except HTTPException:
                 raise
             except Exception as exc:
-                if isinstance(exc, ProvidersBusyError):
-                    return _providers_busy_response(exc, client_id)
-                if isinstance(exc, ProviderDisabledError):
-                    return _provider_disabled_response(exc.provider_id)
-                if isinstance(exc, UnsupportedOnCliError):
-                    return _unsupported_on_cli_response(exc)
-                log.error("subprocess stream forward error: %s", exc)
-                err_str = str(exc)
-                # Before the timeout test: a CLI message quotes its stderr.
-                if isinstance(exc, CliSubprocessError):
-                    return _cli_error_response(exc, client_id)
-                if isinstance(exc, ProviderQuotaError):
-                    return _quota_error_response(exc, client_id)
-                if isinstance(exc, (ProviderHTTPError, ProviderNetworkError)):
-                    return _provider_http_error_response(exc, client_id)
-                if "timeout" in err_str.lower():
-                    return JSONResponse(
-                        status_code=503,
-                        content={"detail": err_str, "retry_after": 10},
-                        headers={"Retry-After": "10"},
-                    )
-                if isinstance(exc, AuthError):
-                    raise HTTPException(status_code=exc.status_code, detail=err_str)
-                raise HTTPException(status_code=502, detail=err_str)
+                return _chat_error_response(exc, client_id, "subprocess stream")
 
-            # Billing + cache (mirror non-stream path)
-            _billing_for_cache = {}
-            try:
-                if client_id:
-                    provider, real_model = _billing_target(body)
-                    usage_data = result.get("usage") or {}
-                    reported = _usage_reported()
-                    if reported:
-                        # Counts the CLI reported, zeros included.
-                        prompt_tokens = usage_data["prompt_tokens"]
-                        completion_tokens = usage_data["completion_tokens"]
-                    else:
-                        prompt_tokens = usage_data.get(
-                            "prompt_tokens", 0
-                        ) or estimate_prompt_tokens(body.get("messages", []))
-                        completion_tokens = usage_data.get(
-                            "completion_tokens", 0
-                        ) or estimate_completion_tokens(result)
-                    pricing_month = _billing.current_pricing_month()
-                    match = _billing.resolve_price(
-                        real_model, pricing_month, provider=provider
-                    )
-                    cost = _billing.calculate_cost(
-                        prompt_tokens, completion_tokens, match.entry if match else None
-                    )
-                    _key_id = getattr(request.state, "key_id", "")
-                    _usage.append_usage(
-                        client_id=client_id,
-                        model=real_model,
-                        provider_id=provider["id"],
-                        prompt_tokens=prompt_tokens,
-                        completion_tokens=completion_tokens,
-                        pricing_month=pricing_month,
-                        cost_usd=cost,
-                        key_id=_key_id,
-                        price_key=match.price_key if match else "",
-                        price_source=match.source if match else "",
-                    )
-                    _billing_for_cache = {
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "total_tokens": prompt_tokens + completion_tokens,
-                        "cost_usd": cost,
-                        "model": real_model,
-                        "pricing_month": pricing_month,
-                    }
-                    result["billing"] = _billing_for_cache
-                    # Ensure usage in result matches billing (so cache replay emits
-                    # the same numbers).
-                    new_usage = {
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "total_tokens": prompt_tokens + completion_tokens,
-                        "cost_usd": round(cost, 6),
-                    }
-                    if reported:
-                        for key in (
-                            "prompt_tokens_details",
-                            "completion_tokens_details",
-                        ):
-                            if isinstance(usage_data.get(key), dict):
-                                new_usage[key] = usage_data[key]
-                    result["usage"] = new_usage
-            except Exception as exc:
-                log.warning("subprocess stream billing error (non-fatal): %s", exc)
+            # Billed as a plain chat; the replay ends with what was billed.
+            reported_usage = dict(result.get("usage") or {})
+            _billing_for_cache = _charge_answer(
+                request, client_id, key_record, spending_total, body, result
+            )
+            if _billing_for_cache:
+                result["billing"] = _billing_for_cache
+                result["usage"] = chat_billing.usage_block(
+                    _billing_for_cache, reported_usage if _usage_reported() else None
+                )
 
             # Write to cache (same cache the non-stream branch uses, so future
             # requests — stream or not — hit instantly).
@@ -2657,28 +2565,7 @@ async def chat_completions(
         except HTTPException:
             raise
         except Exception as exc:
-            if isinstance(exc, ProvidersBusyError):
-                return _providers_busy_response(exc, client_id)
-            if isinstance(exc, ProviderDisabledError):
-                return _provider_disabled_response(exc.provider_id)
-            if isinstance(exc, UnsupportedOnCliError):
-                return _unsupported_on_cli_response(exc)
-            log.error("stream error: %s", exc)
-            err_str = str(exc)
-            if isinstance(exc, ProviderQuotaError):
-                return _quota_error_response(exc, client_id)
-            # Before the timeout test: the provider's body can say "timeout".
-            if isinstance(exc, (ProviderHTTPError, ProviderNetworkError)):
-                return _provider_http_error_response(exc, client_id)
-            if "timeout" in err_str.lower():
-                return JSONResponse(
-                    status_code=503,
-                    content={"detail": err_str, "retry_after": 10},
-                    headers={"Retry-After": "10"},
-                )
-            if isinstance(exc, AuthError):
-                raise HTTPException(status_code=exc.status_code, detail=err_str)
-            raise HTTPException(status_code=502, detail=err_str)
+            return _chat_error_response(exc, client_id, "stream")
 
         _key_id = getattr(request.state, "key_id", "")
 
@@ -2805,52 +2692,14 @@ async def chat_completions(
     except HTTPException:
         raise
     except Exception as exc:
-        if isinstance(exc, ProvidersBusyError):
-            return _providers_busy_response(exc, client_id)
-        if isinstance(exc, ProviderDisabledError):
-            return _provider_disabled_response(exc.provider_id)
-        if isinstance(exc, UnsupportedOnCliError):
-            return _unsupported_on_cli_response(exc)
-        log.error("forward error: %s", exc)
-        err_str = str(exc)
-        # Before the timeout test: a CLI message quotes its stderr.
-        if isinstance(exc, CliSubprocessError):
-            return _cli_error_response(exc, client_id)
-        if isinstance(exc, ProviderQuotaError):
-            return _quota_error_response(exc, client_id)
-        # Before the timeout test: the provider's body can say "timeout".
-        if isinstance(exc, (ProviderHTTPError, ProviderNetworkError)):
-            return _provider_http_error_response(exc, client_id)
-        # 503 + Retry-After for timeouts (client can retry), 502 for other errors
-        if "timeout" in err_str.lower():
-            return JSONResponse(
-                status_code=503,
-                content={"detail": err_str, "retry_after": 10},
-                headers={"Retry-After": "10"},
-            )
-        if isinstance(exc, AuthError):
-            raise HTTPException(status_code=exc.status_code, detail=err_str)
-        raise HTTPException(status_code=502, detail=err_str)
+        return _chat_error_response(exc, client_id, "forward")
     elapsed = time.perf_counter() - t0
     log.info("<- OK | model=%s | %.2fs", body.get("model", "?"), elapsed)
 
     # -- Billing --------------------------------------------------------------
-    billing_info = {}
-    try:
-        if client_id:
-            billing_info = _bill_completion(
-                client_id, getattr(request.state, "key_id", ""), body, result
-            )
-            # Spending alert (non-blocking)
-            if client_id != "admin":
-                _send_spending_alert(
-                    client_id,
-                    billing_info["pricing_month"],
-                    key_record=key_record,
-                    current_total_usd=spending_total + billing_info["cost_usd"],
-                )
-    except Exception as exc:
-        log.warning("Billing error (non-fatal): %s", exc)
+    billing_info = _charge_answer(
+        request, client_id, key_record, spending_total, body, result
+    )
 
     # Inject billing into response + headers
     if billing_info:

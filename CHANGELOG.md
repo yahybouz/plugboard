@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **A client key no longer gets the raw text of a gateway error** (PLU-28): a chat that failed on a timeout (`503`, `Retry-After: 10`), on a provider's credentials (`401` or the status the error carries) or on any other error (`502`) answered with the exception's text, which could name a host, a port, a local path or a CLI login hint. A client key now gets a sentence written by Plugboard and an `error_ref` that finds the text in the gateway log (`ref=<error_ref>`); the admin key and the Playground still get the text. The plain, streamed and CLI-streamed chats share one error answer.
+- **A whole answer is counted, priced and recorded in one place** (PLU-28): a CLI route asked to stream is billed by the same code as a plain chat (`plugboard/chat_billing.py`), and now also checks the spending alert; its replayed stream ends with the usage recorded, and keeps the answer's own `finish_reason` and tool calls when the router replays it.
+
 ## [4.12.1] — 2026-11-13
 
 ### Fixed
