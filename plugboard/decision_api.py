@@ -380,7 +380,10 @@ async def decide(body: DecisionRequest, record: dict = Depends(require_decision_
     _warn_obsolete_price()
     if _usage_breaker_refuses(record):
         raise HTTPException(503, "Decision usage recording unavailable")
-    _check_spending_limit(record["client_id"], key_record=record)
+    # Usage SQLite off the event loop (PLU-27).
+    await asyncio.to_thread(
+        _check_spending_limit, record["client_id"], key_record=record
+    )
     rpm = record.get("rpm_limit", 0)
     if rpm and not check_client_rate_limit(record["key_id"], rpm):
         raise HTTPException(429, "Client rate limit exceeded")

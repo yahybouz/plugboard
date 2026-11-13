@@ -292,19 +292,44 @@ def _write(data: Dict[str, Any]) -> None:
     # Atomic, owner-only (provider tokens live here), and never over an
     # unreadable file that _read() reported as empty.
     atomic_write_json(PROVIDERS_FILE, data, mode=0o600)
+    _providers_cache.clear()
+
+
+# PLU-27: a chat reads the provider list about ten times. The decrypted list
+# is kept as JSON text, keyed by the file's path and raw bytes: while the
+# file is unchanged a read costs a file read and a JSON parse (a fresh copy
+# for each caller), no lock and no decryption.
+_providers_cache: Dict[str, Any] = {}
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
 def load_providers() -> List[Dict[str, Any]]:
+    """The providers, tokens decrypted; each call gets its own copy."""
+    try:
+        raw = PROVIDERS_FILE.read_bytes()
+    except OSError:
+        raw = None
+    key = (str(PROVIDERS_FILE), raw)
+    if raw is not None and _providers_cache.get("key") == key:
+        return json.loads(_providers_cache["json"])
     with _lock():
+        try:
+            raw = PROVIDERS_FILE.read_bytes()  # what _read() parses, under the lock
+        except OSError:
+            raw = None
         data = _read()
         providers = data.get("providers", [])
         for p in providers:
             if "bearer_token" in p and not is_removed_provider(p):
                 p["bearer_token"] = _decrypt_token(p["bearer_token"])
-        return providers
+    if raw is not None:
+        _providers_cache.clear()
+        _providers_cache.update(
+            key=(str(PROVIDERS_FILE), raw), json=json.dumps(providers)
+        )
+    return providers
 
 
 def get_provider(provider_id: str) -> Optional[Dict[str, Any]]:

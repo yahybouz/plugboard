@@ -382,7 +382,10 @@ async def create_embeddings(
     owner = provider["id"]
     if not model_access_matches(record.get("allowed_models") or [], owner, native):
         raise HTTPException(403, "Embedding model not permitted for this key")
-    _check_spending_limit(record["client_id"], key_record=record)
+    # Usage SQLite off the event loop (PLU-27).
+    await asyncio.to_thread(
+        _check_spending_limit, record["client_id"], key_record=record
+    )
     rpm = int(record.get("rpm_limit", 0) or 0)
     if rpm and not check_client_rate_limit(
         record.get("key_id", record["client_id"]), rpm
@@ -435,7 +438,7 @@ async def create_embeddings(
         _release_slot()
 
     tokens = _prompt_tokens(raw, inputs)
-    recorded = _record_usage(record, native, owner, tokens)
+    recorded = await asyncio.to_thread(_record_usage, record, native, owner, tokens)
     dims = len(vectors[0])
     _KNOWN_DIMENSIONS[body.model] = dims
     log.info(

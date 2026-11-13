@@ -15,6 +15,7 @@ Supported sources:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -112,7 +113,8 @@ class CLIAuthLoader:
         cached = self._cached()
         if cached:
             return cached
-        self._store(self._fetch_token())
+        # A file read, or `gh auth token` (up to 5 s): off the loop (PLU-27).
+        self._store(await asyncio.to_thread(self._fetch_token))
         if self._cache and not self._cache.is_valid():
             refreshed = await self._refresh(self._cache)
             if refreshed:

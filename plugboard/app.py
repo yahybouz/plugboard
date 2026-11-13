@@ -533,6 +533,12 @@ async def _lifespan(application: FastAPI):  # noqa: ARG001
         await _asyncio.wait_for(change_events.drain(), timeout=10)
     except _asyncio.TimeoutError:
         log.warning("Shutdown: some change webhooks were not delivered")
+    from plugboard import alerts as _alerts  # provider_down, sent in the background
+
+    try:
+        await _asyncio.wait_for(_alerts.drain(), timeout=10)
+    except _asyncio.TimeoutError:
+        log.warning("Shutdown: some alert webhooks were not delivered")
     if _nag_task:
         _nag_task.cancel()
     for task in _boot_tasks:
@@ -1933,7 +1939,7 @@ def _bill_completion(
     return charge.billing_info()
 
 
-def _charge_answer(
+async def _charge_answer(
     request: Request,
     client_id: Optional[str],
     key_record: Optional[Dict[str, Any]],
@@ -1943,11 +1949,13 @@ def _charge_answer(
 ) -> Dict[str, Any]:
     """Bill a whole answer (a non-streamed chat, or one a CLI route answered
     for a stream) and check the spending alert; {} when nothing was billed.
-    A billing error does not fail the answer: it is logged."""
+    A billing error does not fail the answer: it is logged. The usage write
+    runs off the event loop (PLU-27)."""
     if not client_id:
         return {}
     try:
-        billing_info = _bill_completion(
+        billing_info = await _asyncio.to_thread(
+            _bill_completion,
             client_id,
             getattr(request.state, "key_id", ""),
             body,
@@ -2556,7 +2564,9 @@ async def chat_completions(
 
     # Issue #5: check spending limit before processing request
     if client_id and client_id != "admin":
-        spending_total = _check_spending_limit(client_id, key_record=key_record)
+        spending_total = await _asyncio.to_thread(
+            _check_spending_limit, client_id, key_record=key_record
+        )
 
     # Check model access (per-key allowed_models). A model of a disabled
     # provider is checked as its owner's, then refused (PLU-12).
@@ -2628,7 +2638,9 @@ async def chat_completions(
             client_id=client_id or "",
             **key_params(body),
         )
-        cached = get_cached(_cache_key, client_id=client_id or "")
+        cached = await _asyncio.to_thread(
+            get_cached, _cache_key, client_id=client_id or ""
+        )
         if not cached and not _is_streaming:
             # Exact miss → try semantic (paraphrase) match. Off by default;
             # enable via PLUGBOARD_SEMANTIC_CACHE=1. Phase 2 (embedding-
@@ -2743,7 +2755,7 @@ async def chat_completions(
 
             # Billed as a plain chat; the replay ends with what was billed.
             reported_usage = dict(result.get("usage") or {})
-            _billing_for_cache = _charge_answer(
+            _billing_for_cache = await _charge_answer(
                 request, client_id, key_record, spending_total, body, result
             )
             if _billing_for_cache:
@@ -2759,7 +2771,8 @@ async def chat_completions(
                     from plugboard.cache import set_cached
 
                     _cost = _billing_for_cache.get("cost_usd", 0)
-                    set_cached(
+                    await _asyncio.to_thread(
+                        set_cached,
                         _cache_key,
                         body.get("model", ""),
                         _cache_key[:16],
@@ -2877,6 +2890,8 @@ async def chat_completions(
                     # tokens, so record them before letting the error through.
                     if cid:
                         try:
+                            # On the loop: a cancelled request cannot await
+                            # here (the rare path; PLU-27 moves the others).
                             _bill_streaming(
                                 cid,
                                 req_body,
@@ -2899,8 +2914,13 @@ async def chat_completions(
             bill = None
             if cid:
                 try:
-                    bill = _bill_streaming(
-                        cid, req_body, bytes(accumulated), key_id=kid, hold=_hold
+                    bill = await _asyncio.to_thread(
+                        _bill_streaming,
+                        cid,
+                        req_body,
+                        bytes(accumulated),
+                        key_id=kid,
+                        hold=_hold,
                     )
                 except Exception as exc:
                     log.warning("Stream billing error (non-fatal): %s", exc)
@@ -2961,7 +2981,7 @@ async def chat_completions(
     log.info("<- OK | model=%s | %.2fs", body.get("model", "?"), elapsed)
 
     # -- Billing --------------------------------------------------------------
-    billing_info = _charge_answer(
+    billing_info = await _charge_answer(
         request, client_id, key_record, spending_total, body, result
     )
 
@@ -2986,7 +3006,8 @@ async def chat_completions(
             from plugboard.cache import set_cached
 
             cost = billing_info.get("cost_usd", 0) if billing_info else 0
-            set_cached(
+            await _asyncio.to_thread(
+                set_cached,
                 _cache_key,
                 body.get("model", ""),
                 _cache_key[:16],

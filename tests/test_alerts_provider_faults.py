@@ -115,6 +115,7 @@ async def test_three_http_provider_faults_send_provider_down(
             await _forward_http()
         assert _sent(mock) == []
         await _forward_http()
+        await alerting.drain()  # the webhook goes out in the background (PLU-27)
 
     assert len(_sent(mock)) == 1
     alert = _sent(mock)[0]
@@ -153,6 +154,7 @@ async def test_a_request_error_between_provider_faults_neither_counts_nor_resets
         assert _sent(mock) == []
         mock.post(_A, status=503, payload={"error": "unavailable"}, repeat=4)
         await _forward_http()
+        await alerting.drain()
 
     assert [alert["consecutive_failures"] for alert in _sent(mock)] == [3]
 
@@ -258,6 +260,7 @@ async def test_three_cli_provider_faults_send_provider_down(
             await _forward_cli()
         assert _sent(mock) == []
         await _forward_cli()
+        await alerting.drain()
 
     assert [(a["type"], a["provider_id"]) for a in _sent(mock)] == [
         ("provider_down", _CLI_ID)

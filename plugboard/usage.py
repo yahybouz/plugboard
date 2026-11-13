@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import secrets
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -95,32 +96,40 @@ def _get_conn() -> sqlite3.Connection:
         _schema_ready.clear()  # deleted or not created yet: set the schema up again
     private_sqlite_file(_DB_PATH)
     conn = sqlite3.connect(str(_DB_PATH), timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.row_factory = sqlite3.Row
     if _schema_ready.get("path") != str(_DB_PATH):
-        conn.execute(_CREATE_TABLE)
-        existing = {row[1] for row in conn.execute("PRAGMA table_info(usage_entries)")}
-        for column, decl in _ADDED_COLUMNS.items():
-            if column not in existing:
-                try:
-                    conn.execute(
-                        f"ALTER TABLE usage_entries ADD COLUMN {column} {decl}"
-                    )
-                except sqlite3.OperationalError as exc:
-                    if "duplicate column" not in str(exc).lower():
-                        raise  # another process added it first: fine
-        for idx in _CREATE_INDEXES:
-            conn.execute(idx)
-        conn.execute(_CREATE_HOLDS)
-        conn.execute(_CREATE_HOLDS_INDEX)
-        conn.commit()
-        _schema_ready["path"] = str(_DB_PATH)
+        # Worker threads open connections at once (PLU-27): one sets the
+        # database up, the others wait for it instead of racing its writes.
+        with _schema_lock:
+            if _schema_ready.get("path") != str(_DB_PATH):
+                _set_up(conn)
+                _schema_ready["path"] = str(_DB_PATH)
     return conn
+
+
+def _set_up(conn: sqlite3.Connection) -> None:
+    """WAL mode (kept in the file), tables, added columns and indexes."""
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(_CREATE_TABLE)
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(usage_entries)")}
+    for column, decl in _ADDED_COLUMNS.items():
+        if column not in existing:
+            try:
+                conn.execute(f"ALTER TABLE usage_entries ADD COLUMN {column} {decl}")
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise  # another process added it first: fine
+    for idx in _CREATE_INDEXES:
+        conn.execute(idx)
+    conn.execute(_CREATE_HOLDS)
+    conn.execute(_CREATE_HOLDS_INDEX)
+    conn.commit()
 
 
 # Schema creation and column migration run once per database per process.
 _schema_ready: Dict[str, str] = {}
+_schema_lock = threading.Lock()
 
 
 def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
