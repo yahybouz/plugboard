@@ -315,6 +315,10 @@ def build_checks(smoke: Smoke, args) -> list[tuple[str, Callable[[], str]]]:
             if not args.allow_unlimited_key:
                 raise CheckFailed(f"{message}; pass --allow-unlimited-key to accept it")
             smoke.say("WARN", "models", message)
+            return (
+                f"{model} listed among {len(rows)} model(s), "
+                "key not limited (accepted by --allow-unlimited-key)"
+            )
         return f"{model} listed among {len(rows)} model(s), key limited"
 
     def chat() -> str:
