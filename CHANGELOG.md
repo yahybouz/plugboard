@@ -48,6 +48,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`GET /v1/models/{model_id}/info` did not follow the client catalogue**: a client key got the full profile of a model that `GET /v1/models` leaves out for it (last connectivity probe failed less than 36 hours ago). It now gets the unknown-model answer (`info_source: "derived"`), as for a model its `allowed_models` refuses; the admin key is unchanged.
 
+- **`scripts/smoke_consumers.py` failed on a model served by CLI subscriptions only**: its `structured` step sends a `response_format`, which such a route refuses by contract (`400` `unsupported_on_cli`, nothing called), so the post-deployment smoke could not pass once Ollama is off. That refusal is now a `SKIP`, like absent embeddings; any other refusal of the step is still a failure.
+
 ## [4.13.0] — 2026-11-13
 
 ### Added

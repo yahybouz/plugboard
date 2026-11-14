@@ -328,7 +328,8 @@ bash deploy/ovh/verify.sh
 ```
 
 Every line must be `PASS`, except `SKIP embeddings` (no embedding model is
-declared while Ollama is off). A `FAIL`: go back now (step 8, **Back**), then stop
+declared while Ollama is off) and `SKIP structured` (a model served by CLI
+subscription routes only takes no `response_format`). A `FAIL`: go back now (step 8, **Back**), then stop
 the gate.
 
 ```bash

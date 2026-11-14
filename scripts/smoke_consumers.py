@@ -12,7 +12,9 @@ budget (60 s by default):
   stream      the same call streamed returns text and ends with [DONE]
   structured  response_format json_schema: the answer is exactly the JSON
               object of a schema whose value is a nonce, which the prompt
-              does not give (a gateway that drops response_format fails)
+              does not give (a gateway that drops response_format fails).
+              A model only CLI subscription routes serve is a SKIP: they
+              refuse response_format (400 unsupported_on_cli, nothing called)
   embeddings  when the key may use a declared embedding model
               (GET /v1/embeddings/models): it is available and one vector is
               returned. No embedding model declared for the key is a SKIP,
@@ -21,7 +23,7 @@ budget (60 s by default):
 Read-only: no admin route, no provider or key change, no quarantine write.
 Chat calls send ``"cache": false`` (a cached answer proves nothing) and a
 small ``max_tokens``; they are billed to the smoke key like any client call,
-so give it a dedicated client key limited (allowed_models) to a local chat
+so give it a dedicated client key limited (allowed_models) to one chat
 model and, where embeddings are served, to the identity listed in
 PLUGBOARD_EMBEDDING_MODELS. Redirects are never followed and no proxy is
 used, so the key only goes to --url.
@@ -76,6 +78,23 @@ def pick_default_model(rows: list, allowed: Optional[list]) -> str:
     return ""
 
 
+def _cli_refuses_response_format(failure: "CheckFailed") -> bool:
+    """The gateway's documented refusal of a structured output on a model that
+    only CLI subscription routes serve: 400, code ``unsupported_on_cli``,
+    ``response_format`` the only refused field."""
+    if failure.status != 400:
+        return False
+    try:
+        payload = json.loads(failure.body)
+    except ValueError:
+        return False
+    return (
+        isinstance(payload, dict)
+        and payload.get("code") == "unsupported_on_cli"
+        and payload.get("unsupported") == ["response_format"]
+    )
+
+
 def structured_schema(word: str) -> dict:
     """A schema only the gateway can tell the model: its value is a nonce.
 
@@ -95,7 +114,13 @@ def structured_schema(word: str) -> dict:
 
 
 class CheckFailed(Exception):
-    """A check did not pass; the message is safe to print."""
+    """A check did not pass; the message is safe to print.
+
+    ``status`` and ``body`` hold the HTTP answer when the gateway refused.
+    """
+
+    status: Optional[int] = None
+    body: str = ""
 
 
 class Skipped(Exception):
@@ -158,7 +183,9 @@ class Smoke:
                 detail = exc.read(2000).decode("utf-8", "replace")
             except OSError:
                 pass
-            raise CheckFailed(f"HTTP {exc.code} on {path}: {detail}") from None
+            failure = CheckFailed(f"HTTP {exc.code} on {path}: {detail}")
+            failure.status, failure.body = exc.code, detail
+            raise failure from None
         except (URLError, socket.timeout, TimeoutError, ConnectionError) as exc:
             reason = getattr(exc, "reason", exc)
             if self.remaining() <= 0:
@@ -341,18 +368,26 @@ def build_checks(smoke: Smoke, args) -> list[tuple[str, Callable[[], str]]]:
 
     def structured() -> str:
         word = f"pong{uuid.uuid4().hex[:6]}"
-        answer = smoke.post_json(
-            "/v1/chat/completions",
-            _chat_body(
-                model,
-                "Say pong.",
-                args.max_tokens,
-                response_format={
-                    "type": "json_schema",
-                    "json_schema": structured_schema(word),
-                },
-            ),
-        )
+        try:
+            answer = smoke.post_json(
+                "/v1/chat/completions",
+                _chat_body(
+                    model,
+                    "Say pong.",
+                    args.max_tokens,
+                    response_format={
+                        "type": "json_schema",
+                        "json_schema": structured_schema(word),
+                    },
+                ),
+            )
+        except CheckFailed as exc:
+            if _cli_refuses_response_format(exc):
+                raise Skipped(
+                    "the model is served by CLI subscription routes only, which "
+                    "take no response_format (400 unsupported_on_cli, nothing called)"
+                ) from None
+            raise
         content, finish = _content(answer)
         if not content.strip():
             raise _empty(finish)

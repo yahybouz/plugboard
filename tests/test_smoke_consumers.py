@@ -50,6 +50,8 @@ def _default_behavior() -> dict:
         # response_format); a string: that content whatever was sent.
         "structured_content": None,
         "drop_response_format": False,
+        # (status, body) answered to a chat carrying response_format, or None.
+        "structured_error": None,
         "embedding_models": [],
         "embedding_route": True,
         "embedding_vector": [0.1, 0.2, 0.3],
@@ -136,6 +138,8 @@ class _Gateway(BaseHTTPRequestHandler):
             return self._send(b["chat_status"], detail)
         if body.get("stream"):
             return self._stream(b)
+        if b["structured_error"] and body.get("response_format"):
+            return self._send(*b["structured_error"])
         fmt = None if b["drop_response_format"] else body.get("response_format")
         if b["structured_content"] is not None and body.get("response_format"):
             content = b["structured_content"]
@@ -577,3 +581,46 @@ def test_a_model_list_flagged_compatible_is_trusted_over_allowed_models(gateway)
     proc = _smoke(server, model=None)
 
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+_UNSUPPORTED_ON_CLI = {
+    "detail": "Model route 'claude-code' is a CLI subscription: it cannot serve "
+    "response_format. Nothing was called.",
+    "code": "unsupported_on_cli",
+    "unsupported": ["response_format"],
+}
+
+
+def test_a_cli_only_model_skips_the_structured_step(gateway):
+    """With Ollama off the smoke model is a CLI subscription's, and a CLI route
+    refuses response_format by contract (400 unsupported_on_cli, nothing
+    called): the step does not apply, it is not a failed deployment."""
+    server, gw = gateway
+    gw.behavior["structured_error"] = (400, _UNSUPPORTED_ON_CLI)
+
+    proc = _smoke(server)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert _check_names(proc, "PASS") == ["health", "models", "chat", "stream"]
+    assert _check_names(proc, "SKIP") == ["structured", "embeddings"]
+    assert _lines(proc, "FAIL") == []
+    assert "unsupported_on_cli" in "".join(_lines(proc, "SKIP"))
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        (400, {"detail": "too long", "code": "context_length_exceeded"}),
+        (400, {"detail": "bad request"}),
+        (400, dict(_UNSUPPORTED_ON_CLI, unsupported=["tools"])),
+        (503, _UNSUPPORTED_ON_CLI),
+    ],
+)
+def test_any_other_refusal_of_the_structured_step_is_a_failure(gateway, error):
+    server, gw = gateway
+    gw.behavior["structured_error"] = error
+
+    proc = _smoke(server)
+
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert _check_names(proc, "FAIL") == ["structured"]
