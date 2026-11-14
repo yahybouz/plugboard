@@ -8,9 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [4.14.1] — 2026-11-14
 
+### Added
+
+- **Runbook of the production instance** (PLU-64): [`docs/runbooks/production-instance.md`](docs/runbooks/production-instance.md) says how the instance in service departs from `deploy/ovh/compose.yml` (Compose project, configuration under `/etc/plugboard`, no published port, an existing network, the catalogue scheduler off until 4.14.1 is tested on its data), its backups, its rollback and what the gateway does with agy's conversations.
+
+### Changed
+
+- **`GET /v1/models/{model_id}/info` refuses a model the key may not call, as chat does** (BUG-103): a key limited by `allowed_models` got `200` with a derived profile (`info_source: "derived"`, `provider`, `family`) for a model outside its list. It now gets `403` with `"code": "forbidden_model"` and the chat's `detail`, and no profile. A model the client catalogue leaves out after a failed probe still gets the derived answer; the admin key and the keys without `allowed_models` are unchanged. **For integrators with a limited key**: handle `403` on this route. API contract 2.4.0 (`docs/api/openapi.json`, `docs/api/mcp.json`): `403` on the route.
+
 ### Fixed
 
 - **The catalogue refresh removed from a provider the models another provider had refused** (BUG-102): the quarantine kept a model's name and not the provider that refused it, and without an inference probe the refresh drops every quarantined name from a CLI provider's saved list. In production, three models the claude subscription serves (`claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-haiku-4-5`) left its list at the first catalogue pass of 4.14.0: a codex refusal of 01/11 had quarantined those names, and a pass of 02/11 had counted their first absence. Ten of agy's thirteen models were quarantined the same way and stayed only because a pass that drops more than half of a list is refused as an anomaly. A quarantine entry now belongs to the provider it was observed on: the chat routes, the internet check, the probes and the smoke scripts record it, and it labels (`"reason": "quarantined"` in `/v1/models`) or removes the model at that provider only. Entries recorded before this release name no provider: they stay in `data/quarantined_models.json`, under `models`, and are applied to no provider; a model its provider really refuses is quarantined again, at that provider, the next time it fails. The rule itself is unchanged: a model its own provider refuses still leaves that provider's list at the second pass ([monitoring](docs/guide/monitoring.md#model-catalog-and-connectivity)).
+
+- **An old absence no longer counts toward a removal** (BUG-102): the scheduler removes a model from a provider's list at its second absence in a row, and the count had no date. In production, the absence that made the first pass of 4.14.0 the second one was twelve days old. Each absence is now dated: it adds to the previous one only when that one was counted less than 72 hours earlier, and a count written before this release (a bare number) starts again at 1. A manual **Discover** still removes at once, and a pass that drops more than half of a list is still refused ([monitoring](docs/guide/monitoring.md#jobs)).
+
+- **A tool agy refuses no longer answers "invalid JSON"** (BUG-100): headless agy refuses a tool it cannot ask permission for and returns a valid payload with an empty answer; the gateway answered `CLI 'agy' returned invalid JSON` and quoted agy's output. It now says that agy refused the tools its answer needed, naming them (`write_file`, `read_file`, `command`), or that agy returned an empty answer; agy's output is no longer quoted. The status (`502`) is unchanged.
+
+- **`scripts/smoke_consumers.py` called an unlimited key limited** (BUG-101): with `--allow-unlimited-key`, the `models` line now says `key not limited (accepted by --allow-unlimited-key)`.
+
+### Security
+
+- **Plugboard removes what each agy call leaves in agy's store** (BUG-97): agy records every conversation, prompt in clear, under its home (`~/.gemini/antigravity-cli`), about 8 files and 450 KB per call, outside any retention. After each agy call (answered, failed, timed out or cancelled, streamed or not), once the agy process has ended, the gateway removes that call's entries in `conversations/`, `brain/`, `annotations/` and `presence/`, found by the conversation id agy gives in its own output. A call cut before agy gave its id removes what appeared in those folders during its run, never while another agy call of the gateway is still running. The shared summaries (`conversation_summaries.db`, `jetbox_summaries_proto.pb`) are removed when no agy call is running. The directory itself, `antigravity-oauth-token` (agy's sign-in) and everything else in it are never touched; `implicit/`, `log/`, `cache/` and `crashes/` stay. A purge that fails is logged and never fails the answer. Not covered: what agy stored before this release (remove it once, by hand), and an agy run by hand with the gateway's home during a cut call ([providers](docs/guide/providers-and-subscriptions.md#subscriptions-through-an-official-cli)).
 
 ## [4.14.0] — 2026-11-14
 
