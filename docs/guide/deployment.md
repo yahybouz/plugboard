@@ -155,6 +155,19 @@ Protected providers (catalog presets, built-in presets with an HTTP(S) URL, and 
 - To upgrade: back up `data/`, pull the new version, run `make setup` (or rebuild the image), restart, and check `/health`. To go back, follow the [rollback runbook](../runbooks/rollback-release.md).
 - To move the install to another machine, follow the [move runbook](../runbooks/move-install.md).
 
+## Checks after a deployment
+
+Each script reads its target and its key from the environment, never prints the key, does not follow a redirect, and exits `0` only when every check passed. They do not replace one another:
+
+| Script | Key | What it proves | Environment |
+|---|---|---|---|
+| [`scripts/smoke_consumers.py`](../../scripts/smoke_consumers.py) | a dedicated client key | The version in service and its readiness, a limited key and its models, a chat (plain, streamed, structured output unless only CLI subscription routes serve the model), embeddings when a model is declared; the smoke of the [production gate](../runbooks/prod-gate.md) | `PLUGBOARD_SMOKE_KEY`, `--url`, `--expect-version` |
+| [`scripts/recette_passerelle.py`](../../scripts/recette_passerelle.py) | a client key | A client's path on one model: `/health`, `/health/ready`, the model in `/v1/models`, one chat; the MCP endpoint when `PLUGBOARD_MCP_URL` is set | `PLUGBOARD_URL`, `PLUGBOARD_API_KEY`, `PLUGBOARD_RECETTE_MODEL` |
+| [`scripts/recette_acces.py`](../../scripts/recette_acces.py) | a client key | Every provider the key sees answers by the API, by the API in a stream and by the MCP `chat` tool over stdio, and the MCP lists the API's models ([MCP guide](mcp.md)) | `PLUGBOARD_URL`, `PLUGBOARD_KEY`, `PLUGBOARD_MCP_PYTHON` |
+| [`scripts/recette_ollama_off.py`](../../scripts/recette_ollama_off.py) | a client key | Ollama is off: no `ollama:` model listed, a chat or embeddings call to one is refused, `/health/ready` is `200`; nothing is billed | `PLUGBOARD_URL`, `PLUGBOARD_SMOKE_KEY` |
+| [`scripts/recette_services.py`](../../scripts/recette_services.py) | the admin key | `/health`, `/health/ready` and every background job of the [Jobs](monitoring.md#jobs) page running and healthy; read-only | `PLUGBOARD_RECETTE_URL`, `PLUGBOARD_RECETTE_ADMIN_KEY`, `PLUGBOARD_RECETTE_TOTP` |
+| [`scripts/bench_latence.py`](../../scripts/bench_latence.py) | a client key | The [latency targets](performance-targets.md): each CLI alone, then the gateway with and without stream; real calls | `PLUGBOARD_BENCH_URL`, `PLUGBOARD_BENCH_KEY` |
+
 ## MCP server
 
 The MCP server is a separate process; see [MCP server](mcp.md). In SSE or HTTP mode it requires `PLUGBOARD_MCP_TOKEN` and listens on `127.0.0.1:MCP_PORT` (8766). Never expose it, through a reverse proxy or a non-loopback `MCP_HOST`, without that token: every caller would act with its client key. When remote clients need it, keep the token secret, serve it over TLS, and list the public name in `PLUGBOARD_MCP_ALLOWED_HOSTS` and `PLUGBOARD_MCP_ALLOWED_ORIGINS` ([network transports](mcp.md#network-transports-sse-http)). The admin key is never used in these modes.
