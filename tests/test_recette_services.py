@@ -209,3 +209,13 @@ def test_a_control_character_inside_a_secret_is_refused_without_echo(
     assert name in out.err and "not shown" in out.err
     assert KEY[:8] not in shown and KEY[8:] not in shown and "Traceback" not in shown
     assert gateway.methods == []  # refused before any request
+
+
+@pytest.mark.parametrize("url", ["http://[::1", "http://127.0.0.1:notaport", "gateway"])
+def test_a_malformed_address_is_a_usage_error_without_a_trace(monkeypatch, capsys, url):
+    monkeypatch.setenv("PLUGBOARD_RECETTE_URL", url)
+    monkeypatch.setenv("PLUGBOARD_RECETTE_ADMIN_KEY", KEY)
+    assert recette.main([]) == 2
+    out = capsys.readouterr()
+    assert "PLUGBOARD_RECETTE_URL" in out.err and "Traceback" not in out.err
+    assert KEY not in out.out + out.err

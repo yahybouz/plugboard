@@ -330,3 +330,16 @@ def test_a_call_that_breaks_is_a_failure_and_shows_no_secret(
     assert [r["summary"]["errors"] for r in rows] == [["ValueError"], ["ValueError"]]
     assert KEY not in shown.out + shown.err + out.read_text()
     assert "Traceback" not in shown.err
+
+
+@pytest.mark.parametrize("url", ["http://[::1", "http://127.0.0.1:notaport", "gateway"])
+def test_a_malformed_address_is_a_usage_error_without_a_trace(monkeypatch, capsys, url):
+    monkeypatch.setenv("PLUGBOARD_BENCH_URL", url)
+    monkeypatch.setenv("PLUGBOARD_BENCH_KEY", KEY)
+    rc = bench.main(
+        ["--target", TARGET, "--rounds", "1", "--concurrency", "1", "--no-cli"]
+    )
+    shown = capsys.readouterr()
+    assert rc == 2
+    assert "PLUGBOARD_BENCH_URL" in shown.err and "Traceback" not in shown.err
+    assert KEY not in shown.out + shown.err

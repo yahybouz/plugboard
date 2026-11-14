@@ -309,6 +309,16 @@ def render_table(rows: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _valid_url(url: str) -> bool:
+    """An http(s) address with a host and a readable port."""
+    try:
+        parts = urlsplit(url)
+        parts.port  # raises on a port that is not a number
+    except ValueError:
+        return False
+    return parts.scheme in ("http", "https") and bool(parts.hostname)
+
+
 def _unusable_secret(value: str) -> bool:
     """A space or a control character inside a secret: it cannot be a header
     value, and Python's refusal would print it."""
@@ -398,6 +408,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(
             f"error: set {args.url_env} and {args.key_env}, give at least one --target, "
             "--rounds >= 1 and --concurrency levels >= 1",
+            file=sys.stderr,
+        )
+        return 2
+    if not _valid_url(url):
+        print(
+            f"error: {args.url_env} is not an http(s) address (value not shown)",
             file=sys.stderr,
         )
         return 2

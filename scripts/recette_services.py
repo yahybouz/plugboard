@@ -85,6 +85,16 @@ def _get(
         conn.close()
 
 
+def _valid_url(url: str) -> bool:
+    """An http(s) address with a host and a readable port."""
+    try:
+        parts = urlsplit(url)
+        parts.port  # raises on a port that is not a number
+    except ValueError:
+        return False
+    return parts.scheme in ("http", "https") and bool(parts.hostname)
+
+
 def _unusable_secret(value: str) -> bool:
     """A space or a control character inside a secret: it cannot be a header
     value, and Python's refusal would print it."""
@@ -155,6 +165,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not url or not key or not expected:
         print(
             f"error: set {args.url_env} and {args.key_env}; --expect needs a job",
+            file=sys.stderr,
+        )
+        return 2
+    if not _valid_url(url):
+        print(
+            f"error: {args.url_env} is not an http(s) address (value not shown)",
             file=sys.stderr,
         )
         return 2
