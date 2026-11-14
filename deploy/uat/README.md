@@ -25,11 +25,11 @@ A change to a file here takes effect only once a root operator installs it on th
 
 | File here | SHA-256 | Copied | Drift check on the host |
 |---|---|---|---|
-| `compose.yml` | `79ca733f094aec680ef516c91236aa9bf78cf1de684b8e1fc9df70d27aabf1cf` | 2026-11-14 | `sha256sum /srv/plugboard/compose.yml` |
+| `compose.yml` | `8f5a1e0a382ab5263f8f4ec035149697ffc5573a489713d3e512def2e41f2d40` | 2026-11-14 | `sha256sum /srv/plugboard/compose.yml` |
 | `seccomp-plugboard-userns.json` | `35afc90b6fbd72bcd6d6af1df24bc1250cf6c196d1e01f384cf2688930b74ed5` | 2026-11-12 | `sha256sum /srv/plugboard/seccomp/plugboard-userns.json` |
 | `apparmor-plugboard-userns` | `74b76daa402cbc29fc70caa75b162cecf15fe525e450bdf361318a30964a99e1` | 2026-11-12 | `sha256sum /etc/apparmor.d/plugboard-userns` |
 
-Since 2026-11-14 `compose.yml` is the Ollama-off version (`OLLAMA_ENABLED: "false"`, no relay, no embedding model). Until an operator copies it to the host, the host file still has the previous digest `b154b0ef238d1d84ea3c5702a2a336397f971dccc5f33e15060aecf00aba9f36`. To use Ollama again on the UAT: set `OLLAMA_ENABLED: "true"`, `OLLAMA_URL` (the relay), `PLUGBOARD_EMBEDDING_MODELS` and `PLUGBOARD_OLLAMA_TOKEN` in `secrets/runtime.env`.
+Since 2026-11-14 `compose.yml` is the 4.14.0 version: Ollama off (`OLLAMA_ENABLED: "false"`, no relay, no embedding model) and the model catalogue and price schedulers on, without inference probes (INC-2). Until an operator copies it to the host, the host file still has the previous digest `b154b0ef238d1d84ea3c5702a2a336397f971dccc5f33e15060aecf00aba9f36`. To use Ollama again on the UAT: set `OLLAMA_ENABLED: "true"`, `OLLAMA_URL` (the relay), `PLUGBOARD_EMBEDDING_MODELS` and `PLUGBOARD_OLLAMA_TOKEN` in `secrets/runtime.env`.
 
 When the host file changes, copy it here again in the same change and update its digest and date.
 
