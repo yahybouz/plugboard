@@ -154,6 +154,7 @@ Protected providers (catalog presets, built-in presets with an HTTP(S) URL, and 
 - Back up `data/` (and `ENCRYPTION_KEY` if it is set in the environment, or `data/.encryption_key` if it was generated). Without the encryption key, stored provider credentials cannot be decrypted: if the server starts with another key, its boot log names every stored secret it cannot decrypt (critical level), the providers concerned are turned off until the right key is restored or their key is entered again (audit `provider.secret_unreadable`, alert `provider_secret_unreadable`), and their stored key is never sent.
 - To upgrade: back up `data/`, pull the new version, run `make setup` (or rebuild the image), restart, and check `/health`. To go back, follow the [rollback runbook](../runbooks/rollback-release.md).
 - To move the install to another machine, follow the [move runbook](../runbooks/move-install.md).
+- The production instance: `deploy/ovh/compose.yml` is the reference model, and the instance in service departs from it on the points listed in [the production instance runbook](../runbooks/production-instance.md) (no published port, an existing network, the model catalogue scheduler off), which also gives its backup and rollback.
 
 ## Checks after a deployment
 
