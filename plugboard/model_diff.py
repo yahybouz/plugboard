@@ -10,8 +10,10 @@ with what the key can use, which is a first population, not a change.
 Rules:
 - a discovery that failed or returned nothing changes nothing;
 - the scheduler removes a model only after ``PLUGBOARD_MODEL_REMOVAL_PASSES``
-  (default 2) valid discoveries in a row without it; a manual discover is an
-  explicit admin action and removes at once;
+  (default 2) valid discoveries in a row without it; an absence adds to the
+  previous one only when that one was counted less than ``ABSENCE_MAX_AGE_H``
+  (72) hours earlier, otherwise the count starts again at 1; a manual
+  discover is an explicit admin action and removes at once;
 - a scheduler pass that would drop more than half of the list is treated as
   an anomaly of the provider and not applied;
 - ``default_model`` and ``pinned_models`` are never removed;
@@ -26,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -35,6 +38,36 @@ log = logging.getLogger(__name__)
 
 MODES = ("scheduler", "manual")
 MAX_DROP_RATIO = 0.5
+# An absence adds to the previous one only when that one is more recent than
+# this; an older count (or one written without a date) starts again at 1.
+ABSENCE_MAX_AGE_H = 72
+
+
+def _now() -> datetime:
+    """The current time; tests replace it."""
+    return datetime.now(timezone.utc)
+
+
+def _previous_count(entry: Any, now: datetime) -> int:
+    """Absences in a row still in force for one model, 0 when none.
+
+    ``entry`` is ``{"count": n, "at": "<ISO 8601 UTC>"}``. A count without a
+    valid date (the format before 4.14.1 kept a bare integer), dated in the
+    future or older than ``ABSENCE_MAX_AGE_H`` hours does not count.
+    """
+    if not isinstance(entry, dict):
+        return 0
+    try:
+        count = int(entry.get("count") or 0)
+        at = datetime.fromisoformat(str(entry.get("at") or ""))
+    except (TypeError, ValueError):
+        return 0
+    if at.tzinfo is None:
+        return 0
+    age = now - at
+    if not timedelta(0) <= age < timedelta(hours=ABSENCE_MAX_AGE_H):
+        return 0
+    return max(0, count)
 
 
 def removal_passes() -> int:
@@ -47,7 +80,7 @@ def _state_path() -> Path:
     return data_dir() / "catalog" / "model_absences.json"
 
 
-def _read_state() -> Dict[str, Dict[str, int]]:
+def _read_state() -> Dict[str, Dict[str, Any]]:
     path = _state_path()
     if not path.exists():
         return {}
@@ -59,7 +92,7 @@ def _read_state() -> Dict[str, Dict[str, int]]:
     return data if isinstance(data, dict) else {}
 
 
-def _write_state(state: Dict[str, Dict[str, int]]) -> None:
+def _write_state(state: Dict[str, Dict[str, Any]]) -> None:
     from plugboard.storage import atomic_write_json
 
     path = _state_path()
@@ -142,6 +175,7 @@ def apply(
         e["id"]: e for e in (discovered or []) if isinstance(e, dict) and e.get("id")
     }
     passes = removal_passes()
+    now = _now()
 
     with _lock(_state_path()):
         state = _read_state()
@@ -179,12 +213,12 @@ def apply(
                     result.removed.append(mid)
                     absences.pop(mid, None)
                     continue
-                count = int(absences.get(mid, 0)) + 1
+                count = _previous_count(absences.get(mid), now) + 1
                 if count >= passes:
                     result.removed.append(mid)
                     absences.pop(mid, None)
                 else:
-                    absences[mid] = count
+                    absences[mid] = {"count": count, "at": now.isoformat()}
                     result.pending_removal[mid] = count
                     keep_missing.append(mid)
             for mid in new_ids:

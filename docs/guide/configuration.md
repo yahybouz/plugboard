@@ -205,7 +205,7 @@ The catalog is downloaded with each price update. A download that fails, is inva
 | `MODEL_AVAILABILITY_DAILY_HOUR_UTC` | `PRICING_DAILY_HOUR_UTC` + 1 | Hour (UTC) of the daily catalog refresh. |
 | `PLUGBOARD_MODEL_AVAILABILITY_INTERVAL_H` | value of `PLUGBOARD_PRICING_REFRESH_INTERVAL_H` (6) | Hours between model-list refreshes, 1 to 24; `0` = once a day at `MODEL_AVAILABILITY_DAILY_HOUR_UTC`. The older `MODEL_AVAILABILITY_INTERVAL_H` is still read. |
 | `PLUGBOARD_MODEL_AVAILABILITY_CLI_INTERVAL_H` | `24` | Minimum hours between two refreshes of a CLI provider (each one spawns the CLI), 1 to 24. A manual run ignores it. |
-| `PLUGBOARD_MODEL_REMOVAL_PASSES` | `2` | Refreshes in a row without a model before it is removed from a provider's list (minimum 1). |
+| `PLUGBOARD_MODEL_REMOVAL_PASSES` | `2` | Refreshes in a row without a model before it is removed from a provider's list (minimum 1). An absence noted more than 72 hours before the next one no longer counts. |
 | `MODEL_AVAILABILITY_BOOTSTRAP_DELAY_S` | `8` | Delay after startup before the first refresh. |
 | `MODEL_AVAILABILITY_UPDATE_TIMEOUT_S` | `900` | Timeout of one refresh. |
 | `PLUGBOARD_MODEL_REFRESH_PROBE_KINDS` | empty | Which CLIs and Ollama to probe with a completion, at startup and during the refresh: `codex,claude,gemini,agy,ollama`, or `all` for every kind. Empty (the default) runs no probe: the CLIs keep their saved lists, the agy account list (`agy models`) and Ollama's installed list (`/api/tags`) are still synced, without running a model. A probe spends the CLI subscription's quota, and on Ollama loads each installed model in turn. Without `codex`, `claude` or `gemini` here, the dashboard's *Discover* keeps that CLI's saved list. |

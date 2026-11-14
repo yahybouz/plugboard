@@ -11,11 +11,12 @@ serves. Ten names that agy serves sat in the same store.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 import plugboard.model_availability as ma
-from plugboard import cli_subprocess
+from plugboard import cli_subprocess, model_diff
 from plugboard import model_quarantine as mq
 from tests.conftest import _setup_providers
 
@@ -210,16 +211,86 @@ def test_a_success_lifts_the_entry_of_its_own_provider_only(tmp_path):
     assert mq.get_quarantined_suffixes(qfile, provider_id="b") == {"gone"}
 
 
-async def test_a_provider_s_own_refusal_still_removes_its_model(prod):
+TODAY = datetime(2026, 11, 14, 2, 30, tzinfo=timezone.utc)
+
+
+def _clock(monkeypatch, at: datetime) -> None:
+    """One clock for the pass: the CLI schedule and the absence count."""
+
+    class _Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return at if tz is None else at.astimezone(tz)
+
+    monkeypatch.setattr(ma, "datetime", _Clock)
+    monkeypatch.setattr(model_diff, "_now", lambda: at)
+
+
+def _absences(pfile) -> dict:
+    return json.loads(
+        (pfile.parent / "catalog" / "model_absences.json").read_text(encoding="utf-8")
+    )
+
+
+@pytest.mark.parametrize(
+    "counted_on_02_11",
+    [1, {"count": 1, "at": "2026-11-02T02:29:07+00:00"}],
+    ids=["undated-count-of-production", "dated-count"],
+)
+async def test_the_absence_counted_on_02_11_is_not_the_first_absence_of_today_s_pass(
+    prod, monkeypatch, counted_on_02_11
+):
+    """The client's rule: an old absence count is not the first absence of a
+    pass of today. claude-haiku-4-5 is refused by its own provider today and
+    had been counted absent on 02/11: today's pass counts it once and keeps it."""
+    pfile, qfile = prod
+    _clock(monkeypatch, TODAY)
+    (pfile.parent / "catalog" / "model_absences.json").write_text(
+        json.dumps({CLAUDE: {m: counted_on_02_11 for m in LOST}}), encoding="utf-8"
+    )
+    mq.record_terminal_unavailable(
+        "claude-haiku-4-5", reason="model_not_found", provider_id=CLAUDE, path=qfile
+    )
+
+    report = await ma.refresh_all_model_catalogs(
+        pass_kind="bootstrap", quarantine_path=qfile
+    )
+
+    assert set(LOST) <= set(_saved(pfile, CLAUDE))
+    assert report["last_changes"]["providers"][CLAUDE]["pending_removal"] == {
+        "claude-haiku-4-5": 1
+    }
+    assert _absences(pfile)[CLAUDE] == {
+        "claude-haiku-4-5": {"count": 1, "at": TODAY.isoformat()}
+    }
+
+
+async def test_a_provider_s_own_refusal_still_removes_its_model(prod, monkeypatch):
     """The rule itself stays: a model its own provider refuses leaves that
-    provider's list at the second absence, and only that model."""
+    provider's list at the second absence, and only that model. The count of
+    02/11 does not count: today's pass is the first absence, the pass of the
+    next day (the CLI catalogue is read every 24 hours) is the second."""
     pfile, qfile = prod
     mq.record_terminal_unavailable(
         "claude-haiku-4-5", reason="model_not_found", provider_id=CLAUDE, path=qfile
     )
 
+    _clock(monkeypatch, TODAY)
     await ma.refresh_all_model_catalogs(pass_kind="bootstrap", quarantine_path=qfile)
 
+    assert set(LOST) <= set(_saved(pfile, CLAUDE))
+    assert _absences(pfile)[CLAUDE] == {
+        "claude-haiku-4-5": {"count": 1, "at": TODAY.isoformat()}
+    }
+
+    _clock(monkeypatch, TODAY + timedelta(hours=24, minutes=5))
+    report = await ma.refresh_all_model_catalogs(
+        pass_kind="scheduled", quarantine_path=qfile
+    )
+
+    assert report["last_changes"]["providers"][CLAUDE]["removed"] == [
+        "claude-haiku-4-5"
+    ]
     saved = _saved(pfile, CLAUDE)
     assert "claude-haiku-4-5" not in saved
     assert {"claude-sonnet-5-5", "claude-haiku-5-5"} <= set(saved)
