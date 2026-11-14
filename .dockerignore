@@ -78,8 +78,6 @@ sdk/
 .git/
 .gitignore
 .gitattributes
-.github/
-.gitlab-ci.yml
 .gitleaks.toml
 .pre-commit-config.yaml
 

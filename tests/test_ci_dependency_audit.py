@@ -62,9 +62,3 @@ def test_every_lock_is_audited_in_ci(lock):
 @pytest.mark.parametrize("lock", LOCKS)
 def test_every_lock_is_audited_by_make_audit(lock):
     assert lock in _audited_by_make()
-
-
-@pytest.mark.parametrize("path", [".gitlab-ci.yml", ".github/workflows/ci.yml"])
-def test_remote_ci_definitions_audit_every_lock(path):
-    # Kept in step with ci/pipeline.json, which translates them.
-    assert _loop_locks((ROOT / path).read_text(encoding="utf-8")) == set(LOCKS)
