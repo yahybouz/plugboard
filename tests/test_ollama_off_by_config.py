@@ -322,3 +322,38 @@ async def test_ready_stays_200_and_reports_ollama_as_not_configured(
     assert body["checks"]["ollama"] == "not_configured"
     assert no_daemon == []
     readiness.reset_cache()
+
+
+# ── Review T1: nothing is written, the daemon stays untouched ───────────────
+
+
+async def test_resync_does_not_call_the_daemon_when_off_by_config(
+    app_client, config_off, no_daemon
+):
+    await ollama.resync_models()
+    assert no_daemon == []
+
+
+async def test_the_switch_and_the_edit_route_do_not_reach_the_daemon(
+    app_client, config_off, no_daemon
+):
+    client, _auth, _key, _calls = app_client
+    admin = {"Authorization": f"Bearer {ADMIN_KEY}"}
+    resp = await client.put(
+        "/admin/ollama/switch", json={"enabled": True}, headers=admin
+    )
+    assert resp.status_code in (200, 409), resp.text
+    resp = await client.put(
+        "/providers/ollama", json={"is_active": True}, headers=admin
+    )
+    assert resp.status_code < 500, resp.text
+    assert no_daemon == []
+
+
+def test_the_edit_form_sends_back_the_stored_switch(app_client, config_off):
+    from pathlib import Path
+
+    provider = config.get_provider("ollama")
+    assert provider["stored_is_active"] is True
+    source = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text()
+    assert "p.disabled_by_config === true" in source

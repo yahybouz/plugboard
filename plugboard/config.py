@@ -338,11 +338,8 @@ def load_providers() -> List[Dict[str, Any]]:
         for p in providers:
             if p.get("id") == ollama.PROVIDER_ID:
                 # In memory only: the stored switch waits for the variable.
-                p.update(
-                    stored_is_active=p.get("is_active", True) is not False,
-                    is_active=False,
-                    disabled_by_config=True,
-                )
+                p.setdefault("stored_is_active", p.get("is_active", True) is not False)
+                p.update(is_active=False, disabled_by_config=True)
     return providers
 
 

@@ -521,6 +521,8 @@ async def resync_models() -> None:
     """
     from plugboard.config import get_provider
 
+    if disabled_by_config():
+        return  # OLLAMA_ENABLED=false: the daemon is never called (PLU-53)
     provider = get_provider(_PROVIDER_ID)
     if provider is not None:
         await _sync_models(provider)
