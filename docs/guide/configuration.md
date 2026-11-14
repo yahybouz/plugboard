@@ -49,7 +49,7 @@ A completed rotation also signs out every dashboard session and forgets the brow
 | `HOST` | `0.0.0.0` | Interface `run.py` listens on. `.env.example` sets `127.0.0.1` (local install). With `API_KEY` and `ADMIN_KEY` both empty, `run.py` refuses any value other than `127.0.0.1`, `localhost` or `::1` ([details](troubleshooting.md#api_key-and-admin_key-are-both-empty-refusing-to-listen-on-0000)). |
 | `PORT` | `8765` | Listening port. |
 | `RELOAD` | `false` | `true` enables hot reload (`make dev` sets it). |
-| `PLUGBOARD_DATA` | `data` | Directory for all state (JSON files, SQLite databases, pricing grids). The pricing scheduler's `cb_state.json` always lives in the `data/` directory of the installation. |
+| `PLUGBOARD_DATA` | `data` | Directory for all state (JSON files, SQLite databases, pricing grids, the pricing scheduler's `cb_state.json`). |
 | `PLUGBOARD_BIND_HOST` | set by `run.py` | Records the interface the server really listens on; used by auto-login. Do not set it yourself. |
 | `PLUGBOARD_SKIP_DOTENV` | empty | `1` stops the configuration module from loading `.env` (used by the test suite). |
 | `RATE_LIMIT` | `60` | Requests per minute per client IP address, all routes. `0` disables it. |
@@ -112,6 +112,11 @@ A completed rotation also signs out every dashboard session and forgets the brow
 The removed connector's `OPENCLAW_URL`, `OPENCLAW_KEY`, `OPENCLAW_MODEL` and
 `OPENCLAW_NAME` variables are ignored; they create no provider. See the
 [manual migration guide](openclaw-removal.md) for existing installations.
+
+Ollama is not a default provider: this release serves models through the CLI
+subscriptions (`claude`, `codex`, `agy`, `gemini`). With the default
+`OLLAMA_ENABLED=auto`, a daemon that answers on `OLLAMA_URL` at startup is
+still registered; set `OLLAMA_ENABLED=false` to keep it out.
 
 | Variable | Default | Description |
 |---|---|---|
@@ -261,7 +266,6 @@ See [typed decisions](decisions.md) and the [local decision runtime](decisions-r
 | Variable | Default | Description |
 |---|---|---|
 | `PLUGBOARD_REGISTRY_PATH` | `data/registry.json` | Update registry served to client projects over MCP. Format: `plugboard/registry.example.json`. |
-| `PLUGBOARD_JOB_PYTHON` | the server's interpreter | Python used by scheduled jobs (pricing, model refresh). |
 | `GEMINI_OAUTH_CLIENT_ID`, `GEMINI_OAUTH_CLIENT_SECRET` | empty | Google OAuth desktop client used to sign in to Gemini from the dashboard and to refresh Gemini CLI tokens. Not shipped with Plugboard. |
 
 ## Data retention
@@ -302,5 +306,8 @@ These are read by `scripts/run_mcp.py` and the maintenance scripts, not by the s
 | `PLUGBOARD_SMOKE_KEY` | empty | Client key used by the post-deployment smoke `scripts/smoke_consumers.py`: a dedicated key whose `allowed_models` holds a local chat model and, where embeddings are served, the identity of `PLUGBOARD_EMBEDDING_MODELS` (an unlimited key fails the smoke). It is never printed. |
 | `PLUGBOARD_SMOKE_MODEL` | empty | Chat model the smoke calls, as `/v1/models` lists it for that key (`--model` overrides it). |
 | `PLUGBOARD_SMOKE_EMBEDDING_MODEL` | empty | Embedding model the smoke checks; it must be declared for the key. Empty: the first one the key may use; when there is none, the embeddings check is skipped. |
+| `PLUGBOARD_RECETTE_MODEL` | empty | Model called by the client acceptance run `scripts/recette_passerelle.py` (required; with `PLUGBOARD_URL` and the client key `PLUGBOARD_API_KEY`). Its chat step sends one real request to the model. Exit codes: `0` every check passed, `1` a check failed, `2` configuration missing. |
+| `PLUGBOARD_RECETTE_TIMEOUT` | `60` | Timeout of each request of `scripts/recette_passerelle.py`, in seconds. |
+| `PLUGBOARD_MCP_URL` | empty | Streamable HTTP endpoint of the MCP server that `scripts/recette_passerelle.py` also checks (with `PLUGBOARD_MCP_TOKEN`). Empty: the MCP step is reported as not tested. |
 
 

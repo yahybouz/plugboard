@@ -185,21 +185,24 @@ curl -s -X POST -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/admi
 ```
 
 The watchdog checks every `WATCHDOG_INTERVAL` seconds (default 30). After
-`WATCHDOG_FAILURES` consecutive failures (default 3) it tries a restart,
-limited by `WATCHDOG_RESTART_COOLDOWN` (default 120 s) and
-`WATCHDOG_MAX_RESTARTS` per hour (default 5). Restarts call an
-operator-provided launcher script (see `restart_provider` in
-`plugboard/provider_watchdog.py`); without one, a restart fails with
-`Launcher script not found` and you must restart the upstream service yourself.
+`WATCHDOG_FAILURES` consecutive failures (default 3) of a provider that is
+not *sovereign*, it records a restart attempt, limited by
+`WATCHDOG_RESTART_COOLDOWN` (default 120 s) and `WATCHDOG_MAX_RESTARTS` per
+hour (default 5). It never runs a launcher script: the attempt is recorded as
+failed (`Provider restart not supported; native lifecycle is managed
+externally`, see `restart_provider` in `plugboard/provider_watchdog.py`) and
+counts towards the `provider_down` alert. Restart the upstream service
+yourself.
 
 ## Mitigation and rollback
 
-1. Restart a self-hosted upstream through the watchdog (only works when a
-   launcher script is installed), then check the restart history:
+1. Restart a self-hosted upstream with its own supervisor (Docker, systemd,
+   or the CLI's login for a CLI provider). Plugboard does not restart it:
+   `POST /admin/watchdog/<provider_id>/restart` only records the attempt and
+   answers `500` with `Provider restart not supported; native lifecycle is
+   managed externally`. The restart history shows the watchdog's attempts:
 
    ```bash
-   curl -s -X POST -H "Authorization: Bearer $ADMIN_KEY" \
-     http://localhost:8765/admin/watchdog/<provider_id>/restart
    curl -s -H "Authorization: Bearer $ADMIN_KEY" \
      "http://localhost:8765/admin/watchdog/restarts?hours=24"
    ```

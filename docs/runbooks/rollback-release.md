@@ -6,8 +6,14 @@ The procedure depends on how the version was deployed:
 | Deployment | Goes back with | Section |
 |---|---|---|
 | UAT host, deployed by `ci deployer` | `ci deployer plugboard <previous sha>`, which reuses the previous image | [4a](#4a-uat-host-ci-deployer) |
-| Private host `deploy/ovh/` | the previous image, kept under its own tag before the upgrade | [4b](#4b-private-host-deployovh) |
+| Former private host `deploy/ovh/` (end of life) | the previous image, kept under its own tag before the upgrade | [4b](#4b-private-host-deployovh) |
 | Source install, other Docker deployments | the previous git tag, or the previous image tag | [4c](#4c-source-install-and-other-docker-deployments) |
+
+The production instance runs on a private host whose deployment files are
+not in `deploy/`; this runbook does not give its commands.
+
+`ci` is the local CI tool of the UAT host (`python3 /srv/dev/.ci/outils/ci.py`,
+subcommands `etat`, `lancer`, `deployer`). There is no remote CI pipeline.
 
 Every way ends with the same check: `scripts/smoke_consumers.py` green
 against the version you rolled back to ([step 6](#6-verify)).
@@ -104,9 +110,9 @@ curl -s -H "Authorization: Bearer $ADMIN_KEY" \
 
 The data directory (`data/` by default, or `PLUGBOARD_DATA`; `/app/data` in
 the image) holds providers, client keys, usage, pricing grids and SQLite
-databases. On the private host, take a cold backup (it stops the gateway for
-a few seconds, archives data, CLI logins and runtime configuration, and
-restarts it):
+databases. On the private host, take a cold backup (it stops the gateway,
+allowing it up to 40 seconds to stop, archives data, CLI logins and runtime
+configuration, encrypts the archive with `age`, and restarts the gateway):
 
 ```bash
 cd /opt/plugboard
@@ -175,6 +181,9 @@ The UAT volumes belong to the host owner: if the previous version cannot read
 the data (step 5), escalate instead of restoring them yourself.
 
 ### 4b. Private host (`deploy/ovh/`)
+
+This host is end of life (see [deploy/ovh/README.md](../../deploy/ovh/README.md)):
+the steps below apply only while it still runs.
 
 `/etc/plugboard/runtime.env` is readable by root only, so every
 `docker compose` command runs with `sudo`, and the image is passed on each
