@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **A client key lists only models it can call now** (lot B): `GET /v1/models` for a client key leaves out a model in quarantine or whose last probe failed; the admin key keeps the full view. The MCP `list_models` tool reads the same route.
+
+- **Quota, refused model and timeout carry a `code`** (lot B, BUG-67): a provider or CLI subscription quota answers `429` with `"code": "quota_exhausted"`, a model the key's `allowed_models` refuses `403` with `"code": "forbidden_model"`, and a provider or CLI that exceeds its deadline `503` with `"code": "provider_timeout"` and `Retry-After: 10` (a CLI timeout answered `502` before, against the documented `503`). API contract 2.2.0 (`docs/api/openapi.json`, `docs/api/mcp.json`): the three codes in `ErrorResponse.code`.
+
 ## [4.13.0] — 2026-11-13
 
 ### Added

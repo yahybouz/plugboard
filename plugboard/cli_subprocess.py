@@ -75,6 +75,8 @@ class CliSubprocessError(RuntimeError):
             subscription does not serve the model (codex with a ChatGPT
             account, BUG-78; decided like ``request_too_long``, never set with
             ``quota``): no other provider is tried, nothing is quarantined.
+        timed_out: the CLI did not finish within its deadline (BUG-67): the
+            client gets 503 with Retry-After, as for an HTTP provider's timeout.
     """
 
     def __init__(
@@ -90,8 +92,10 @@ class CliSubprocessError(RuntimeError):
         retry_after: Optional[int] = None,
         request_too_long: bool = False,
         model_unsupported: bool = False,
+        timed_out: bool = False,
     ):
         super().__init__(message)
+        self.timed_out = timed_out
         self.exit_code = exit_code
         self.stderr = stderr
         self.pid = pid
@@ -1829,6 +1833,7 @@ async def complete(
                     pid=proc.pid,
                     provider_name=backend.command,
                     model_id=model,
+                    timed_out=True,
                 ) from None
             finally:
                 # Timeout, cancellation or any error: the semaphore slot and
