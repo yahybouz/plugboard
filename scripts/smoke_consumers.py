@@ -35,7 +35,7 @@ the project's virtualenv, or inside the container.
 Usage:
   PLUGBOARD_SMOKE_KEY=... python3 scripts/smoke_consumers.py --url http://127.0.0.1:8765
   # Without --model / PLUGBOARD_SMOKE_MODEL the first model of a CLI provider
-  # (Codex:, claude-code:, Gemini:, Antigravity:) that the key may use is chosen;
+  # (Codex:, claude-code:, Gemini:, antigravity-via-agy-cli:) that the key may use is chosen;
   # an ollama: model never is. Name one to check another: PLUGBOARD_SMOKE_MODEL=Codex:<model>
 
 Exit status: 0 every check passed (SKIP allowed), 1 a check failed or the
@@ -59,7 +59,15 @@ KEY_ENV = "PLUGBOARD_SMOKE_KEY"
 MODEL_ENV = "PLUGBOARD_SMOKE_MODEL"
 EMBEDDING_ENV = "PLUGBOARD_SMOKE_EMBEDDING_MODEL"
 # Default chat model: a CLI provider's, in this order. Ollama is off by default.
-CLI_PREFIXES = ("codex:", "claude-code:", "gemini:", "antigravity:", "agy:")
+# agy is published under its preset's slug, antigravity-via-agy-cli.
+CLI_PREFIXES = (
+    "codex:",
+    "claude-code:",
+    "gemini:",
+    "antigravity-via-agy-cli:",
+    "antigravity:",
+    "agy:",
+)
 
 
 def pick_default_model(rows: list, allowed: Optional[list]) -> str:

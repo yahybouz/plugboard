@@ -49,7 +49,8 @@ minutes of random delay) stops and restarts the gateway then.
   enforced; a code is accepted once).
 - A **smoke key**: a client key created in the dashboard for the gate only,
   with a small monthly limit, whose `allowed_models` holds one chat model
-  of a CLI subscription provider (`claude-code:`, `Codex:`, `Antigravity:`)
+  of a CLI subscription provider (`claude-code:`, `Codex:`,
+  `antigravity-via-agy-cli:`)
   that `GET /v1/models` lists for it. Ollama is off in
   `deploy/ovh/compose.yml` (`OLLAMA_ENABLED=false`, no embedding identity):
   the key holds no `ollama:*` model, and the smoke's embeddings step is a

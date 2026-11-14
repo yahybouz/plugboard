@@ -493,6 +493,20 @@ def test_without_a_model_the_first_cli_model_of_the_key_is_chosen(gateway):
     assert f"model={MODEL}" in proc.stdout
 
 
+def test_an_agy_model_is_chosen_under_the_id_the_gateway_publishes(gateway):
+    """The agy preset is published as ``antigravity-via-agy-cli:<model>``
+    (the provider's name, slugified), never as ``Antigravity:``."""
+    server, gw = gateway
+    agy = "antigravity-via-agy-cli:gemini-3.8-flash-low"
+    gw.behavior["models"] = ["ollama:other", agy]
+    gw.behavior["me_allowed"] = [agy]
+
+    proc = _smoke(server, model=None)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"model={agy}" in proc.stdout
+
+
 def test_an_ollama_model_is_never_chosen_by_default(gateway):
     server, gw = gateway
     gw.behavior["models"] = ["ollama:other", "ollama:qwen3:8b"]
