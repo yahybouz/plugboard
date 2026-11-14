@@ -2,10 +2,13 @@
 
 This guide takes you from a fresh clone to a first metered request on your own machine.
 
+Plugboard is one gateway: a standard chat API (`POST /v1/chat/completions`, `GET /v1/models`) and an [MCP server](mcp.md), in front of your subscriptions reached through their official CLIs. Each client calls it with its own `pb_` key.
+
 ## Requirements
 
 - Python 3.12 (`python3.12` on `PATH`, or `uv`, which downloads it), `make` and git. The dependency locks target 3.12; `make setup PYTHON=python3.13` uses another interpreter, unsupported.
-- Optional: [Ollama](https://ollama.com) for local models, and the official CLIs (`claude`, `codex`, `gemini`, `gh`) if you want to use subscriptions (read the [risks](providers-and-subscriptions.md#risks-of-using-subscriptions) first).
+- The official CLI of each subscription you will use (`claude`, `codex`, `agy`, or `gemini` for the *Gemini (via Gemini CLI)* preset), signed in on the gateway host. Read the [risks](providers-and-subscriptions.md#risks-of-using-subscriptions) first.
+- Paid API-key providers and Ollama are out of scope for this delivery: the code still handles them, but this guide does not use them.
 
 ## Install
 
@@ -13,7 +16,7 @@ This guide takes you from a fresh clone to a first metered request on your own m
 git clone <repository-url> plugboard
 cd plugboard
 make setup   # creates .venv with Python 3.12 and installs requirements-dev.lock (hash-checked)
-make init    # creates .env from .env.example with a random ADMIN_KEY and API_KEY
+make init    # creates .env from .env.example with a random ADMIN_KEY, API_KEY and ENCRYPTION_KEY
 make dev     # runs python run.py with hot reload (RELOAD=true)
 ```
 
@@ -62,20 +65,22 @@ The dashboard has these pages:
 | Overview | Request counts, errors and latency per provider |
 | API keys | Create, revoke, rotate and delete client keys |
 | Usage & billing | Monthly usage per client, CSV export |
-| Providers | Add API-key presets, CLI-based providers and custom endpoints; discover models |
-| Connections | GitHub device-flow sign-in for GitHub Models and Copilot |
+| Providers | Add subscription CLI providers (and API-key presets, custom endpoints and the GitHub sign-in presets); discover models |
 | Pricing | View and edit the current month's prices |
 | Playground | Chat with any model, check which models have internet access |
-| Ollama | Pull, inspect and delete local Ollama models |
+| Ollama | Turn Ollama off or on; pull, inspect and delete local Ollama models (Ollama is out of scope for this delivery: keep it off) |
 | Monitoring | Provider health, uptime and recent history |
+| Catalog history | Models each provider gained or lost, newest first |
 | Jobs | The price refresh, the model catalog refresh and the provider watchdog: state, next run, **Run now** |
 
 ## Add a first provider
 
-The fastest options:
+A subscription through its official CLI:
 
-- **Ollama** (optional; the shipped deployment configurations turn it off with `OLLAMA_ENABLED=false`): with `OLLAMA_ENABLED=auto` or `true`, if Ollama answers on `http://localhost:11434` when the server starts, it is registered automatically as the `ollama` provider.
-- **API key**: Providers → **+ Add direct provider** → choose *Anthropic Direct*, *Google Gemini Direct*, *GitHub Models* or *OpenAI Direct* → paste the key → **Create**.
+1. Install the CLI and sign in once, as the operating-system user that runs Plugboard ([install and sign-in commands](providers-and-subscriptions.md#subscriptions-through-an-official-cli)).
+2. Providers → **+ Add direct provider** → choose *Claude (via claude CLI)*, *ChatGPT (via codex CLI)* or *Antigravity (via agy CLI)* → **Verify CLI** → **Create (use local CLI)**.
+
+Ollama is optional and outside this delivery: the shipped deployment configurations and `.env.example` turn it off with `OLLAMA_ENABLED=false`. Without that line the code default is `OLLAMA_ENABLED=auto`, and a daemon answering on `http://localhost:11434` at startup is registered as the `ollama` provider. Paid API-key presets (*Anthropic Direct*, *OpenAI Direct*...) are outside this delivery too.
 
 All options are described in [Providers and subscriptions](providers-and-subscriptions.md).
 
@@ -97,10 +102,10 @@ export PB_KEY=pb_your_key
 curl -s http://localhost:8765/v1/chat/completions \
   -H "Authorization: Bearer $PB_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"model": "anthropic-direct:claude-haiku-5-5", "messages": [{"role": "user", "content": "Hello"}]}'
+  -d '{"model": "claude-code:claude-haiku-5-5", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
-Replace the model with `<provider-id>:<model>` for a provider you configured. Then open **Usage & billing** to see the request and its cost.
+`claude-code:` is how `GET /v1/models` lists the *Claude (via claude CLI)* provider. Replace the model with an `id` that `GET /v1/models` lists for a provider you configured. Then open **Usage & billing** to see the request and its cost.
 
 ## Where your data lives
 

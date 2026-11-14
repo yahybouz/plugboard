@@ -4,6 +4,8 @@ A **provider** is a backend that answers chat completions: a cloud API, a local 
 
 Provider credentials stay on the gateway host. API keys and tokens are encrypted at rest in `data/providers.json` and `data/credentials.db` (see `ENCRYPTION_KEY` in the [configuration reference](configuration.md)).
 
+**Scope of this delivery.** The supported path is a subscription reached through its official CLI: [*Claude (via claude CLI)*, *ChatGPT (via codex CLI)*, *Antigravity (via agy CLI)*](#subscriptions-through-an-official-cli), and *Gemini (via Gemini CLI)* through [CLI credentials](#subscriptions-through-cli-credentials). Paid API-key providers (the API key presets, the models.dev catalog and custom endpoints) are still handled by the code, but are out of scope for this delivery. [Ollama](#ollama) is out of scope too and is not a default provider: keep it turned off.
+
 ## Provider kinds
 
 | Kind | Dashboard presets | How requests are served |
@@ -11,7 +13,7 @@ Provider credentials stay on the gateway host. API keys and tokens are encrypted
 | API key | *Anthropic Direct*, *Google Gemini Direct*, *GitHub Models*, *OpenAI Direct* | HTTP call to the vendor with your key |
 | Catalog (models.dev) | *OpenRouter · unverified*, *Groq · unverified*, *Moonshot AI (Kimi) · unverified*, *OpenCode Zen · unverified* and every other provider with a standard chat API that the catalog lists | HTTP call with your key |
 | Custom endpoint | **+ Add custom provider** | HTTP call to any server with a standard chat API |
-| Local models | *Ollama* (automatic) | HTTP call to your Ollama daemon |
+| Local models | *Ollama* (registered at startup when it answers; out of scope for this delivery, keep it off) | HTTP call to your Ollama daemon |
 | Subscription through an official CLI | *Claude (via claude CLI)*, *ChatGPT (via codex CLI)*, *Antigravity (via agy CLI)* | Plugboard runs the CLI as a subprocess for each request |
 | Subscription through CLI credentials | *ChatGPT (via Codex CLI)*, *Gemini (via Gemini CLI)*, *GitHub Copilot (via gh CLI)*, *GitHub Models (via gh CLI)* | HTTP call with the token the CLI stored on the host |
 | GitHub sign-in from the dashboard | *GitHub Models (OAuth via dashboard)*, *GitHub Copilot (OAuth via dashboard)* | HTTP call with a token obtained through GitHub's device flow |
@@ -20,7 +22,7 @@ Presets marked *roadmap* in the dashboard (for example *Claude Pro (roadmap)*) c
 
 ## Model IDs
 
-A model is addressed as `<provider-id>:<model>`, for example `anthropic-direct:claude-haiku-5-5` or `ollama:qwen3:8b`. The provider ID is derived from the provider name when you create it (*OpenAI Direct* becomes `openai-direct`) and is shown on the Providers page.
+A model is addressed as `<provider-id>:<model>`, for example `chatgpt-via-codex-cli:gpt-5.5` or `antigravity-via-agy-cli:gemini-3.8-flash-medium`. The provider ID is derived from the provider name when you create it (*Claude (via claude CLI)* becomes `claude-via-claude-cli`) and is shown on the Providers page.
 
 - With an explicit provider prefix, the request goes to that provider only. Plugboard retries it on `429`, `500`, `502`, `503` and `529` with backoff, but does not switch provider. An error saying the context or the message is too long is not retried: the request would fail the same way, and the client gets `400`.
 - Without a matching prefix, Plugboard tries the active providers in turn, ordered by a score that combines latency, error rate and requests in flight. A context too long goes straight to the next provider.
@@ -42,7 +44,7 @@ In every mode:
 
 - Per model family, only the `PLUGBOARD_MODEL_EXPOSE_VERSIONS` newest versions are listed (default 2); `PLUGBOARD_MODEL_EXPOSE=all` lists every model. A provider's default model and models already used stay listed.
 - `PLUGBOARD_TOP_N_PER_PROVIDER` can also cap each provider (default `0`, no cap), ranked by benchmark score and recency. Ollama models are grouped by family and not truncated.
-- Every published model keeps its provider's ID (`anthropic-direct:claude-opus-5-5`), except for safe Claude, Codex and Gemini CLI display aliases described above.
+- Every published model keeps its provider's ID (`antigravity-via-agy-cli:gemini-3.8-flash-medium`), except for safe Claude, Codex and Gemini CLI display aliases described above.
 - Models in `PLUGBOARD_MODEL_DENYLIST` are hidden. Quarantined models stay listed with `"connected": false`. A model whose last connectivity probe failed less than 36 hours ago is left out of the catalogue a client key sees (the admin key sees it, with `"connected": false`); chat still accepts it. A model never probed, or probed longer ago, stays listed.
 
 A model hidden by exposure filters can still be called with its unambiguous explicit `<provider-id>:<model>` ID, for example `ollama:llama3.2` for a locally pulled Ollama model. An identity omitted because of a namespace collision has no guaranteed address until the configuration is unambiguous.
@@ -50,6 +52,8 @@ A model hidden by exposure filters can still be called with its unambiguous expl
 ## Add a provider from the dashboard
 
 ### API key presets
+
+Out of scope for this delivery (paid per use); still available in the dashboard.
 
 1. Create a key with the vendor:
    - Anthropic: <https://console.anthropic.com/settings/keys>
@@ -169,7 +173,7 @@ Read [the risks](#risks-of-using-subscriptions) first. These presets run the ven
    | Antigravity CLI | see [antigravity.google](https://antigravity.google/), then `agy install` | run `agy` once and sign in with Google |
 
 2. **Providers → + Add direct provider**, choose *Claude (via claude CLI)*, *ChatGPT (via codex CLI)* or *Antigravity (via agy CLI)*.
-3. Click **Check CLI**: Plugboard verifies that the binary is on the `PATH` and runs. Then **Create**.
+3. Click **Verify CLI**: Plugboard verifies that the binary is on the `PATH` and runs (`GET /admin/direct-providers/{preset_key}/check`). Then **Create (use local CLI)**.
 
 What to expect:
 
@@ -177,7 +181,7 @@ What to expect:
 - A CLI provider takes one request at a time by default (`PLUGBOARD_CLI_PROVIDER_MAX_INFLIGHT`, or its `max_concurrency`): the next requests wait for it, and get `503 providers_busy` if it is still busy when their wait budget ends ([concurrent requests per provider](#concurrent-requests-per-provider)). Concurrent processes per CLI are also capped by `PLUGBOARD_SUBPROCESS_LIMIT` (default 4).
 - The CLI runs in a neutral temporary working directory, so it does not pick up project files or settings; `PLUGBOARD_SUBPROCESS_CWD` overrides this.
 - Codex runs with `--sandbox read-only`; `PLUGBOARD_CODEX_SANDBOX` changes the mode.
-- Gemini with an **API key** goes through *Google Gemini Direct* (AI Studio key); with a **Google subscription** it goes through *Antigravity (via agy CLI)*. agy ignores `GEMINI_API_KEY`: it only uses its own Google sign-in. In the `full` container image agy is preinstalled; sign in once with `docker exec -it <gateway> agy` (the session is kept in the `/home/app` volume). An unsigned agy returns an explicit "not signed in" error.
+- Gemini with an **API key** goes through *Google Gemini Direct* (AI Studio key); with a **Google subscription** it goes through *Antigravity (via agy CLI)*. agy ignores `GEMINI_API_KEY`: it only uses its own Google sign-in. In the `full` container image agy is preinstalled (amd64 only: agy ships no other Linux build); sign in once with `docker exec -it <gateway> agy` (the session is kept in the `/home/app` volume). An unsigned agy returns an explicit "not signed in" error.
 - Antigravity runs in print mode with `--sandbox --mode plan`. Headless `agy` cannot ask for a tool permission, so it refuses every tool call unless your agy `settings.json` pre-allows it: keep that file free of allow rules on the gateway host. Its model list is read from `agy models`; the codex list is read from the catalog cache the codex CLI keeps for your account (`~/.codex/models_cache.json`). That cache also lists models a ChatGPT sign-in refuses: when codex is signed in with ChatGPT (`auth_mode` `chatgpt` in `auth.json`, and no `CODEX_API_KEY` in the gateway's environment), the codex route leaves out `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-sol` and `gpt-6-astra` from discovery, the model refresh and `/v1/models`, saved lists included, and a model name without a provider prefix is not routed to it, not even when it is the route's saved default model or the family name of a dated model it lists (another provider that serves the name answers; `Codex:gpt-6.1-sol` still reaches codex and gets the `400` above). With an API key they stay listed.
 - The *Google Gemini (via gemini CLI)* preset is no longer offered (the gemini CLI now refuses personal-account sign-ins); providers created with it keep working while the CLI does.
 - Token counts: agy reports them, and Plugboard uses them once validated (non-negative integers, `total_tokens` equal to input + output) for the response `usage`, the final streamed usage chunk and the usage ledger; a reported 0 stays 0. Valid cache-read and thinking counters are exposed as optional `prompt_tokens_details.cached_tokens` and `completion_tokens_details.reasoning_tokens` when they do not exceed their parent counts; they are never added to the total. Nonzero-thinking semantics are not verified for every agy model: inconsistent totals fall back to estimates. When agy's usage is missing, malformed or inconsistent, and for the other CLIs, usage is estimated with a tokenizer as before.
@@ -232,7 +236,7 @@ Read [the risks](#risks-of-using-subscriptions) first. These presets do not run 
 | *GitHub Models (via gh CLI)* | `gh auth token` |
 | *GitHub Copilot (via gh CLI)* | `gh auth token`, exchanged for a Copilot token (requires a Copilot subscription) |
 
-Refreshing an expired Gemini CLI token, and signing in to Gemini from the dashboard, need a Google OAuth desktop client in `GEMINI_OAUTH_CLIENT_ID` / `GEMINI_OAUTH_CLIENT_SECRET`; Plugboard does not ship one. Without it, run `gemini` once to refresh the token. Some vendor endpoints reject tokens obtained this way (see [ADR-002](../adr/ADR-002-oauth-broker-abandoned-for-google.md)). For Claude, ChatGPT and Gemini subscriptions, prefer the subprocess presets above.
+Refreshing an expired Gemini CLI token, and signing in to Gemini from the dashboard, need a Google OAuth desktop client in `GEMINI_OAUTH_CLIENT_ID` / `GEMINI_OAUTH_CLIENT_SECRET`; Plugboard does not ship one. Without it, run `gemini` once to refresh the token. Some vendor endpoints reject tokens obtained this way (see [ADR-002](../adr/ADR-002-oauth-broker-abandoned-for-google.md)). For Claude and ChatGPT subscriptions, prefer the subprocess presets above; for a Google subscription, *Antigravity (via agy CLI)*.
 
 ### GitHub sign-in from the dashboard
 
@@ -259,12 +263,17 @@ A full provider passes a request for a model without provider prefix, streamed o
 
 - **Existing OpenClaw installations:** the connector and its environment bootstrap have been removed. Its old variables are ignored and recognizable legacy requests are refused without fallback. [Migrate manually to direct providers](openclaw-removal.md); changing an old provider's name is not a migration.
 - **Ollama**: `OLLAMA_URL`, `OLLAMA_ENABLED`, `OLLAMA_TIMEOUT`, `PLUGBOARD_OLLAMA_TOKEN` (Ollama behind a proxy that asks for a bearer token).
-- **API key presets on a remote instance**: `scripts/setup_railway_providers.py` reads `SETUP_ANTHROPIC_API_KEY`, `SETUP_OPENAI_API_KEY`, `SETUP_GEMINI_API_KEY` and `SETUP_GITHUB_PAT` and creates the matching presets through the admin API (`PLUGBOARD_URL` and `PLUGBOARD_ADMIN_KEY` point it at the instance). Unset variables are skipped, and presets that already exist are left untouched.
+- **API key presets on a remote instance** (out of scope for this delivery): `scripts/setup_railway_providers.py` reads `SETUP_ANTHROPIC_API_KEY`, `SETUP_OPENAI_API_KEY`, `SETUP_GEMINI_API_KEY` and `SETUP_GITHUB_PAT` and creates the matching presets through the admin API (`PLUGBOARD_URL` and `PLUGBOARD_ADMIN_KEY` point it at the instance). Unset variables are skipped, and presets that already exist are left untouched.
 - **Admin API**: everything the dashboard does is available over HTTP with `Authorization: Bearer $ADMIN_KEY`:
 
 ```bash
-# list presets, then create one from a preset
+# list presets, then check a subscription CLI and create its provider (no key: the CLI's sign-in is used)
 curl -s http://localhost:8765/admin/direct-providers/presets -H "Authorization: Bearer $ADMIN_KEY"
+curl -s http://localhost:8765/admin/direct-providers/claude-cli-subprocess/check -H "Authorization: Bearer $ADMIN_KEY"
+curl -s -X POST http://localhost:8765/admin/direct-providers/claude-cli-subprocess \
+  -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" -d '{}'
+
+# API key presets (out of scope for this delivery): create one from a preset
 curl -s -X POST http://localhost:8765/admin/direct-providers/openai \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
   -d '{"api_key": "sk-..."}'
@@ -320,4 +329,4 @@ Using a consumer subscription (Claude Pro/Max, ChatGPT Plus/Pro, Gemini, GitHub 
 - Google's Gemini CLI FAQ states that using third-party software to piggyback on Gemini CLI's OAuth sign-in violates its terms and may lead to account suspension or termination. See the [Gemini CLI FAQ](https://geminicli.com/docs/resources/faq/).
 - OpenAI and GitHub publish their own terms for ChatGPT and Copilot plans. Heavy automated use through `gh` has also been answered with rate limits.
 
-Plugboard ships these modes because some people run it as a personal tool on their own machine. **You decide whether to use them and you bear the consequences**, up to the loss of the account. Never expose a subscription-backed provider to other people. **API keys are the safe option**: they are designed for programmatic access and are billed per use.
+Plugboard ships these modes because some people run it as a personal tool on their own machine. **You decide whether to use them and you bear the consequences**, up to the loss of the account. Never expose a subscription-backed provider to other people. **API keys are the safe option**: they are designed for programmatic access and are billed per use (paid API-key providers are out of scope for this delivery).

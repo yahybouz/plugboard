@@ -133,7 +133,7 @@ A model whose circuit is open (3 consecutive provider failures: `429`, `5xx`, ti
 
 ## Ollama is not detected
 
-Ollama is registered at startup only if `OLLAMA_URL` answers with "Ollama is running". Start Ollama, then restart Plugboard. In Docker, `localhost` is the container itself: set `OLLAMA_URL` to an address the container can reach.
+Ollama is not a default provider of this release (see [providers bootstrapped from the environment](configuration.md#providers-bootstrapped-from-the-environment)); this applies only when you use one on purpose. Ollama is registered at startup only if `OLLAMA_URL` answers with "Ollama is running" (and `OLLAMA_ENABLED` is not `false`). Start Ollama, then restart Plugboard. In Docker, `localhost` is the container itself: set `OLLAMA_URL` to an address the container can reach.
 
 ## Start from a clean state
 

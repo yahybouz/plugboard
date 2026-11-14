@@ -122,7 +122,7 @@ It lists the models your key sees, calls one per active provider through the API
 | `chat` | `model`, `message`, `max_tokens` (4096), `temperature` (0.7), `system_prompt`, `session_id` | One chat completion through `/v1/chat/completions` |
 | `chat_stream` | same as `chat` | The same with `stream: true` |
 | `list_models` | none | Model IDs from `/v1/models` |
-| `embed` | `input` (string or list, ≤ 256), `model`, `include_vectors` (true) | Embeddings through `/v1/embeddings`: model, count, dimensions, usage and vectors |
+| `embed` | `input` (string or list, ≤ 256), `model`, `include_vectors` (true) | Embeddings through `/v1/embeddings`: model, count, dimensions, usage and vectors. Served by a local Ollama only: unavailable while Ollama is off, as in this delivery |
 | `list_embedding_models` | none | Embedding model IDs the key can use (`/v1/embeddings/models`) |
 | `list_decision_models` | none | Permitted decision engines, availability, capabilities and confidence semantics |
 | `decide` | `model`, `state`, `questions` | Named typed questions through `/v1/decisions`; no chat fallback |
@@ -157,7 +157,7 @@ configured server-side key returns 503; no real Jev call is claimed. The optiona
 Laya runtime is qualified only for macOS arm64 ≥14, not Linux/OVH. Historical
 multilingual smoke remains 2/3; the Torch pt2 reserve and final reviews remain open.
 
-Prompts: `quick_chat`, `deep_analysis`, `code_review`. Their default model IDs come from the original deployment and are unlikely to exist on yours; pass a model from `list_models` explicitly.
+Prompts: `quick_chat`, `deep_analysis`, `code_review`. Their model IDs are fixed Claude CLI IDs (`claude-code:claude-haiku-4-5` for `quick_chat`, `claude-code:claude-sonnet-4-6` for the other two), served only when the *Claude (via claude CLI)* provider is set up; pass a model from `list_models` explicitly.
 
 ## Admin tools (stdio only)
 
@@ -177,7 +177,7 @@ Prompts: `quick_chat`, `deep_analysis`, `code_review`. Their default model IDs c
 
 The update registry lets the gateway operator push integration changes to the projects that use it. An AI coding agent working in a client project calls `check_updates` (no argument) at the start of a session, reads each pending item with `get_update_prompt`, applies it, and calls `mark_applied` with its ID.
 
-The registry is operator data kept outside the repository: `data/registry.json`, or the file named by `PLUGBOARD_REGISTRY_PATH`. Without it the registry is empty. `plugboard/registry.example.json` shows the format:
+The registry is operator data kept outside the repository: `data/registry.json`, or the file named by `PLUGBOARD_REGISTRY_PATH`. Without it the registry is empty. `plugboard/registry.example.json` is a minimal file; a fuller example:
 
 ```json
 {
@@ -198,7 +198,7 @@ The registry is operator data kept outside the repository: `data/registry.json`,
           "action": "replace",
           "description": "Prefix the model name with its provider ID.",
           "old": ["LLM_MODEL=gpt-4o-mini"],
-          "new": ["LLM_MODEL=anthropic-direct:claude-haiku-5-5"]
+          "new": ["LLM_MODEL=claude-code:claude-haiku-5-5"]
         }
       ],
       "verification": "Send one request and check that it returns 200."

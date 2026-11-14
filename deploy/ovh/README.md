@@ -1,5 +1,10 @@
 # Private OVH deployment
 
+> **End of life.** This OVH instance is being retired: it is no longer the
+> production instance, which runs on another private host not described in
+> this directory. Use these files only to operate the old instance until it is
+> shut down; do not start a new deployment from them.
+
 ## Scope
 
 One small Ubuntu VPS, Docker `full`, private Tailscale Serve, no public application ports. The Compose file is a separate production configuration; it does not change the default developer deployment. The CLI versions of the image are pinned in the repository `Dockerfile` (stage `full`), not in the Compose file, and their home directory persists separately from application data. No provider credentials or existing local data are automatically copied.

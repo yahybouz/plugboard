@@ -13,6 +13,17 @@ green smoke and a rollback rehearsed both ways.
 This is a planned procedure, not an incident runbook: its sections are the
 steps of the gate.
 
+The commands below are written for the former private host `deploy/ovh/`,
+which is end of life (see [deploy/ovh/README.md](../../deploy/ovh/README.md)).
+The production instance now runs on another private host whose deployment
+files are not in `deploy/`: keep the order and the criteria of the gate (data
+check, proven backup, CLI versions, smoke, rehearsed rollback, 24 hours of
+observation), not these paths and names.
+
+`ci` is the local CI tool of the UAT host (`python3 /srv/dev/.ci/outils/ci.py`,
+subcommands `etat`, `lancer`, `deployer`); `ci deployer` refuses a commit
+without a green local CI run. There is no remote CI pipeline.
+
 ## When to use
 
 Before every production upgrade of the private host. The UAT host must
@@ -21,7 +32,8 @@ rehearsed rollback ([rollback-release.md](rollback-release.md#rehearse-the-rollb
 Write down that commit: `ci deployer plugboard <sha> --etat` prints it as
 `sha_en_service`.
 
-Avoid 03:30 UTC: the daily backup timer stops and restarts the gateway then.
+Avoid 03:30 to 03:40 UTC: the daily backup timer (03:30 UTC plus up to 10
+minutes of random delay) stops and restarts the gateway then.
 
 ## Before you start
 
@@ -197,7 +209,8 @@ on. A key is fixed by revoking it and creating a new one with a correct
 handing the new key to its client. Run the check again until it prints
 `READY`. Read the `WARN` lines too (`--strict` makes them fail).
 
-Then take a cold backup (the gateway stops for a few seconds) and check it.
+Then take a cold backup (the gateway stops while the archive is written) and
+check it.
 This backup is mandatory: from 4.12.0 the first daily retention pass (04:00
 UTC) deletes old usage, audit, watchdog, monitoring and session rows for good
 (see [monitoring](../guide/monitoring.md)), and this archive is then the only
@@ -274,7 +287,7 @@ sudo docker run --rm --network none --entrypoint sh \
 
 Expected: `1000`, then `0.65.0`, `2.1.306 (Claude Code)`, `codex-cli 0.163.0`,
 the `gh version` lines and `1.4.4`: the versions pinned in the `Dockerfile`
-and in `deploy/ovh/compose.yml`. Another version or an error stops the gate.
+(the Compose file passes none). Another version or an error stops the gate.
 
 ### 6. Switch to the new version
 
@@ -349,7 +362,8 @@ note it: a real rollback would then need the restore of
 [rollback-release.md, step 5](rollback-release.md#5-if-the-old-version-cannot-read-the-current-data).
 
 Then restart the daily backup. It stops and restarts the gateway every day
-at 03:30 UTC: the `/metrics` counters restart then, the access log goes on.
+between 03:30 and 03:40 UTC: the `/metrics` counters restart then, the access
+log goes on.
 
 ```bash
 sudo systemctl start plugboard-backup.timer

@@ -62,7 +62,7 @@ The list of providers is on the admin `GET /providers`. The client authenticatio
 `GET /health/ready` is public too and says whether the instance can serve requests: `200` when it is ready, `503` with the same body when it is not. It never calls a provider or starts a CLI, and its result is kept for 5 seconds:
 
 ```json
-{"ready": true, "version": "4.11.5", "checks": {"usage_db": "ok", "cli": "ok", "auth": "ok", "ollama": "unreachable", "background": "ok"}}
+{"ready": true, "version": "4.13.0", "checks": {"usage_db": "ok", "cli": "ok", "auth": "ok", "ollama": "not_configured", "background": "ok"}}
 ```
 
 | Check | States | Blocks readiness |
@@ -75,7 +75,19 @@ The list of providers is on the admin `GET /providers`. The client authenticatio
 
 The body names no provider and carries no error text: a check that raises gives its failure state (`fail`, `unknown` or `degraded`) and a warning in the server log. The dashboard and `GET /health/detailed` (admin) say which provider is affected. Container and deployment health checks stay on `/health`: use `/health/ready` to keep traffic away from an instance that cannot serve, not to restart it.
 
-`GET /health/detailed` (admin) calls `<base_url>/health` on every active HTTP provider and adds usage counters for the current month.
+`GET /health/detailed` (admin) probes every active provider with the dashboard's health check (a CLI provider by its binary and `--version`, a local server at the URL it serves, an HTTP provider at `<base_url>/health` or its model-list URL) and answers `ok` (every probe passed), `version`, `providers` (one result per provider), `usage_month`, `usage_entries` and `keys_count`.
+
+## Jobs
+
+The background jobs run inside the server; nothing is scheduled outside it (no crontab, no script). The **Jobs** page and the admin API show the same five jobs: `pricing_refresh`, `model_refresh`, `provider_watchdog`, `availability_snapshots` and `data_retention`.
+
+| Endpoint | Effect |
+|---|---|
+| `GET /admin/jobs` | One entry per job: `id`, `name`, `description`, `schedule`, `next_run`, `last_run` and `last_status` (`success`, `error`, `running`, `stale`, `disabled` or `never_run`; `running` or `stopped` for the watchdog) |
+| `GET /admin/jobs/{id}/log?lines=50` | `id`, `name`, `status`, `output` (the last `lines` lines of the job's status, as JSON) and `lines_total` |
+| `POST /admin/jobs/{id}/run` | **Run now**: starts the job in the background and answers at once with `status` `started`, `running` (a run is already under way) or `error` (the watchdog runs continuously and cannot be started by hand). It also runs a job whose scheduled runs are turned off. Recorded in the [audit log](#admin-audit-log) as `job.run` |
+
+An unknown job ID answers `404`.
 
 ## Metrics
 
@@ -112,7 +124,7 @@ The time to first token and tokens per second are measured on streamed answers f
 
 ```bash
 PLUGBOARD_BENCH_KEY=... .venv/bin/python scripts/bench_concurrency.py \
-  --url https://gateway.example --model ollama:qwen2.5:7b \
+  --url https://gateway.example --model <provider-id>:<model> \
   --clients 1,2,4,8 --rounds 3 --warmup 1 --check \
   --first-word-p95-max 5 --tps-min 5 --json bench.json
 ```
@@ -143,7 +155,7 @@ transport, rather than reported healthy. See [migration](openclaw-removal.md).
 |---|---|
 | `GET /admin/watchdog` | Running state and per-provider counters |
 | `POST /admin/watchdog/start`, `POST /admin/watchdog/stop` | Start or stop the loop |
-| `POST /admin/watchdog/{provider_id}/restart` | Report restart unsupported for unmanaged providers; reject removed legacy connectors |
+| `POST /admin/watchdog/{provider_id}/restart` | Restarts nothing: records the attempt and answers `500` (restart not supported, or a removed legacy connector rejected) |
 | `GET /admin/watchdog/events?provider_id=&event_type=&limit=` | Check and restart history (`data/watchdog.db`) |
 | `GET /admin/watchdog/restarts?hours=24` | Restart statistics |
 

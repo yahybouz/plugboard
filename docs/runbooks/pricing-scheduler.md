@@ -2,7 +2,7 @@
 
 Plugboard bills each request from a monthly pricing grid stored in
 `data/pricing/YYYY_MM.json` (under `PLUGBOARD_DATA` when set). An in-process
-scheduler refreshes that grid: once at startup ("bootstrap"), then daily at
+scheduler refreshes that grid: once at startup ("bootstrap"), then
 every `PLUGBOARD_PRICING_REFRESH_INTERVAL_H` hours (default 6, plus up to 5
 minutes of jitter), or daily at `PRICING_DAILY_HOUR_UTC` when it is `0`. Each refresh
 reads the sources listed in `PLUGBOARD_PRICING_SOURCES` (your own document at
@@ -185,15 +185,15 @@ missing entries from the previous month.
 
 ### Circuit breaker still open after the cause is fixed
 
-The scheduler's breaker state is saved in `data/cb_state.json` inside the
-installation directory (this file does not follow `PLUGBOARD_DATA`), so it
+The scheduler's breaker state is saved in `cb_state.json` in the data
+directory (`data/cb_state.json`, or under `PLUGBOARD_DATA` when set), so it
 survives restarts. A manual refresh (`POST /admin/pricing/scrape`) updates the
 grid but does not close the breaker. To close it:
 
 1. Restart Plugboard. The startup bootstrap refresh always runs; if it
    succeeds the breaker returns to `CLOSED`.
-2. If you need a clean slate, stop Plugboard, delete `data/cb_state.json`,
-   then start it again.
+2. If you need a clean slate, stop Plugboard, delete `cb_state.json` from the
+   data directory, then start it again.
 
 ## Official price table
 
@@ -261,8 +261,9 @@ within `PLUGBOARD_OFFICIAL_PRICES_MAX_AGE_DAYS`: recheck them, then update
    computed at the time.
 
 4. If the scheduler itself misbehaves and a fix is not available yet, set
-   `PRICING_SCHEDULER_DISABLED=1`, restart, and run `make pricing` daily until
-   the fix ships. Re-enable the scheduler afterwards.
+   `PRICING_SCHEDULER_DISABLED=1`, restart, and run the manual refresh of
+   step 1 (`POST /admin/pricing/scrape`) daily until the fix ships; it does
+   not go through the scheduler. Re-enable the scheduler afterwards.
 
 ## Escalation
 

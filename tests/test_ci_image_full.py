@@ -79,21 +79,6 @@ def test_ci_image_step_starts_every_cli_of_the_image():
     assert _option_values(argv, "--verifier-amd64") == ["agy --version"]
 
 
-def test_gitlab_pipeline_builds_the_same_target():
-    doc = yaml.safe_load((ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8"))
-    script = "\n".join(doc["docker-build"]["script"])
-
-    assert "--target full" in script
-    assert "--target api" not in script
-    loop = re.search(r"for cli in ([a-z ]+); do\n(.*?)\n\s*done", script, re.S)
-    assert loop, "the CLI check loop is missing"
-    assert loop.group(1).split() == ["gemini", "claude", "codex", "gh"]
-    assert '--network none "plugboard:ci-$CI_COMMIT_SHORT_SHA" "$cli" --version' in (
-        loop.group(2)
-    )
-    assert re.search(r"--network none \S+ agy --version", script)
-
-
 def test_cli_versions_are_pinned_in_the_dockerfile_only():
     # One source (PLU-29): the OVH build passes no CLI version, so the image
     # always gets the Dockerfile's pinned releases.

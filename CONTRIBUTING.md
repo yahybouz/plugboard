@@ -5,7 +5,7 @@ Thank you for helping. This document explains where to contribute, how to set up
 ## Where to contribute
 
 - The **canonical repository is on GitLab**. Open issues and merge requests there.
-- The GitHub repository is a read-only mirror. Pull requests opened on GitHub are not reviewed; please move them to GitLab.
+- The GitHub repository is a read-only mirror. Changes proposed there are not reviewed; move them to GitLab.
 - Security problems: do not open a public issue. Follow [SECURITY.md](SECURITY.md).
 - By participating you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
@@ -64,7 +64,7 @@ A change that alters the architecture, the security model, the storage layout or
 
 ## Review and merge
 
-- A maintainer reviews every merge request. The CI pipeline (lint, format check, tests with a coverage threshold, security scan) must pass.
+- A maintainer reviews every merge request. The local CI (`ci/pipeline.json`: lint, format check, tests with a coverage floor, MCP contract, gitleaks, bandit, dependency audit, image build) must be green on the commit. There is no remote pipeline: a push runs nothing.
 - Reviews focus on correctness, security, tests and documentation.
 - Maintainers squash or rebase on merge to keep the history readable.
 

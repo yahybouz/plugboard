@@ -15,13 +15,13 @@ The configuration of the UAT gateway, as it runs on the UAT host. It is versione
 
 ## How the UAT is deployed
 
-Only by the host's deployer, which builds the `full` image from a commit with a green CI, writes `PLUGBOARD_IMAGE` into `compose.env`, recreates the `gateway` service and rolls back when `/health` does not answer. Never deploy the UAT with a manual `docker compose up`.
+Only by the host's deployer, started with the local CI tool of the UAT host: `ci deployer plugboard <sha>` (that is `python3 /srv/dev/.ci/outils/ci.py deployer plugboard <sha>`; `--etat` prints the SHA in service without deploying). The deployer refuses a commit without a green local CI run, builds the `full` image `plugboard:uat-<sha7>` when it is missing, writes `PLUGBOARD_IMAGE` into `compose.env`, recreates the `gateway` service and rolls back by itself when `/health` does not answer `200` or the container is not healthy on the new image (`sante_delai_s`, 120 seconds, in `deployer-entry.json`). There is no remote CI pipeline. Never deploy the UAT with a manual `docker compose up`.
 
 A change to a file here takes effect only once a root operator installs it on the host. Editing the repository does not change the running UAT.
 
 ## Faithful copies
 
-`compose.yml`, `seccomp-plugboard-userns.json` and `apparmor-plugboard-userns` are byte-for-byte copies of the host files, taken on 2026-11-12. Their comments are kept as they are on the host. To check the host for drift, a root operator compares `sha256sum <host path>` with the digest below; `tests/test_uat_deploy_config.py` checks that this table matches the files here.
+`compose.yml`, `seccomp-plugboard-userns.json` and `apparmor-plugboard-userns` are byte-for-byte copies of the host files, taken on the dates of the table below. Their comments are kept as they are on the host. To check the host for drift, a root operator compares `sha256sum <host path>` with the digest below; `tests/test_uat_deploy_config.py` checks that this table matches the files here.
 
 | File here | SHA-256 | Copied | Drift check on the host |
 |---|---|---|---|

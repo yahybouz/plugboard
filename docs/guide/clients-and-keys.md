@@ -33,7 +33,7 @@ curl -s -X POST http://localhost:8765/admin/keys \
         "label": "production",
         "monthly_limit_usd": 25,
         "rpm_limit": 120,
-        "allowed_models": ["anthropic-direct:claude-haiku-4-5-20251001", "ollama:qwen3:8b"],
+        "allowed_models": ["claude-code:claude-haiku-5-5", "chatgpt-via-codex-cli:gpt-5.5"],
         "org_id": "acme"
       }'
 ```
@@ -129,8 +129,8 @@ A successful non-streaming response is a standard chat completion plus a `billin
   "prompt_tokens": 12,
   "completion_tokens": 9,
   "total_tokens": 21,
-  "cost_usd": 0.0000072,
-  "model": "gpt-4o-mini",
+  "cost_usd": 0.0000057,
+  "model": "claude-haiku-5-5",
   "pricing_month": "2026_10"
 }
 ```

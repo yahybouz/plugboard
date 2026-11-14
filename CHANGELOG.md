@@ -6,19 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Changed
-
-- **Ollama is off by default and its epic is deprioritised** (PLU-53, decision of 14/11): `deploy/uat/compose.yml`, `deploy/ovh/compose.yml` and `.env.example` set `OLLAMA_ENABLED=false`; the composes no longer carry the relay URL, the embedding identity, the `ollama-private` bridge network or (UAT) the relay token name. `OLLAMA_ENABLED=false` now turns off an `ollama` provider already registered, in memory and without writing: no `ollama:*` model in `/v1/models`, the Playground or the MCP tools; a chat to one answers `503 provider_disabled` naming the configuration, even when no Ollama is registered; embeddings say so (`503`) or that no embedding provider is configured (`404`); the price job no longer reads ollama.com for a turned-off Ollama; `/health/ready` stays `200`. Setting `true` or `auto` brings Ollama back; nothing was removed from the code ([providers](docs/guide/providers-and-subscriptions.md#ollama)).
-
-- **`scripts/smoke_consumers.py` no longer needs Ollama**: without `--model` or `PLUGBOARD_SMOKE_MODEL` it picks the first `Codex:`, `claude-code:`, `Gemini:` or `Antigravity:` model the key may use, never an `ollama:` one; the embeddings step is skipped with *no embedding provider configured for this key* when none is declared.
-
 ### Added
 
 - **`scripts/recette_acces.py`: one command proves access by API and MCP** (lot B): with `PLUGBOARD_URL` and `PLUGBOARD_KEY` (a client key) in the environment, it makes a short real call per provider the key sees through the API, the API in a stream (first byte measured) and the MCP `chat` tool over stdio, checks that the MCP catalogue lists exactly the API's model IDs, prints a table and writes a JSON file; it exits non-zero when a surface fails, never prints the key and keeps to 60 requests a minute. Standard library only.
 
 - **The full image carries the MCP server** (lot B): `/opt/venv-mcp`, built from `requirements-mcp.lock` with hashes checked (the build fails if `mcp` does not import), next to the gateway's own environment. A client starts it over stdio, for example `docker exec -i <container> /opt/venv-mcp/bin/python scripts/run_mcp.py`; no port is opened. The slim `api` image is unchanged. A test imports the server with every API-only package blocked.
 
+- **Live stream for claude and agy CLI providers** (INC-2): a streamed chat served by a claude or agy subscription now sends the text as the CLI writes it (claude `--include-partial-messages`, agy `--output-format stream-json`), the first word at once, instead of running the CLI whole and replaying it. Nothing is sent before the first word, so the fall back to the next provider is unchanged; a failure after it ends the stream with the `stream_interrupted` event, what was sent is billed, a client that leaves stops the CLI. Billing counts the whole answer once, and the spending alert now follows a streamed answer's billing. This path does not fill the response cache. codex reports whole messages only and keeps the replay.
+
+- **`scripts/bench_latence.py`** (bare CLI against the gateway, with and without stream, 1 then 3 calls at once) and **`scripts/recette_services.py`** (read-only: `/health`, `/health/ready`, state of every background job; non-zero exit when one is absent, stopped or failing). The figures they check are in [Performance targets](docs/guide/performance-targets.md).
+
+- **Client acceptance run** (`scripts/recette_passerelle.py`): checks `/health`, `/health/ready`, `/v1/models` with the client key, and one short chat call; the MCP endpoint is checked when `PLUGBOARD_MCP_URL` is set. It reads the target and the key from the environment, never prints the key, and exits `1` at the first failure (`2` when the configuration is missing).
+
 ### Changed
+
+- **Ollama is off by default and its epic is deprioritised** (PLU-53, decision of 14/11): `deploy/uat/compose.yml`, `deploy/ovh/compose.yml` and `.env.example` set `OLLAMA_ENABLED=false`; the composes no longer carry the relay URL, the embedding identity, the `ollama-private` bridge network or (UAT) the relay token name. `OLLAMA_ENABLED=false` now turns off an `ollama` provider already registered, in memory and without writing: no `ollama:*` model in `/v1/models`, the Playground or the MCP tools; a chat to one answers `503 provider_disabled` naming the configuration, even when no Ollama is registered; embeddings say so (`503`) or that no embedding provider is configured (`404`); the price job no longer reads ollama.com for a turned-off Ollama; `/health/ready` stays `200`. Setting `true` or `auto` brings Ollama back; nothing was removed from the code ([providers](docs/guide/providers-and-subscriptions.md#ollama)).
+
+- **`scripts/smoke_consumers.py` no longer needs Ollama**: without `--model` or `PLUGBOARD_SMOKE_MODEL` it picks the first `Codex:`, `claude-code:`, `Gemini:` or `Antigravity:` model the key may use, never an `ollama:` one; the embeddings step is skipped with *no embedding provider configured for this key* when none is declared.
 
 - **A client key lists only models it can call now** (lot B): `GET /v1/models` (and the benchmarks and `/v2` lists) for a client key leaves out a model whose last connectivity probe failed less than 36 hours ago; the admin key keeps the full view, and quarantined or never-probed models stay listed. The MCP `list_models` tool reads the same route.
 
@@ -26,15 +30,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Quota, refused model and timeout carry a `code`** (lot B, BUG-67): a provider or CLI subscription quota answers `429` with `"code": "quota_exhausted"`, a model the key's `allowed_models` refuses `403` with `"code": "forbidden_model"`, and a provider or CLI that exceeds its deadline `503` with `"code": "provider_timeout"` and `Retry-After: 10` (a CLI timeout answered `502` before, against the documented `503`). API contract 2.2.0 (`docs/api/openapi.json`, `docs/api/mcp.json`): the three codes in `ErrorResponse.code`.
 
-### Added
-
-- **Live stream for claude and agy CLI providers** (INC-2): a streamed chat served by a claude or agy subscription now sends the text as the CLI writes it (claude `--include-partial-messages`, agy `--output-format stream-json`), the first word at once, instead of running the CLI whole and replaying it. Nothing is sent before the first word, so the fall back to the next provider is unchanged; a failure after it ends the stream with the `stream_interrupted` event, what was sent is billed, a client that leaves stops the CLI. Billing counts the whole answer once, and the spending alert now follows a streamed answer's billing. This path does not fill the response cache. codex reports whole messages only and keeps the replay.
-- **`scripts/bench_latence.py`** (bare CLI against the gateway, with and without stream, 1 then 3 calls at once) and **`scripts/recette_services.py`** (read-only: `/health`, `/health/ready`, state of every background job; non-zero exit when one is absent, stopped or failing). The figures they check are in [Performance targets](docs/guide/performance-targets.md).
-
-### Changed
-
 - **The Jobs page no longer reads a failing job as healthy** (INC-2): a loop that is no longer alive is `stopped`, an open or degraded circuit breaker or a crashed loop is `error`, a job the app never started is `not_started` (not `disabled`, which is the configuration's choice), and the watchdog shows its last check and reads `error` when its status cannot be read.
+
 - **The UAT compose runs every scheduler** (INC-2): `MODEL_AVAILABILITY_SCHEDULER_DISABLED` and `PRICING_SCHEDULER_DISABLED` were `1`, and Claude models were probed on every run; the UAT now matches prod (jobs on, no inference probe).
+
+- **The pipeline is local only.** `.gitlab-ci.yml` and `.github/workflows/ci.yml` are removed: a push to GitLab or GitHub runs nothing. The local CI is `ci/pipeline.json`, run with `python3 /srv/dev/.ci/outils/ci.py etat | lancer | deployer`.
+
+- **Documentation aligned on 4.13.0**: README, client guide, configuration, supervision and operations pages reference only commands, variables and routes present in the code.
+
+### Fixed
+
+- **Documentation**: `PLUGBOARD_JOB_PYTHON` is no longer documented (nothing reads it), and the pricing runbook names the scrape endpoint instead of a `make pricing` target that does not exist.
 
 ## [4.13.0] — 2026-11-13
 
