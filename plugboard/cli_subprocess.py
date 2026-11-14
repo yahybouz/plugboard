@@ -442,8 +442,10 @@ CLI_BACKENDS: Dict[str, CliBackend] = {
         # Antigravity CLI in print mode. Headless agy cannot prompt for a tool
         # permission, so every tool call (file read, shell, web) is denied
         # unless the operator's agy settings.json pre-allows it (SEC-2026-10).
-        # --sandbox restricts the terminal on top of that, --mode plan keeps
-        # the agent from editing, and slash commands / skills are not expanded.
+        # --sandbox restricts the terminal on top of that, and slash commands /
+        # skills are not expanded. --mode plan is NOT a guard: agy 1.4.4 says it
+        # "has no effect while slash command expansion is disabled" (board:
+        # the agy plan-mode ticket); it is kept until that is proven in real.
         # Never add --dangerously-skip-permissions here. No -p: agy reads a
         # piped prompt when -p is omitted.
         args=[
@@ -1704,10 +1706,59 @@ def _dyld_hint(stderr_text: str, command: str) -> str:
 # ── Incremental output (INC-2) ──────────────────────────────────────────────
 # Which CLIs can hand the answer over while they run, and how to read it:
 # claude (``--include-partial-messages``: ``stream_event`` lines carrying
-# ``text_delta``). codex ``exec --json`` only reports whole messages, gemini is
-# not installed on the servers, agy's ``stream-json`` shape is not verified:
-# those keep the single answer at the end.
+# ``text_delta``) and agy (``--output-format stream-json``: ``step_update``
+# events of the ``agent_response`` step carrying ``text_delta``); both shapes
+# captured on the UAT (claude 2.1.306, agy 1.4.4). codex ``exec --json`` only
+# reports whole messages and gemini is not installed on the servers: those
+# keep the single answer at the end.
 STREAM_EXTRA_ARGS: Dict[str, List[str]] = {"claude": ["--include-partial-messages"]}
+
+
+def _stream_args(kind: str, args: List[str]) -> List[str]:
+    """``args`` of a CLI whose answer is read as it comes."""
+    out = list(args)
+    if kind == "agy" and "--output-format" in out:
+        out[out.index("--output-format") + 1] = "stream-json"
+    return [*out, *STREAM_EXTRA_ARGS.get(kind, [])]
+
+
+def _agy_stream_to_json(stdout_text: str) -> str:
+    """agy's ``stream-json`` run as its ``json`` payload: the object of the last
+    ``result`` event (status, response, usage, error). Unchanged without one,
+    so the usual failure paths (exit code, stderr) apply."""
+    for line in reversed(stdout_text.splitlines()):
+        if '"result"' not in line:
+            continue
+        try:
+            evt = json.loads(line)
+        except ValueError:
+            continue
+        if (
+            isinstance(evt, dict)
+            and evt.get("event") == "result"
+            and isinstance(evt.get("result"), dict)
+        ):
+            return json.dumps(evt["result"])
+    return stdout_text
+
+
+def _agy_text_delta(line: bytes) -> str:
+    """Text of an agy ``agent_response`` ``step_update`` line, else ``""``."""
+    if b"text_delta" not in line:
+        return ""
+    try:
+        evt = json.loads(line)
+    except ValueError:
+        return ""
+    step = evt.get("step_update") if isinstance(evt, dict) else None
+    if (
+        isinstance(step, dict)
+        and evt.get("event") == "step_update"
+        and step.get("step_type") == "agent_response"
+    ):
+        text = step.get("text_delta")
+        return text if isinstance(text, str) else ""
+    return ""
 
 
 def _claude_text_delta(line: bytes) -> str:
@@ -1730,7 +1781,10 @@ def _claude_text_delta(line: bytes) -> str:
     return ""
 
 
-_DELTA_READERS: Dict[str, Callable[[bytes], str]] = {"claude": _claude_text_delta}
+_DELTA_READERS: Dict[str, Callable[[bytes], str]] = {
+    "claude": _claude_text_delta,
+    "agy": _agy_text_delta,
+}
 
 
 def can_stream(kind: str) -> bool:
@@ -1849,7 +1903,7 @@ async def complete(
         argv.extend(codex_isolation_args(spawn_cwd))
     read_delta = _DELTA_READERS.get(kind) if on_delta is not None else None
     if read_delta is not None:
-        argv.extend(STREAM_EXTRA_ARGS.get(kind, []))
+        argv = [binary_path, *_stream_args(kind, backend.args)]
     if backend.model_arg and model:
         argv.extend([backend.model_arg, model])
 
@@ -1938,6 +1992,8 @@ async def complete(
     elapsed = time.perf_counter() - t0
     _live.update(phase="cli_parse")
     stdout_text = (stdout or b"").decode("utf-8", "replace")
+    if kind == "agy" and read_delta is not None:
+        stdout_text = _agy_stream_to_json(stdout_text)
     stderr_text = (stderr or b"").decode("utf-8", "replace")
     rate_limited = kind == "claude" and _claude_rate_limited(stdout_text)
 

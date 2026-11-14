@@ -124,3 +124,83 @@ async def test_a_failing_callback_does_not_break_the_answer(fake_cli):
 
     result = await cli_subprocess.complete("claude", BODY, on_delta=bad)
     assert result["choices"][0]["message"]["content"] == "Bonjour"
+
+
+# ── agy: stream-json (shape captured on the UAT, agy 1.4.4) ─────────────────
+
+
+def _agy_step(
+    text: str, state: str = "ACTIVE", step_type: str = "agent_response"
+) -> str:
+    return json.dumps(
+        {
+            "event": "step_update",
+            "step_update": {
+                "conversation_id": "c",
+                "step_index": 1,
+                "state": state,
+                "step_type": step_type,
+                "text_delta": text,
+            },
+        }
+    )
+
+
+AGY_RESULT = json.dumps(
+    {
+        "event": "result",
+        "result": {
+            "conversation_id": "c",
+            "status": "SUCCESS",
+            "response": "Bonjour !\n",
+            "usage": {"input_tokens": 7, "output_tokens": 2, "total_tokens": 9},
+        },
+    }
+)
+AGY_LINES = [
+    json.dumps({"event": "init", "init": {"model": "m"}}),
+    _agy_step("ignored", "DONE", "user_input"),
+    _agy_step("Bonjour"),
+    _agy_step(" !\n", "DONE"),
+    AGY_RESULT,
+]
+
+
+async def test_agy_streams_agent_response_deltas(fake_cli):
+    argv_log = fake_cli(AGY_LINES, pause=0.6)
+    seen: list[str] = []
+    result = await cli_subprocess.complete(
+        "agy",
+        {"model": "gemini-3.8-flash-low", "messages": BODY["messages"]},
+        on_delta=seen.append,
+    )
+    assert seen == ["Bonjour", " !\n"]
+    assert result["choices"][0]["message"]["content"] == "Bonjour !\n"
+    assert result["usage"]["total_tokens"] == 9  # reported counts survive
+    argv = argv_log.read_text().split("\n")
+    assert argv[argv.index("--output-format") + 1] == "stream-json"
+
+
+async def test_agy_without_callback_keeps_json_mode(fake_cli):
+    argv_log = fake_cli([json.dumps(json.loads(AGY_RESULT)["result"])])
+    result = await cli_subprocess.complete(
+        "agy", {"model": "gemini-3.8-flash-low", "messages": BODY["messages"]}
+    )
+    argv = argv_log.read_text().split("\n")
+    assert argv[argv.index("--output-format") + 1] == "json"
+    assert result["choices"][0]["message"]["content"] == "Bonjour !\n"
+
+
+async def test_agy_error_result_is_classified_as_before(fake_cli):
+    err = json.dumps(
+        {
+            "event": "result",
+            "result": {"status": "ERROR", "error": "Resource has been exhausted"},
+        }
+    )
+    fake_cli([json.dumps({"event": "init", "init": {}}), err], exit_code=3)
+    with pytest.raises(CliSubprocessError) as info:
+        await cli_subprocess.complete(
+            "agy", {"model": "m", "messages": BODY["messages"]}, on_delta=lambda t: None
+        )
+    assert info.value.quota is True
