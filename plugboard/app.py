@@ -3617,6 +3617,12 @@ async def model_info(
     if not _model_is_compatible(model_id, client_id or "", key_record=key_record):
         # A model the key may not call gets the unknown-model answer.
         return derived_model_info(model_id)
+    if client_id and client_id != "admin":
+        # So does a model the client's catalogue leaves out (_models_for_key):
+        # its last probe failed recently. The admin keeps the full view.
+        for item in await list_models():
+            if item.get("id") == model_id and _not_callable_now(item):
+                return derived_model_info(model_id)
     info = get_model_info(model_id)
     if not info:
         raise HTTPException(404, f"No benchmark data for model '{model_id}'")

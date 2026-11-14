@@ -44,6 +44,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`scripts/recette_acces.py` followed a redirect with the key**: a `3xx` answer was followed and the `Authorization` header sent to the address it named. A redirect is now a named failure (`redirect: HTTP <status> not followed`), as in the other acceptance scripts; set `PLUGBOARD_URL` to the final address.
 
+- **`GET /v1/models/{model_id}/info` did not follow the client catalogue**: a client key got the full profile of a model that `GET /v1/models` leaves out for it (last connectivity probe failed less than 36 hours ago). It now gets the unknown-model answer (`info_source: "derived"`), as for a model its `allowed_models` refuses; the admin key is unchanged.
+
 ## [4.13.0] — 2026-11-13
 
 ### Added

@@ -156,3 +156,44 @@ async def test_admin_keeps_the_full_catalogue(client, keys, tmp_path, monkeypatc
     )
     ids = await _ids(client, "testkey")  # the fixture's admin key
     assert {"agy-sub:agy-beta", "agy-sub:agy-gamma"} <= ids
+
+
+async def _info(client, key, model_id):
+    resp = await client.get(f"/v1/models/{model_id}/info", headers=_auth(key))
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+async def test_model_info_follows_the_client_catalogue(
+    client, keys, tmp_path, monkeypatch
+):
+    """A model the client's catalogue leaves out answers as an unknown model
+    on ``/v1/models/{id}/info`` too; the admin keeps its profile."""
+    from plugboard.benchmarks import derived_model_info
+
+    hidden = "claude-sub:claude-sonnet-4-6"  # has a curated profile
+    _prepare(tmp_path, monkeypatch, status={hidden: _FAILED})
+    rec = keys.create_key("cust", "synthetic")
+    keys._invalidate_cache()
+    assert hidden not in await _ids(client, rec["key"])
+    assert hidden in await _ids(client, "testkey")
+
+    assert (await _info(client, "testkey", hidden))["info_source"] == "benchmark_db"
+    client_view = await _info(client, rec["key"], hidden)
+    assert client_view["info_source"] == "derived"
+    assert client_view == derived_model_info(hidden)
+
+
+@pytest.mark.parametrize("status", [_OK, _STALE, None])
+async def test_model_info_keeps_the_profile_of_a_listed_model(
+    client, keys, tmp_path, monkeypatch, status
+):
+    listed = "claude-sub:claude-sonnet-4-6"
+    _prepare(tmp_path, monkeypatch, status={listed: status} if status else {})
+    rec = keys.create_key("cust", "synthetic")
+    keys._invalidate_cache()
+    assert listed in await _ids(client, rec["key"])
+    assert await _info(client, rec["key"], listed) == await _info(
+        client, "testkey", listed
+    )
+    assert (await _info(client, rec["key"], listed))["info_source"] == "benchmark_db"
