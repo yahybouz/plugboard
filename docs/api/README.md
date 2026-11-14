@@ -7,7 +7,7 @@ Plugboard speaks the OpenAI chat API: most clients only change their base URL an
 | [`openapi.json`](openapi.json) | The client API, OpenAPI 3.1: every route a client key calls, with request and response schemas, status codes and headers |
 | [`mcp.json`](mcp.json) | The MCP server: its tools with their JSON input schemas, its resources and prompts |
 
-Both files are generated from the code (`make contract`) and checked in CI: a route, a field or an MCP tool that changes without the contract fails the build. A running instance serves the same OpenAPI document, without a key, at `GET /v1/openapi.json`.
+Both files are generated from the code (`make contract`) and checked by the local CI (`ci/pipeline.json`; there is no remote CI, nothing runs when a branch is pushed): a route, a field or an MCP tool that changes without the contract fails the run. A running instance serves the same OpenAPI document, without a key, at `GET /v1/openapi.json`.
 
 Admin routes are not part of this contract. They are described by the admin-only `/openapi.json` and `/docs` of the instance.
 
@@ -17,7 +17,7 @@ Admin routes are not part of this contract. They are described by the admin-only
 |---|---|
 | Base URL | `http(s)://<host>:8765/v1` (local install: `http://localhost:8765/v1`) |
 | Authentication | `Authorization: Bearer pb_...`, a client key issued by the operator ([Clients and keys](../guide/clients-and-keys.md)) |
-| Model ids | `GET /v1/models`; pass an `id` as `model`, for example `anthropic-direct:claude-sonnet-5-5` |
+| Model ids | `GET /v1/models`; pass an `id` as `model`, for example `claude-code:claude-sonnet-5-5` |
 
 With the OpenAI SDKs:
 
@@ -26,7 +26,7 @@ from openai import OpenAI
 
 client = OpenAI(base_url="http://localhost:8765/v1", api_key="pb_your_key")
 reply = client.chat.completions.create(
-    model="anthropic-direct:claude-sonnet-5-5",
+    model="claude-code:claude-sonnet-5-5",
     messages=[{"role": "user", "content": "Hello"}],
     extra_body={"cache": False},  # Plugboard fields go in extra_body
 )
@@ -38,7 +38,7 @@ import OpenAI from "openai";
 
 const client = new OpenAI({ baseURL: "http://localhost:8765/v1", apiKey: "pb_your_key" });
 const reply = await client.chat.completions.create({
-  model: "anthropic-direct:claude-sonnet-5-5",
+  model: "claude-code:claude-sonnet-5-5",
   messages: [{ role: "user", content: "Hello" }],
 });
 ```
@@ -55,7 +55,7 @@ export PLUGBOARD_API_KEY
 ```bash
 curl http://localhost:8765/v1/chat/completions \
   -H "Authorization: Bearer ${PLUGBOARD_API_KEY:?Set PLUGBOARD_API_KEY}" -H "Content-Type: application/json" \
-  -d '{"model": "anthropic-direct:claude-sonnet-5-5", "messages": [{"role": "user", "content": "Hello"}]}'
+  -d '{"model": "claude-code:claude-sonnet-5-5", "messages": [{"role": "user", "content": "Hello"}]}'
 ```
 
 The repository also ships a small Python client, [`sdk/python`](../../sdk/python/README.md).
@@ -192,7 +192,7 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 }
 ```
 
-`code` is stable, test it rather than the text. `detail` echoes the model you sent, cut after 100 characters. A key limited by `allowed_models` gets `403` for a model outside its list, whether a provider knows it or not, so the `404` only tells it about models it may use. A budgeted key gets this `404` rather than a `402` for a missing price. A model with a known provider prefix (`anthropic-direct:no-such-model`) is still sent to that provider, which answers for it (`502` when it refuses).
+`code` is stable, test it rather than the text. `detail` echoes the model you sent, cut after 100 characters. A key limited by `allowed_models` gets `403` for a model outside its list, whether a provider knows it or not, so the `404` only tells it about models it may use. A budgeted key gets this `404` rather than a `402` for a missing price. A model with a known provider prefix (`<provider-id>:no-such-model`) is still sent to that provider, which answers for it (`502` when it refuses).
 
 `POST /v1/preflight` applies the same rule to each pair, read as `<provider>:<model>`: such a pair answers `"ok": false` with `"error": "model_not_found"`, and is neither pinged nor billed. As on chat, a limited key gets `forbidden_model` first, and a budgeted key gets `model_not_found` rather than `price_unavailable`.
 
@@ -212,7 +212,7 @@ There is no `Retry-After`: nobody knows when the provider comes back. A key limi
 
 ## MCP
 
-The MCP server (stdio, SSE or streamable HTTP) wraps the same API for MCP clients: `chat`, `chat_stream`, `list_models`, `embed`, `list_embedding_models`, `list_decision_models`, `decide`, `check_usage`, `provider_status`, plus the update-registry tools and, over stdio only and off by default, the admin tools `add_provider` and `refresh_catalog`. [`mcp.json`](mcp.json) gives each tool's input schema; [MCP server](../guide/mcp.md) explains how to install, configure and connect it.
+The MCP server (stdio, SSE or streamable HTTP) wraps the same API for MCP clients: `chat`, `chat_stream`, `list_models`, `embed`, `list_embedding_models`, `list_decision_models`, `decide`, `check_usage`, `inflight_requests`, `provider_status`, plus the update-registry tools and, over stdio only and off by default, the admin tools `add_provider` and `refresh_catalog`. [`mcp.json`](mcp.json) gives each tool's input schema; [MCP server](../guide/mcp.md) explains how to install, configure and connect it.
 
 ## Versioning
 
@@ -228,7 +228,7 @@ Fields not named in the contract may appear in answers (they pass through from t
 
 ```bash
 make contract         # regenerate docs/api/openapi.json and docs/api/mcp.json
-make contract-check   # what CI runs
+make contract-check   # fail when docs/api/ no longer matches the code
 ```
 
-The contract lives in `plugboard/api_contract.py`. A new public route, or a change to what a route returns, needs that file updated, `make contract`, and a `CONTRACT_VERSION` bump as above. `tests/test_api_contract.py` checks the routes, the committed file and real answers against it; the `mcp-contract` CI job checks `mcp.json`.
+The contract lives in `plugboard/api_contract.py`. A new public route, or a change to what a route returns, needs that file updated, `make contract`, and a `CONTRACT_VERSION` bump as above. `tests/test_api_contract.py` checks the routes, the committed file and real answers against it; the `mcp-contract` step of the local CI (`ci/pipeline.json`, run with `make ci`) checks `mcp.json`.
