@@ -173,7 +173,8 @@ async def test_switch_off_then_on_without_restart(app_client, mcp_tools):
     listed = await mcp_tools.list_models()
     assert "acme-direct:" in listed and "ollama:" not in listed
     out = await mcp_tools.chat(model="ollama:qwen3:8b", message="hi")
-    assert "HTTP 503" in out and "provider_disabled" in out
+    # The MCP tool gives the API's code and detail (4.14.0), not "HTTP 503".
+    assert out.startswith("Error: provider_disabled: ")
     out = json.loads(await mcp_tools.embed(input="hi", model=EMBEDDING_MODEL))
     assert out["error"]["code"] == "engine_unavailable"
     assert "Embedding provider unavailable" in out["error"]["message"]
