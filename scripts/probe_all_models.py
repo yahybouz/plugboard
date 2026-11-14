@@ -166,7 +166,9 @@ async def probe_all():
             )
 
             if is_terminal:
-                record_terminal_unavailable(real_model, reason=reason[:200])
+                record_terminal_unavailable(
+                    real_model, reason=reason[:200], provider_id=provider["id"]
+                )
                 print(f" [QUARANTINED] (Reason: {reason[:80]}...)")
                 results.append(
                     {"model_id": model_id, "status": "quarantined", "reason": reason}

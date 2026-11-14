@@ -8,7 +8,9 @@ def synthetic_observations(monkeypatch):
     from plugboard import model_availability, model_quarantine
 
     monkeypatch.setattr(model_availability, "load_model_status", lambda: {"models": {}})
-    monkeypatch.setattr(model_quarantine, "get_quarantined_suffixes", lambda: set())
+    monkeypatch.setattr(
+        model_quarantine, "get_quarantined_by_provider", lambda *a, **k: {}
+    )
 
 
 @pytest.mark.parametrize("shadow", [False, True])

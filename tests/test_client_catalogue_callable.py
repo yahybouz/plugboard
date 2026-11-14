@@ -55,7 +55,10 @@ def _prepare(tmp_path, monkeypatch, status=None, quarantined=()):
     import plugboard.model_quarantine as mq
 
     monkeypatch.setattr(ma, "load_model_status", lambda: {"models": dict(status or {})})
-    monkeypatch.setattr(mq, "get_quarantined_suffixes", lambda: set(quarantined))
+    # The quarantine is per provider (BUG-102): these names are agy-sub's.
+    monkeypatch.setattr(
+        mq, "get_quarantined_by_provider", lambda *a, **k: {"agy-sub": set(quarantined)}
+    )
     router.invalidate_models_cache()
 
 

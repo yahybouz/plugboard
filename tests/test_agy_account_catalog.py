@@ -276,18 +276,21 @@ async def test_quarantine_stays_hidden_and_untouched(
     qpath.write_text(
         json.dumps(
             {
-                "models": {
-                    "gemini-4-argon-high": {
-                        "consecutive_fails": QUARANTINE_THRESHOLD,
-                        "terminal": True,
-                        "terminal_reason": "account_unsupported",
-                    },
-                    "gemini-3.8-pro-low": {
-                        "consecutive_fails": QUARANTINE_THRESHOLD,
-                        "terminal": True,
-                        "terminal_reason": "model_unavailable",
-                    },
-                    "gemini-4-argon-low": {"consecutive_fails": 1},
+                # agy's own entries (BUG-102: the quarantine is per provider).
+                "providers": {
+                    AGY_PROVIDER_ID: {
+                        "gemini-4-argon-high": {
+                            "consecutive_fails": QUARANTINE_THRESHOLD,
+                            "terminal": True,
+                            "terminal_reason": "account_unsupported",
+                        },
+                        "gemini-3.8-pro-low": {
+                            "consecutive_fails": QUARANTINE_THRESHOLD,
+                            "terminal": True,
+                            "terminal_reason": "model_unavailable",
+                        },
+                        "gemini-4-argon-low": {"consecutive_fails": 1},
+                    }
                 }
             }
         )

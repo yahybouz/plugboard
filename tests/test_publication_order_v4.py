@@ -24,7 +24,9 @@ def synthetic_observations(monkeypatch):
     from plugboard import model_availability, model_quarantine
 
     monkeypatch.setattr(model_availability, "load_model_status", lambda: {"models": {}})
-    monkeypatch.setattr(model_quarantine, "get_quarantined_suffixes", lambda: set())
+    monkeypatch.setattr(
+        model_quarantine, "get_quarantined_by_provider", lambda *a, **k: {}
+    )
 
 
 @pytest.mark.parametrize("owner,alias,native", ACCOUNTS)
@@ -172,7 +174,11 @@ async def test_dated_promotion_and_health_keep_native_identity(
             }
         },
     )
-    monkeypatch.setattr(model_quarantine, "get_quarantined_suffixes", lambda: {dated})
+    monkeypatch.setattr(
+        model_quarantine,
+        "get_quarantined_by_provider",
+        lambda *a, **k: {owner: {dated}},
+    )
     original_alias_map = model_catalog.build_alias_map
     seen_raw = []
 

@@ -12,8 +12,16 @@ A single subsequent success resets the counter and removes the model
 from quarantine — so a temporary upstream outage cannot durably blacklist
 a model that came back to life.
 
-State lives in ``data/quarantined_models.json``. Atomic writes via a
-temp file so a crash mid-write cannot corrupt the file.
+An entry belongs to the provider it was observed on (BUG-102): the same
+model name can be refused by one provider and served by another, so a
+refusal only ever hides, labels or removes the model at its own provider.
+Entries recorded without a provider (every entry written before 4.14.1)
+cannot say whose refusal they are: they stay in the file, under ``models``,
+and are applied to no provider.
+
+State lives in ``data/quarantined_models.json``: ``providers`` maps a
+provider ID to its entries, ``models`` holds the entries without a provider.
+Atomic writes via a temp file so a crash mid-write cannot corrupt the file.
 """
 
 from __future__ import annotations
@@ -106,23 +114,62 @@ def _save_raw(state: Dict[str, Any], path: Path = _QUARANTINE_FILE) -> None:
         log.warning("quarantine: failed to persist (%s)", exc)
 
 
-def get_quarantined_suffixes(path: Path = _QUARANTINE_FILE) -> Set[str]:
-    """Return the set of model suffixes that are currently quarantined.
+def _entries(state: Dict[str, Any], provider_id: str) -> Dict[str, Any]:
+    """The entries of ``provider_id`` in ``state``, created when missing;
+    without a provider, the entries recorded for none."""
+    if not provider_id:
+        models = state.get("models")
+        if not isinstance(models, dict):
+            models = state["models"] = {}
+        return models
+    providers = state.get("providers")
+    if not isinstance(providers, dict):
+        providers = state["providers"] = {}
+    entries = providers.get(provider_id)
+    if not isinstance(entries, dict):
+        entries = providers[provider_id] = {}
+    return entries
 
-    A model is "quarantined" when its consecutive fail count is >=
-    :data:`QUARANTINE_THRESHOLD`. Called by :func:`router.list_models` on
-    every uncached refresh, so this stays cheap (single file read).
-    """
-    state = _load_raw(path)
-    models = state.get("models") or {}
-    if not isinstance(models, dict):
+
+def _quarantined(entries: Any) -> Set[str]:
+    if not isinstance(entries, dict):
         return set()
     return {
         suffix
-        for suffix, entry in models.items()
+        for suffix, entry in entries.items()
         if isinstance(entry, dict)
         and int(entry.get("consecutive_fails", 0) or 0) >= QUARANTINE_THRESHOLD
     }
+
+
+def get_quarantined_suffixes(
+    path: Path = _QUARANTINE_FILE, *, provider_id: Optional[str] = None
+) -> Set[str]:
+    """Return the model suffixes quarantined at ``provider_id``.
+
+    A model is "quarantined" when its consecutive fail count is >=
+    :data:`QUARANTINE_THRESHOLD`. Whoever hides, labels or removes a model
+    must name the provider it asks about: one provider's refusal says nothing
+    of another's (BUG-102). Without ``provider_id`` the names recorded for no
+    provider are returned, for the record only: they apply to nobody.
+    """
+    state = _load_raw(path)
+    if provider_id is None:
+        return _quarantined(state.get("models"))
+    providers = state.get("providers")
+    if not provider_id or not isinstance(providers, dict):
+        return set()
+    return _quarantined(providers.get(provider_id))
+
+
+def get_quarantined_by_provider(path: Path = _QUARANTINE_FILE) -> Dict[str, Set[str]]:
+    """Every provider's quarantined suffixes, in one file read. Called by
+    :func:`router.list_models` on every uncached refresh."""
+    providers = _load_raw(path).get("providers")
+    if not isinstance(providers, dict):
+        return {}
+    found = {pid: _quarantined(entries) for pid, entries in providers.items()}
+    return {pid: suffixes for pid, suffixes in found.items() if suffixes}
 
 
 def is_account_unsupported_error(reason: str) -> bool:
@@ -148,16 +195,18 @@ def record_failure(
     suffix: str,
     *,
     reason: str = "",
+    provider_id: str = "",
     path: Path = _QUARANTINE_FILE,
 ) -> Dict[str, Any]:
-    """Increment the consecutive-fail counter for ``suffix``.
+    """Increment the consecutive-fail counter of ``suffix`` at ``provider_id``.
 
     Returns the updated entry. The caller (smoke runner) logs the
     transition to quarantine when ``consecutive_fails`` crosses
-    :data:`QUARANTINE_THRESHOLD`.
+    :data:`QUARANTINE_THRESHOLD`. Without ``provider_id`` the entry is kept
+    for the record and applies to no provider.
     """
     state = _load_raw(path)
-    models = state.setdefault("models", {})
+    models = _entries(state, provider_id)
     entry = models.get(suffix) or {}
     entry["consecutive_fails"] = int(entry.get("consecutive_fails", 0) or 0) + 1
     entry["last_failure_at"] = _now_iso()
@@ -172,6 +221,7 @@ def record_account_unsupported(
     suffix: str,
     *,
     reason: str = "",
+    provider_id: str = "",
     path: Path = _QUARANTINE_FILE,
 ) -> Dict[str, Any]:
     """Immediately quarantine a model the current account cannot use."""
@@ -179,6 +229,7 @@ def record_account_unsupported(
         suffix,
         reason=reason,
         terminal_reason="account_unsupported",
+        provider_id=provider_id,
         path=path,
     )
 
@@ -188,11 +239,13 @@ def record_terminal_unavailable(
     *,
     reason: str = "",
     terminal_reason: str = "model_unavailable",
+    provider_id: str = "",
     path: Path = _QUARANTINE_FILE,
 ) -> Dict[str, Any]:
-    """Immediately quarantine a model for a non-transient upstream refusal."""
+    """Immediately quarantine a model, at ``provider_id``, for a non-transient
+    upstream refusal."""
     state = _load_raw(path)
-    models = state.setdefault("models", {})
+    models = _entries(state, provider_id)
     entry = models.get(suffix) or {}
     entry["consecutive_fails"] = QUARANTINE_THRESHOLD
     entry["last_failure_at"] = _now_iso()
@@ -205,18 +258,22 @@ def record_terminal_unavailable(
     return entry
 
 
-def record_success(suffix: str, path: Path = _QUARANTINE_FILE) -> None:
-    """Reset the fail counter for ``suffix`` and remove it from quarantine.
+def record_success(
+    suffix: str, path: Path = _QUARANTINE_FILE, *, provider_id: str = ""
+) -> None:
+    """Reset the fail counter of ``suffix`` at ``provider_id`` and remove it
+    from that provider's quarantine.
 
     A single successful probe is enough to rehabilitate a model — the
     smoke test is conservative (real prompt, real provider), so a green
     run is a strong signal the upstream issue is gone.
     """
     state = _load_raw(path)
-    models = state.get("models") or {}
+    models = _entries(state, provider_id)
     if suffix in models:
         del models[suffix]
-        state["models"] = models
+        if provider_id and not models:
+            del state["providers"][provider_id]
         _save_raw(state, path)
 
 

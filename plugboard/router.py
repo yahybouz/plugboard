@@ -1342,13 +1342,18 @@ async def forward(
                         )
 
                         if is_account_unsupported_error(reason):
-                            record_account_unsupported(real_model, reason=reason[:200])
+                            record_account_unsupported(
+                                real_model,
+                                reason=reason[:200],
+                                provider_id=provider["id"],
+                            )
                             invalidate_models_cache()
                         elif is_terminal_model_unavailable_error(reason):
                             record_terminal_unavailable(
                                 real_model,
                                 reason=reason[:200],
                                 terminal_reason="model_unavailable",
+                                provider_id=provider["id"],
                             )
                             invalidate_models_cache()
                     except Exception as quarantine_exc:
@@ -1885,13 +1890,16 @@ async def _stream_route(
                 if refused:
                     pass
                 elif is_account_unsupported_error(reason):
-                    record_account_unsupported(real_model, reason=reason[:200])
+                    record_account_unsupported(
+                        real_model, reason=reason[:200], provider_id=provider["id"]
+                    )
                     invalidate_models_cache()
                 elif is_terminal_model_unavailable_error(reason):
                     record_terminal_unavailable(
                         real_model,
                         reason=reason[:200],
                         terminal_reason="model_unavailable",
+                        provider_id=provider["id"],
                     )
                     invalidate_models_cache()
             except Exception as quarantine_exc:
@@ -2563,12 +2571,14 @@ async def list_models() -> List[Dict[str, Any]]:
     # a row — typically a deprecation we missed or a vendor pulling the
     # rug under us. The next successful probe rehabilitates it.
     try:
-        from plugboard.model_quarantine import get_quarantined_suffixes
+        from plugboard.model_quarantine import get_quarantined_by_provider
 
-        quarantined = get_quarantined_suffixes()
+        # Per provider: a name one provider refuses is not labelled at the
+        # others that serve it (BUG-102).
+        quarantined = get_quarantined_by_provider()
     except Exception as exc:  # noqa: BLE001
         log.debug("list_models: quarantine read failed (%s)", exc)
-        quarantined = set()
+        quarantined = {}
 
     # Load persisted connectivity status from model_status.json.
     # Falls back gracefully to quarantine-only logic if file is absent.
@@ -2611,7 +2621,7 @@ async def list_models() -> List[Dict[str, Any]]:
         else:
             m["connected"] = False
             m["last_probed_at"] = None
-        if real_suffix in quarantined and entry is None:
+        if real_suffix in quarantined.get(m["owned_by"], ()) and entry is None:
             m["reason"] = "quarantined"
         m["id"] = publication_ids[(m["owned_by"], raw_id)]
 
