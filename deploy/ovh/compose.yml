@@ -10,7 +10,7 @@ services:
     # keeps them equal), so a plain `up -d` never starts an older image.
     # PLUGBOARD_IMAGE picks another tag, such as the previous image kept for
     # a rollback (docs/runbooks/rollback-release.md).
-    image: ${PLUGBOARD_IMAGE:-plugboard:private-full-v4.13.0}
+    image: ${PLUGBOARD_IMAGE:-plugboard:private-full-v4.14.0}
     restart: unless-stopped
     env_file:
       - ${PLUGBOARD_ENV_FILE:-/etc/plugboard/runtime.env}

@@ -22,7 +22,7 @@
     {"id": "ruff", "argv": ["{scratch}/venv/bin/ruff", "check", "--no-cache", "plugboard/", "tests/", "sdk/python/"], "timeout_seconds": 300},
     {"id": "ruff-format", "argv": ["{scratch}/venv/bin/ruff", "format", "--check", "--no-cache", "plugboard/", "tests/", "sdk/python/"], "timeout_seconds": 300},
     {"id": "registre-json", "argv": ["{scratch}/venv/bin/python", "-m", "json.tool", "plugboard/registry.example.json", "{tmp}/registry.json"], "timeout_seconds": 60},
-    {"id": "pytest", "description": "pytest + couverture (plancher 80 %,).",
+    {"id": "pytest", "description": "pytest + couverture (plancher 80 %).",
      "argv": ["{scratch}/venv/bin/python", "-m", "pytest", "tests/", "-q", "-p", "no:cacheprovider", "--cov=plugboard",
       "--cov-report=term", "--cov-report=xml:{artifacts}/coverage.xml", "--cov-fail-under=80", "--junitxml={artifacts}/report.xml"],
      "timeout_seconds": 2400},

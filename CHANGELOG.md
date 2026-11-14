@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.14.0] — 2026-11-14
+
 ### Added
 
 - **`scripts/recette_acces.py`: one command proves access by API and MCP** (lot B): with `PLUGBOARD_URL` and `PLUGBOARD_KEY` (a client key) in the environment, it makes a short real call per provider the key sees through the API, the API in a stream (first byte measured) and the MCP `chat` tool over stdio, checks that the MCP catalogue lists exactly the API's model IDs, prints a table and writes a JSON file; it exits non-zero when a surface fails, never prints the key and keeps to 60 requests a minute. Standard library only.
@@ -36,7 +38,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **The pipeline is local only.** `.gitlab-ci.yml` and `.github/workflows/ci.yml` are removed: a push to GitLab or GitHub runs nothing. The local CI is `ci/pipeline.json`, run with `python3 /srv/dev/.ci/outils/ci.py etat | lancer | deployer`.
 
-- **Documentation aligned on 4.13.0**: README, client guide, configuration, supervision and operations pages reference only commands, variables and routes present in the code.
+- **Documentation aligned on the code**: README, client guide, configuration, supervision and operations pages reference only commands, variables and routes present in the code.
 
 - **Configuration and runbooks describe Ollama as off by default** (PLU-53): `docs/guide/configuration.md` says what `OLLAMA_ENABLED=false` does since this release (it also turns off a registered `ollama` provider; the page said the opposite), and the `provider-down`, `move-install` and `prod-gate` runbooks treat Ollama as optional: the production smoke key holds a CLI subscription model and its embeddings step is a `SKIP`.
 

@@ -54,7 +54,7 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 `GET /health` is public and cheap, suitable for container and deployment health checks. It always answers `200` while the process runs, reads no file, and shows only the status and the version:
 
 ```json
-{"ok": true, "version": "4.13.0"}
+{"ok": true, "version": "4.14.0"}
 ```
 
 The list of providers is on the admin `GET /providers`. The client authentication posture is the `auth` check of `GET /health/ready`: a deployment gate that must refuse an instance whose client authentication is off reads that route, which answers `503` when `API_KEY` is empty outside dev mode.
@@ -62,7 +62,7 @@ The list of providers is on the admin `GET /providers`. The client authenticatio
 `GET /health/ready` is public too and says whether the instance can serve requests: `200` when it is ready, `503` with the same body when it is not. It never calls a provider or starts a CLI, and its result is kept for 5 seconds:
 
 ```json
-{"ready": true, "version": "4.13.0", "checks": {"usage_db": "ok", "cli": "ok", "auth": "ok", "ollama": "not_configured", "background": "ok"}}
+{"ready": true, "version": "4.14.0", "checks": {"usage_db": "ok", "cli": "ok", "auth": "ok", "ollama": "not_configured", "background": "ok"}}
 ```
 
 | Check | States | Blocks readiness |
