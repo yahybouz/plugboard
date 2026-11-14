@@ -47,19 +47,19 @@ services:
       PLUGBOARD_INTERNET_CHECK_ON_BOOT: "0"
       PRICING_SCHEDULER_DISABLED: "0"
       PLUGBOARD_LLM_PRICING: "0"
-      OLLAMA_ENABLED: "true"
-      OLLAMA_URL: http://172.30.114.1:11434
+      # Ollama is off by default (decision YB 14/11): no bridge network, no
+      # URL, no embedding model. To bring it back: OLLAMA_ENABLED "true",
+      # OLLAMA_URL, PLUGBOARD_EMBEDDING_MODELS and the ollama-private network
+      # (see README, Ollama bridge).
+      OLLAMA_ENABLED: "false"
       # Publish installed references only, not an unverified paid cloud catalog.
       PLUGBOARD_OLLAMA_CLOUD_AUTOSYNC: "0"
       # Small VM: only Ollama Cloud models (:cloud, manifest-only) can be
       # pulled; local pulls must leave 5 GB free (admin can override).
       PLUGBOARD_LOCAL_MODEL_DOWNLOADS: "0"
       PLUGBOARD_OLLAMA_MIN_FREE_GB: "5"
-      # Exact identities served by POST /v1/embeddings (client key only).
-      PLUGBOARD_EMBEDDING_MODELS: "ollama:qwen3-embedding:0.6b"
     networks:
       - default
-      - ollama-private
     ports:
       - "127.0.0.1:8765:8765"
     volumes:
@@ -87,16 +87,13 @@ services:
         max-file: "3"
 networks:
   # Fixed, so its gateway (FORWARDED_ALLOW_IPS above) never changes when
-  # the network is recreated (D-50). Next to plugboard-ollama
-  # (172.30.114.0/29, install-ollama-bridge.sh), never overlapping it.
+  # the network is recreated (D-50). Never overlapping plugboard-ollama
+  # (172.30.114.0/29, install-ollama-bridge.sh), if Ollama is turned back on.
   default:
     ipam:
       config:
         - subnet: 172.30.115.0/29
           gateway: 172.30.115.1
-  ollama-private:
-    external: true
-    name: plugboard-ollama
 volumes:
   data:
   cli-home:

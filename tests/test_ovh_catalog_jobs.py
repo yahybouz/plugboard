@@ -102,7 +102,7 @@ def test_compose_protected_restrictions_unchanged():
     assert env["PLUGBOARD_OLLAMA_CLOUD_AUTOSYNC"] == "0"
     assert not any("GEMINI_API_KEY" in key or "GOOGLE_API_KEY" in key for key in env)
     assert gateway["ports"] == ["127.0.0.1:8765:8765"]
-    assert gateway["networks"] == ["default", "ollama-private"]
+    assert gateway["networks"] == ["default"]
     assert gateway["cap_drop"] == ["ALL"]
     assert "no-new-privileges:true" in gateway["security_opt"]
     assert "apparmor=plugboard-codex" in gateway["security_opt"]

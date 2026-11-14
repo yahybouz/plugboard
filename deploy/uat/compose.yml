@@ -30,12 +30,10 @@ services:
       PLUGBOARD_MODEL_REFRESH_PROBE_KINDS: "claude"
       PLUGBOARD_INTERNET_CHECK_ON_BOOT: "0"
       PLUGBOARD_LLM_PRICING: "0"
-      # Ollama UAT = relay with token (ollama-proxy, rootless docker of agent);
-      # PLUGBOARD_OLLAMA_TOKEN is in secrets/runtime.env.
-      OLLAMA_ENABLED: "true"
-      OLLAMA_URL: http://172.17.0.1:11435
-      # Embeddings via the Ollama relay (recette BUG-25): exact model names.
-      PLUGBOARD_EMBEDDING_MODELS: "ollama:qwen3-embedding:0.6b-q8_0"
+      # Ollama is off by default (decision YB 14/11): no relay, no embedding
+      # model. To bring it back, set OLLAMA_ENABLED "true", OLLAMA_URL and
+      # PLUGBOARD_EMBEDDING_MODELS (see deploy/uat/README.md).
+      OLLAMA_ENABLED: "false"
       PLUGBOARD_OLLAMA_CLOUD_AUTOSYNC: "0"
       PLUGBOARD_LOCAL_MODEL_DOWNLOADS: "0"
     ports:

@@ -94,9 +94,9 @@ def test_compose_env_example_names_the_image():
     assert _env_names("compose.env.example") == ["PLUGBOARD_IMAGE"]
 
 
-def test_runtime_env_example_names_exactly_the_four_secrets():
+def test_runtime_env_example_names_exactly_the_three_secrets():
     assert sorted(_env_names("runtime.env.example")) == sorted(
-        ["ADMIN_KEY", "API_KEY", "ENCRYPTION_KEY", "PLUGBOARD_OLLAMA_TOKEN"]
+        ["ADMIN_KEY", "API_KEY", "ENCRYPTION_KEY"]
     )
 
 
