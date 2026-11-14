@@ -45,7 +45,7 @@ In every mode:
 - Per model family, only the `PLUGBOARD_MODEL_EXPOSE_VERSIONS` newest versions are listed (default 2); `PLUGBOARD_MODEL_EXPOSE=all` lists every model. A provider's default model and models already used stay listed.
 - `PLUGBOARD_TOP_N_PER_PROVIDER` can also cap each provider (default `0`, no cap), ranked by benchmark score and recency. Ollama models are grouped by family and not truncated.
 - Every published model keeps its provider's ID (`antigravity-via-agy-cli:gemini-3.8-flash-medium`), except for safe Claude, Codex and Gemini CLI display aliases described above.
-- Models in `PLUGBOARD_MODEL_DENYLIST` are hidden. Quarantined models stay listed with `"connected": false`. A model whose last connectivity probe failed less than 36 hours ago is left out of the catalogue a client key sees (the admin key sees it, with `"connected": false`); chat still accepts it. A model never probed, or probed longer ago, stays listed.
+- Models in `PLUGBOARD_MODEL_DENYLIST` are hidden. Quarantined models stay listed with `"connected": false`. A model whose last connectivity probe failed less than 36 hours ago is left out of the catalogue a client key sees (the admin key sees it, with `"connected": false`); chat still accepts it. A model never probed, or probed longer ago, stays listed: with no inference probe turned on (`PLUGBOARD_MODEL_REFRESH_PROBE_KINDS` empty, the default and the shipped configurations), no CLI model is probed, so none is left out.
 
 A model hidden by exposure filters can still be called with its unambiguous explicit `<provider-id>:<model>` ID, for example `ollama:llama3.2` for a locally pulled Ollama model. An identity omitted because of a namespace collision has no guaranteed address until the configuration is unambiguous.
 
