@@ -421,6 +421,29 @@ def test_an_unlimited_key_can_be_accepted_explicitly(gateway):
     assert any("not limited" in line for line in _lines(proc, "WARN"))
 
 
+def test_the_pass_line_of_an_accepted_unlimited_key_says_it_is_not_limited(gateway):
+    """BUG-101: the PASS line used to end with "key limited" for a key that
+    is not limited."""
+    server, gw = gateway
+    gw.behavior["me_allowed"] = []
+
+    proc = _smoke(server, "--allow-unlimited-key")
+
+    [line] = [ln for ln in _lines(proc, "PASS") if ln.startswith("PASS models:")]
+    assert "key limited" not in line
+    assert "key not limited" in line
+    assert "--allow-unlimited-key" in line
+
+
+def test_the_pass_line_of_a_limited_key_is_unchanged(gateway):
+    server, _ = gateway
+
+    proc = _smoke(server)
+
+    [line] = [ln for ln in _lines(proc, "PASS") if ln.startswith("PASS models:")]
+    assert "model(s), key limited (" in line
+
+
 def test_a_4_4_0_model_list_with_the_model_allowed_passes(gateway):
     server, gw = gateway
     gw.behavior["compatible"] = {MODEL: True, "ollama:other": False}
