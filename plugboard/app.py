@@ -3291,6 +3291,13 @@ async def chat_completions(
 # -- /v1/models --------------------------------------------------------------
 
 
+def _not_callable_now(item: Dict[str, Any]) -> bool:
+    """A catalogue entry that is in quarantine or whose last probe failed."""
+    if item.get("reason") == "quarantined":
+        return True
+    return item.get("connected") is False and bool(item.get("last_probed_at"))
+
+
 async def _models_for_key(
     request: Request, client_id: Optional[str]
 ) -> List[Dict[str, Any]]:
@@ -3303,10 +3310,15 @@ async def _models_for_key(
     key_record = _get_request_key_record(request, client_id=client_id)
     # One guard for the whole list: its registry snapshot is read once.
     guard = _model_route_guard(client_id or "", key_record)
+    # A client key is offered only what can be called now: a model in
+    # quarantine or whose last probe failed is left out. The admin keeps the
+    # full view (dashboard, diagnostics).
+    callable_only = bool(client_id) and client_id != "admin"
     return [
         dict(item, account_compatible=True)
         for item in await list_models()
         if _guard_accepts(guard, item.get("id", ""))
+        and not (callable_only and _not_callable_now(item))
     ]
 
 
