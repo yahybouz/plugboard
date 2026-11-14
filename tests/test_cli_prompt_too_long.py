@@ -112,6 +112,12 @@ def cli_process(monkeypatch):
         proc.returncode = returncode
         proc.pid = _PID
         proc.communicate = AsyncMock(return_value=(stdout, stderr))
+        # A streamed chat reads the pipes itself (claude and agy write their
+        # answer as they go, 4.14.0): the same bytes, then the end of file.
+        proc.stdout.read = AsyncMock(side_effect=[stdout, b""])
+        proc.stderr.read = AsyncMock(return_value=stderr)
+        proc.stdin.drain = AsyncMock()
+        proc.wait = AsyncMock(return_value=returncode)
 
         async def _spawn(*args, **kwargs):
             spawned.append(args)
