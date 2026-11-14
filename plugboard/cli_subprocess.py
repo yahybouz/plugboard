@@ -247,7 +247,9 @@ _PROVIDER_ENV_ALLOWLIST: Dict[str, frozenset] = {
             "CLOUDSDK_CONFIG",
         }
     ),
-    # agy keeps its Google sign-in under ~/.gemini/antigravity: HOME is enough.
+    # agy keeps its Google sign-in under ~/.gemini/antigravity-cli
+    # (antigravity-oauth-token): HOME is enough. It records each conversation
+    # in the same directory, which must therefore never be deleted (BUG-97).
     "agy": frozenset(),
     "claude": frozenset(
         {
