@@ -199,7 +199,7 @@ Not built yet:
 
 ## Contributing
 
-The canonical repository is on GitLab, with a read-only mirror on GitHub. Please open issues and merge requests on GitLab. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
+The canonical repository is on GitLab, with a read-only mirror on GitHub. Please open issues and merge requests on GitLab. Tests and image builds run in the local CI (`ci/pipeline.json`); a push to either forge triggers no pipeline. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

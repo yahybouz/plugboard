@@ -56,7 +56,7 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 
 ### CI secret-scan range after a history replacement
 
-**What:** In `.gitlab-ci.yml`, fall back to a full scan when `CI_COMMIT_BEFORE_SHA` is not an ancestor of `CI_COMMIT_SHA`, and fail when gitleaks scans 0 commits on a non-empty push. Add gitleaks to the GitHub mirror CI. Mark the smoke-job variables Protected and restrict the report artifact.
+**What:** In the `gitleaks` step of `ci/pipeline.json` (local CI, the only pipeline since the remote CI was removed in lot D), fall back to a full scan when the base commit is not an ancestor of the tested commit, and fail when gitleaks scans 0 commits on a non-empty push.
 
 **Why:** After the planned fresh-history publication the scan range is invalid and gitleaks passes without scanning.
 
