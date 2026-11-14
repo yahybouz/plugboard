@@ -5,7 +5,10 @@ Not run by the CI; it makes REAL inference calls (a short prompt each).
 For each ``--target`` it measures, with 1 then 3 simultaneous calls (``--concurrency``):
 
 * ``cli``          the bare CLI (claude, codex or agy), prompt on stdin: time to
-                   its first byte of output and total time;
+                   its first byte of output (its first event) and total time. It
+                   is the command Plugboard spawns (same options, directory and
+                   environment, read from plugboard/cli_subprocess.py), so run
+                   it from the repository with the gateway's environment;
 * ``gateway``      a chat through ``<url>/v1/chat/completions``, no stream: total;
 * ``gateway-sse``  the same chat streamed: time to the first byte, time to the
                    first word (first ``delta`` with content) and total.
@@ -53,17 +56,38 @@ import sys
 import threading
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Sequence
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlsplit
 
-# Bare command of each CLI: the prompt goes to stdin, as Plugboard sends it.
-BARE_ARGV = {
-    "claude": ["claude", "-p", "--tools", "", "--model"],
-    "codex": ["codex", "exec", "--skip-git-repo-check", "--model"],
-    "agy": ["agy", "--model"],
-}
-BARE_STDIN_OPERAND = {"codex": ["-"]}
+KINDS = ("claude", "codex", "agy")
 MODES = ("cli", "gateway", "gateway-sse")
+
+
+def bare_command(kind: str, native: str) -> Tuple[List[str], str, Dict[str, str]]:
+    """(argv, cwd, environment) of the bare CLI: the command Plugboard spawns.
+
+    Taken from plugboard/cli_subprocess.py, never copied here: without its
+    isolation options a CLI loads the host's settings, MCP servers and commands
+    (claude then exits 1 on a prompt of 295 000 tokens), and the measure is not
+    the one of the call the gateway makes. The prompt goes to stdin.
+    """
+    # Imported here: --no-cli needs neither the repository nor its environment.
+    root = str(Path(__file__).resolve().parent.parent)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from plugboard import cli_subprocess as cs
+
+    backend = cs.CLI_BACKENDS[kind]
+    cwd = cs._clean_spawn_cwd()
+    argv = [backend.command, *backend.args]
+    if kind == "codex":
+        argv.extend(cs.codex_isolation_args(cwd))
+    if backend.model_arg:
+        argv.extend([backend.model_arg, native])
+    if backend.stdin_arg:
+        argv.append(backend.stdin_arg)
+    return argv, cwd, cs.build_child_env(kind)
 
 
 def prompt() -> str:
@@ -91,7 +115,10 @@ def _scrub(text: str, secrets: Sequence[str]) -> str:
 
 def run_cli(kind: str, native: str, timeout: float) -> Dict[str, Any]:
     """One bare CLI call: time to its first stdout byte, total, exit code."""
-    argv = [*BARE_ARGV[kind], native, *BARE_STDIN_OPERAND.get(kind, [])]
+    try:
+        argv, cwd, env = bare_command(kind, native)
+    except ImportError as exc:
+        return {"ok": False, "error": f"plugboard not importable: {exc.name}"}
     exe = shutil.which(argv[0])
     if exe is None:
         return {"ok": False, "error": f"{argv[0]} not installed"}
@@ -102,7 +129,8 @@ def run_cli(kind: str, native: str, timeout: float) -> Dict[str, Any]:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            cwd="/tmp",
+            cwd=cwd,
+            env=env,
         )
     except OSError as exc:
         return {"ok": False, "error": repr(exc)[:120]}
@@ -292,7 +320,7 @@ def _plain_http_allowed(url: str, allow_http: bool) -> bool:
 def parse_target(spec: str) -> Dict[str, str]:
     kind, _, rest = spec.partition("=")
     gateway_model, _, native = rest.partition("=")
-    if kind not in BARE_ARGV or not gateway_model or not native:
+    if kind not in KINDS or not gateway_model or not native:
         raise ValueError(f"bad --target {spec!r}: KIND=GATEWAY_MODEL=NATIVE_MODEL")
     return {"kind": kind, "gateway_model": gateway_model, "native": native}
 

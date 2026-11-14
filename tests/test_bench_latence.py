@@ -203,3 +203,70 @@ def test_busy_refusals_at_3_calls_are_not_failures(gateway):
         ["--target", TARGET, "--no-cli", "--rounds", "1", "--concurrency", "3"]
     )
     assert rc == 0
+
+
+@pytest.mark.parametrize("kind", ["claude", "codex", "agy"])
+def test_the_bare_cli_is_the_command_plugboard_spawns(kind):
+    """Without Plugboard's isolation options the bare CLI loads the host's
+    settings, MCP servers and commands: on the UAT, ``claude -p --tools ""``
+    exits 1 with a 295 000-token prompt. The bench takes the options from
+    plugboard/cli_subprocess.py, so both always run the same command."""
+    from plugboard import cli_subprocess as cs
+
+    backend = cs.CLI_BACKENDS[kind]
+    argv, cwd, env = bench.bare_command(kind, "the-model")
+    assert argv[0] == backend.command
+    assert argv[1 : 1 + len(backend.args)] == backend.args
+    assert argv[argv.index("--model") + 1] == "the-model"
+    assert cwd == cs._clean_spawn_cwd() and cwd != "/tmp"
+    assert env == cs.build_child_env(kind)
+    if kind == "codex":
+        isolation = cs.codex_isolation_args(cwd)
+        assert isolation and all(opt in argv for opt in isolation)
+        assert argv[-1] == "-"  # the operand that makes codex read stdin
+    else:
+        assert argv[-1] == "the-model"
+
+
+def test_the_bare_claude_carries_every_isolation_option():
+    argv, _, _ = bench.bare_command("claude", "haiku")
+    for option, value in (
+        ("--permission-mode", "default"),
+        ("--tools", ""),
+        ("--setting-sources", ""),
+    ):
+        assert argv[argv.index(option) + 1] == value
+    assert "--disable-slash-commands" in argv and "--strict-mcp-config" in argv
+
+
+def test_the_bare_agy_keeps_its_sandbox():
+    argv, _, _ = bench.bare_command("agy", "flash")
+    assert "--sandbox" in argv and "--disable-slash-commands" in argv
+    assert "--dangerously-skip-permissions" not in argv
+
+
+def test_run_cli_spawns_the_isolated_command(monkeypatch, tmp_path):
+    """The options reach the process, and the server's secrets do not."""
+    seen = tmp_path / "argv.txt"
+    exe = tmp_path / "claude"
+    exe.write_text(
+        "#!/bin/sh\ncat >/dev/null\n"
+        f'for a in "$@"; do printf \'[%s]\\n\' "$a"; done > {seen}\n'
+        f'printf \'cwd=%s\\nadmin=%s\\n\' "$PWD" "$ADMIN_KEY" >> {seen}\n'
+        "echo PONG\n"
+    )
+    exe.chmod(exe.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setenv("PATH", f"{tmp_path}:/usr/bin:/bin")
+    monkeypatch.setenv("ADMIN_KEY", "not-for-the-cli")
+    result = bench.run_cli("claude", "haiku", 10)
+    assert result["ok"], result
+    got = seen.read_text()
+    for option in (
+        "[--strict-mcp-config]",
+        "[--disable-slash-commands]",
+        "[--setting-sources]\n[]",
+        "[--permission-mode]\n[default]",
+        "[--model]\n[haiku]",
+    ):
+        assert option in got, got
+    assert "cwd=/tmp\n" not in got and "not-for-the-cli" not in got
