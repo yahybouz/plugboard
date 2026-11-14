@@ -204,3 +204,40 @@ async def test_agy_error_result_is_classified_as_before(fake_cli):
             "agy", {"model": "m", "messages": BODY["messages"]}, on_delta=lambda t: None
         )
     assert info.value.quota is True
+
+
+async def test_agy_non_json_line_with_exit_0_is_an_error(fake_cli):
+    # Captured on the UAT: an empty stdin made agy print this and exit 0.
+    fake_cli(["CLI error: bubbletea: error opening TTY"], exit_code=0)
+    with pytest.raises(CliSubprocessError, match="invalid JSON"):
+        await cli_subprocess.complete(
+            "agy", {"model": "m", "messages": BODY["messages"]}, on_delta=lambda t: None
+        )
+
+
+async def test_agy_is_never_launched_with_an_empty_prompt(fake_cli):
+    argv_log = fake_cli([AGY_RESULT])
+    with pytest.raises(RuntimeError, match="Empty prompt"):
+        await cli_subprocess.complete(
+            "agy", {"model": "m", "messages": [{"role": "user", "content": "  "}]}
+        )
+    assert not argv_log.exists()
+
+
+async def test_agy_invalid_model_result_is_an_error(fake_cli):
+    err = json.dumps(
+        {
+            "event": "result",
+            "result": {
+                "conversation_id": "",
+                "status": "ERROR",
+                "response": "",
+                "error": "invalid model selection x",
+            },
+        }
+    )
+    fake_cli([err], exit_code=1)
+    with pytest.raises(CliSubprocessError, match="invalid model selection"):
+        await cli_subprocess.complete(
+            "agy", {"model": "x", "messages": BODY["messages"]}, on_delta=lambda t: None
+        )
