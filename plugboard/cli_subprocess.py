@@ -655,9 +655,11 @@ def agy_private_tmp(spawn_cwd: str) -> Iterator[str]:
     (real run on the UAT, 14/11). With none set it took ``/tmp``, shared with
     the launch directories of the other requests: it created files there and
     overwrote one in another private directory. Each request therefore gets
-    its own: a fresh directory under its launch directory (``mkdtemp``, mode
-    0700), holding nothing of the server or of another request, gone when the
-    request ends. This bounds where agy writes; it is not a sandbox.
+    its own: a fresh directory under the launch directory of the CLIs
+    (``mkdtemp``, mode 0700), holding nothing of the server or of another
+    request, gone when the request ends. This bounds the writes a prompt can
+    make through agy's file tool; it is not a sandbox, and agy still keeps
+    its own record of each conversation under its home (BUG-97).
     """
     path = tempfile.mkdtemp(prefix="agy-tmp-", dir=spawn_cwd)
     try:

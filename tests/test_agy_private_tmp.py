@@ -1,8 +1,8 @@
 """agy writes without asking inside ``TMPDIR`` (real run on the UAT, agy 1.4.4,
 14/11): with none set it falls back on the shared ``/tmp``, where the launch
 directories of the other requests live. Plugboard gives each agy request its
-own ``TMPDIR``: a private directory under the request's launch directory,
-removed when the request ends, however it ends.
+own ``TMPDIR``: a private directory under the directory the CLIs are launched
+from, removed when the request ends, however it ends.
 
 A real process is spawned (a shell script named ``agy``), so the directory is
 looked at while the CLI runs and after the gateway is done with it.
@@ -65,7 +65,7 @@ def _assert_private(seen: dict, spawn: Path, server_tmp: Path) -> None:
     tmpdir = seen["TMPDIR"]
     assert tmpdir, "agy must be given a TMPDIR"
     assert seen["cwd"] == str(spawn)
-    # Under the launch directory of the request, never the shared one.
+    # Under the directory the request was launched from, never the shared /tmp.
     assert os.path.dirname(tmpdir) == str(spawn)
     assert tmpdir not in ("/tmp", tempfile.gettempdir(), str(server_tmp))
     assert seen["mode"] == "700"
