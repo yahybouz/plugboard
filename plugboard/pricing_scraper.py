@@ -559,9 +559,13 @@ def _ollama_configured() -> bool:
     except Exception as exc:  # noqa: BLE001 - a broken store must not stop pricing
         log.warning("ollama pricing: cannot read providers: %s", exc)
         return False
+    # A provider turned off (switch or OLLAMA_ENABLED=false) is not configured.
     return any(
-        str(p.get("id") or "").startswith("ollama")
-        or ":11434" in (p.get("base_url") or "")
+        p.get("is_active", True)
+        and (
+            str(p.get("id") or "").startswith("ollama")
+            or ":11434" in (p.get("base_url") or "")
+        )
         for p in providers
     )
 

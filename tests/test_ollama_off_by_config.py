@@ -214,3 +214,111 @@ async def test_embeddings_name_the_configuration_when_ollama_is_off(
     assert detail.startswith("Embedding provider unavailable")
     assert "OLLAMA_ENABLED=false" in detail
     assert calls == []
+
+
+# ── Background work: nothing reaches Ollama, nothing logs an error ──────────
+
+
+@pytest.fixture
+def no_daemon(monkeypatch):
+    """Any call to the daemon, the relay or ollama.com fails the test."""
+    calls: list = []
+
+    async def _refused(*_args, **_kwargs):
+        calls.append("daemon")
+        raise AssertionError("Ollama is off: no call is allowed")
+
+    for name in ("check_available", "list_models", "discover_cloud_whitelisted_ids"):
+        monkeypatch.setattr(ollama, name, _refused)
+    return calls
+
+
+async def test_the_boot_registers_and_syncs_nothing(app_client, config_off, no_daemon):
+    assert await ollama.bootstrap_ollama() is None
+    assert no_daemon == []
+
+
+async def test_the_boot_with_no_provider_registered_calls_nothing(
+    bare, no_daemon, caplog
+):
+    assert await ollama.bootstrap_ollama() is None
+    assert config.get_provider("ollama") is None
+    assert no_daemon == []
+    assert not [r for r in caplog.records if r.levelname in ("WARNING", "ERROR")]
+
+
+async def test_the_watchdog_does_not_ping_ollama(
+    app_client, config_off, monkeypatch, caplog
+):
+    import asyncio
+    from types import SimpleNamespace
+
+    from plugboard import provider_watchdog
+
+    pinged: list = []
+
+    async def _ping(provider_id, force_deep=False):
+        pinged.append(provider_id)
+        return {"ok": True, "check": "shallow"}
+
+    async def _stop(_seconds):
+        provider_watchdog._running = False
+
+    monkeypatch.setattr(provider_watchdog, "ping_provider", _ping)
+    monkeypatch.setattr(
+        provider_watchdog, "asyncio", SimpleNamespace(sleep=_stop), raising=False
+    )
+    monkeypatch.setattr(provider_watchdog, "_running", True)
+    await provider_watchdog._watchdog_loop()
+    assert "ollama" not in pinged
+    assert pinged, "the other providers are still watched"
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
+    assert asyncio  # the real module is untouched for the other tests
+
+
+async def test_the_connectivity_probes_skip_ollama(
+    app_client, config_off, monkeypatch, no_daemon
+):
+    from plugboard import model_availability
+
+    probed: list = []
+
+    async def _probe(provider, *_a, **_kw):
+        probed.append(provider.get("id"))
+        return {}
+
+    monkeypatch.setattr(model_availability, "probe_ollama_provider", _probe)
+    await model_availability.run_connectivity_probes(probe_kinds={"ollama"})
+    assert probed == []
+    assert no_daemon == []
+
+
+async def test_the_price_job_does_not_read_ollama_com(
+    app_client, config_off, monkeypatch
+):
+    import aiohttp
+
+    from plugboard import pricing_scraper
+
+    def _no_session(*_a, **_kw):
+        raise AssertionError("Ollama is off: ollama.com must not be read")
+
+    monkeypatch.setattr(aiohttp, "ClientSession", _no_session)
+    assert pricing_scraper._ollama_configured() is False
+    assert await pricing_scraper._fetch_ollama_pricing() == {}
+
+
+async def test_ready_stays_200_and_reports_ollama_as_not_configured(
+    app_client, config_off, monkeypatch, no_daemon
+):
+    from plugboard import readiness
+
+    readiness.reset_cache()
+    client, _auth, _key, _calls = app_client
+    resp = await client.get("/health/ready")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ready"] is True
+    assert body["checks"]["ollama"] == "not_configured"
+    assert no_daemon == []
+    readiness.reset_cache()
