@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "2.3.0"
+CONTRACT_VERSION = "2.4.0"
 _JSON = "application/json"
 
 
@@ -764,7 +764,10 @@ _ROUTES: List[_Route] = [
     ("get", "/v2/models/benchmarks", "Same as v1, with api_version",
      None, ModelProfileListV2, _AUTH_ERRORS, True),
     ("get", "/v1/models/{model_id}/info", "Profile of one model",
-     None, ModelInfo, {**_AUTH_ERRORS, "404": "No profile for this model."}, True),
+     None, ModelInfo,
+     {**_AUTH_ERRORS,
+      "403": "The key may not use this model (code forbidden_model).",
+      "404": "No profile for this model."}, True),
     ("post", "/v1/preflight", "Check that provider/model pairs answer",
      PreflightRequest, PreflightResponse,
      {**_AUTH_ERRORS,

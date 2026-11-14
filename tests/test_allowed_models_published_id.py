@@ -353,9 +353,12 @@ async def test_model_info_follows_the_published_id(client, registry, keys, cli_c
     assert admin_view[1]["info_source"] == "benchmark_db"
     assert await info(rec["key"], allowed) == admin_view
 
-    # A model the key may not call still gets the unknown-model answer.
-    refused = await info(rec["key"], "other-provider:claude-sonnet-4-6")
-    assert refused[0] == 200 and refused[1]["info_source"] == "derived"
+    # A model the key may not call is refused as chat refuses it.
+    refused_id = "other-provider:claude-sonnet-4-6"
+    chat = await _chat(client, rec["key"], refused_id)
+    assert chat.status_code == 403 and chat.json()["code"] == "forbidden_model"
+    assert await info(rec["key"], refused_id) == (chat.status_code, chat.json())
+    assert cli_calls == []
 
 
 @pytest.mark.asyncio
