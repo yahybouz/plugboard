@@ -47,13 +47,20 @@ TOTP code, or an admin session. See
 
 ## Backup
 
-- Taken **by hand, before a switch**, under `/var/backups/plugboard/`. It holds
-  the data and the CLI home.
-- **Not encrypted**, readable by root only. It holds the keys, the CLI logins
-  and agy conversations in clear: never copy it elsewhere as it is.
-- **No scheduled backup** on this instance to date (PLU-63).
-- No full restore has been tried. The backup command and the restore
-  procedure are to be completed by the operator.
+- **Every night, encrypted** (since 14 November 2026): `plugboard-backup.timer`
+  runs [`deploy/ovh/backup.sh`](../../deploy/ovh/backup.sh) at 03:30 UTC, plus
+  up to 10 minutes. The archive is encrypted with `age` for the recipient in
+  `/etc/plugboard/backup.recipient`; the private key is not on the server.
+  **The script stops the gateway while it copies**: about two minutes without
+  service each night (2 min 16 s at the first run).
+- **By hand, before a switch**, under `/var/backups/plugboard/`: the data and
+  the CLI home, **not encrypted**, readable by root only. It holds the keys,
+  the CLI logins and agy conversations in clear: never copy it elsewhere as it
+  is. It is the restore point of that switch.
+- **No restore has been rehearsed** (PLU-63): the nightly archive has not been
+  decrypted, and no archive has been restored in full. Until one is, a backup
+  is not a proven restore point. The restore procedure is to be completed by
+  the operator.
 
 ## Roll back
 
@@ -95,6 +102,8 @@ completed by the operator.
 ## What to watch
 
 - The size of the CLI logins volume.
+- The nightly backup: a short outage around 03:30 UTC is expected; a longer
+  one, or a gateway that stays down, is not.
 - The catalogue scheduler stays off until the test above has passed.
 
 See also: [production gate](prod-gate.md),
