@@ -17,7 +17,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "recette_passerelle.py"
-KEY = "pb_test_key_for_recette_0123456789"
+KEY = "pb_" + "x" * 32  # factice, sans entropie
 MODEL = "anthropic-direct:claude-haiku-5-5"
 
 
@@ -127,6 +127,6 @@ def test_missing_key_is_a_configuration_error_without_network():
 
 
 def test_wrong_key_fails_the_models_step(gateway):
-    proc = _run(gateway, PLUGBOARD_API_KEY="pb_wrong_key_0123456789abcdef")
+    proc = _run(gateway, PLUGBOARD_API_KEY="pb_" + "y" * 32)
     assert proc.returncode == 1
     assert "pb_wrong" not in proc.stdout + proc.stderr

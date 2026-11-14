@@ -4,3 +4,6 @@
 50340bfa0038452a0e97ccf728efdb5594393736:deploy/ovh/verify.sh:curl-auth-header:20
 # Fake test api_key in the BUG-65 test (tests/test_models_dev.py), replaced in the next commit.
 22ae4a941be8f4a8434067a572bb7cbe8426e4c6:tests/test_models_dev.py:generic-api-key:270
+# Fake api_key of the acceptance-run tests (tests/test_recette_passerelle.py), added in 48af6bf; not a credential.
+48af6bf640d041f4de2f0abef929619b3b9c64f8:tests/test_recette_passerelle.py:generic-api-key:20
+48af6bf640d041f4de2f0abef929619b3b9c64f8:tests/test_recette_passerelle.py:generic-api-key:130
