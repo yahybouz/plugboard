@@ -237,7 +237,7 @@ async def test_native_colon_models_reach_subprocess_unchanged(model, monkeypatch
 
     received = []
 
-    async def complete(kind, body, *, timeout_s):
+    async def complete(kind, body, *, timeout_s, on_delta=None):
         received.append((kind, body["model"], timeout_s))
         return {"choices": [{"message": {"content": "OK"}}]}
 

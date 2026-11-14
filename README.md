@@ -182,6 +182,7 @@ Choose **Plugboard** if you want one small self-hosted gateway for a handful of 
 - [Clients and keys](docs/guide/clients-and-keys.md)
 - [Pricing](docs/guide/pricing.md)
 - [Monitoring](docs/guide/monitoring.md)
+- [Performance targets](docs/guide/performance-targets.md)
 - [Configuration reference](docs/guide/configuration.md)
 - [Deployment](docs/guide/deployment.md)
 - [MCP server](docs/guide/mcp.md)

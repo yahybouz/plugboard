@@ -497,7 +497,7 @@ def two_clis(_providers_file, monkeypatch):
     runs = {"claude": 0, "codex": 0}
     gates = {"claude": asyncio.Event(), "codex": asyncio.Event()}
 
-    async def fake_complete(kind, body, *, timeout_s=None):
+    async def fake_complete(kind, body, *, timeout_s=None, on_delta=None):
         runs[kind] += 1
         await gates[kind].wait()
         return {**FAKE_COMPLETION}
@@ -615,7 +615,7 @@ async def test_internet_check_calls_only_the_provider_it_checks(
     router.invalidate_models_cache()
     cli_runs = []
 
-    async def fake_complete(kind, body, *, timeout_s=None):
+    async def fake_complete(kind, body, *, timeout_s=None, on_delta=None):
         cli_runs.append(body["model"])
         return _answer("I cannot browse the web.")  # offline, if ever asked
 

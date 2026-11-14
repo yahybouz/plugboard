@@ -48,7 +48,7 @@ async def test_probe_subprocess_model_classifies_results(monkeypatch):
     from plugboard import cli_subprocess
     from plugboard import model_availability as ma
 
-    async def ok_complete(kind, body, *, timeout_s):
+    async def ok_complete(kind, body, *, timeout_s, on_delta=None):
         assert kind == "gemini"
         assert body["model"] == "gemini-2.5-flash"
         assert timeout_s == 2
@@ -59,7 +59,7 @@ async def test_probe_subprocess_model_classifies_results(monkeypatch):
         "gemini", "gemini-2.5-flash", timeout_s=2
     ) == {"ok": True, "reason": ""}
 
-    async def empty_complete(_kind, _body, *, timeout_s):
+    async def empty_complete(_kind, _body, *, timeout_s, on_delta=None):
         return {"choices": [{"message": {"content": "   "}}]}
 
     monkeypatch.setattr(cli_subprocess, "complete", empty_complete)
@@ -69,7 +69,7 @@ async def test_probe_subprocess_model_classifies_results(monkeypatch):
         "reason": "empty completion",
     }
 
-    async def unsupported_complete(_kind, _body, *, timeout_s):
+    async def unsupported_complete(_kind, _body, *, timeout_s, on_delta=None):
         raise RuntimeError(
             "The 'gpt-5.4-pro' model is not supported when using Codex "
             "with a ChatGPT account."
@@ -81,7 +81,7 @@ async def test_probe_subprocess_model_classifies_results(monkeypatch):
     assert unsupported["terminal"] is True
     assert unsupported["terminal_reason"] == "account_unsupported"
 
-    async def unavailable_complete(_kind, _body, *, timeout_s):
+    async def unavailable_complete(_kind, _body, *, timeout_s, on_delta=None):
         raise RuntimeError("model is not available")
 
     monkeypatch.setattr(cli_subprocess, "complete", unavailable_complete)

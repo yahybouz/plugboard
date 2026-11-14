@@ -29,7 +29,7 @@ def two_providers(_providers_file, monkeypatch):
     monkeypatch.setattr(circuit_breaker, "_circuits", {})
     unfaked_cli_runs = []
 
-    async def no_real_cli(kind, body, *, timeout_s=None):
+    async def no_real_cli(kind, body, *, timeout_s=None, on_delta=None):
         unfaked_cli_runs.append(kind)
         raise RuntimeError("tests never run a real CLI")
 
@@ -158,7 +158,7 @@ async def test_paused_single_route_is_still_called(two_providers):
 
 
 async def test_cli_quota_pauses_the_route(two_providers, monkeypatch):
-    async def quota(kind, body, *, timeout_s=None):
+    async def quota(kind, body, *, timeout_s=None, on_delta=None):
         raise CliSubprocessError(
             "usage limit",
             quota=True,

@@ -558,7 +558,7 @@ def with_cli(capped_a, _providers_file, monkeypatch):
     _providers_file.write_text(json.dumps({"providers": [capped_a, PROVIDER_B, CLI]}))
     router.invalidate_models_cache()
 
-    async def fake_complete(kind, body, *, timeout_s=None):
+    async def fake_complete(kind, body, *, timeout_s=None, on_delta=None):
         return json.loads(json.dumps(FAKE_COMPLETION))
 
     monkeypatch.setattr(cli_subprocess, "complete", fake_complete)

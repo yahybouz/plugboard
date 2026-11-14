@@ -145,7 +145,7 @@ def isolated(monkeypatch, tmp_path, _providers_file):
     answer = json.loads(json.dumps(FAKE_COMPLETION))
     answer["choices"][0]["message"]["content"] = "Hello there, dear friend!"
 
-    async def fake_complete(kind, body, *, timeout_s=None):
+    async def fake_complete(kind, body, *, timeout_s=None, on_delta=None):
         completed.append((kind, body))
         return json.loads(json.dumps(answer))
 

@@ -23,11 +23,14 @@ services:
       PLUGBOARD_PROVIDER_WAIT_S: "10"
       PLUGBOARD_CLI_PROVIDER_MAX_INFLIGHT: "1"
       PLUGBOARD_SUBPROCESS_LIMIT: "1"
-      MODEL_AVAILABILITY_SCHEDULER_DISABLED: "1"
-      PRICING_SCHEDULER_DISABLED: "1"
-      # Claude: the catalogue is only known by probing the account (one tiny
-      # call per model on a manual Discover / the refresh job).
-      PLUGBOARD_MODEL_REFRESH_PROBE_KINDS: "claude"
+      # Model catalogue and price jobs run on their default cadence, as in
+      # prod, so the Jobs page shows a last run for each (INC-2). No inference
+      # probes: they spend subscription quota on every run (the agy account
+      # list is synced without one). To probe Claude's models by hand, set
+      # PLUGBOARD_MODEL_REFRESH_PROBE_KINDS=claude for that run only.
+      MODEL_AVAILABILITY_SCHEDULER_DISABLED: "0"
+      PRICING_SCHEDULER_DISABLED: "0"
+      PLUGBOARD_MODEL_REFRESH_PROBE_KINDS: ""
       PLUGBOARD_INTERNET_CHECK_ON_BOOT: "0"
       PLUGBOARD_LLM_PRICING: "0"
       # Ollama is off by default (decision YB 14/11): no relay, no embedding

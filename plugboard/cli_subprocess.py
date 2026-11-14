@@ -43,7 +43,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from plugboard import envcompat
 from plugboard.circuit_breaker import (
@@ -446,8 +446,10 @@ CLI_BACKENDS: Dict[str, CliBackend] = {
         # Antigravity CLI in print mode. Headless agy cannot prompt for a tool
         # permission, so every tool call (file read, shell, web) is denied
         # unless the operator's agy settings.json pre-allows it (SEC-2026-10).
-        # --sandbox restricts the terminal on top of that, --mode plan keeps
-        # the agent from editing, and slash commands / skills are not expanded.
+        # --sandbox restricts the terminal on top of that, and slash commands /
+        # skills are not expanded. --mode plan is NOT a guard: agy 1.4.4 says it
+        # "has no effect while slash command expansion is disabled" (board:
+        # the agy plan-mode ticket); it is kept until that is proven in real.
         # Never add --dangerously-skip-permissions here. No -p: agy reads a
         # piped prompt when -p is omitted.
         args=[
@@ -1705,6 +1707,151 @@ def _dyld_hint(stderr_text: str, command: str) -> str:
     return ""
 
 
+# ── Incremental output (INC-2) ──────────────────────────────────────────────
+# Which CLIs can hand the answer over while they run, and how to read it:
+# claude (``--include-partial-messages``: ``stream_event`` lines carrying
+# ``text_delta``) and agy (``--output-format stream-json``: ``step_update``
+# events of the ``agent_response`` step carrying ``text_delta``); both shapes
+# captured on the UAT (claude 2.1.306, agy 1.4.4). codex ``exec --json`` only
+# reports whole messages and gemini is not installed on the servers: those
+# keep the single answer at the end.
+STREAM_EXTRA_ARGS: Dict[str, List[str]] = {"claude": ["--include-partial-messages"]}
+
+
+def _stream_args(kind: str, args: List[str]) -> List[str]:
+    """``args`` of a CLI whose answer is read as it comes."""
+    out = list(args)
+    if kind == "agy" and "--output-format" in out:
+        out[out.index("--output-format") + 1] = "stream-json"
+    return [*out, *STREAM_EXTRA_ARGS.get(kind, [])]
+
+
+def _agy_stream_to_json(stdout_text: str) -> str:
+    """agy's ``stream-json`` run as its ``json`` payload: the object of the last
+    ``result`` event (status, response, usage, error). Unchanged without one,
+    so the usual failure paths (exit code, stderr) apply."""
+    for line in reversed(stdout_text.splitlines()):
+        if '"result"' not in line:
+            continue
+        try:
+            evt = json.loads(line)
+        except ValueError:
+            continue
+        if (
+            isinstance(evt, dict)
+            and evt.get("event") == "result"
+            and isinstance(evt.get("result"), dict)
+        ):
+            return json.dumps(evt["result"])
+    # Events but no result: the run was cut. Their text (cwd, tools, partial
+    # answer) is not an error message; the exit code and stderr say why.
+    if '"event"' in stdout_text:
+        return ""
+    return stdout_text
+
+
+def _agy_text_delta(line: bytes) -> str:
+    """Text of an agy ``agent_response`` ``step_update`` line, else ``""``."""
+    if b"text_delta" not in line:
+        return ""
+    try:
+        evt = json.loads(line)
+    except ValueError:
+        return ""
+    step = evt.get("step_update") if isinstance(evt, dict) else None
+    if (
+        isinstance(step, dict)
+        and evt.get("event") == "step_update"
+        and step.get("step_type") == "agent_response"
+    ):
+        text = step.get("text_delta")
+        return text if isinstance(text, str) else ""
+    return ""
+
+
+def _claude_text_delta(line: bytes) -> str:
+    """Text of a claude ``stream_event`` ``text_delta`` line, else ``""``."""
+    if b"text_delta" not in line:
+        return ""
+    try:
+        evt = json.loads(line)
+    except ValueError:
+        return ""
+    if not isinstance(evt, dict) or evt.get("type") != "stream_event":
+        return ""
+    inner = evt.get("event")
+    if not isinstance(inner, dict) or inner.get("type") != "content_block_delta":
+        return ""
+    delta = inner.get("delta")
+    if isinstance(delta, dict) and delta.get("type") == "text_delta":
+        text = delta.get("text")
+        return text if isinstance(text, str) else ""
+    return ""
+
+
+_DELTA_READERS: Dict[str, Callable[[bytes], str]] = {
+    "claude": _claude_text_delta,
+    "agy": _agy_text_delta,
+}
+
+
+def can_stream(kind: str) -> bool:
+    """True when ``complete(kind, ..., on_delta=...)`` reports text as it comes."""
+    return kind in _DELTA_READERS
+
+
+async def _communicate_streaming(
+    proc: "asyncio.subprocess.Process",
+    data: bytes,
+    read_delta: Callable[[bytes], str],
+    on_delta: Callable[[str], None],
+) -> Tuple[bytes, bytes]:
+    """``proc.communicate(data)`` that also reports the text deltas of stdout
+    line by line as they are written. stdout and stderr are returned whole."""
+
+    async def feed() -> None:
+        try:
+            assert proc.stdin is not None
+            proc.stdin.write(data)
+            await proc.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # the CLI left without reading: its exit code tells
+        finally:
+            with contextlib.suppress(Exception):
+                proc.stdin.close()  # type: ignore[union-attr]
+
+    async def read_stdout() -> bytes:
+        assert proc.stdout is not None
+        chunks: List[bytes] = []
+        pending = b""
+        while True:
+            block = await proc.stdout.read(65536)
+            if not block:
+                break
+            chunks.append(block)
+            pending += block
+            while True:
+                end = pending.find(b"\n")
+                if end == -1:
+                    break
+                line, pending = pending[:end], pending[end + 1 :]
+                text = read_delta(line)
+                if text:
+                    try:
+                        on_delta(text)
+                    except Exception as exc:  # noqa: BLE001 - consumer's problem
+                        log.debug("stream callback failed: %r", exc)
+        return b"".join(chunks)
+
+    async def read_stderr() -> bytes:
+        assert proc.stderr is not None
+        return await proc.stderr.read()
+
+    _, stdout, stderr = await asyncio.gather(feed(), read_stdout(), read_stderr())
+    await proc.wait()
+    return stdout, stderr
+
+
 # ── Main entry point ────────────────────────────────────────────────────────
 
 
@@ -1713,6 +1860,7 @@ async def complete(
     body: Dict[str, Any],
     *,
     timeout_s: Optional[float] = None,
+    on_delta: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
     """Run the CLI and return an OpenAI chat.completions-compatible response.
 
@@ -1720,6 +1868,8 @@ async def complete(
         kind: CLI kind ("gemini" | "codex" | "claude").
         body: OpenAI-format request body (model, messages, max_tokens, ...).
         timeout_s: per-request wall-clock limit (overrides backend default).
+        on_delta: called with each piece of answer text as the CLI writes it
+            (see ``can_stream``); the returned response is the same either way.
 
     Returns:
         OpenAI-style response dict.
@@ -1756,7 +1906,11 @@ async def complete(
     # tenant prompts.
     spawn_cwd = os.environ.get("PLUGBOARD_SUBPROCESS_CWD") or _clean_spawn_cwd()
 
-    argv = [binary_path, *backend.args]
+    read_delta = _DELTA_READERS.get(kind) if on_delta is not None else None
+    argv = [
+        binary_path,
+        *(_stream_args(kind, backend.args) if read_delta else backend.args),
+    ]
     if kind == "codex":
         argv.extend(codex_isolation_args(spawn_cwd))
     if backend.model_arg and model:
@@ -1820,10 +1974,13 @@ async def complete(
                 # A CLI that exits without reading its stdin is not an error
                 # here: communicate() ignores the broken pipe and the exit
                 # code is reported below.
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(prompt.encode("utf-8")),
-                    timeout=deadline,
-                )
+                if read_delta is not None and on_delta is not None:
+                    pending_io = _communicate_streaming(
+                        proc, prompt.encode("utf-8"), read_delta, on_delta
+                    )
+                else:
+                    pending_io = proc.communicate(prompt.encode("utf-8"))
+                stdout, stderr = await asyncio.wait_for(pending_io, timeout=deadline)
                 finished = True
             except asyncio.TimeoutError:
                 raise CliSubprocessError(
@@ -1845,6 +2002,8 @@ async def complete(
     elapsed = time.perf_counter() - t0
     _live.update(phase="cli_parse")
     stdout_text = (stdout or b"").decode("utf-8", "replace")
+    if kind == "agy" and read_delta is not None:
+        stdout_text = _agy_stream_to_json(stdout_text)
     stderr_text = (stderr or b"").decode("utf-8", "replace")
     rate_limited = kind == "claude" and _claude_rate_limited(stdout_text)
 
