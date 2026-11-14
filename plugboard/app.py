@@ -53,7 +53,7 @@ import re
 import secrets
 import time
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import (
     Annotated,
     Any,
@@ -3317,11 +3317,29 @@ async def chat_completions(
 # -- /v1/models --------------------------------------------------------------
 
 
+# A probe failure hides a model only while it is fresh: probes are periodic
+# (nightly), and a stale failure says nothing about the model today.
+_PROBE_FAILURE_MAX_AGE_S = 36 * 3600
+
+
 def _not_callable_now(item: Dict[str, Any]) -> bool:
-    """A catalogue entry that is in quarantine or whose last probe failed."""
-    if item.get("reason") == "quarantined":
-        return True
-    return item.get("connected") is False and bool(item.get("last_probed_at"))
+    """A catalogue entry whose last connectivity probe failed recently.
+
+    A model never probed, or probed long ago, stays listed. Quarantine is not
+    used: it is keyed by the bare model name, so one provider's refusal would
+    hide the model at every other provider.
+    """
+    probed = item.get("last_probed_at")
+    if item.get("connected") is not False or not isinstance(probed, str):
+        return False
+    try:
+        when = datetime.fromisoformat(probed.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - when).total_seconds()
+    return age <= _PROBE_FAILURE_MAX_AGE_S
 
 
 async def _models_for_key(
@@ -3330,15 +3348,15 @@ async def _models_for_key(
     """The catalogue as the calling key sees it, for every model list route.
 
     Chat's allowed_models rule decides: a limited key only gets the models it
-    may call; the admin and unlimited keys get every model. Entries are copies,
+    may call; the admin and unlimited keys get every model. A client key also
+    loses a model whose last probe failed within 36 hours. Entries are copies,
     so the shared models cache never carries one caller's flag.
     """
     key_record = _get_request_key_record(request, client_id=client_id)
     # One guard for the whole list: its registry snapshot is read once.
     guard = _model_route_guard(client_id or "", key_record)
-    # A client key is offered only what can be called now: a model in
-    # quarantine or whose last probe failed is left out. The admin keeps the
-    # full view (dashboard, diagnostics).
+    # A client key is offered only what can be called now: a model whose last
+    # probe failed recently is left out. The admin keeps the full view.
     callable_only = bool(client_id) and client_id != "admin"
     return [
         dict(item, account_compatible=True)

@@ -69,8 +69,15 @@ async def _ids(client, key):
     return {m["id"] for m in resp.json()["data"]}
 
 
-_FAILED = {"connected": False, "last_probed_at": "2026-11-14T08:00:00+00:00"}
-_OK = {"connected": True, "last_probed_at": "2026-11-14T08:00:00+00:00"}
+def _ago(hours):
+    from datetime import datetime, timedelta, timezone
+
+    return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+
+
+_FAILED = {"connected": False, "last_probed_at": _ago(1)}
+_STALE = {"connected": False, "last_probed_at": "2025-01-01T00:00:00+00:00"}
+_OK = {"connected": True, "last_probed_at": _ago(1)}
 
 
 async def test_client_key_does_not_see_a_model_whose_last_probe_failed(
@@ -89,15 +96,45 @@ async def test_client_key_does_not_see_a_model_whose_last_probe_failed(
     assert "agy-sub:agy-gamma" in ids  # never probed: still offered
 
 
-async def test_client_key_does_not_see_a_quarantined_model(
+async def test_stale_failure_and_quarantine_do_not_hide_a_model(
     client, keys, tmp_path, monkeypatch
 ):
-    _prepare(tmp_path, monkeypatch, quarantined={"agy-gamma"})
+    """A failure older than a probe cycle, or a bare-name quarantine (shared by
+    every provider serving the name), says nothing sure about this route."""
+    _prepare(
+        tmp_path,
+        monkeypatch,
+        status={"agy-sub:agy-beta": _STALE},
+        quarantined={"agy-gamma"},
+    )
     rec = keys.create_key("cust", "synthetic")
     keys._invalidate_cache()
     ids = await _ids(client, rec["key"])
-    assert "agy-sub:agy-gamma" not in ids
-    assert "agy-sub:agy-alpha" in ids
+    assert {"agy-sub:agy-beta", "agy-sub:agy-gamma"} <= ids
+
+
+async def test_filter_applies_to_v2_and_leaves_the_admin_view_whole(
+    client, keys, tmp_path, monkeypatch
+):
+    _prepare(tmp_path, monkeypatch, status={"agy-sub:agy-beta": _FAILED})
+    rec = keys.create_key("cust", "synthetic")
+    keys._invalidate_cache()
+    resp = await client.get("/v2/models", headers=_auth(rec["key"]))
+    assert resp.status_code == 200, resp.text
+    assert "agy-sub:agy-beta" not in resp.text
+    # Same cache, admin afterwards: nothing was removed from it.
+    assert "agy-sub:agy-beta" in await _ids(client, "testkey")
+
+
+async def test_limited_key_gets_the_intersection(client, keys, tmp_path, monkeypatch):
+    _prepare(tmp_path, monkeypatch, status={"agy-sub:agy-beta": _FAILED})
+    rec = keys.create_key(
+        "cust",
+        "synthetic",
+        allowed_models=["agy-sub:agy-alpha", "agy-sub:agy-beta"],
+    )
+    keys._invalidate_cache()
+    assert await _ids(client, rec["key"]) == {"agy-sub:agy-alpha"}
 
 
 async def test_inactive_provider_has_no_model_for_a_client_key(
@@ -116,7 +153,6 @@ async def test_admin_keeps_the_full_catalogue(client, keys, tmp_path, monkeypatc
         tmp_path,
         monkeypatch,
         status={"agy-sub:agy-beta": _FAILED},
-        quarantined={"agy-gamma"},
     )
     ids = await _ids(client, "testkey")  # the fixture's admin key
     assert {"agy-sub:agy-beta", "agy-sub:agy-gamma"} <= ids

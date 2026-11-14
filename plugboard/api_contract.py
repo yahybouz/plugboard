@@ -215,7 +215,7 @@ class ModelEntry(_Open):
     internet_access: Optional[bool] = None
     connected: Optional[bool] = Field(
         default=None,
-        description="true only for a successful connectivity observation; false for failed, quarantined or unknown connectivity. last_probed_at is null when never probed.",
+        description="true only for a successful connectivity observation; false for failed (client keys do not see a failure less than 36 hours old), quarantined or unknown connectivity. last_probed_at is null when never probed.",
     )
     last_probed_at: Optional[str] = None
     account_compatible: Optional[bool] = Field(
