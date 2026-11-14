@@ -291,8 +291,10 @@ def test_dashboard_edit_form_sends_the_stored_switch_back():
     js = (Path(__file__).resolve().parent.parent / "static" / "app.js").read_text(
         encoding="utf-8"
     )
+    # Since 4.14.0 the same goes for an Ollama turned off by the configuration.
     assert re.search(
-        r'getElementById\("pf-active"\)\.checked = p\.secret_unreadable === true '
+        r'getElementById\("pf-active"\)\.checked = '
+        r"\(p\.secret_unreadable === true \|\| p\.disabled_by_config === true\) "
         r"\? p\.stored_is_active !== false : p\.is_active;",
         js,
     )
