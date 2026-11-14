@@ -49,13 +49,12 @@ minutes of random delay) stops and restarts the gateway then.
   enforced; a code is accepted once).
 - A **smoke key**: a client key created in the dashboard for the gate only,
   with a small monthly limit, whose `allowed_models` holds one chat model
-  that the host's Ollama really has, and, only if that Ollama also has it,
-  the embedding identity of `deploy/ovh/compose.yml`
-  (`ollama:qwen3-embedding:0.6b`). Check on the host: `ollama list` must
-  show `<model>` (and `qwen3-embedding:0.6b` if the key holds it). A cloud
-  reference consumes its plan's allowance: each smoke run sends three short
-  chat calls and, when the key holds the embedding identity, one embeddings
-  call; the gate runs three smokes.
+  of a CLI subscription provider (`claude-code:`, `Codex:`, `Antigravity:`)
+  that `GET /v1/models` lists for it. Ollama is off in
+  `deploy/ovh/compose.yml` (`OLLAMA_ENABLED=false`, no embedding identity):
+  the key holds no `ollama:*` model, and the smoke's embeddings step is a
+  `SKIP`. Each smoke run sends three short chat calls on the subscription's
+  allowance; the gate runs three smokes.
 - The `age` identity of the backups, on the machine that keeps it.
 
 Placeholders: `<running-version>` is the version in service before the gate
@@ -77,7 +76,7 @@ wait_healthy() {
   done
   echo "not healthy after 5 minutes: $state"; return 1
 }
-# Add --require-embeddings when the smoke key holds the embedding identity.
+# Embeddings are skipped: no embedding model is declared while Ollama is off.
 smoke() {
   python3 ~/plugboard-tools/smoke_consumers.py --url http://127.0.0.1:8765 \
     --model <model> --expect-version "$1"
@@ -328,8 +327,8 @@ smoke <new-version>; echo "exit $?"       # 0, in less than 60 s
 bash deploy/ovh/verify.sh
 ```
 
-Every line must be `PASS` (`SKIP embeddings` only when the smoke key holds
-no embedding identity). A `FAIL`: go back now (step 8, **Back**), then stop
+Every line must be `PASS`, except `SKIP embeddings` (no embedding model is
+declared while Ollama is off). A `FAIL`: go back now (step 8, **Back**), then stop
 the gate.
 
 ```bash

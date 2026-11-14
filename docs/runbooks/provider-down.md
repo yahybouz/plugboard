@@ -167,7 +167,13 @@ add the new host to that variable and restart.
 
 ### Ollama daemon stopped
 
-Ollama is a local (sovereign) provider: the watchdog never restarts it.
+Only when Ollama is in use. The shipped configurations turn it off
+(`OLLAMA_ENABLED=false`): a chat to an `ollama:*` model then answers `503`
+`provider_disabled` naming the configuration, and `/health/ready` shows
+`ollama: not_configured`. That is the expected state, not an incident.
+
+With `OLLAMA_ENABLED=true` or `auto`: Ollama is a local (sovereign)
+provider, and the watchdog never restarts it.
 
 ```bash
 curl -s -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/admin/ollama/status

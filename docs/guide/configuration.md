@@ -113,16 +113,19 @@ The removed connector's `OPENCLAW_URL`, `OPENCLAW_KEY`, `OPENCLAW_MODEL` and
 `OPENCLAW_NAME` variables are ignored; they create no provider. See the
 [manual migration guide](openclaw-removal.md) for existing installations.
 
-Ollama is not a default provider: this release serves models through the CLI
-subscriptions (`claude`, `codex`, `agy`, `gemini`). With the default
-`OLLAMA_ENABLED=auto`, a daemon that answers on `OLLAMA_URL` at startup is
-still registered; set `OLLAMA_ENABLED=false` to keep it out.
+Ollama is optional and off by default: this release serves models through the CLI
+subscriptions (`claude`, `codex`, `agy`, `gemini`), and the configurations this
+repository ships (`deploy/uat/compose.yml`, `deploy/ovh/compose.yml`,
+`.env.example`) set `OLLAMA_ENABLED=false`. Without that line the code default
+is `auto`: a daemon that answers on `OLLAMA_URL` at startup is registered. The
+other Ollama variables below only matter once it is turned on
+([Ollama](providers-and-subscriptions.md#ollama)).
 
 | Variable | Default | Description |
 |---|---|---|
 | `OLLAMA_URL` | `http://localhost:11434` | Ollama daemon URL. |
 | `PLUGBOARD_OLLAMA_TOKEN` | empty | Bearer token for an Ollama behind an authenticating proxy: sent only to `OLLAMA_URL` (never to ollama.com) and stored, encrypted, on the `ollama` provider. `POST /v1/embeddings` sends it too when the engine is exactly `OLLAMA_URL`. |
-| `OLLAMA_ENABLED` | `auto` | At startup only: `auto` registers Ollama if it answers, `true` also warns if it does not, `false` never registers it. `false` does not turn off a provider already registered: use the switch on the Ollama page. |
+| `OLLAMA_ENABLED` | `auto` (`false` in the shipped `.env.example` and composes) | `auto` registers Ollama at startup if it answers, `true` also warns if it does not. `false` turns Ollama off for the whole process, even when an `ollama` provider is already registered: no `ollama:*` model is listed, a chat to one answers `503` `provider_disabled`, no background job calls the daemon or ollama.com, and nothing is written (the stored switch is kept, `true` or `auto` brings it back). |
 | `OLLAMA_TIMEOUT` | `30` | Timeout of Ollama management calls, in seconds. |
 | `OLLAMA_CLOUD_CATALOG_URL` | `https://ollama.com/api/tags` | Catalog used to add Ollama cloud models. |
 | `PLUGBOARD_OLLAMA_CLOUD_AUTOSYNC` | `1` | `0` stops adding Ollama cloud models automatically. |

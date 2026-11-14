@@ -17,7 +17,7 @@ What moves, and where it lives:
 | `ENCRYPTION_KEY` | `.env` (or the platform's secret store); when it is empty, `data/.encryption_key` | `.env`, or the data archive |
 | `ADMIN_KEY`, `API_KEY`, every other setting | `.env` | `.env` |
 | CLI subscription logins (Claude, Codex, Gemini...) | the home directory of the account that runs Plugboard (`/home/app` in Docker) | nothing: sign in again |
-| Local Ollama models | the Ollama install | nothing: pull them again |
+| Local Ollama models (only when Ollama is used: off by default) | the Ollama install | nothing: pull them again |
 
 Without the encryption key the stored provider tokens, OAuth sign-ins and
 MFA secret cannot be read. The archive and `.env` hold secrets: keep them
@@ -86,8 +86,8 @@ Of a move that fails:
   sets it.
 - **Copied while running**: the SQLite stores were copied mid-write. Stop
   the old instance before the archive (step 3).
-- **Ollama models missing**: `data/` holds the `ollama` provider, not the
-  models. Pull them on the new machine, or point the provider to an Ollama
+- **Ollama models missing** (only when Ollama is used): `data/` holds the
+  `ollama` provider, not the models. Pull them on the new machine, or point the provider to an Ollama
   that has them (step 7).
 - **CLI providers signed out**: their logins are in the old account's home
   directory. Sign in again on the new machine (step 7).
@@ -228,8 +228,10 @@ missing), and run the check again. Do not start the server before it passes.
   `ENCRYPTION_KEY` as they are.
 - **Reverse proxy and TLS**: set them up on the new machine
   ([deployment](../guide/deployment.md#behind-a-reverse-proxy)).
-- **Ollama**: install it and pull the local models you use
-  (`ollama pull <model>`). If it answers at another address, set `OLLAMA_URL`,
+- **Ollama**, only if you use it (the shipped configurations set
+  `OLLAMA_ENABLED=false`; a moved `data/` that holds an `ollama` provider
+  keeps it, turned off by that setting): set `OLLAMA_ENABLED=true`, install
+  Ollama and pull the local models you use (`ollama pull <model>`). If it answers at another address, set `OLLAMA_URL`,
   start Plugboard (step 8), then update the provider's address, which
   `data/` kept:
 

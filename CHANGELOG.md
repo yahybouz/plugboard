@@ -38,6 +38,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Documentation aligned on 4.13.0**: README, client guide, configuration, supervision and operations pages reference only commands, variables and routes present in the code.
 
+- **Configuration and runbooks describe Ollama as off by default** (PLU-53): `docs/guide/configuration.md` says what `OLLAMA_ENABLED=false` does since this release (it also turns off a registered `ollama` provider; the page said the opposite), and the `provider-down`, `move-install` and `prod-gate` runbooks treat Ollama as optional: the production smoke key holds a CLI subscription model and its embeddings step is a `SKIP`.
+
 ### Fixed
 
 - **Documentation**: `PLUGBOARD_JOB_PYTHON` is no longer documented (nothing reads it), and the pricing runbook names the scrape endpoint instead of a `make pricing` target that does not exist.
