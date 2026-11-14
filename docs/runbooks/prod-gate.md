@@ -53,8 +53,9 @@ minutes of random delay) stops and restarts the gateway then.
   that `GET /v1/models` lists for it. Ollama is off in
   `deploy/ovh/compose.yml` (`OLLAMA_ENABLED=false`, no embedding identity):
   the key holds no `ollama:*` model, and the smoke's embeddings step is a
-  `SKIP`. Each smoke run sends three short chat calls on the subscription's
-  allowance; the gate runs three smokes.
+  `SKIP`. Each smoke run sends two short chat calls on the subscription's
+  allowance (the structured one is refused before any call); the gate runs
+  three smokes.
 - The `age` identity of the backups, on the machine that keeps it.
 
 Placeholders: `<running-version>` is the version in service before the gate
