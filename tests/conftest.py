@@ -145,6 +145,21 @@ def _restore_process_state():
 
 
 @pytest.fixture(autouse=True)
+def _no_real_agy_store():
+    """complete("agy") purges agy's store under the HOME given to agy
+    (BUG-97), and fake agy binaries run with the developer's HOME: the purge
+    finds no store, so the suite never touches a real ~/.gemini. The tests of
+    the purge (test_agy_store_purge.py) give agy a throwaway HOME and put the
+    real lookup back. Without ``monkeypatch``, see _reset_load_state."""
+    from plugboard import agy_store
+
+    real = agy_store.store_dir
+    agy_store.store_dir = lambda home: None
+    yield
+    agy_store.store_dir = real
+
+
+@pytest.fixture(autouse=True)
 def _reset_load_state():
     """Provider leases, route pauses, circuits, session turns and the global
     chat slots start empty in every test (PLU-9, PLU-8, PLU-14): a circuit
