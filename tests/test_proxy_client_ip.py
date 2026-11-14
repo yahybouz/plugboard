@@ -179,7 +179,8 @@ def test_production_compose_trusts_only_its_fixed_bridge_gateway():
     assert trusted_proxy_warning(trusted) is None
     # Distinct from the private Ollama network (install-ollama-bridge.sh).
     assert not subnet.overlaps(ipaddress.ip_network("172.30.114.0/29"))
-    ollama = ipaddress.ip_address(
-        urlparse(service["environment"]["OLLAMA_URL"]).hostname
-    )
-    assert ollama not in subnet
+    # Ollama is off in the shipped compose (PLU-53): no OLLAMA_URL. An operator
+    # who turns it back on must keep its address out of this subnet.
+    ollama_url = service["environment"].get("OLLAMA_URL")
+    if ollama_url:
+        assert ipaddress.ip_address(urlparse(ollama_url).hostname) not in subnet
