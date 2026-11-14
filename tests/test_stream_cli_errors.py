@@ -39,7 +39,7 @@ def failing_cli(_providers_file, monkeypatch):
     router.invalidate_models_cache()
     monkeypatch.setattr(circuit_breaker, "_circuits", {})
 
-    async def fail(kind, body, *, timeout_s=None):
+    async def fail(kind, body, *, timeout_s=None, on_delta=None):
         raise CliSubprocessError(
             f"CLI 'claude' exited 1: {SECRET}",
             exit_code=1,

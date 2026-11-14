@@ -42,7 +42,7 @@ def no_real_calls(monkeypatch):
     """A CLI route is never run for real (the error tests also take away the
     router's HTTP session: a missed patch fails instead of calling out)."""
 
-    async def no_cli(kind, body, *, timeout_s=None):
+    async def no_cli(kind, body, *, timeout_s=None, on_delta=None):
         raise AssertionError("a test reached a CLI it did not fake")
 
     monkeypatch.setattr(cli_subprocess, "complete", no_cli)
@@ -170,7 +170,7 @@ def cli_answers(monkeypatch):
     """The fake CLI answers with the given completion (deep-copied each time)."""
     answer = {"completion": dict(FAKE_COMPLETION, usage={})}
 
-    async def complete(kind, body, *, timeout_s=None):
+    async def complete(kind, body, *, timeout_s=None, on_delta=None):
         return json.loads(json.dumps(answer["completion"]))
 
     monkeypatch.setattr(cli_subprocess, "complete", complete)
@@ -352,7 +352,7 @@ async def test_the_router_cli_stream_raises_before_its_first_chunk(keys):
     """Nothing is sent yet: the error goes to the chat route, which writes the
     answer (the CLI's text and stderr go to the admin only)."""
 
-    async def failing(kind, body, *, timeout_s=None):
+    async def failing(kind, body, *, timeout_s=None, on_delta=None):
         raise cli_subprocess.CliSubprocessError(
             "CLI failed: /home/ops/.claude/creds", stderr="ops@example.invalid"
         )

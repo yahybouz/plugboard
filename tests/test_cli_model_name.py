@@ -222,7 +222,7 @@ def isolated(_providers_file, monkeypatch, tmp_path):
 
     cli_calls: list = []
 
-    async def fake_complete(kind, body, *, timeout_s=None):
+    async def fake_complete(kind, body, *, timeout_s=None, on_delta=None):
         cli_calls.append((kind, body))
         return json.loads(json.dumps(FAKE_COMPLETION))
 

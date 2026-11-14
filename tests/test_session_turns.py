@@ -393,7 +393,7 @@ async def test_streamed_cli_turn_is_recorded(
     _providers_file.write_text(json.dumps({"providers": [CLI]}))
     router.invalidate_models_cache()
 
-    async def fake_complete(kind, body, *, timeout_s=None):
+    async def fake_complete(kind, body, *, timeout_s=None, on_delta=None):
         return _answer("from the CLI")
 
     monkeypatch.setattr(cli_subprocess, "complete", fake_complete)

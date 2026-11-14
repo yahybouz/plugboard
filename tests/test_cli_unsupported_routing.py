@@ -93,7 +93,7 @@ def isolated(monkeypatch, tmp_path):
 
     calls = {"complete": [], "acquire": 0, "circuit": 0, "guard": 0}
 
-    async def fake_complete(kind, body, *, timeout_s=None):
+    async def fake_complete(kind, body, *, timeout_s=None, on_delta=None):
         calls["complete"].append((kind, body))
         return json.loads(json.dumps(FAKE_COMPLETION))
 

@@ -333,7 +333,7 @@ async def test_cli_calls_are_recorded_in_metrics(tmp_path, monkeypatch):
     monkeypatch.setattr(metrics, "_stats", {})
     calls = {"n": 0}
 
-    async def fake_complete(kind, body, timeout_s=None):
+    async def fake_complete(kind, body, timeout_s=None, on_delta=None):
         calls["n"] += 1
         if calls["n"] == 3:
             raise RuntimeError("boom")

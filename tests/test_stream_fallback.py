@@ -369,7 +369,7 @@ def http_cli_http(_providers_file, monkeypatch):
     monkeypatch.setattr(circuit_breaker, "_circuits", {})
     failure = {"too_long": False}
 
-    async def failing_cli(kind, body, *, timeout_s=None):
+    async def failing_cli(kind, body, *, timeout_s=None, on_delta=None):
         raise CliSubprocessError(
             "CLI 'claude' exited 1: SECRET_STDERR token=abc",
             provider_name="claude",

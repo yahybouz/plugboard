@@ -483,7 +483,7 @@ async def test_a_cli_route_asked_to_stream_holds_and_settles(
     )
     router.invalidate_models_cache()
 
-    async def complete(kind, body, *, timeout_s=None):
+    async def complete(kind, body, *, timeout_s=None, on_delta=None):
         return _json.loads(_json.dumps(FAKE_COMPLETION))
 
     monkeypatch.setattr(cli_subprocess, "complete", complete)

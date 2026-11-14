@@ -227,7 +227,7 @@ def cli_calls(monkeypatch, tmp_path):
     monkeypatch.setattr(response_cache, "_DB_PATH", tmp_path / "cache" / "cache.db")
     calls = []
 
-    async def _complete(kind, body, *, timeout_s=None):
+    async def _complete(kind, body, *, timeout_s=None, on_delta=None):
         calls.append((kind, body.get("model")))
         return copy.deepcopy(FAKE_COMPLETION)
 
@@ -622,7 +622,7 @@ async def test_fallback_candidate_outside_the_policy_is_refused(
     registry(_THREE_CLIS)
     rec = _key(keys, ["claude-code:claude-sonnet-4-6"])
 
-    async def _claude_is_down(kind, body, *, timeout_s=None):
+    async def _claude_is_down(kind, body, *, timeout_s=None, on_delta=None):
         cli_calls.append((kind, body.get("model")))
         if kind == "claude":
             raise RuntimeError("synthetic CLI failure")

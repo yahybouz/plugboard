@@ -944,7 +944,7 @@ async def test_router_dispatches_to_subprocess(monkeypatch, tmp_path):
     # Mock the subprocess invocation
     called = {}
 
-    async def fake_complete(kind, body, timeout_s=None):
+    async def fake_complete(kind, body, timeout_s=None, on_delta=None):
         called["kind"] = kind
         called["model"] = body["model"]
         return {

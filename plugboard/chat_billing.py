@@ -207,18 +207,29 @@ def record(
 
 
 async def replay_as_sse(
-    completion: Dict[str, Any], *, completion_id: str, created: int, model: str
+    completion: Dict[str, Any],
+    *,
+    completion_id: str,
+    created: int,
+    model: str,
+    already_sent: str = "",
 ) -> AsyncIterator[bytes]:
     """Replay a whole chat completion as OpenAI SSE chunks.
 
     The text goes out word by word, then the tool calls in one delta
     (``index`` = position), then a final chunk with the answer's own
     ``finish_reason`` and its ``usage``, then ``[DONE]``. An empty or missing
-    ``content`` sends no content delta.
+    ``content`` sends no content delta. ``already_sent`` is the text a live
+    stream has already sent: only what follows it in ``content`` goes out (all
+    of it when ``content`` does not start with it, which cannot be retracted).
     """
     choice = (completion.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     content = message.get("content") or ""
+    if already_sent:
+        content = (
+            content[len(already_sent) :] if content.startswith(already_sent) else ""
+        )
     tool_calls = message.get("tool_calls") or []
     finish_reason = choice.get("finish_reason") or "stop"
     usage = completion.get("usage") or {}

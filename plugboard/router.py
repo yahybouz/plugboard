@@ -1721,6 +1721,58 @@ async def _alert_failure(provider_id: str) -> None:
         log.debug("provider_down alert failed: %s", exc)
 
 
+async def _cli_live(
+    kind: str, body: Dict[str, Any], timeout: float
+) -> AsyncIterator[tuple]:
+    """Run a CLI and yield ``(text, None)`` for each piece of its answer as it
+    is written, then ``("", result)`` (the ``complete()`` response). The CLI's
+    own failure is raised after the pieces already yielded; a consumer that
+    stops early (client gone) stops the CLI and its process group."""
+    from plugboard import cli_subprocess
+
+    pieces: "asyncio.Queue[str]" = asyncio.Queue()
+    task = asyncio.ensure_future(
+        cli_subprocess.complete(
+            kind, body, timeout_s=timeout, on_delta=pieces.put_nowait
+        )
+    )
+    getter: Optional["asyncio.Future[str]"] = None
+    try:
+        while True:
+            if getter is None:
+                getter = asyncio.ensure_future(pieces.get())
+            await asyncio.wait({task, getter}, return_when=asyncio.FIRST_COMPLETED)
+            if getter.done():
+                text, getter = getter.result(), None
+                yield text, None
+                continue
+            break
+        if getter is not None and getter.done() and not getter.cancelled():
+            text, getter = getter.result(), None  # taken as the CLI ended
+            yield text, None
+        while not pieces.empty():
+            yield pieces.get_nowait(), None
+        yield "", task.result()
+    finally:
+        if getter is not None and not getter.done():
+            getter.cancel()
+        if not task.done():
+            task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+
+
+def _delta_sse(completion_id: str, created: int, model: str, text: str) -> bytes:
+    evt = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}],
+    }
+    return f"data: {json.dumps(evt)}\n\n".encode("utf-8")
+
+
 async def _stream_route(
     body: Dict[str, Any],
     provider: Dict[str, Any],
@@ -1744,9 +1796,10 @@ async def _stream_route(
     _served_by.set((provider, real_model))
     _usage_reported.set(False)
 
-    # Subprocess providers don't stream natively (CLIs return the full
-    # response once). Emulate SSE by running the completion and chunking
-    # the text into pseudo-deltas so the Playground works end-to-end.
+    # Subprocess providers: a CLI that writes its answer as it goes (claude,
+    # agy: cli_subprocess.can_stream) has its text sent at once, the first
+    # word as soon as it exists (INC-2); the others return the full response
+    # once, which is chunked into pseudo-deltas so the Playground works.
     auth_source = provider.get("auth_source", "")
     if auth_source.startswith("subprocess:"):
         from plugboard import cli_subprocess
@@ -1754,12 +1807,31 @@ async def _stream_route(
         kind = auth_source.removeprefix("subprocess:")
         sub_body = {**body, "model": real_model, "stream": False}
         _t_cli = _time.perf_counter()
+        live_stream = cli_subprocess.can_stream(kind)
+        sent: List[str] = []
+        stream_id = "chatcmpl-" + _uuid.uuid4().hex[:24]
+        stream_created = int(_time.time())
+        stream_model = f"{kind}-cli:{real_model}"
         try:
-            result = await cli_subprocess.complete(
-                kind,
-                sub_body,
-                timeout_s=timeout,
-            )
+            if live_stream:
+                result = None
+                async with contextlib.aclosing(
+                    _cli_live(kind, sub_body, timeout)
+                ) as pieces:
+                    async for text, final in pieces:
+                        if final is not None:
+                            result = final
+                            break
+                        sent.append(text)
+                        yield _delta_sse(stream_id, stream_created, stream_model, text)
+                assert result is not None
+                result["id"] = stream_id
+            else:
+                result = await cli_subprocess.complete(
+                    kind,
+                    sub_body,
+                    timeout_s=timeout,
+                )
             metrics.record(provider["id"], _time.perf_counter() - _t_cli)
         except Exception as exc:
             # The request's own error does not lower the score (review MIN-5).
@@ -1826,8 +1898,11 @@ async def _stream_route(
         async for chunk in chat_billing.replay_as_sse(
             result,
             completion_id=result.get("id", "chatcmpl-subproc"),
-            created=result.get("created", int(_time.time())),
+            created=stream_created
+            if sent
+            else result.get("created", int(_time.time())),
             model=result.get("model", f"{kind}-cli:{real_model}"),
+            already_sent="".join(sent),
         ):
             yield chunk
         return

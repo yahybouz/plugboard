@@ -111,7 +111,7 @@ def isolated(monkeypatch, _providers_file):
 
     completed: list[tuple[str, dict]] = []
 
-    async def fake_complete(kind, body, *, timeout_s=None):
+    async def fake_complete(kind, body, *, timeout_s=None, on_delta=None):
         completed.append((kind, body))
         return json.loads(json.dumps(FAKE_COMPLETION))
 

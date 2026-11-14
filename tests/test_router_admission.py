@@ -46,7 +46,7 @@ def capped_a(_providers_file, monkeypatch):
     monkeypatch.setattr(circuit_breaker, "_circuits", {})
     unfaked_cli_runs = []
 
-    async def no_real_cli(kind, body, *, timeout_s=None):
+    async def no_real_cli(kind, body, *, timeout_s=None, on_delta=None):
         unfaked_cli_runs.append(kind)
         raise RuntimeError("tests never run a real CLI")
 
@@ -125,7 +125,7 @@ async def test_cli_call_counts_in_flight_and_frees_its_slot(
     router.invalidate_models_cache()
     gate = asyncio.Event()
 
-    async def fake_complete(kind, body, *, timeout_s=None):
+    async def fake_complete(kind, body, *, timeout_s=None, on_delta=None):
         await gate.wait()
         return {**FAKE_COMPLETION}
 
