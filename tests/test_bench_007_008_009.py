@@ -302,12 +302,17 @@ async def _model_info(client, key, model_id):
 
 
 @pytest.mark.asyncio
-async def test_model_info_refused_model_answers_as_unknown(
+async def test_model_info_of_a_model_the_key_cannot_call_is_refused_like_chat(
     client, tmp_path, monkeypatch
 ):
-    """BUG-24: a limited key gets the unknown-model answer for a refused model."""
-    import plugboard.benchmarks as bench
+    """A limited key gets chat's refusal (403 forbidden_model) on the info
+    route of a model outside its allowed_models, and no profile at all."""
+    from plugboard import app as app_mod
 
+    async def _no_forward(*args, **kwargs):
+        raise AssertionError("forward() must not be reached")
+
+    monkeypatch.setattr(app_mod, "forward", _no_forward)
     rec = _restricted_key(tmp_path, monkeypatch, ["fake:model-v1"])
     refused = "other-provider:claude-sonnet-4-6"  # has a curated profile
     admin_view = await _model_info(client, "testkey", refused)
@@ -319,12 +324,18 @@ async def test_model_info_refused_model_answers_as_unknown(
         client, "testkey", allowed
     )
 
-    limited_view = await _model_info(client, rec["key"], refused)
-    # What the route answers when the profile database does not know the model.
-    monkeypatch.setattr(bench, "_MODELS_DB", {})
-    unknown_view = await _model_info(client, "testkey", refused)
-    assert limited_view == unknown_view
-    assert limited_view[0] == 200 and limited_view[1]["info_source"] == "derived"
+    chat = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {rec['key']}"},
+        json={"model": refused, "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert chat.status_code == 403 and chat.json()["code"] == "forbidden_model"
+
+    status, body = await _model_info(client, rec["key"], refused)
+    assert (status, body) == (chat.status_code, chat.json())
+    assert set(body) == {"detail", "code"}
+    for leaked in ("provider", "family", "info_source"):
+        assert leaked not in body
 
 
 @pytest.mark.asyncio

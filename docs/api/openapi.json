@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "2.3.0",
+    "version": "2.4.0",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
@@ -3491,6 +3491,16 @@
           },
           "429": {
             "description": "Rate limit or monthly spending limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The key may not use this model (code forbidden_model).",
             "content": {
               "application/json": {
                 "schema": {

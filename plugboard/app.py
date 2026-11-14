@@ -3633,8 +3633,13 @@ async def model_info(
     from plugboard.benchmarks import derived_model_info, get_model_info
 
     key_record = _get_request_key_record(request, client_id=client_id)
-    if not _model_is_compatible(model_id, client_id or "", key_record=key_record):
-        # A model the key may not call gets the unknown-model answer.
+    try:
+        # A model the key may not call is refused as chat refuses it:
+        # 403 forbidden_model, same detail, no profile.
+        _check_model_access(client_id or "", model_id, key_record=key_record)
+    except ValueError:
+        # No route to check the key against (no active provider, a decision
+        # model): the unknown-model answer, never the curated profile.
         return derived_model_info(model_id)
     if client_id and client_id != "admin":
         # So does a model the client's catalogue leaves out (_models_for_key):
