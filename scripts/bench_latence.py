@@ -16,6 +16,10 @@ The gateway URL and the client key come from the environment
 http to another machine without ``--allow-http``. Each call asks for no cached
 answer and has its own prompt.
 
+A ``503`` refusal (``providers_busy``) is counted as ``busy``, not as a failure, except
+at 1 call at a time. ``--check`` applies one limit to every target: run it once per
+provider with that provider's limits.
+
 A target is ``KIND=GATEWAY_MODEL=NATIVE_MODEL``, for example
 ``agy=antigravity-via-agy-cli:gemini-3.8-flash-low=gemini-3.8-flash-low``.
 ``--no-cli`` skips the bare CLI runs (a machine without the CLIs).
@@ -165,6 +169,8 @@ def run_gateway(
         )
         resp = conn.getresponse()
         out["status"] = resp.status
+        if resp.status == 503:
+            out["refused"] = True  # providers_busy: an answer, not a breakage
         if resp.status != 200:
             out["error"] = _scrub(resp.read().decode("utf-8", "replace"), [key])
             out["total"] = round(time.perf_counter() - t0, 3)
@@ -176,6 +182,7 @@ def run_gateway(
         first_byte = first_word = None
         words = 0
         done = False
+        interrupted = False
         while True:
             line = resp.readline()
             if not line:
@@ -186,17 +193,27 @@ def run_gateway(
                 done = True
             elif line.startswith(b"data:"):
                 try:
-                    delta = json.loads(line[5:])["choices"][0].get("delta") or {}
-                except (ValueError, KeyError, IndexError):
+                    event = json.loads(line[5:])
+                    if isinstance(event, dict) and event.get("error"):
+                        interrupted = True  # stream_interrupted: not a success
+                        continue
+                    delta = event["choices"][0].get("delta") or {}
+                except (ValueError, KeyError, IndexError, TypeError):
                     continue
                 if delta.get("content") or delta.get("tool_calls"):
                     words += 1
                     if first_word is None:
                         first_word = time.perf_counter() - t0
-        good = done and words > 0
+        good = done and words > 0 and not interrupted
         out.update(
             ok=good,
-            error=None if good else "stream ended without a word or [DONE]",
+            error=None
+            if good
+            else (
+                "stream interrupted"
+                if interrupted
+                else "stream ended without a word or [DONE]"
+            ),
             first_byte=round(first_byte, 3) if first_byte is not None else None,
             first_word=round(first_word, 3) if first_word is not None else None,
             total=round(time.perf_counter() - t0, 3),
@@ -230,7 +247,8 @@ def run_level(call, level: int) -> List[Dict[str, Any]]:
 def summarize(calls: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "calls": len(calls),
-        "failed": sum(1 for c in calls if not c.get("ok")),
+        "refused": sum(1 for c in calls if c.get("refused")),
+        "failed": sum(1 for c in calls if not c.get("ok") and not c.get("refused")),
         "first_byte": stats([c.get("first_byte") for c in calls if c.get("ok")]),
         "first_word": stats([c.get("first_word") for c in calls if c.get("ok")]),
         "total": stats([c.get("total") for c in calls if c.get("ok")]),
@@ -240,7 +258,7 @@ def summarize(calls: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 def render_table(rows: List[Dict[str, Any]]) -> str:
     head = (
-        f"{'target':<28} {'mode':<12} {'n':>2} {'fail':>4} "
+        f"{'target':<28} {'mode':<12} {'n':>2} {'fail':>4} {'busy':>4} "
         f"{'1st byte':>9} {'1st word':>9} {'total':>7}"
     )
     lines = [head, "-" * len(head)]
@@ -252,7 +270,7 @@ def render_table(rows: List[Dict[str, Any]]) -> str:
         s = r["summary"]
         lines.append(
             f"{r['target'][:28]:<28} {r['mode']:<12} {r['concurrency']:>2} "
-            f"{s['failed']:>4} {cell(s['first_byte']):>9} "
+            f"{s['failed']:>4} {s['refused']:>4} {cell(s['first_byte']):>9} "
             f"{cell(s['first_word']):>9} {cell(s['total']):>7}"
         )
     return "\n".join(lines)
@@ -384,7 +402,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     print(render_table(rows))
     problems: List[str] = []
-    failed = sum(r["summary"]["failed"] for r in rows)
+    failed = sum(
+        r["summary"]["failed"]
+        + (r["summary"]["refused"] if r["concurrency"] == 1 else 0)
+        for r in rows
+    )
     if failed:
         problems.append(f"{failed} call(s) failed")
     if args.check:

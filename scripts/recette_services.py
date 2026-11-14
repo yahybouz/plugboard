@@ -10,8 +10,10 @@ Checks, in order:
 
 A job fails the recipe when it is absent from the list or its state is
 ``disabled``, ``not_started``, ``stopped``, ``error`` or ``stale``. ``never_run``
-(started, nothing run yet) fails too, unless ``--allow-never-run``; ``--wait S``
-polls up to S seconds first, for a gateway that has just started. The expected
+(started, nothing run yet) fails too, unless ``--allow-never-run``, and except
+for ``data_retention``, which runs once a day at its hour; ``--wait S`` polls up
+to S seconds first, for a gateway that has just started (not with a TOTP code,
+good for one call). The expected
 jobs are ``--expect`` (default: all five): ``pricing_refresh``, ``model_refresh``,
 ``provider_watchdog``, ``availability_snapshots``, ``data_retention``.
 
@@ -53,6 +55,9 @@ EXPECTED_JOBS = (
 )
 HEALTHY = {"success", "running"}
 PENDING = {"never_run"}  # settles by itself after a start
+# Daily at a fixed hour: nothing has run after a restart until that hour (a
+# missed pass is caught up only when its last one is old), so never_run is normal.
+DAILY_JOBS = {"data_retention"}
 
 
 def _get(
@@ -109,7 +114,9 @@ def judge_jobs(
         state = str(job.get("last_status"))
         last = job.get("last_run") or "-"
         lines.append(f"  {job_id:<24} {state:<12} last run {last}")
-        if state in HEALTHY or (state in PENDING and allow_never_run):
+        if state in HEALTHY or (
+            state in PENDING and (allow_never_run or job_id in DAILY_JOBS)
+        ):
             continue
         problems.append(f"job {job_id}: {state} (last run {last})")
     return lines, problems
@@ -174,11 +181,16 @@ def main(argv: Optional[List[str]] = None) -> int:
                 break
             lines, job_problems = judge_jobs(body, expected, args.allow_never_run)
             settling = any(
-                str(j.get("last_status")) in PENDING | {"running"}
+                str(j.get("last_status")) in PENDING
                 for j in body
                 if isinstance(j, dict) and j.get("id") in expected
             )
-            if (not job_problems and not settling) or time.monotonic() >= deadline:
+            # An admin TOTP code is good once: a second call would be refused.
+            if (
+                totp
+                or (not job_problems and not settling)
+                or (time.monotonic() >= deadline)
+            ):
                 break
             time.sleep(min(5.0, max(deadline - time.monotonic(), 0.1)))
         print("jobs (/admin/jobs):")

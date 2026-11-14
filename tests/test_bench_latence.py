@@ -167,3 +167,39 @@ def test_plain_http_to_another_machine_needs_the_flag(monkeypatch):
     monkeypatch.setenv("PLUGBOARD_BENCH_URL", "http://192.0.2.1:8765")
     monkeypatch.setenv("PLUGBOARD_BENCH_KEY", KEY)
     assert bench.main(["--target", TARGET, "--no-cli"]) == 2
+
+
+def test_an_interrupted_stream_is_a_failure(gateway, monkeypatch, capsys):
+    def cut(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length))
+        if not body.get("stream"):
+            raw = b'{"choices":[{"message":{"content":"PONG"}}]}'
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        self.wfile.write(b'data: {"choices":[{"delta":{"content":"PO"}}]}\n\n')
+        self.wfile.write(b'data: {"error":{"code":"stream_interrupted"}}\n\n')
+        self.wfile.write(b"data: [DONE]\n\n")
+
+    monkeypatch.setattr(gateway, "do_POST", cut)
+    assert (
+        bench.main(
+            ["--target", TARGET, "--no-cli", "--rounds", "1", "--concurrency", "1"]
+        )
+        == 1
+    )
+    assert "failed" in capsys.readouterr().err
+
+
+def test_busy_refusals_at_3_calls_are_not_failures(gateway):
+    gateway.status = 503
+    rc = bench.main(
+        ["--target", TARGET, "--no-cli", "--rounds", "1", "--concurrency", "3"]
+    )
+    assert rc == 0

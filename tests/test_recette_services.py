@@ -98,9 +98,9 @@ def test_all_green_exits_0_and_only_reads(gateway, capsys):
     "state", ["disabled", "not_started", "stopped", "error", "stale", "never_run"]
 )
 def test_a_job_not_healthy_fails(gateway, state, capsys):
-    gateway.jobs = _jobs(data_retention=state)
+    gateway.jobs = _jobs(pricing_refresh=state)
     assert recette.main([]) == 1
-    assert f"data_retention: {state}" in capsys.readouterr().err
+    assert f"pricing_refresh: {state}" in capsys.readouterr().err
 
 
 def test_never_run_is_accepted_on_request(gateway):
@@ -160,3 +160,24 @@ def test_plain_http_to_another_machine_needs_the_flag(monkeypatch):
     monkeypatch.setenv("PLUGBOARD_RECETTE_URL", "http://192.0.2.1:8765")
     monkeypatch.setenv("PLUGBOARD_RECETTE_ADMIN_KEY", KEY)
     assert recette.main([]) == 2
+
+
+def test_retention_never_run_right_after_a_start_is_accepted(gateway):
+    gateway.jobs = _jobs(data_retention="never_run")
+    assert recette.main([]) == 0
+
+
+def test_wait_does_not_spin_on_a_running_watchdog(gateway, monkeypatch):
+    gateway.jobs = _jobs(provider_watchdog="running")
+    sleeps = []
+    monkeypatch.setattr(recette.time, "sleep", lambda s: sleeps.append(s))
+    assert recette.main(["--wait", "60"]) == 0
+    assert sleeps == []
+
+
+def test_with_a_totp_code_the_jobs_are_asked_once(gateway, monkeypatch):
+    gateway.jobs = _jobs(pricing_refresh="never_run")
+    monkeypatch.setenv("PLUGBOARD_RECETTE_TOTP", "123456")
+    monkeypatch.setattr(recette.time, "sleep", lambda s: None)
+    assert recette.main(["--wait", "60"]) == 1
+    assert [p for m, p in gateway.methods if p == "/admin/jobs"] == ["/admin/jobs"]
