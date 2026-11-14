@@ -121,6 +121,10 @@ def main() -> int:
         return run()
     except (URLError, OSError) as exc:
         return _fail("gateway", f"unreachable ({type(exc).__name__})")
+    except ValueError as exc:
+        # A key Python cannot put in a header. Never the exception's text.
+        print(f"request not sent: {type(exc).__name__}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

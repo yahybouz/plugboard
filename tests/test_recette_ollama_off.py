@@ -68,3 +68,17 @@ def test_a_control_character_inside_the_key_is_refused_without_echo(
     assert "PLUGBOARD_SMOKE_KEY" in shown.err and "not shown" in shown.err
     assert "pb_fake_key" not in text and "not_real" not in text
     assert called == []
+
+
+def test_a_key_python_cannot_send_is_a_usage_error_without_a_trace(
+    recette, monkeypatch, capsys
+):
+    """A character outside latin-1 cannot go in a header: http.client raises a
+    ValueError (UnicodeEncodeError) before anything is sent."""
+    monkeypatch.setattr(recette, "KEY", "pb_fake_key_€_not_real_0123456789")
+    monkeypatch.setattr(recette, "URL", "http://127.0.0.1:9")
+    assert recette.main() == 2
+    shown = capsys.readouterr()
+    text = shown.out + shown.err
+    assert "UnicodeEncodeError" in shown.err and "Traceback" not in text
+    assert "pb_fake_key" not in text and "not_real" not in text
