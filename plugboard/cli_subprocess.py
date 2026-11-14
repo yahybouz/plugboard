@@ -1512,6 +1512,50 @@ def _extract_agy_error(stdout_text: str) -> str:
     return msg[:400]
 
 
+# Names of the actions agy says it refused, quoted back only when plain.
+_AGY_ACTION_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
+_AGY_ACTIONS_SHOWN = 8
+
+
+def _agy_empty_answer(stdout_text: str, command: str) -> str:
+    """Why agy's valid payload holds no answer (BUG-100), else ``""``.
+
+    Headless agy cannot ask for a tool permission: it refuses the tool and
+    answers ``{"status": "SUCCESS", "response": "", "denied_actions": [...]}``
+    (real run, UAT, 14/11). That is valid JSON, not an invalid one. agy's
+    output is never quoted: only the refused action names, when plain.
+    """
+    try:
+        payload = _parse_gemini_json_stdout(stdout_text)
+    except Exception:  # noqa: BLE001 - then it is invalid JSON indeed
+        return ""
+    if not isinstance(payload, dict) or "response" not in payload:
+        return ""
+    if str(payload.get("status", "SUCCESS")).upper() != "SUCCESS":
+        return ""
+    response = payload.get("response")
+    if not isinstance(response, str) or response.strip():
+        return ""
+    denied = payload.get("denied_actions")
+    if isinstance(denied, list) and denied:
+        names: List[str] = []
+        for item in denied:
+            action = item.get("action") if isinstance(item, dict) else None
+            if (
+                isinstance(action, str)
+                and _AGY_ACTION_RE.fullmatch(action)
+                and action not in names
+            ):
+                names.append(action)
+        listed = f" ({', '.join(names[:_AGY_ACTIONS_SHOWN])})" if names else ""
+        return (
+            f"CLI {command!r} refused the tools its answer needed{listed}: "
+            "headless agy cannot ask for a tool permission, so nothing was done "
+            "and there is no answer."
+        )
+    return f"CLI {command!r} returned an empty answer and gave no reason."
+
+
 # Key set on complete()'s result when the CLI reported validated token counts.
 # The router pops it before the result leaves the process.
 USAGE_REPORTED_KEY = "_plugboard_usage_reported"
@@ -2155,8 +2199,14 @@ async def complete(
                 **_quota_fields(quota_error, quota_stderr, rate_limited=rate_limited),
             )
         if text is None and backend.output_mode == "json":
+            # Valid agy JSON without an answer is not invalid JSON (BUG-100):
+            # said as such, same error and same classification otherwise.
+            empty = (
+                _agy_empty_answer(stdout_text, backend.command) if kind == "agy" else ""
+            )
             raise CliSubprocessError(
-                f"CLI {backend.command!r} returned invalid JSON. "
+                empty
+                or f"CLI {backend.command!r} returned invalid JSON. "
                 f"First 200 chars: {stdout_text[:200]!r}",
                 exit_code=proc.returncode,
                 stderr=stderr_text[:500],
