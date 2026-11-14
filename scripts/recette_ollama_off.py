@@ -109,6 +109,14 @@ def main() -> int:
             "PLUGBOARD_SMOKE_KEY is empty: export a client key first.", file=sys.stderr
         )
         return 2
+    if any(ord(ch) < 33 or ord(ch) == 127 for ch in KEY):
+        # Python's refusal of such a header value would print the key.
+        print(
+            "PLUGBOARD_SMOKE_KEY holds a space or a control character "
+            "(value not shown).",
+            file=sys.stderr,
+        )
+        return 2
     try:
         return run()
     except (URLError, OSError) as exc:

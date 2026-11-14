@@ -52,7 +52,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`scripts/smoke_consumers.py` failed on a model served by CLI subscriptions only**: its `structured` step sends a `response_format`, which such a route refuses by contract (`400` `unsupported_on_cli`, nothing called), so the post-deployment smoke could not pass once Ollama is off. That refusal is now a `SKIP`, like absent embeddings; any other refusal of the step is still a failure.
 
-- **`scripts/recette_services.py` and `scripts/bench_latence.py` could print the key**: a key read from a file with CRLF line ends kept its `\r`, and Python then quoted the whole `Authorization` value (the admin key, for `recette_services.py`) in a trace; `bench_latence.py` also exited `0` without having made a call. Both now strip the key, refuse a space or control character inside it without showing it (exit `2`), and never print an exception text; a bench call that breaks is counted as a failure.
+- **`scripts/recette_services.py` and `scripts/bench_latence.py` could print the key**: a key read from a file with CRLF line ends kept its `\r`, and Python then quoted the whole `Authorization` value (the admin key, for `recette_services.py`) in a trace; `bench_latence.py` also exited `0` without having made a call. Both now strip the key, refuse a space or control character inside it without showing it (exit `2`), answer a malformed address with exit `2` instead of a trace, and print the type of an exception only; a bench call that breaks is counted as a failure. `smoke_consumers.py`, `recette_acces.py` and `recette_ollama_off.py` refuse such a key the same way.
 
 ### Security
 

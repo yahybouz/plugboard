@@ -511,6 +511,13 @@ def main(argv: Optional[list] = None) -> int:
             f"{KEY_ENV} is empty: export the limited smoke key first.", file=sys.stderr
         )
         return 2
+    if any(ord(ch) < 33 or ord(ch) == 127 for ch in key):
+        # Python's refusal of such a header value would print the key.
+        print(
+            f"{KEY_ENV} holds a space or a control character (value not shown).",
+            file=sys.stderr,
+        )
+        return 2
     smoke = Smoke(args.url, key, args.timeout, args.deadline)
     if not args.model:
         try:

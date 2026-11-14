@@ -330,3 +330,22 @@ def test_a_redirect_is_a_named_failure_and_the_key_never_follows_it(
     assert failed and all("redirect" in r["detail"] for r in failed)
     assert all("302" in r["detail"] for r in failed)
     assert KEY not in out and KEY not in json.dumps(data)
+
+
+def test_a_control_character_inside_the_key_is_refused_without_echo(
+    gateway, tmp_path, capsys
+):
+    """Python would quote the whole ``Authorization`` value in its refusal, and
+    the masked table would still show the end of the key."""
+    url, seen = gateway()
+    out = tmp_path / "out.json"
+    bad = KEY[:8] + "\r" + KEY[8:]
+
+    code = recette.main([str(out)], env={"PLUGBOARD_URL": url, "PLUGBOARD_KEY": bad})
+
+    captured = capsys.readouterr()
+    shown = captured.out + captured.err
+    assert code == 2
+    assert "PLUGBOARD_KEY" in captured.err and "not shown" in captured.err
+    assert KEY[:8] not in shown and KEY[8:] not in shown and "Traceback" not in shown
+    assert seen == [] and not out.exists()

@@ -638,3 +638,16 @@ def test_any_other_refusal_of_the_structured_step_is_a_failure(gateway, error):
 
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert _check_names(proc, "FAIL") == ["structured"]
+
+
+def test_a_control_character_inside_the_key_is_refused_without_echo(gateway):
+    """Python would quote the whole ``Authorization`` value in its refusal."""
+    server, gw = gateway
+
+    proc = _smoke(server, key=KEY[:8] + "\r" + KEY[8:])
+
+    shown = proc.stdout + proc.stderr
+    assert proc.returncode == 2, shown
+    assert "PLUGBOARD_SMOKE_KEY" in proc.stderr and "not shown" in proc.stderr
+    assert KEY[:8] not in shown and KEY[8:] not in shown and "Traceback" not in shown
+    assert gw.seen == []

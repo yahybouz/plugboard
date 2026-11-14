@@ -53,3 +53,18 @@ async def _send(client, auth, method, path, body):
 def test_a_missing_key_is_a_usage_error(recette, monkeypatch):
     monkeypatch.setattr(recette, "KEY", "")
     assert recette.main() == 2
+
+
+def test_a_control_character_inside_the_key_is_refused_without_echo(
+    recette, monkeypatch, capsys
+):
+    """Python would quote the whole ``Authorization`` value in its refusal."""
+    called = []
+    monkeypatch.setattr(recette, "KEY", "pb_fake_key\rnot_real_0123456789")
+    monkeypatch.setattr(recette, "call", lambda *a, **k: called.append(a))
+    assert recette.main() == 2
+    shown = capsys.readouterr()
+    text = shown.out + shown.err
+    assert "PLUGBOARD_SMOKE_KEY" in shown.err and "not shown" in shown.err
+    assert "pb_fake_key" not in text and "not_real" not in text
+    assert called == []

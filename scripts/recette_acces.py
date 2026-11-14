@@ -600,6 +600,13 @@ def main(argv: Optional[List[str]] = None, env: Optional[Dict[str, str]] = None)
             file=sys.stderr,
         )
         return 2
+    if any(ord(ch) < 33 or ord(ch) == 127 for ch in key):
+        # Python's refusal of such a header value would print the key.
+        print(
+            "PLUGBOARD_KEY holds a space or a control character (value not shown).",
+            file=sys.stderr,
+        )
+        return 2
     try:
         wanted = parse_models(args.model)
     except ValueError as exc:
