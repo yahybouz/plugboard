@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Client acceptance run** (`scripts/recette_passerelle.py`): checks `/health`, `/health/ready`, `/v1/models` with the client key, and one short chat call; the MCP endpoint is checked when `PLUGBOARD_MCP_URL` is set. It reads the target and the key from the environment, never prints the key, and exits `1` at the first failure (`2` when the configuration is missing).
+
+### Changed
+
+- **The pipeline is local only.** `.gitlab-ci.yml` and `.github/workflows/ci.yml` are removed: a push to GitLab or GitHub runs nothing. The local CI is `ci/pipeline.json`, run with `python3 /srv/dev/.ci/outils/ci.py etat | lancer | deployer`.
+- **Documentation aligned on 4.13.0**: README, client guide, configuration, supervision and operations pages reference only commands, variables and routes present in the code.
+
+### Fixed
+
+- **Documentation**: `PLUGBOARD_JOB_PYTHON` is no longer documented (nothing reads it), and the pricing runbook names the scrape endpoint instead of a `make pricing` target that does not exist.
+
 ## [4.13.0] — 2026-11-13
 
 ### Added
