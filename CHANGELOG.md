@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Live stream for claude and agy CLI providers** (INC-2): a streamed chat served by a claude or agy subscription now sends the text as the CLI writes it (claude `--include-partial-messages`, agy `--output-format stream-json`), the first word at once, instead of running the CLI whole and replaying it. Nothing is sent before the first word, so the fall back to the next provider is unchanged; a failure after it ends the stream with the `stream_interrupted` event, what was sent is billed, a client that leaves stops the CLI. Billing counts the whole answer once, and the spending alert now follows a streamed answer's billing. This path does not fill the response cache. codex reports whole messages only and keeps the replay.
+- **`scripts/bench_latence.py`** (bare CLI against the gateway, with and without stream, 1 then 3 calls at once) and **`scripts/recette_services.py`** (read-only: `/health`, `/health/ready`, state of every background job; non-zero exit when one is absent, stopped or failing). The figures they check are in [Performance targets](docs/guide/performance-targets.md).
+
+### Changed
+
+- **The Jobs page no longer reads a failing job as healthy** (INC-2): a loop that is no longer alive is `stopped`, an open or degraded circuit breaker or a crashed loop is `error`, a job the app never started is `not_started` (not `disabled`, which is the configuration's choice), and the watchdog shows its last check and reads `error` when its status cannot be read.
+- **The UAT compose runs every scheduler** (INC-2): `MODEL_AVAILABILITY_SCHEDULER_DISABLED` and `PRICING_SCHEDULER_DISABLED` were `1`, and Claude models were probed on every run; the UAT now matches prod (jobs on, no inference probe).
+
 ## [4.13.0] — 2026-11-13
 
 ### Added
