@@ -33,6 +33,8 @@ NOT_CONFIGURATION = {
     # The key the load bench sends; read by the operator's script, not the
     # server (PLU-17).
     "PLUGBOARD_BENCH_KEY": "scripts/bench_concurrency.py",
+    # The gateway the latency bench measures; also the operator's script (INC-2).
+    "PLUGBOARD_BENCH_URL": "scripts/bench_latence.py",
 }
 
 

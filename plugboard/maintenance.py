@@ -148,6 +148,10 @@ class PeriodicJob:
         exc = task.exception()
         if exc is not None:
             log.error("PeriodicJob %s crashed: %s", self.name, exc, exc_info=exc)
+            # The Jobs page must show a loop that ended, not its last success.
+            self.last_error = f"loop stopped: {type(exc).__name__}: {exc}"[
+                :_ERROR_MAX_CHARS
+            ]
 
     def _seconds_until_daily_hour(self) -> float:
         now = self._now().astimezone(timezone.utc)

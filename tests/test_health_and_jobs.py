@@ -244,6 +244,8 @@ async def test_scheduler_jobs_listed_with_a_known_state(admin_client):
             "running",
             "stale",
             "disabled",
+            "stopped",
+            "not_started",
         )
 
 
@@ -272,7 +274,8 @@ async def test_maintenance_jobs_are_listed(admin_client, monkeypatch):
     assert jobs["availability_snapshots"]["next_run"] == "2026-11-12 10:05 UTC"
     assert jobs["data_retention"]["name"] == "Data retention"
     assert jobs["data_retention"]["schedule"] == "daily at 04:00 UTC (in-process)"
-    assert jobs["data_retention"]["last_status"] == "never_run"
+    # Built here and never started: its loop is not alive.
+    assert jobs["data_retention"]["last_status"] == "stopped"
 
 
 async def test_a_retention_pass_with_a_failed_store_shows_as_an_error(

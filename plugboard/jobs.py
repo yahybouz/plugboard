@@ -116,12 +116,17 @@ def _short_time(value: Any) -> Optional[str]:
 
 
 def _scheduler_state(status: Dict[str, Any]) -> str:
+    """One word for the Jobs page. A job that is not working never reads as
+    healthy: a loop that is no longer alive is ``stopped``, an open or degraded
+    circuit breaker is ``error`` whatever its last success was."""
     if status.get("disabled"):
         return "disabled"
     if status.get("running_since"):
         return "running"
-    if status.get("last_error"):
+    if status.get("last_error") or status.get("cb_state") in ("OPEN", "DEGRADED"):
         return "error"
+    if status.get("running") is False:
+        return "stopped"
     if status.get("stale"):
         return "stale"
     if status.get("last_success_at"):
@@ -129,13 +134,34 @@ def _scheduler_state(status: Dict[str, Any]) -> str:
     return "never_run"
 
 
+def _watchdog_status() -> Dict[str, Any]:
+    from plugboard.provider_watchdog import get_watchdog_status
+
+    return get_watchdog_status()
+
+
 def _watchdog_state() -> str:
     try:
-        from plugboard.provider_watchdog import get_watchdog_status
+        return "running" if _watchdog_status().get("running") else "stopped"
+    except Exception:  # noqa: BLE001 - a status that cannot be read is no proof
+        log.warning("watchdog status unreadable", exc_info=True)
+        return "error"
 
-        return "running" if get_watchdog_status().get("running") else "stopped"
-    except Exception:  # noqa: BLE001 - the watchdog lives in the app
-        return "running"
+
+def _watchdog_last_run() -> Optional[str]:
+    """Time of the most recent provider check, from the watchdog's own state."""
+    try:
+        ages = [
+            p["last_check_ago_s"]
+            for p in (_watchdog_status().get("providers") or {}).values()
+            if p.get("last_check_ago_s") is not None
+        ]
+    except Exception:  # noqa: BLE001
+        return None
+    if not ages:
+        return None
+    when = datetime.now(timezone.utc) - timedelta(seconds=min(ages))
+    return when.strftime("%Y-%m-%d %H:%M UTC")
 
 
 def get_jobs_status(app_state: Any = None) -> List[Dict[str, Any]]:
@@ -150,13 +176,13 @@ def get_jobs_status(app_state: Any = None) -> List[Dict[str, Any]]:
                     "description": job["description"],
                     "schedule": "continuous (every 30 s)",
                     "next_run": "continuous",
-                    "last_run": None,
+                    "last_run": _watchdog_last_run(),
                     "last_status": _watchdog_state(),
                 }
             )
             continue
         sched = _scheduler(job, app_state)
-        status = _status(sched) if sched is not None else {"disabled": True}
+        status = _status(sched) if sched is not None else {}
         result.append(
             {
                 "id": job_id,
@@ -169,7 +195,9 @@ def get_jobs_status(app_state: Any = None) -> List[Dict[str, Any]]:
                 "last_run": _short_time(
                     status.get("last_run_at") or status.get("last_success_at")
                 ),
-                "last_status": _scheduler_state(status),
+                "last_status": _scheduler_state(status)
+                if sched is not None
+                else "not_started",
             }
         )
     return result
@@ -182,16 +210,14 @@ def get_job_log(job_id: str, lines: int = 50, app_state: Any = None) -> Dict[str
         return {"error": f"Job '{job_id}' not found"}
     if job.get("continuous"):
         try:
-            from plugboard.provider_watchdog import get_watchdog_status
-
-            detail: Dict[str, Any] = get_watchdog_status()
+            detail: Dict[str, Any] = _watchdog_status()
         except Exception as exc:  # noqa: BLE001
             detail = {"error": str(exc)}
         status = _watchdog_state()
     else:
         sched = _scheduler(job, app_state)
-        detail = _status(sched) if sched is not None else {"disabled": True}
-        status = _scheduler_state(detail)
+        detail = _status(sched) if sched is not None else {"started": False}
+        status = _scheduler_state(detail) if sched is not None else "not_started"
     text = json.dumps(detail, indent=2, default=str)
     output_lines = text.splitlines()
     return {

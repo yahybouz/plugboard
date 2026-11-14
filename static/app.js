@@ -1364,7 +1364,7 @@ async function loadJobs() {
     const rows = jobs.map(function (j) {
       let statusBadge;
       if (j.last_status === "success" || j.last_status === "running") statusBadge = h("span", { className: "badge badge-green" }, j.last_status);
-      else if (j.last_status === "error" || j.last_status === "stopped") statusBadge = h("span", { className: "badge badge-red" }, j.last_status);
+      else if (j.last_status === "error" || j.last_status === "stopped" || j.last_status === "not_started") statusBadge = h("span", { className: "badge badge-red" }, j.last_status);
       else if (j.last_status === "stale") statusBadge = h("span", { className: "badge badge-orange" }, "stale");
       else statusBadge = h("span", { className: "badge badge-muted" }, j.last_status || "never run");
 

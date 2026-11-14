@@ -284,7 +284,7 @@ class TestInProcessJobs:
     def test_without_schedulers_jobs_show_not_started(self) -> None:
         by_id = {j["id"]: j for j in jobs.get_jobs_status(None)}
         assert by_id["pricing_refresh"]["schedule"] == "not started"
-        assert by_id["pricing_refresh"]["last_status"] == "disabled"
+        assert by_id["pricing_refresh"]["last_status"] == "not_started"
 
     @pytest.mark.anyio
     async def test_run_now_starts_the_scheduler(self) -> None:
