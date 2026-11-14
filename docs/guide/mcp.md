@@ -68,6 +68,53 @@ Example client configuration (stdio):
 }
 ```
 
+## Use it from a client
+
+The supported way to reach the models through MCP is **stdio**: your MCP client starts the server as a child process, and the server calls the gateway over HTTP(S) with your **client key** (`pb_...`). Nothing listens on a port, so this opens no new network exposure. Do not use the admin key for this.
+
+You need two things: how to start the process, and the three variables.
+
+| Variable | Value |
+|---|---|
+| `PLUGBOARD_URL` | The gateway's address as the client reaches it, for example `https://plugboard.example.com` |
+| `PLUGBOARD_API_KEY` | Your client key (`pb_...`) |
+| `PLUGBOARD_MCP_TIMEOUT` | Optional: seconds allowed to a chat call (default 900) |
+
+**A. On the client's machine** (a checkout of the repository and its MCP environment, `make setup-mcp`): this is the configuration shown above, with `command` set to the `.venv-mcp` interpreter and `args` to `scripts/run_mcp.py`.
+
+**B. Inside the gateway's container** (the `full` image ships the MCP environment in `/opt/venv-mcp`): the client runs the command through Docker, locally or over SSH, and `PLUGBOARD_URL` is the gateway as seen from the container (`http://127.0.0.1:8765`):
+
+```json
+{
+  "mcpServers": {
+    "plugboard": {
+      "command": "docker",
+      "args": [
+        "exec", "-i",
+        "-e", "PLUGBOARD_URL=http://127.0.0.1:8765",
+        "-e", "PLUGBOARD_API_KEY",
+        "plugboard",
+        "/opt/venv-mcp/bin/python", "/app/scripts/run_mcp.py"
+      ],
+      "env": { "PLUGBOARD_API_KEY": "pb_your_key" }
+    }
+  }
+}
+```
+
+Replace `plugboard` with the container's name. `-e PLUGBOARD_API_KEY` without a value passes the variable from the client's `env`, so the key is not written in the arguments (visible in a process list). Over SSH, run the same `docker exec -i ...` command on the server (`"command": "ssh", "args": ["host", "docker", "exec", ...]`) and put the key in that remote command's environment.
+
+**Check it works** with one command, from a checkout, with the same variables (`PLUGBOARD_KEY` is the same client key):
+
+```bash
+PLUGBOARD_URL=https://plugboard.example.com PLUGBOARD_KEY=pb_your_key \
+  python scripts/recette_acces.py results.json
+```
+
+It lists the models your key sees, calls one per active provider through the API (plain and streamed) and through this MCP server, prints a table and exits non-zero if a surface fails.
+
+**What the tools show.** `list_models` shows exactly the model IDs of `GET /v1/models` for your key: only models you may call, none from a turned-off provider. A refused call comes back as `Error: <code>: <detail>`, the same code and message the API gives: `quota_exhausted` (a subscription's quota is used up, retry later), `providers_busy` (every provider of the model is at its cap, retry in a few seconds), `forbidden_model` (your key may not use the model), `model_not_supported_by_subscription` (the account plan behind the route does not serve it), `provider_timeout`.
+
 ## Tools
 
 | Tool | Arguments | What it does |
