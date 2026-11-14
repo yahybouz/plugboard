@@ -83,7 +83,7 @@ The background jobs run inside the server; nothing is scheduled outside it (no c
 
 | Endpoint | Effect |
 |---|---|
-| `GET /admin/jobs` | One entry per job: `id`, `name`, `description`, `schedule`, `next_run`, `last_run` and `last_status` (`success`, `error`, `running`, `stale`, `disabled` or `never_run`; `running` or `stopped` for the watchdog) |
+| `GET /admin/jobs` | One entry per job: `id`, `name`, `description`, `schedule`, `next_run`, `last_run` and `last_status`: `success`, `running`, `never_run`, `disabled` (turned off by the configuration), `stale`, `error` (its last run failed, or its circuit breaker is open or degraded), `stopped` (its loop is no longer alive) or `not_started` (the application never started it); for the watchdog `running`, `stopped`, or `error` when its status cannot be read |
 | `GET /admin/jobs/{id}/log?lines=50` | `id`, `name`, `status`, `output` (the last `lines` lines of the job's status, as JSON) and `lines_total` |
 | `POST /admin/jobs/{id}/run` | **Run now**: starts the job in the background and answers at once with `status` `started`, `running` (a run is already under way) or `error` (the watchdog runs continuously and cannot be started by hand). It also runs a job whose scheduled runs are turned off. Recorded in the [audit log](#admin-audit-log) as `job.run` |
 
@@ -116,7 +116,7 @@ Each provider entry of `GET /metrics` gains a `models` object once one of its mo
 
 **Total wait per request** (`plugboard_request_wait_seconds`, histogram, Prometheus only, no labels): the seconds each chat request (`/v1/chat/completions`, `/v2/chat/completions`, `/v1/preflight`) spent waiting in all, for a slot of the global cap, for its session's turn and for providers' slots, recorded when the request ends (after the last byte of a stream); `0` for a request that never waited. Every request that passed the key check counts once, served, refused (`503 server_busy`, `session_busy` or `providers_busy`) or left by its client (`499`), so the buckets just above the wait budget (the longer of `PLUGBOARD_INFLIGHT_WAIT_S` and `PLUGBOARD_PROVIDER_WAIT_S`, 10 s by default) show the requests that waited it all. `GET /metrics` keeps one entry per provider and does not carry it.
 
-The time to first token and tokens per second are measured on streamed answers from HTTP providers: a non-streamed answer has no first token to time, and a CLI provider's stream is replayed from its complete answer. Labels are `provider` and `model` only, never a client or a key; a model the provider does not list (nor has as its default model) is labelled `(unlisted)`, so a name a client typed never becomes a label. At most 256 (provider, model) series are kept; past that, each provider's new models are counted under one `(other)` series of that provider.
+The time to first token and tokens per second are measured on streamed answers from HTTP providers: a non-streamed answer has no first token to time, and a CLI provider's stream is not measured here (`claude` and `agy` send theirs live, `codex` replays its complete answer; [`scripts/bench_latence.py`](../../scripts/bench_latence.py) times their first word). Labels are `provider` and `model` only, never a client or a key; a model the provider does not list (nor has as its default model) is labelled `(unlisted)`, so a name a client typed never becomes a label. At most 256 (provider, model) series are kept; past that, each provider's new models are counted under one `(other)` series of that provider.
 
 ### Load bench
 

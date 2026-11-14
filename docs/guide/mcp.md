@@ -82,7 +82,7 @@ You need two things: how to start the process, and the three variables.
 
 **A. On the client's machine** (a checkout of the repository and its MCP environment, `make setup-mcp`): this is the configuration shown above, with `command` set to the `.venv-mcp` interpreter and `args` to `scripts/run_mcp.py`.
 
-**B. Inside the gateway's container** (the `full` image ships the MCP environment in `/opt/venv-mcp`): the client runs the command through Docker, locally or over SSH, and `PLUGBOARD_URL` is the gateway as seen from the container (`http://127.0.0.1:8765`):
+**B. Inside the gateway's container**, for the operator's own account only: whoever can run `docker exec` in that container can read the gateway's secrets and data, so a third-party client uses A. The `full` image ships the MCP environment in `/opt/venv-mcp`: the client runs the command through Docker, locally or over SSH, and `PLUGBOARD_URL` is the gateway as seen from the container (`http://127.0.0.1:8765`):
 
 ```json
 {
