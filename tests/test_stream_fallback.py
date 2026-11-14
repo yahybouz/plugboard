@@ -270,7 +270,7 @@ async def test_a_handed_over_stream_is_billed_to_the_provider_that_streamed(
 
     billed = []
 
-    def bill(client_id, body, raw, key_id=None, hold=None):
+    def bill(client_id, body, raw, key_id=None, hold=None, reported=False):
         billed.append(router.served_by()[0]["id"])
         return None
 
