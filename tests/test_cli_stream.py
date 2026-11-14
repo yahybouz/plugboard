@@ -276,3 +276,110 @@ async def test_a_streaming_run_that_times_out_is_killed(fake_cli):
         )
     assert time.perf_counter() - t0 < 5
     assert seen == ["Bon"]
+
+
+# ── agy without an answer (BUG-100) ─────────────────────────────────────────
+# Real payload of agy 1.4.4 (UAT, 14/11) when headless agy refused a tool:
+# valid JSON, status SUCCESS, an empty response and the refused actions.
+_AGY_EMPTY = {
+    "conversation_id": "f5afb0a0-22e8-41fc-9bb6-73f6e1d65261",
+    "status": "SUCCESS",
+    "response": "",
+    "duration_seconds": 1.807394606,
+    "num_turns": 1,
+    "usage": {"input_tokens": 7362, "output_tokens": 0, "total_tokens": 7362},
+}
+_AGY_DENIED = {
+    **_AGY_EMPTY,
+    "denied_actions": [{"action": "write_file", "display_name": "WriteFile"}],
+}
+
+
+def _agy_lines(payload: dict, stream: bool) -> list:
+    if not stream:
+        return [json.dumps(payload)]
+    return [
+        json.dumps({"event": "init", "conversation_id": payload["conversation_id"]}),
+        json.dumps({"event": "result", "result": payload}),
+    ]
+
+
+async def _agy_error(stream: bool) -> CliSubprocessError:
+    with pytest.raises(CliSubprocessError) as info:
+        await cli_subprocess.complete(
+            "agy",
+            {"model": "m", "messages": BODY["messages"]},
+            on_delta=(lambda t: None) if stream else None,
+        )
+    return info.value
+
+
+def _raw_free(message: str) -> None:
+    """agy's raw output is never quoted back."""
+    for raw in ("invalid JSON", "First 200 chars", "conversation_id", '"status"'):
+        assert raw not in message, message
+    assert "f5afb0a0" not in message
+
+
+def _same_classification(err: CliSubprocessError) -> None:
+    """Only the message changes: same exit code, no new flag."""
+    assert err.exit_code == 0
+    assert not (err.quota or err.request_too_long or err.model_unsupported)
+    assert not err.timed_out
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+async def test_agy_refused_tool_says_so(fake_cli, stream):
+    fake_cli(_agy_lines(_AGY_DENIED, stream))
+
+    err = await _agy_error(stream)
+
+    message = str(err)
+    assert "refused the tools its answer needed" in message
+    assert "write_file" in message
+    assert "nothing was done" in message
+    assert "no answer" in message
+    _raw_free(message)
+    _same_classification(err)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+async def test_agy_empty_answer_without_refusal_says_so(fake_cli, stream):
+    fake_cli(_agy_lines(_AGY_EMPTY, stream))
+
+    err = await _agy_error(stream)
+
+    message = str(err)
+    assert "returned an empty answer" in message
+    assert "refused" not in message
+    _raw_free(message)
+    _same_classification(err)
+
+
+async def test_agy_refused_action_names_are_never_echoed_raw(fake_cli):
+    weird = {
+        **_AGY_EMPTY,
+        "denied_actions": [
+            {"action": "read_file"},
+            {"action": "x<script>alert(1)</script>"},
+            {"action": "read_file"},
+            {"action": 7},
+            "command",
+            {"action": "command"},
+        ],
+    }
+    fake_cli(_agy_lines(weird, False))
+
+    message = str(await _agy_error(False))
+
+    assert "(read_file, command)" in message
+    assert "<script>" not in message
+    _raw_free(message)
+
+
+async def test_agy_invalid_json_keeps_its_message(fake_cli):
+    fake_cli(["CLI error: bubbletea: error opening TTY"], exit_code=0)
+
+    message = str(await _agy_error(False))
+
+    assert "returned invalid JSON" in message

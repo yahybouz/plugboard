@@ -45,7 +45,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-from plugboard import envcompat
+from plugboard import agy_store, envcompat
 from plugboard.circuit_breaker import (
     is_model_unsupported_by_subscription,
     is_request_too_long,
@@ -249,7 +249,8 @@ _PROVIDER_ENV_ALLOWLIST: Dict[str, frozenset] = {
     ),
     # agy keeps its Google sign-in under ~/.gemini/antigravity-cli
     # (antigravity-oauth-token): HOME is enough. It records each conversation
-    # in the same directory, which must therefore never be deleted (BUG-97).
+    # in the same directory, which must therefore never be deleted: only what
+    # each call created is removed after it (BUG-97, see agy_store).
     "agy": frozenset(),
     "claude": frozenset(
         {
@@ -661,7 +662,8 @@ def agy_private_tmp(spawn_cwd: str) -> Iterator[str]:
     (``mkdtemp``, mode 0700), holding nothing of the server or of another
     request, gone when the request ends. This bounds the writes a prompt can
     make through agy's file tool; it is not a sandbox, and agy still keeps
-    its own record of each conversation under its home (BUG-97).
+    its own record of each conversation under its home, removed after each
+    call by agy_store (BUG-97).
     """
     path = tempfile.mkdtemp(prefix="agy-tmp-", dir=spawn_cwd)
     try:
@@ -1510,6 +1512,50 @@ def _extract_agy_error(stdout_text: str) -> str:
     return msg[:400]
 
 
+# Names of the actions agy says it refused, quoted back only when plain.
+_AGY_ACTION_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
+_AGY_ACTIONS_SHOWN = 8
+
+
+def _agy_empty_answer(stdout_text: str, command: str) -> str:
+    """Why agy's valid payload holds no answer (BUG-100), else ``""``.
+
+    Headless agy cannot ask for a tool permission: it refuses the tool and
+    answers ``{"status": "SUCCESS", "response": "", "denied_actions": [...]}``
+    (real run, UAT, 14/11). That is valid JSON, not an invalid one. agy's
+    output is never quoted: only the refused action names, when plain.
+    """
+    try:
+        payload = _parse_gemini_json_stdout(stdout_text)
+    except Exception:  # noqa: BLE001 - then it is invalid JSON indeed
+        return ""
+    if not isinstance(payload, dict) or "response" not in payload:
+        return ""
+    if str(payload.get("status", "SUCCESS")).upper() != "SUCCESS":
+        return ""
+    response = payload.get("response")
+    if not isinstance(response, str) or response.strip():
+        return ""
+    denied = payload.get("denied_actions")
+    if isinstance(denied, list) and denied:
+        names: List[str] = []
+        for item in denied:
+            action = item.get("action") if isinstance(item, dict) else None
+            if (
+                isinstance(action, str)
+                and _AGY_ACTION_RE.fullmatch(action)
+                and action not in names
+            ):
+                names.append(action)
+        listed = f" ({', '.join(names[:_AGY_ACTIONS_SHOWN])})" if names else ""
+        return (
+            f"CLI {command!r} refused the tools its answer needed{listed}: "
+            "headless agy cannot ask for a tool permission, so nothing was done "
+            "and there is no answer."
+        )
+    return f"CLI {command!r} returned an empty answer and gave no reason."
+
+
 # Key set on complete()'s result when the CLI reported validated token counts.
 # The router pops it before the result leaves the process.
 USAGE_REPORTED_KEY = "_plugboard_usage_reported"
@@ -1972,6 +2018,14 @@ async def complete(
         # so a burst of requests can't fork-bomb the host (TM-001 mitigation).
         _live.update(phase="cli_queue")
         async with _get_semaphore(kind):
+            store_call: Optional[agy_store.AgyCall] = None
+            if kind == "agy":
+                # agy records each conversation, prompt in clear, under its
+                # home (BUG-97): what this call created is removed once the
+                # child is dead and reaped, however the call ends. Registered
+                # right before the launch, see agy_store.
+                store_call = agy_store.begin(env)
+                cleanup.callback(store_call.end)
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *argv,
@@ -2006,12 +2060,18 @@ async def complete(
                 # code is reported below.
                 if read_delta is not None and on_delta is not None:
                     pending_io = _communicate_streaming(
-                        proc, prompt.encode("utf-8"), read_delta, on_delta
+                        proc,
+                        prompt.encode("utf-8"),
+                        # agy's first event already names the conversation.
+                        store_call.watching(read_delta) if store_call else read_delta,
+                        on_delta,
                     )
                 else:
                     pending_io = proc.communicate(prompt.encode("utf-8"))
                 stdout, stderr = await asyncio.wait_for(pending_io, timeout=deadline)
                 finished = True
+                if store_call is not None:
+                    store_call.see_output(stdout)
             except asyncio.TimeoutError:
                 raise CliSubprocessError(
                     f"CLI {backend.command!r} timed out after {deadline:.0f}s",
@@ -2139,8 +2199,14 @@ async def complete(
                 **_quota_fields(quota_error, quota_stderr, rate_limited=rate_limited),
             )
         if text is None and backend.output_mode == "json":
+            # Valid agy JSON without an answer is not invalid JSON (BUG-100):
+            # said as such, same error and same classification otherwise.
+            empty = (
+                _agy_empty_answer(stdout_text, backend.command) if kind == "agy" else ""
+            )
             raise CliSubprocessError(
-                f"CLI {backend.command!r} returned invalid JSON. "
+                empty
+                or f"CLI {backend.command!r} returned invalid JSON. "
                 f"First 200 chars: {stdout_text[:200]!r}",
                 exit_code=proc.returncode,
                 stderr=stderr_text[:500],
