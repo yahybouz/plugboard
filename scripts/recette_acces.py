@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import http.client
 import json
 import os
 import queue
@@ -44,6 +45,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -51,7 +53,10 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 RATE_LIMIT_PER_MINUTE = 60
-PROMPT = "Reply with the single word: pong"
+RUN_ID = uuid.uuid4().hex[:8]
+# Unique per run: the gateway caches an identical prompt for minutes, and a
+# cached answer would pass without the provider being called.
+PROMPT = f"Reply with the single word: pong (check {RUN_ID})"
 
 
 # ── rate limit ──────────────────────────────────────────────────────────────
@@ -188,7 +193,12 @@ class Gateway:
                 return json.loads(resp.read().decode("utf-8")), ""
         except urllib.error.HTTPError as exc:
             return None, self.error_text(exc)
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+        except (
+            urllib.error.URLError,
+            OSError,
+            ValueError,
+            http.client.HTTPException,
+        ) as exc:
             return None, f"{type(exc).__name__}: {exc}"
 
     def chat(self, model: str, max_tokens: int) -> Tuple[bool, str]:
@@ -198,7 +208,12 @@ class Gateway:
                 payload = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             return False, self.error_text(exc)
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+        except (
+            urllib.error.URLError,
+            OSError,
+            ValueError,
+            http.client.HTTPException,
+        ) as exc:
             return False, f"{type(exc).__name__}: {exc}"
         choices = payload.get("choices") or []
         content = (choices[0].get("message") or {}).get("content") if choices else None
@@ -241,7 +256,7 @@ class Gateway:
                             content = True
         except urllib.error.HTTPError as exc:
             return False, self.error_text(exc), first
-        except (urllib.error.URLError, OSError) as exc:
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
             return False, f"{type(exc).__name__}: {exc}", first
         if error:
             return False, error, first
@@ -454,6 +469,7 @@ def run(
         "surfaces": len(rec.rows),
         "failed": len(failed),
         "providers": [p for p, _ in picks],
+        "mcp_skipped": skip_mcp,
     }
     result = {
         "url": url,
@@ -478,6 +494,8 @@ def _run_mcp(rec, url, key, picks, api_ids, max_tokens, timeout, mcp_python, lim
         client = McpStdio(python, url, key, timeout)
         client.start()
     except Exception as exc:  # noqa: BLE001 - reported as the surface's failure
+        if "client" in locals():
+            client.proc.kill()
         rec.add("-", "-", "mcp-start", False, t0, detail=f"{type(exc).__name__}: {exc}")
         return
     try:

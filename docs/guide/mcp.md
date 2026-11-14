@@ -102,7 +102,7 @@ You need two things: how to start the process, and the three variables.
 }
 ```
 
-Replace `plugboard` with the container's name. `-e PLUGBOARD_API_KEY` without a value passes the variable from the client's `env`, so the key is not written in the arguments (visible in a process list). Over SSH, run the same `docker exec -i ...` command on the server (`"command": "ssh", "args": ["host", "docker", "exec", ...]`) and put the key in that remote command's environment.
+Replace `plugboard` with the container's name. `-e PLUGBOARD_API_KEY` without a value passes the variable from the client's `env`, so the key is not written in the arguments (visible in a process list). Over SSH, `ssh` does not pass the client's environment: prefer running the stdio command on the server's own account, with the key in a file only that account reads (`-e PLUGBOARD_API_KEY="$(cat ~/.plugboard-key)"` in the remote command). A key written in the `args` of the client configuration appears in process lists.
 
 **Check it works** with one command, from a checkout, with the same variables (`PLUGBOARD_KEY` is the same client key):
 

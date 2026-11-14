@@ -234,3 +234,37 @@ def test_unreachable_gateway_exits_one(tmp_path, capsys):
     code, _, data = run_cli("http://127.0.0.1:9", tmp_path, capsys, "--skip-mcp")
     assert code == 1
     assert data["results"][0]["status"] == "FAIL"
+
+
+def test_each_run_sends_a_prompt_the_cache_has_not_seen():
+    assert recette.RUN_ID in recette.PROMPT
+    assert len(recette.RUN_ID) == 8
+
+
+def test_a_truncated_answer_is_a_failure_not_a_crash(tmp_path, capsys):
+    import socket
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(5)
+
+    def serve():
+        while True:
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                return
+            conn.recv(4096)
+            conn.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                b'Content-Length: 500\r\n\r\n{"data":'
+            )
+            conn.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.getsockname()[1]}"
+    code, _, data = run_cli(url, tmp_path, capsys, "--skip-mcp")
+    srv.close()
+    assert code == 1
+    assert data["results"][0]["status"] == "FAIL"
+    assert data["summary"]["mcp_skipped"] is True
