@@ -136,7 +136,11 @@ async def test_refresh_drops_codex_account_unsupported(monkeypatch, tmp_path: Pa
             ),
         }
     ]
-    assert get_quarantined_suffixes(qfile) == {"gpt-5.4-pro"}
+    # Recorded for the provider that refused it, and for no other (BUG-102).
+    assert get_quarantined_suffixes(qfile, provider_id="chatgpt-via-codex-cli") == {
+        "gpt-5.4-pro"
+    }
+    assert get_quarantined_suffixes(qfile) == set()
 
 
 @pytest.mark.asyncio
@@ -259,7 +263,10 @@ async def test_refresh_quarantines_terminal_deprecation(monkeypatch, tmp_path: P
 
     assert report["models"] == []
     assert report["dropped"][0]["reason"] == "model_unavailable"
-    assert get_quarantined_suffixes(qfile) == {"claude-3-opus-20240229"}
+    assert get_quarantined_suffixes(qfile, provider_id="claude-via-claude-cli") == {
+        "claude-3-opus-20240229"
+    }
+    assert get_quarantined_suffixes(qfile) == set()
 
 
 @pytest.mark.asyncio
@@ -349,7 +356,15 @@ async def test_refresh_unprobed_subprocess_filters_quarantined(monkeypatch, tmp_
 
     monkeypatch.setattr("plugboard.router.discover_models", fail_if_called)
     qfile = tmp_path / "quarantine.json"
-    record_terminal_unavailable("claude-old", reason="deprecated", path=qfile)
+    record_terminal_unavailable(
+        "claude-old", reason="deprecated", provider_id=provider["id"], path=qfile
+    )
+    # The same name refused by another provider says nothing of this one, and
+    # neither does an entry recorded without a provider (BUG-102).
+    record_terminal_unavailable(
+        "claude-sonnet-4-5", provider_id="chatgpt-via-codex-cli", path=qfile
+    )
+    record_terminal_unavailable("claude-sonnet-4-5", path=qfile)
 
     report = await ma.refresh_subprocess_provider_models(
         provider,

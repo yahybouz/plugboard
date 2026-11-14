@@ -376,6 +376,8 @@ def main() -> int:
         if not model_id:
             continue
         suffix = _suffix(model_id)
+        # The quarantine is kept per provider (BUG-102): /v1/models names it.
+        owner = str(m.get("owned_by") or "")
         probe = _probe(model_id, timeout=args.timeout, max_retries=args.max_retries)
         row: Dict[str, Any] = {
             "model": model_id,
@@ -391,7 +393,7 @@ def main() -> int:
             verdict = _classify_response(suffix, row["reply"])
             row["status"] = verdict
             if verdict == "ok":
-                record_success(suffix)
+                record_success(suffix, provider_id=owner)
                 row["quarantine_note"] = ""
             else:
                 # mismatch: log only, do NOT bump quarantine.
@@ -414,7 +416,7 @@ def main() -> int:
             row["http_status"] = probe.get("http_status")
             if is_account_unsupported_error(probe.get("error", "")):
                 entry = record_account_unsupported(
-                    suffix, reason=probe.get("error", "")[:200]
+                    suffix, reason=probe.get("error", "")[:200], provider_id=owner
                 )
                 fails = int(entry.get("consecutive_fails", 0))
                 row["quarantine_note"] = (
@@ -427,10 +429,14 @@ def main() -> int:
                 # by bumping the counter QUARANTINE_THRESHOLD times. Saves
                 # 2 nightlies for an obviously-dead model.
                 for _ in range(QUARANTINE_THRESHOLD):
-                    record_failure(suffix, reason=probe.get("error", "")[:200])
+                    record_failure(
+                        suffix, reason=probe.get("error", "")[:200], provider_id=owner
+                    )
                 row["quarantine_note"] = "deprecated → quarantined"
             else:
-                entry = record_failure(suffix, reason=probe.get("error", "")[:200])
+                entry = record_failure(
+                    suffix, reason=probe.get("error", "")[:200], provider_id=owner
+                )
                 fails = int(entry.get("consecutive_fails", 0))
                 if fails >= QUARANTINE_THRESHOLD:
                     row["quarantine_note"] = f"quarantined ({fails} fails)"

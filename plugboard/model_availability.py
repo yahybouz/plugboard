@@ -681,11 +681,13 @@ async def refresh_subprocess_provider_models(
             seen.add(mid)
             candidate_ids.append(mid)
 
-    quarantined = (
-        get_quarantined_suffixes(quarantine_path)
-        if quarantine_path
-        else get_quarantined_suffixes()
-    )
+    # This provider's own quarantine: another provider's refusal of the same
+    # model name says nothing of this one (BUG-102). ``own`` is passed to
+    # every quarantine call below.
+    own: Dict[str, Any] = {"provider_id": str(provider.get("id") or "")}
+    if quarantine_path:
+        own["path"] = quarantine_path
+    quarantined = get_quarantined_suffixes(**own)
     # Models a ChatGPT sign-in refuses leave the codex route's saved list
     # too, never probed nor quarantined: they stay valid elsewhere (BUG-78).
     refused: frozenset = frozenset()
@@ -728,10 +730,7 @@ async def refresh_subprocess_provider_models(
         verified += 1
         probe = await probe_subprocess_model(kind, mid, timeout_s=timeout_s)
         if probe.get("ok"):
-            if quarantine_path:
-                record_success(mid, path=quarantine_path)
-            else:
-                record_success(mid)
+            record_success(mid, **own)
             kept.append(mid)
             continue
 
@@ -748,33 +747,17 @@ async def refresh_subprocess_provider_models(
                     else "model_unavailable"
                 )
             if terminal_reason == "account_unsupported":
-                if quarantine_path:
-                    record_account_unsupported(mid, reason=reason, path=quarantine_path)
-                else:
-                    record_account_unsupported(mid, reason=reason)
-            elif quarantine_path:
-                record_terminal_unavailable(
-                    mid,
-                    reason=reason,
-                    terminal_reason=terminal_reason,
-                    path=quarantine_path,
-                )
+                record_account_unsupported(mid, reason=reason, **own)
             else:
                 record_terminal_unavailable(
-                    mid,
-                    reason=reason,
-                    terminal_reason=terminal_reason,
+                    mid, reason=reason, terminal_reason=terminal_reason, **own
                 )
             dropped.append(
                 {"id": mid, "reason": terminal_reason, "detail": reason[:400]}
             )
             continue
 
-        entry = (
-            record_failure(mid, reason=reason, path=quarantine_path)
-            if quarantine_path
-            else record_failure(mid, reason=reason)
-        )
+        entry = record_failure(mid, reason=reason, **own)
         fails = int(entry.get("consecutive_fails", 0) or 0)
         if fails >= QUARANTINE_THRESHOLD:
             dropped.append(
@@ -918,7 +901,12 @@ async def refresh_native_provider_models(provider: Dict[str, Any]) -> Dict[str, 
                     from plugboard import model_quarantine as _mq
                     from plugboard.router import _model_denylist
 
-                    excluded = _mq.get_quarantined_suffixes() | _model_denylist()
+                    excluded = (
+                        _mq.get_quarantined_suffixes(
+                            provider_id=str(provider.get("id") or "")
+                        )
+                        | _model_denylist()
+                    )
                     cloud_ids = [c for c in cloud_ids if c not in excluded]
                     if cloud_ids:
                         model_ids = list(dict.fromkeys(list(model_ids) + cloud_ids))

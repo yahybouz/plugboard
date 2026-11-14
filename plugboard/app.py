@@ -3995,7 +3995,9 @@ async def check_model_internet_access(
         )
 
         if is_terminal:
-            record_terminal_unavailable(real_model, reason=reason[:200])
+            record_terminal_unavailable(
+                real_model, reason=reason[:200], provider_id=provider["id"]
+            )
             invalidate_models_cache()
             return {
                 "model_id": model_id,
