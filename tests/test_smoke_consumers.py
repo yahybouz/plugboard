@@ -556,3 +556,24 @@ def test_an_unreachable_gateway_fails_fast():
 
     assert proc.returncode == 1
     assert _check_names(proc, "FAIL")[0] == "health"
+
+
+def test_a_rejected_key_while_choosing_the_model_fails_without_showing_it(gateway):
+    server, gw = gateway
+
+    proc = _smoke(server, model=None, key="pb_wrong_key_for_this_gateway_000")
+
+    assert proc.returncode == 1
+    assert "pb_wrong_key_for_this_gateway_000" not in proc.stdout + proc.stderr
+    assert "401" in proc.stderr
+
+
+def test_a_model_list_flagged_compatible_is_trusted_over_allowed_models(gateway):
+    server, gw = gateway
+    gw.behavior["models"] = [MODEL]
+    gw.behavior["compatible"] = {MODEL: True}
+    gw.behavior["me_allowed"] = ["Codex:*"]
+
+    proc = _smoke(server, model=None)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr

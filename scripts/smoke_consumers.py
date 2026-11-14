@@ -69,7 +69,8 @@ def pick_default_model(rows: list, allowed: Optional[list]) -> str:
                 continue
             if row.get("account_compatible") is False:
                 continue
-            if allowed and mid not in allowed:
+            # 4.4.0 flags what the key may use; only an older list needs allowed_models.
+            if "account_compatible" not in row and allowed and mid not in allowed:
                 continue
             return mid
     return ""
@@ -472,12 +473,17 @@ def main(argv: Optional[list] = None) -> int:
         try:
             listed = smoke.get_json("/v1/models")
             me = smoke.get_json("/v1/me")
+            data = listed.get("data", []) if isinstance(listed, dict) else []
             args.model = pick_default_model(
-                [m for m in (listed or {}).get("data", []) if isinstance(m, dict)],
-                (me or {}).get("allowed_models") if isinstance(me, dict) else None,
+                [m for m in data if isinstance(m, dict)],
+                me.get("allowed_models") if isinstance(me, dict) else None,
             )
         except (CheckFailed, OSError, ValueError) as exc:
-            print(f"Cannot choose a default model: {exc}", file=sys.stderr)
+            print(
+                f"FAIL models: cannot choose a default model: {smoke.mask(str(exc))}",
+                file=sys.stderr,
+            )
+            return 1
         if not args.model:
             print(
                 "No CLI-provider model found for this key: "
