@@ -28,7 +28,9 @@ async def main() -> int:
     _, body, _ = await models_dev._download(url, "")
     providers, invalid = models_dev.parse_catalog(json.loads(body))
     presets = models_dev.generated_presets(providers)
-    print(f"{url}: {len(providers)} providers, {invalid} invalid entries, {len(presets)} presets\n")
+    print(
+        f"{url}: {len(providers)} providers, {invalid} invalid entries, {len(presets)} presets\n"
+    )
     for preset in presets:
         provider = providers[preset["catalog_id"]]
         excluded = models_dev.excluded_models(provider)
@@ -36,7 +38,11 @@ async def main() -> int:
             f"{preset['key']:32} {preset['base_url']:48} "
             f"{len(preset['known_models']):4} models  {len(excluded):3} excluded"
         )
-    missing = [pid for pid in REQUIRED if f"{models_dev.PRESET_PREFIX}{pid}" not in {p["key"] for p in presets}]
+    missing = [
+        pid
+        for pid in REQUIRED
+        if f"{models_dev.PRESET_PREFIX}{pid}" not in {p["key"] for p in presets}
+    ]
     if missing:
         print(f"\nMissing required presets: {', '.join(missing)}", file=sys.stderr)
         return 1

@@ -80,9 +80,7 @@ def main() -> int:
     admin_key = os.environ.get("PLUGBOARD_ADMIN_KEY") or ""
 
     if not base:
-        print(
-            "ERROR: set PLUGBOARD_URL (e.g. https://plugboard.example.com)"
-        )
+        print("ERROR: set PLUGBOARD_URL (e.g. https://plugboard.example.com)")
         return 2
     if not admin_key:
         print(

@@ -306,7 +306,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--only",
-        help="Substring filter on the model ID (e.g. 'claude', 'ollama').",
+        help="Substring filter on the model ID (e.g. 'claude', 'codex').",
     )
     parser.add_argument(
         "--timeout",
