@@ -33,6 +33,13 @@ NOT_CONFIGURATION = {
     # The key the load bench sends; read by the operator's script, not the
     # server (PLU-17).
     "PLUGBOARD_BENCH_KEY": "scripts/bench_concurrency.py",
+    # The client key and the MCP interpreter of the access proof, read by the
+    # operator's script (docs/guide/mcp.md), not by the server; HOME and PATH
+    # are only handed on to the MCP child process.
+    "PLUGBOARD_KEY": "scripts/recette_acces.py",
+    "PLUGBOARD_MCP_PYTHON": "scripts/recette_acces.py",
+    "HOME": "scripts/recette_acces.py",
+    "PATH": "scripts/recette_acces.py",
 }
 
 

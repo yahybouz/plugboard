@@ -215,7 +215,7 @@ class ModelEntry(_Open):
     internet_access: Optional[bool] = None
     connected: Optional[bool] = Field(
         default=None,
-        description="true only for a successful connectivity observation; false for failed, quarantined or unknown connectivity. last_probed_at is null when never probed.",
+        description="true only for a successful connectivity observation; false for failed (client keys do not see a failure less than 36 hours old), quarantined or unknown connectivity. last_probed_at is null when never probed.",
     )
     last_probed_at: Optional[str] = None
     account_compatible: Optional[bool] = Field(
@@ -577,7 +577,10 @@ class ErrorResponse(_Open):
         "model_not_found (chat, 404), providers_busy (chat, 503), "
         "server_busy (chat and preflight, 503; also a preflight item's error), "
         "session_busy (chat, 503), "
-        "provider_disabled (chat, 503), usage_unavailable (a key with a monthly "
+        "provider_disabled (chat, 503), provider_timeout (chat, 503; a provider "
+        "gave no answer in time), quota_exhausted (chat, 429; the provider's "
+        "subscription or API quota is exhausted), forbidden_model (chat, 403; "
+        "the key may not use the model), usage_unavailable (a key with a monthly "
         "budget while usage cannot be recorded: chat, preflight, embeddings and "
         "decisions, 503).",
     )
@@ -660,7 +663,7 @@ _CHAT_ERRORS = {
     "429": "Rate limit or monthly spending limit exceeded, or this call's estimated"
     " cost does not fit in what the budget has left once the calls in progress are"
     " counted (nothing was called), or the quota of the last provider tried is"
-    " exhausted (retry_after and Retry-After when it gives a delay).",
+    " exhausted (code quota_exhausted; retry_after and Retry-After when it gives a delay).",
     "400": "Invalid request; nothing was billed."
     " code unsupported_on_cli: only CLI subscription routes (subprocess"
     " providers) serve the model and the request asks for what they cannot serve:"
@@ -680,7 +683,7 @@ _CHAT_ERRORS = {
     " the request asked for a stream or not (PLU-26), or at once when the"
     " stream had already begun.",
     "402": "The key has a monthly budget and the model no known price; nothing was called.",
-    "403": "The key may not use this model; or the provider's own credentials"
+    "403": "The key may not use this model (code forbidden_model); or the provider's own credentials"
     " could not be used on the last provider tried (a Copilot licence missing,"
     " for example): error_ref, nothing was called on that provider.",
     "404": "No provider knows the model: no provider ID prefixes it, no provider"
@@ -688,7 +691,7 @@ _CHAT_ERRORS = {
     " model_not_found, hint says what to send; nothing was called.",
     "413": "Request body larger than MAX_BODY_BYTES (10 MB by default).",
     "502": "The provider failed or answered with an error.",
-    "503": "Provider timeout (retry_after), the global cap of concurrent chat"
+    "503": "Provider timeout (code provider_timeout, retry_after), the global cap of concurrent chat"
     " requests full for the whole wait (code server_busy, Retry-After 5), the"
     " previous turn of the request's session still answered when its wait ended,"
     " or too many of its turns already waiting"

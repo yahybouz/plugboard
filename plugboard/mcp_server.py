@@ -189,6 +189,28 @@ def _auth_headers(admin: bool = False, json_body: bool = False) -> dict[str, str
     return headers
 
 
+def _client_error(status: int, text: str) -> str:
+    """The client-facing message of a refused gateway call.
+
+    The gateway's error body carries a stable ``code`` for the errors a client
+    can act on (quota_exhausted, providers_busy, forbidden_model,
+    model_not_supported_by_subscription, provider_timeout...): the message is
+    then ``<code>: <detail>``, the same pair an API client reads. Without a
+    code it stays ``HTTP <status>: <detail>``.
+    """
+    try:
+        payload = json.loads(text)
+    except ValueError:
+        return f"HTTP {status}: {text[:_DETAIL_LIMIT]}"
+    if isinstance(payload, dict) and ("detail" in payload or "code" in payload):
+        detail = _error_detail(payload)[:_DETAIL_LIMIT]
+        code = payload.get("code")
+        if isinstance(code, str) and code:
+            return f"{code}: {detail}"
+        return f"HTTP {status}: {detail}"
+    return f"HTTP {status}: {text[:_DETAIL_LIMIT]}"
+
+
 async def _api_get(path: str, admin: bool = False) -> dict[str, Any]:
     """GET request to Plugboard API."""
     headers = _auth_headers(admin=admin)
@@ -201,7 +223,7 @@ async def _api_get(path: str, admin: bool = False) -> dict[str, Any]:
         ) as resp:
             if resp.status != 200:
                 text = await resp.text()
-                return {"error": f"HTTP {resp.status}: {text[:300]}"}
+                return {"error": _client_error(resp.status, text)}
             return await resp.json()
     except aiohttp.ClientError as exc:
         return {"error": f"HTTP client error: {exc}"}
@@ -220,7 +242,7 @@ async def _api_post(path: str, body: dict, admin: bool = False) -> dict[str, Any
         ) as resp:
             if resp.status not in (200, 201):
                 text = await resp.text()
-                return {"error": f"HTTP {resp.status}: {text[:300]}"}
+                return {"error": _client_error(resp.status, text)}
             return await resp.json()
     except aiohttp.ClientError as exc:
         return {"error": f"HTTP client error: {exc}"}
@@ -839,13 +861,21 @@ async def chat_stream(
         ) as resp:
             if resp.status != 200:
                 text = await resp.text()
-                return f"Error: HTTP {resp.status}: {text[:300]}"
+                return f"Error: {_client_error(resp.status, text)}"
             reasoning_chunks: List[str] = []
+            stream_error = ""
             async for line in resp.content:
                 text = line.decode("utf-8", errors="replace").strip()
                 if text.startswith("data: ") and text != "data: [DONE]":
                     try:
                         data = json.loads(text[6:])
+                        if isinstance(data.get("error"), dict):
+                            err = data["error"]
+                            stream_error = (
+                                f"{err.get('code') or 'stream_error'}: "
+                                f"{err.get('message', '')}"[:_DETAIL_LIMIT]
+                            )
+                            continue
                         delta = data.get("choices", [{}])[0].get("delta", {})
                         # Thinking models (Ollama qwen3.5/kimi/glm/deepseek,
                         # OpenAI o1) emit chain-of-thought in delta.reasoning.
@@ -860,6 +890,8 @@ async def chat_stream(
     except aiohttp.ClientError as exc:
         return f"Error: HTTP client error: {exc}"
 
+    if stream_error:
+        return ("".join(chunks) + "\n\n" if chunks else "") + f"Error: {stream_error}"
     if chunks:
         if reasoning_chunks:
             return (
@@ -877,6 +909,11 @@ async def chat_stream(
             "(likely max_tokens exhausted — retry with a larger budget)."
         )
     return "Error: Empty streaming response"
+
+
+def _model_ids_from_text(text: str) -> List[str]:
+    """The model IDs a ``list_models`` answer shows (each one in backticks)."""
+    return re.findall(r"^\s*- `([^`]+)`", text, flags=re.MULTILINE)
 
 
 @mcp.tool()

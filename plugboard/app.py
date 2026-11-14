@@ -53,7 +53,7 @@ import re
 import secrets
 import time
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import (
     Annotated,
     Any,
@@ -2181,6 +2181,18 @@ def _billing_target(body: Dict[str, Any]) -> tuple:
 # -- Model access check -----------------------------------------------------
 
 
+class _ModelNotAllowed(HTTPException):
+    """403: the key's allowed_models does not cover the model. Answered with
+    ``code`` forbidden_model, like the preflight's item error."""
+
+
+@app.exception_handler(_ModelNotAllowed)
+async def _model_not_allowed_handler(request: Request, exc: _ModelNotAllowed):
+    return JSONResponse(
+        status_code=403, content={"detail": exc.detail, "code": "forbidden_model"}
+    )
+
+
 def _check_model_access(
     client_id: str,
     model_str: str,
@@ -2224,7 +2236,7 @@ def _model_route_guard(client_id, key_record=None):
             # publishes in. Read once per guard, through the router's registry.
             registry_ids = tuple(p["id"] for p in _router.load_providers())
         if not model_access_matches(allowed, provider["id"], native, registry_ids):
-            raise HTTPException(
+            raise _ModelNotAllowed(
                 status_code=403,
                 detail=(
                     f"Model '{provider['id']}:{native}' not allowed for "
@@ -2355,7 +2367,7 @@ def _quota_error_response(
         detail = str(exc)
     else:
         detail = _quota_detail(exc.provider_id, exc.retry_after)
-    content: Dict[str, Any] = {"detail": detail}
+    content: Dict[str, Any] = {"detail": detail, "code": "quota_exhausted"}
     headers = _retry_after_headers(content, exc.retry_after)
     return JSONResponse(status_code=429, content=content, headers=headers)
 
@@ -2498,6 +2510,7 @@ def _chat_error_response(
         detail = f"The {who} provider" if who else "The provider"
         detail += " did not answer in time"
         content["retry_after"] = 10
+        content["code"] = "provider_timeout"
         headers["Retry-After"] = "10"
     elif isinstance(exc, AuthError):
         status_code = exc.status_code
@@ -2572,6 +2585,7 @@ def _cli_error_response(
     quota = exc.quota
     too_long = exc.request_too_long and not quota
     unsupported = getattr(exc, "model_unsupported", False) and not quota
+    timed_out = getattr(exc, "timed_out", False) and not quota
     ref = secrets.token_hex(4)
     log.warning(
         "cli provider error ref=%s provider=%s model=%s exit=%s pid=%s: %s | stderr=%s",
@@ -2602,6 +2616,11 @@ def _cli_error_response(
                 f"The {name} provider rejected the request: the messages are too "
                 f"long for the model's context (reference {ref} in the gateway log)."
             )
+        elif timed_out:
+            detail = (
+                f"The {name} provider did not answer in time "
+                f"(reference {ref} in the gateway log)."
+            )
         elif unsupported:
             detail = (
                 f"The {name} provider's subscription does not support the model "
@@ -2623,8 +2642,15 @@ def _cli_error_response(
         content["code"] = "model_not_supported_by_subscription"
         content["hint"] = MODEL_NOT_SUPPORTED_HINT
         return JSONResponse(status_code=400, content=content)
+    if timed_out:
+        content["code"] = "provider_timeout"
+        content["retry_after"] = 10
+        return JSONResponse(
+            status_code=503, content=content, headers={"Retry-After": "10"}
+        )
     if not quota:
         return JSONResponse(status_code=502, content=content)
+    content["code"] = "quota_exhausted"
     headers = _retry_after_headers(content, exc.retry_after)
     return JSONResponse(status_code=429, content=content, headers=headers)
 
@@ -3305,22 +3331,52 @@ async def chat_completions(
 # -- /v1/models --------------------------------------------------------------
 
 
+# A probe failure hides a model only while it is fresh: probes are periodic
+# (nightly), and a stale failure says nothing about the model today.
+_PROBE_FAILURE_MAX_AGE_S = 36 * 3600
+
+
+def _not_callable_now(item: Dict[str, Any]) -> bool:
+    """A catalogue entry whose last connectivity probe failed recently.
+
+    A model never probed, or probed long ago, stays listed. Quarantine is not
+    used: it is keyed by the bare model name, so one provider's refusal would
+    hide the model at every other provider.
+    """
+    probed = item.get("last_probed_at")
+    if item.get("connected") is not False or not isinstance(probed, str):
+        return False
+    try:
+        when = datetime.fromisoformat(probed.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    age = (datetime.now(timezone.utc) - when).total_seconds()
+    return age <= _PROBE_FAILURE_MAX_AGE_S
+
+
 async def _models_for_key(
     request: Request, client_id: Optional[str]
 ) -> List[Dict[str, Any]]:
     """The catalogue as the calling key sees it, for every model list route.
 
     Chat's allowed_models rule decides: a limited key only gets the models it
-    may call; the admin and unlimited keys get every model. Entries are copies,
+    may call; the admin and unlimited keys get every model. A client key also
+    loses a model whose last probe failed within 36 hours. Entries are copies,
     so the shared models cache never carries one caller's flag.
     """
     key_record = _get_request_key_record(request, client_id=client_id)
     # One guard for the whole list: its registry snapshot is read once.
     guard = _model_route_guard(client_id or "", key_record)
+    # A client key is offered only what can be called now: a model whose last
+    # probe failed recently is left out. The admin keeps the full view.
+    callable_only = bool(client_id) and client_id != "admin"
     return [
         dict(item, account_compatible=True)
         for item in await list_models()
         if _guard_accepts(guard, item.get("id", ""))
+        and not (callable_only and _not_callable_now(item))
     ]
 
 

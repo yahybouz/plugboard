@@ -12,6 +12,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **`scripts/smoke_consumers.py` no longer needs Ollama**: without `--model` or `PLUGBOARD_SMOKE_MODEL` it picks the first `Codex:`, `claude-code:`, `Gemini:` or `Antigravity:` model the key may use, never an `ollama:` one; the embeddings step is skipped with *no embedding provider configured for this key* when none is declared.
 
+### Added
+
+- **`scripts/recette_acces.py`: one command proves access by API and MCP** (lot B): with `PLUGBOARD_URL` and `PLUGBOARD_KEY` (a client key) in the environment, it makes a short real call per provider the key sees through the API, the API in a stream (first byte measured) and the MCP `chat` tool over stdio, checks that the MCP catalogue lists exactly the API's model IDs, prints a table and writes a JSON file; it exits non-zero when a surface fails, never prints the key and keeps to 60 requests a minute. Standard library only.
+
+- **The full image carries the MCP server** (lot B): `/opt/venv-mcp`, built from `requirements-mcp.lock` with hashes checked (the build fails if `mcp` does not import), next to the gateway's own environment. A client starts it over stdio, for example `docker exec -i <container> /opt/venv-mcp/bin/python scripts/run_mcp.py`; no port is opened. The slim `api` image is unchanged. A test imports the server with every API-only package blocked.
+
+### Changed
+
+- **A client key lists only models it can call now** (lot B): `GET /v1/models` (and the benchmarks and `/v2` lists) for a client key leaves out a model whose last connectivity probe failed less than 36 hours ago; the admin key keeps the full view, and quarantined or never-probed models stay listed. The MCP `list_models` tool reads the same route.
+
+- **The MCP tools give the client the API's code and message** (lot B): `chat`, `chat_stream`, `list_models` and `check_usage` now answer a refused call with `Error: <code>: <detail>` (for example `quota_exhausted`, `providers_busy`, `forbidden_model`, `model_not_supported_by_subscription`), the pair an API client reads, instead of `HTTP <status>` and the first 300 characters of the raw body; an error without a code stays `HTTP <status>: <detail>`. A stream cut after its first chunk returns what was received and `Error: stream_interrupted: ...`.
+
+- **Quota, refused model and timeout carry a `code`** (lot B, BUG-67): a provider or CLI subscription quota answers `429` with `"code": "quota_exhausted"`, a model the key's `allowed_models` refuses `403` with `"code": "forbidden_model"`, and a provider or CLI that exceeds its deadline `503` with `"code": "provider_timeout"` and `Retry-After: 10` (a CLI timeout answered `502` before, against the documented `503`). API contract 2.2.0 (`docs/api/openapi.json`, `docs/api/mcp.json`): the three codes in `ErrorResponse.code`.
+
 ## [4.13.0] — 2026-11-13
 
 ### Added
