@@ -25,6 +25,7 @@ mais l'étape chat consomme une requête réelle du modèle (max_tokens=16).
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import sys
@@ -32,6 +33,20 @@ import urllib.error
 import urllib.request
 
 DEFAULT_URL = "http://127.0.0.1:8765"
+
+
+class RecetteError(Exception):
+    """Échec d'un contrôle. Le message ne contient jamais la clé ni le corps d'erreur."""
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Une redirection est un échec : la cible doit être l'URL finale."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 class Recette:
@@ -55,10 +70,22 @@ class Recette:
             self.base + path, data=data, headers=headers, method=method
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with _OPENER.open(req, timeout=self.timeout) as resp:
                 return resp.status, resp.read()
         except urllib.error.HTTPError as exc:
+            if 300 <= exc.code < 400:
+                raise RecetteError(
+                    f"redirection HTTP {exc.code} : indiquer l'URL finale dans PLUGBOARD_URL"
+                ) from None
             return exc.code, exc.read()
+        except (
+            urllib.error.URLError,
+            OSError,
+            ValueError,
+            http.client.HTTPException,
+        ) as exc:
+            # Only the class name: the message may echo the request, hence the key.
+            raise RecetteError(f"injoignable : {type(exc).__name__}") from None
 
     @staticmethod
     def json_body(raw: bytes):
@@ -73,7 +100,7 @@ def _report(name: str, ok: bool, detail: str = "") -> None:
     print(f"[{name}] {state}{(' — ' + detail) if detail else ''}", flush=True)
 
 
-def run(env: dict) -> int:
+def _run_steps(env: dict) -> int:
     key = env.get("PLUGBOARD_API_KEY", "").strip()
     model = env.get("PLUGBOARD_RECETTE_MODEL", "").strip()
     base = env.get("PLUGBOARD_URL", "").strip() or DEFAULT_URL
@@ -81,6 +108,12 @@ def run(env: dict) -> int:
         timeout = float(env.get("PLUGBOARD_RECETTE_TIMEOUT", "60"))
     except ValueError:
         print("PLUGBOARD_RECETTE_TIMEOUT doit être un nombre", file=sys.stderr)
+        return 2
+    if any(ord(ch) < 33 for ch in key):
+        print(
+            "PLUGBOARD_API_KEY contient un espace ou un caractère de contrôle : valeur non affichée",
+            file=sys.stderr,
+        )
         return 2
     if not key:
         print(
@@ -101,8 +134,8 @@ def run(env: dict) -> int:
     # 1. health
     try:
         status, raw = rec.request("GET", "/health", auth=False)
-    except OSError as exc:
-        _report("health", False, rec.redact(f"injoignable : {exc.__class__.__name__}"))
+    except RecetteError as exc:
+        _report("health", False, str(exc))
         return 1
     body = rec.json_body(raw)
     ok = status == 200 and isinstance(body, dict) and bool(body.get("version"))
@@ -186,7 +219,7 @@ def run(env: dict) -> int:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with _OPENER.open(req, timeout=timeout) as resp:
                 status, raw = resp.status, resp.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as exc:
             status, raw = exc.code, ""
@@ -202,5 +235,19 @@ def run(env: dict) -> int:
     return 0
 
 
+def run(env: dict) -> int:
+    try:
+        return _run_steps(env)
+    except RecetteError as exc:
+        print(f"[échec] {exc}", flush=True)
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(run(dict(os.environ)))
+    try:
+        sys.exit(run(dict(os.environ)))
+    except (
+        Exception
+    ) as exc:  # une erreur inattendue reste un échec, sans trace ni secret
+        print(f"ÉCHEC inattendu : {type(exc).__name__}", file=sys.stderr)
+        sys.exit(1)

@@ -23,6 +23,7 @@ MODEL = "anthropic-direct:claude-haiku-5-5"
 
 class _Fake(BaseHTTPRequestHandler):
     chat_status = 200
+    health_status = 200
 
     def log_message(self, *args):  # keep test output quiet
         pass
@@ -40,6 +41,12 @@ class _Fake(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
+            if _Fake.health_status != 200:
+                self.send_response(_Fake.health_status)
+                self.send_header("Location", "https://example.invalid/")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return None
             return self._send(200, {"status": "ok", "version": "4.13.0"})
         if self.path == "/health/ready":
             return self._send(200, {"status": "ready"})
@@ -68,6 +75,7 @@ def gateway():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     _Fake.chat_status = 200
+    _Fake.health_status = 200
     yield f"http://127.0.0.1:{server.server_port}"
     server.shutdown()
     server.server_close()
@@ -129,4 +137,24 @@ def test_missing_key_is_a_configuration_error_without_network():
 def test_wrong_key_fails_the_models_step(gateway):
     proc = _run(gateway, PLUGBOARD_API_KEY="pb_" + "y" * 32)
     assert proc.returncode == 1
-    assert "pb_wrong" not in proc.stdout + proc.stderr
+    assert "y" * 32 not in proc.stdout + proc.stderr
+
+
+def test_a_successful_run_says_so(gateway):
+    proc = _run(gateway)
+    assert "TOUT PASSE" in proc.stdout
+
+
+def test_a_key_with_a_newline_is_refused_without_echo(gateway):
+    proc = _run(gateway, PLUGBOARD_API_KEY=KEY + "\nsuite")
+    assert proc.returncode == 2
+    assert KEY not in proc.stdout + proc.stderr
+    assert "suite" not in proc.stdout + proc.stderr
+
+
+def test_a_redirect_is_a_named_failure_not_a_silent_one(gateway):
+    _Fake.health_status = 308
+    proc = _run(gateway)
+    assert proc.returncode == 1
+    assert "redirection" in proc.stdout
+    assert "Traceback" not in proc.stderr
