@@ -35,6 +35,10 @@ NOT_CONFIGURATION = {
     "PLUGBOARD_BENCH_KEY": "scripts/bench_concurrency.py",
     # The gateway the latency bench measures; also the operator's script (INC-2).
     "PLUGBOARD_BENCH_URL": "scripts/bench_latence.py",
+    # The recipe's own gateway, admin key and TOTP code (scripts/recette_services.py).
+    "PLUGBOARD_RECETTE_URL": "scripts/recette_services.py",
+    "PLUGBOARD_RECETTE_ADMIN_KEY": "scripts/recette_services.py",
+    "PLUGBOARD_RECETTE_TOTP": "scripts/recette_services.py",
 }
 
 
