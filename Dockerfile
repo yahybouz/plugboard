@@ -9,7 +9,8 @@
 #         CLIs. This is what docker-compose.yml builds.
 #           docker build --target api -t plugboard:api .
 #
-#   full  api + the CLIs that the subprocess providers spawn
+#   full  api + the MCP server's own virtualenv (/opt/venv-mcp) + the CLIs
+#         that the subprocess providers spawn
 #         (gemini, claude, codex via npm; agy from Google's signed release
 #         archive, SHA512-pinned; gh via its apt repository).
 #         It is the LAST stage, so a plain `docker build .` (and the
@@ -160,6 +161,18 @@ RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
 RUN set -e; echo "── Installed CLI binaries ──"; \
     gemini --version; claude --version; codex --version; gh --version; \
     if [ "$(dpkg --print-architecture)" = "amd64" ]; then agy --version; fi
+
+# MCP server (scripts/run_mcp.py): its own hash-checked environment, apart
+# from the gateway's. It opens no port by itself: a client starts it over
+# stdio (`docker exec -i <container> /opt/venv-mcp/bin/python
+# scripts/run_mcp.py`, see docs/guide/mcp.md) and it calls the gateway with a
+# client key. The build fails when the library does not import.
+COPY requirements-mcp.lock /tmp/requirements-mcp.lock
+RUN python -m venv /opt/venv-mcp \
+ && /opt/venv-mcp/bin/pip install --no-cache-dir --require-hashes \
+        -r /tmp/requirements-mcp.lock \
+ && /opt/venv-mcp/bin/python -c "import mcp, aiohttp; print('mcp ok')" \
+ && rm /tmp/requirements-mcp.lock
 
 # CLI version probes can create private state as root during the build.
 # Keep the persisted runtime HOME writable by the unprivileged app user.

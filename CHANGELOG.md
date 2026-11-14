@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **The full image carries the MCP server** (lot B): `/opt/venv-mcp`, built from `requirements-mcp.lock` with hashes checked (the build fails if `mcp` does not import), next to the gateway's own environment. A client starts it over stdio, for example `docker exec -i <container> /opt/venv-mcp/bin/python scripts/run_mcp.py`; no port is opened. The slim `api` image is unchanged. A test imports the server with every API-only package blocked.
+
 ### Changed
 
 - **A client key lists only models it can call now** (lot B): `GET /v1/models` (and the benchmarks and `/v2` lists) for a client key leaves out a model whose last connectivity probe failed less than 36 hours ago; the admin key keeps the full view, and quarantined or never-probed models stay listed. The MCP `list_models` tool reads the same route.
