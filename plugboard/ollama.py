@@ -33,7 +33,17 @@ _OLLAMA_TIMEOUT = envcompat.get_int("OLLAMA_TIMEOUT", default=30)
 # public ollama.com catalogue.
 _OLLAMA_TOKEN = os.environ.get("PLUGBOARD_OLLAMA_TOKEN", "").strip()
 _PROVIDER_ID = "ollama"
+PROVIDER_ID = _PROVIDER_ID
 _PROVIDER_NAME = "Ollama"
+
+
+def disabled_by_config() -> bool:
+    """``OLLAMA_ENABLED=false``: Ollama is off for this process (PLU-53).
+
+    The provider is turned off in memory (``config.load_providers``), nothing
+    is stored: ``true`` or ``auto`` brings it back as it was.
+    """
+    return _OLLAMA_ENABLED == "false"
 
 
 def get_ollama_url() -> str:
