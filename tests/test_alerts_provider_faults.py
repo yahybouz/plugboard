@@ -199,10 +199,17 @@ def cli(_providers_file, monkeypatch):
         proc = MagicMock()
         proc.returncode = code
         proc.pid = 4242
+        # A streamed chat to claude reads the pipes itself (4.14.0); a plain
+        # one calls communicate(). Both get the same bytes, or the same fault.
         if isinstance(stdout, BaseException):
             proc.communicate = AsyncMock(side_effect=stdout)
+            proc.stdout.read = AsyncMock(side_effect=stdout)
         else:
             proc.communicate = AsyncMock(return_value=(stdout, stderr))
+            proc.stdout.read = AsyncMock(side_effect=[stdout, b""])
+        proc.stderr.read = AsyncMock(return_value=stderr)
+        proc.stdin.drain = AsyncMock()
+        proc.wait = AsyncMock(return_value=code)
         monkeypatch.setattr(
             cs.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc)
         )
