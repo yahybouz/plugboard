@@ -58,6 +58,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **A request to agy no longer writes into the shared `/tmp`** (BUG-86): a real run on the UAT (agy 1.4.4, 14/11) showed that agy, without a terminal, refuses every read, every command and every write except a write inside `TMPDIR`, which it does without asking. With no `TMPDIR` it used `/tmp`, shared with the launch directories of the other requests, where it created files and overwrote one in another private directory. Each agy request now gets its own `TMPDIR`: a fresh directory (mode `0700`) under the directory the CLIs are launched from, never the server's `TMPDIR` nor `/tmp`, removed when the request ends, also for a stream, a timeout or a cancelled request. Limits: `agy models` (the catalogue job, no client prompt) still runs with the server's `TMPDIR`; the directory has no size cap; and agy still records every conversation in clear under its own home, outside Plugboard's retention (BUG-97). `--mode plan` has no effect with `--disable-slash-commands` (agy says so itself): a sandbox around agy remains to be added.
 
+- **`opentelemetry-api` 1.45.2** (CVE-2026-126360): the advisory was published on 14/11 against 1.45.1, a dependency of FastAPI pinned in `requirements.lock` and `requirements-dev.lock`; both locks now pin the fixed patch version. `pip-audit` reports no known vulnerability on the four locks.
+
 ## [4.13.0] — 2026-11-13
 
 ### Added
