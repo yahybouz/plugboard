@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.14.1] — 2026-11-14
+
 ### Fixed
 
 - **The catalogue refresh removed from a provider the models another provider had refused** (BUG-102): the quarantine kept a model's name and not the provider that refused it, and without an inference probe the refresh drops every quarantined name from a CLI provider's saved list. In production, three models the claude subscription serves (`claude-sonnet-5-5`, `claude-haiku-5-5`, `claude-haiku-4-5`) left its list at the first catalogue pass of 4.14.0: a codex refusal of 01/11 had quarantined those names, and a pass of 02/11 had counted their first absence. Ten of agy's thirteen models were quarantined the same way and stayed only because a pass that drops more than half of a list is refused as an anomaly. A quarantine entry now belongs to the provider it was observed on: the chat routes, the internet check, the probes and the smoke scripts record it, and it labels (`"reason": "quarantined"` in `/v1/models`) or removes the model at that provider only. Entries recorded before this release name no provider: they stay in `data/quarantined_models.json`, under `models`, and are applied to no provider; a model its provider really refuses is quarantined again, at that provider, the next time it fails. The rule itself is unchanged: a model its own provider refuses still leaves that provider's list at the second pass ([monitoring](docs/guide/monitoring.md#model-catalog-and-connectivity)).
