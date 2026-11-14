@@ -85,6 +85,12 @@ def _get(
         conn.close()
 
 
+def _unusable_secret(value: str) -> bool:
+    """A space or a control character inside a secret: it cannot be a header
+    value, and Python's refusal would print it."""
+    return any(ord(ch) < 33 or ord(ch) == 127 for ch in value)
+
+
 def _plain_http_allowed(url: str, allow_http: bool) -> bool:
     parts = urlsplit(url)
     if parts.scheme == "https" or allow_http:
@@ -134,9 +140,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--allow-http", action="store_true")
     args = ap.parse_args(argv)
 
-    url = os.environ.get(args.url_env, "")
-    key = os.environ.get(args.key_env, "")
+    # Stripped: `$(cat key-file)` keeps the \r of a file with CRLF line ends.
+    url = os.environ.get(args.url_env, "").strip()
+    key = os.environ.get(args.key_env, "").strip()
+    totp = os.environ.get(args.totp_env, "").strip()
     expected = [x.strip() for x in args.expect.split(",") if x.strip()]
+    for name, secret in ((args.key_env, key), (args.totp_env, totp)):
+        if _unusable_secret(secret):
+            print(
+                f"error: {name} holds a space or a control character (value not shown)",
+                file=sys.stderr,
+            )
+            return 2
     if not url or not key or not expected:
         print(
             f"error: set {args.url_env} and {args.key_env}; --expect needs a job",
@@ -149,7 +164,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 2
     admin = {"Authorization": f"Bearer {key}"}
-    totp = os.environ.get(args.totp_env, "")
     if totp:
         admin["X-Plugboard-Admin-TOTP"] = totp
 
@@ -198,6 +212,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         problems.extend(job_problems)
     except OSError as exc:
         print(f"error: gateway not reachable: {type(exc).__name__}", file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        # Never the exception's text: http.client quotes the header it refuses.
+        print(f"error: request not sent: {type(exc).__name__}", file=sys.stderr)
         return 2
 
     for problem in problems:

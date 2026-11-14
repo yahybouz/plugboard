@@ -262,7 +262,12 @@ def run_level(call, level: int) -> List[Dict[str, Any]]:
 
     def one(i: int) -> None:
         gate.wait()
-        results[i] = call()
+        try:
+            results[i] = call()
+        except Exception as exc:  # noqa: BLE001 - a bench must count, not crash
+            # A call without a result is a failed call. Never the exception's
+            # text: http.client quotes the header (the key) it refuses.
+            results[i] = {"ok": False, "error": type(exc).__name__}
 
     threads = [threading.Thread(target=one, args=(i,)) for i in range(level)]
     for t in threads:
@@ -302,6 +307,12 @@ def render_table(rows: List[Dict[str, Any]]) -> str:
             f"{cell(s['first_word']):>9} {cell(s['total']):>7}"
         )
     return "\n".join(lines)
+
+
+def _unusable_secret(value: str) -> bool:
+    """A space or a control character inside a secret: it cannot be a header
+    value, and Python's refusal would print it."""
+    return any(ord(ch) < 33 or ord(ch) == 127 for ch in value)
 
 
 def _plain_http_allowed(url: str, allow_http: bool) -> bool:
@@ -360,8 +371,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--call-max", type=float, default=15.0)
     args = ap.parse_args(argv)
 
-    url = os.environ.get(args.url_env, "")
-    key = os.environ.get(args.key_env, "")
+    # Stripped: `$(cat key-file)` keeps the \r of a file with CRLF line ends.
+    url = os.environ.get(args.url_env, "").strip()
+    key = os.environ.get(args.key_env, "").strip()
+    if _unusable_secret(key):
+        print(
+            f"error: {args.key_env} holds a space or a control character "
+            "(value not shown)",
+            file=sys.stderr,
+        )
+        return 2
     try:
         targets = [parse_target(t) for t in args.target]
         levels = [int(x) for x in args.concurrency.split(",") if x.strip()]

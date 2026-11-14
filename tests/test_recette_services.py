@@ -181,3 +181,31 @@ def test_with_a_totp_code_the_jobs_are_asked_once(gateway, monkeypatch):
     monkeypatch.setattr(recette.time, "sleep", lambda s: None)
     assert recette.main(["--wait", "60"]) == 1
     assert [p for m, p in gateway.methods if p == "/admin/jobs"] == ["/admin/jobs"]
+
+
+def test_a_key_read_from_a_crlf_file_is_used_without_its_line_end(
+    gateway, monkeypatch, capsys
+):
+    """``$(cat key-file)`` keeps the ``\\r`` of a CRLF file: the admin key then
+    ended in a Python trace (``Invalid header value b'Bearer <key>\\r'``)."""
+    monkeypatch.setenv("PLUGBOARD_RECETTE_ADMIN_KEY", KEY + "\r")
+    assert recette.main([]) == 0
+    out = capsys.readouterr()
+    assert "recette services: OK" in out.out
+    assert KEY not in out.out + out.err
+
+
+@pytest.mark.parametrize(
+    "name", ["PLUGBOARD_RECETTE_ADMIN_KEY", "PLUGBOARD_RECETTE_TOTP"]
+)
+def test_a_control_character_inside_a_secret_is_refused_without_echo(
+    gateway, monkeypatch, capsys, name
+):
+    secret = KEY[:8] + "\r" + KEY[8:]
+    monkeypatch.setenv(name, secret)
+    assert recette.main([]) == 2
+    out = capsys.readouterr()
+    shown = out.out + out.err
+    assert name in out.err and "not shown" in out.err
+    assert KEY[:8] not in shown and KEY[8:] not in shown and "Traceback" not in shown
+    assert gateway.methods == []  # refused before any request

@@ -270,3 +270,63 @@ def test_run_cli_spawns_the_isolated_command(monkeypatch, tmp_path):
     ):
         assert option in got, got
     assert "cwd=/tmp\n" not in got and "not-for-the-cli" not in got
+
+
+def test_a_key_read_from_a_crlf_file_is_used_without_its_line_end(
+    gateway, monkeypatch, tmp_path, capsys
+):
+    """``$(cat key-file)`` keeps the ``\\r`` of a CRLF file: the key then ended
+    in a thread's trace and the bench exited 0 without a single call."""
+    out = tmp_path / "r.json"
+    monkeypatch.setenv("PLUGBOARD_BENCH_KEY", KEY + "\r")
+    rc = bench.main(
+        ["--target", TARGET, "--rounds", "1", "--concurrency", "1", "--no-cli"]
+        + ["--json", str(out)]
+    )
+    shown = capsys.readouterr()
+    assert rc == 0, shown.err
+    rows = json.loads(out.read_text())["rows"]
+    # The fake gateway checks the exact key: both calls were made and served.
+    assert [(r["summary"]["calls"], r["summary"]["failed"]) for r in rows] == [
+        (1, 0),
+        (1, 0),
+    ]
+    assert KEY not in shown.out + shown.err + out.read_text()
+
+
+def test_a_control_character_inside_the_key_is_refused_without_echo(
+    gateway, monkeypatch, capsys
+):
+    monkeypatch.setenv("PLUGBOARD_BENCH_KEY", KEY[:8] + "\r" + KEY[8:])
+    rc = bench.main(
+        ["--target", TARGET, "--rounds", "1", "--concurrency", "1", "--no-cli"]
+    )
+    shown = capsys.readouterr()
+    text = shown.out + shown.err
+    assert rc == 2
+    assert "PLUGBOARD_BENCH_KEY" in shown.err and "not shown" in shown.err
+    assert KEY[:8] not in text and KEY[8:] not in text and "Traceback" not in text
+
+
+def test_a_call_that_breaks_is_a_failure_and_shows_no_secret(
+    gateway, monkeypatch, tmp_path, capsys
+):
+    """A call that raises used to leave no result: nothing was counted, the
+    bench exited 0, and the thread's trace printed the exception's text."""
+    out = tmp_path / "r.json"
+
+    def broken(*args, **kwargs):
+        raise ValueError(f"Invalid header value b'Bearer {KEY}'")
+
+    monkeypatch.setattr(bench, "run_gateway", broken)
+    rc = bench.main(
+        ["--target", TARGET, "--rounds", "1", "--concurrency", "1", "--no-cli"]
+        + ["--json", str(out)]
+    )
+    shown = capsys.readouterr()
+    assert rc == 1
+    assert "2 call(s) failed" in shown.err
+    rows = json.loads(out.read_text())["rows"]
+    assert [r["summary"]["errors"] for r in rows] == [["ValueError"], ["ValueError"]]
+    assert KEY not in shown.out + shown.err + out.read_text()
+    assert "Traceback" not in shown.err

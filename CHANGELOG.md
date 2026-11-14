@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **`scripts/recette_services.py` and `scripts/bench_latence.py` could print the key**: a key read from a file with CRLF line ends kept its `\r`, and Python then quoted the whole `Authorization` value (the admin key, for `recette_services.py`) in a trace; `bench_latence.py` also exited `0` without having made a call. Both now strip the key, refuse a space or control character inside it without showing it (exit `2`), and never print an exception text; a bench call that breaks is counted as a failure.
+
 ## [4.14.0] — 2026-11-14
 
 ### Added
