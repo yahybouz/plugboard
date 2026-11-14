@@ -1913,6 +1913,9 @@ async def _stream_route(
         from plugboard import chat_billing
 
         reported = _pop_reported_usage(result)
+        # For the chat route, which records the usage of the stream it relays:
+        # a 0 the CLI reported is a count there too (usage_reported()).
+        _usage_reported.set(reported)
         reported_usage = result.get("usage") or {}
         try:
             charge = chat_billing.charge_completion(

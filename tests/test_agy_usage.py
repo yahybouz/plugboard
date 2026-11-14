@@ -135,11 +135,36 @@ def _billing_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     return u
 
 
+class _FakePipe:
+    """One pipe of the fake process: its bytes once, then the end of file."""
+
+    def __init__(self, data: bytes = b""):
+        self._data = data
+
+    async def read(self, n: int = -1) -> bytes:
+        data, self._data = self._data, b""
+        return data
+
+    def write(self, data: bytes) -> None:
+        pass
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
 class _FakeProc:
     def __init__(self, stdout: bytes, returncode: int = 0, stderr: bytes = b""):
         self.returncode = returncode
         self.pid = 424242
         self._out = (stdout, stderr)
+        # A streamed chat reads the pipes itself (agy writes its answer as it
+        # goes, 4.14.0); a plain one calls communicate().
+        self.stdin = _FakePipe()
+        self.stdout = _FakePipe(stdout)
+        self.stderr = _FakePipe(stderr)
 
     async def communicate(self, input=None):
         return self._out
@@ -368,6 +393,44 @@ async def test_router_forward_stream_keeps_agy_explicit_zero(
     assert final["prompt_tokens"] == usage["input_tokens"]
     assert final["completion_tokens"] == usage["output_tokens"]
     assert final["total_tokens"] == usage["total_tokens"]
+
+
+def _agy_stream_stdout(usage, pieces) -> bytes:
+    """The same run as ``agy --output-format stream-json`` writes it: the
+    answer piece by piece, then the json payload in the ``result`` event."""
+    lines = [
+        {
+            "event": "step_update",
+            "step_update": {"step_type": "agent_response", "text_delta": piece},
+        }
+        for piece in pieces
+    ]
+    payload = {"status": "SUCCESS", "response": "".join(pieces), "usage": usage}
+    lines.append({"event": "result", "result": payload})
+    return "".join(json.dumps(line) + "\n" for line in lines).encode()
+
+
+@pytest.mark.parametrize("usage", _ZERO_CASES, ids=_ZERO_IDS)
+async def test_http_agy_live_stream_keeps_an_explicit_zero(
+    client, fake_cli, _billing_store, usage
+):
+    """4.14.0 sends agy's answer as it is written: the chat route then records
+    the usage of the stream it relayed, and a 0 agy reported must stay a count
+    there as well (it was replaced by an estimate, on the bill only)."""
+    pieces = [_LONG_TEXT[:20], _LONG_TEXT[20:]]
+    fake_cli.set(_agy_stream_stdout(usage, pieces))
+    prompt = f"live-zero-{usage['input_tokens']}-{usage['output_tokens']}"
+    est_p, est_c = _estimates(_messages(prompt), _LONG_TEXT)
+    assert est_p > 0 and est_c > 0  # an estimate would be visible
+    res = await _call(client, f"{AGY_ID}:{AGY_MODEL}", prompt, True)
+    assert "stream-json" in fake_cli.calls[-1]
+    content, got = _answer(res, True)
+    assert content == _LONG_TEXT  # each piece once, nothing replayed
+    row = _single_row(_billing_store, AGY_ID, AGY_MODEL)
+    for seen in (got, row):
+        assert seen["prompt_tokens"] == usage["input_tokens"]
+        assert seen["completion_tokens"] == usage["output_tokens"]
+        assert seen["total_tokens"] == usage["total_tokens"]
 
 
 # ── Untrusted usage falls back to the estimate, content stays healthy ──────

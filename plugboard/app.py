@@ -2050,8 +2050,12 @@ def _bill_streaming(
     raw_sse: bytes,
     key_id: str = "",
     hold: Optional[chat_billing.BudgetHold] = None,
+    reported: bool = False,
 ) -> Dict[str, Any]:
     """Record usage from accumulated SSE chunks and return the billing dict.
+
+    ``reported``: the stream's usage holds counts a CLI reported itself
+    (router.usage_reported()); a 0 among them is then a count, not a gap.
 
     Returns a dict with keys {prompt_tokens, completion_tokens, total_tokens,
     cost_usd, model, upstream_usage_present, text}; ``text`` (the answer,
@@ -2081,13 +2085,22 @@ def _bill_streaming(
             continue
 
     completion_text = "".join(content_parts)
-    # Prefer real upstream counts if present, fall back to estimates.
-    prompt_tokens = upstream_usage.get("prompt_tokens") or estimate_prompt_tokens(
-        body.get("messages", [])
-    )
-    completion_tokens = upstream_usage.get("completion_tokens") or (
-        count_tokens(completion_text) if completion_text else 0
-    )
+
+    # Prefer real upstream counts if present, fall back to estimates. A zero
+    # is estimated too, unless the CLI reported it (as for a whole answer,
+    # chat_billing.counts): a live CLI stream ends with the counts that
+    # _stream_route already settled.
+    def _kept(value: Any) -> bool:
+        if reported and isinstance(value, int) and not isinstance(value, bool):
+            return value >= 0
+        return bool(value)
+
+    prompt_tokens = upstream_usage.get("prompt_tokens")
+    if not _kept(prompt_tokens):
+        prompt_tokens = estimate_prompt_tokens(body.get("messages", []))
+    completion_tokens = upstream_usage.get("completion_tokens")
+    if not _kept(completion_tokens):
+        completion_tokens = count_tokens(completion_text) if completion_text else 0
 
     provider, real_model = _billing_target(body)
     charge = chat_billing.price(provider, real_model, prompt_tokens, completion_tokens)
@@ -3209,6 +3222,9 @@ async def chat_completions(
                             bytes(accumulated),
                             key_id=kid,
                             hold=_hold,
+                            # Read here, in the task that relayed the stream:
+                            # the route set it when the CLI's answer ended.
+                            reported=_usage_reported(),
                         )
                     )
                 except Exception as exc:
