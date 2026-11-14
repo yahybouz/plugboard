@@ -3185,6 +3185,9 @@ async def chat_completions(
                                 bytes(accumulated),
                                 key_id=kid,
                                 hold=_hold,
+                                # Counts only when the usage event came before
+                                # the cut; without it this changes nothing.
+                                reported=_usage_reported(),
                             )
                             log.info(
                                 "Stream interrupted: billed the partial answer "

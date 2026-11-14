@@ -433,6 +433,37 @@ async def test_http_agy_live_stream_keeps_an_explicit_zero(
         assert seen["total_tokens"] == usage["total_tokens"]
 
 
+@pytest.mark.parametrize("usage", _ZERO_CASES, ids=_ZERO_IDS)
+async def test_http_agy_stream_cut_after_its_usage_keeps_an_explicit_zero(
+    client, fake_cli, _billing_store, monkeypatch, usage
+):
+    """A stream that breaks off after its usage event and before ``[DONE]`` is
+    billed by the interrupted path: agy's counts are in what was relayed, and
+    a 0 among them stays a count there too."""
+    from plugboard import chat_billing
+
+    whole = chat_billing.replay_as_sse
+
+    async def cut_before_done(*args, **kwargs):
+        async for chunk in whole(*args, **kwargs):
+            if chunk.strip() == b"data: [DONE]":
+                raise RuntimeError("cut before the end")
+            yield chunk
+
+    monkeypatch.setattr(chat_billing, "replay_as_sse", cut_before_done)
+    pieces = [_LONG_TEXT[:20], _LONG_TEXT[20:]]
+    fake_cli.set(_agy_stream_stdout(usage, pieces))
+    prompt = f"cut-zero-{usage['input_tokens']}-{usage['output_tokens']}"
+    est_p, est_c = _estimates(_messages(prompt), _LONG_TEXT)
+    assert est_p > 0 and est_c > 0  # an estimate would be visible
+    res = await _call(client, f"{AGY_ID}:{AGY_MODEL}", prompt, True)
+    assert res.status_code == 200
+    assert "stream_interrupted" in res.text
+    row = _single_row(_billing_store, AGY_ID, AGY_MODEL)
+    assert row["prompt_tokens"] == usage["input_tokens"]
+    assert row["completion_tokens"] == usage["output_tokens"]
+
+
 # ── Untrusted usage falls back to the estimate, content stays healthy ──────
 
 
