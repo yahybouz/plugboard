@@ -449,7 +449,9 @@ CLI_BACKENDS: Dict[str, CliBackend] = {
         # --sandbox restricts the terminal on top of that, and slash commands /
         # skills are not expanded. --mode plan is NOT a guard: agy 1.4.4 says it
         # "has no effect while slash command expansion is disabled" (board:
-        # the agy plan-mode ticket); it is kept until that is proven in real.
+        # BUG-86); it is kept until the sandbox of that ticket replaces it.
+        # Proven in real (UAT, 14/11): reads, commands and writes are refused,
+        # except a write inside TMPDIR, hence agy_private_tmp() in complete().
         # Never add --dangerously-skip-permissions here. No -p: agy reads a
         # piped prompt when -p is omitted.
         args=[
@@ -642,6 +644,26 @@ def gemini_private_home() -> Iterator[str]:
         yield home
     finally:
         shutil.rmtree(home, ignore_errors=True)
+
+
+@contextlib.contextmanager
+def agy_private_tmp(spawn_cwd: str) -> Iterator[str]:
+    """Yield the ``TMPDIR`` of one agy request and remove it afterwards.
+
+    agy 1.4.4 without a terminal refuses every read, every command and every
+    write, except a write inside ``TMPDIR``, which it does without asking
+    (real run on the UAT, 14/11). With none set it took ``/tmp``, shared with
+    the launch directories of the other requests: it created files there and
+    overwrote one in another private directory. Each request therefore gets
+    its own: a fresh directory under its launch directory (``mkdtemp``, mode
+    0700), holding nothing of the server or of another request, gone when the
+    request ends. This bounds where agy writes; it is not a sandbox.
+    """
+    path = tempfile.mkdtemp(prefix="agy-tmp-", dir=spawn_cwd)
+    try:
+        yield path
+    finally:
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def gemini_isolation_env(home: str) -> Dict[str, str]:
@@ -1934,6 +1956,10 @@ async def complete(
             gemini_home = cleanup.enter_context(gemini_private_home())
             argv.extend(gemini_isolation_args(gemini_home))
             env.update(gemini_isolation_env(gemini_home))
+        if kind == "agy":
+            # Never the server's TMPDIR nor /tmp: see agy_private_tmp(). Like
+            # the gemini home, removed once the child is dead and reaped.
+            env["TMPDIR"] = cleanup.enter_context(agy_private_tmp(spawn_cwd))
         if backend.stdin_arg:
             # Last, after every option: the operand telling the CLI to read stdin.
             argv.append(backend.stdin_arg)
