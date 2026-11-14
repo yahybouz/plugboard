@@ -130,3 +130,21 @@ async def test_stream_error_event_is_reported(gateway, monkeypatch):
         await runner.cleanup()
     assert out.startswith("par")
     assert "Error: stream_interrupted: The stream was interrupted." in out
+
+
+def test_client_error_shapes():
+    long = json.dumps({"detail": "x" * 500, "code": "quota_exhausted"})
+    assert mcp_server._client_error(429, long) == "quota_exhausted: " + "x" * 300
+    listed = json.dumps({"detail": [{"loc": ["body"]}]})
+    assert mcp_server._client_error(422, listed) == 'HTTP 422: [{"loc": ["body"]}]'
+
+
+async def test_forbidden_model_body_of_the_real_handler(gateway):
+    from plugboard.app import _model_not_allowed_handler, _ModelNotAllowed
+
+    exc = _ModelNotAllowed(status_code=403, detail="Model 'p:m' not allowed.")
+    body = json.loads((await _model_not_allowed_handler(None, exc)).body)
+    assert (
+        mcp_server._client_error(403, json.dumps(body))
+        == "forbidden_model: Model 'p:m' not allowed."
+    )

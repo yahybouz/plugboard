@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **`scripts/recette_acces.py`: one command proves access by API and MCP** (lot B): with `PLUGBOARD_URL` and `PLUGBOARD_KEY` (a client key) in the environment, it makes a short real call per provider the key sees through the API, the API in a stream (first byte measured) and the MCP `chat` tool over stdio, checks that the MCP catalogue lists exactly the API's model IDs, prints a table and writes a JSON file; it exits non-zero when a surface fails, never prints the key and keeps to 60 requests a minute. Standard library only.
+
 - **The full image carries the MCP server** (lot B): `/opt/venv-mcp`, built from `requirements-mcp.lock` with hashes checked (the build fails if `mcp` does not import), next to the gateway's own environment. A client starts it over stdio, for example `docker exec -i <container> /opt/venv-mcp/bin/python scripts/run_mcp.py`; no port is opened. The slim `api` image is unchanged. A test imports the server with every API-only package blocked.
 
 ### Changed

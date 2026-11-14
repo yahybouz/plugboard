@@ -891,7 +891,7 @@ async def chat_stream(
         return f"Error: HTTP client error: {exc}"
 
     if stream_error:
-        return "".join(chunks) + f"\n\nError: {stream_error}"
+        return ("".join(chunks) + "\n\n" if chunks else "") + f"Error: {stream_error}"
     if chunks:
         if reasoning_chunks:
             return (

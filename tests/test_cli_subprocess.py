@@ -763,8 +763,11 @@ async def _stop_by_timeout(caller: str) -> None:
             "model": "x-model",
             "messages": [{"role": "user", "content": "hi"}],
         }
-        with pytest.raises(cli_subprocess.CliSubprocessError, match="timed out"):
+        with pytest.raises(
+            cli_subprocess.CliSubprocessError, match="timed out"
+        ) as caught:
             await cli_subprocess.complete("codex", body, timeout_s=2.0)
+        assert caught.value.timed_out is True  # BUG-67: answered 503, not 502
     elif caller == "list_agy_models":
         assert await cli_subprocess.list_agy_models(timeout_s=2.0) == []
     elif caller == "probe_cli_version":
