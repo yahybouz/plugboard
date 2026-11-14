@@ -42,6 +42,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Documentation**: `PLUGBOARD_JOB_PYTHON` is no longer documented (nothing reads it), and the pricing runbook names the scrape endpoint instead of a `make pricing` target that does not exist.
 
+- **`scripts/recette_acces.py` followed a redirect with the key**: a `3xx` answer was followed and the `Authorization` header sent to the address it named. A redirect is now a named failure (`redirect: HTTP <status> not followed`), as in the other acceptance scripts; set `PLUGBOARD_URL` to the final address.
+
 ## [4.13.0] — 2026-11-13
 
 ### Added

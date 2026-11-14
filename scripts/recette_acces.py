@@ -27,7 +27,8 @@ Environment:
 Exit codes: 0 every surface passed; 1 a surface failed (or no provider is
 visible); 2 bad usage or environment.
 
-Only the standard library is used. At most 60 requests a minute are sent to
+Only the standard library is used. A redirect is never followed (it would
+send the key elsewhere): it is a failure. At most 60 requests a minute are sent to
 the gateway, the MCP server's own calls included. Each call costs a few
 tokens (``--max-tokens``, default 16): it is a real inference.
 """
@@ -154,6 +155,16 @@ def render_table(rows: List[Dict[str, Any]]) -> str:
 # ── HTTP ────────────────────────────────────────────────────────────────────
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: it would send the key to another address."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 class Gateway:
     def __init__(self, base: str, key: str, limiter: RateLimiter, timeout: float):
         self.base = base.rstrip("/")
@@ -169,11 +180,16 @@ class Gateway:
         if data is not None:
             req.add_header("Content-Type", "application/json")
         self.limiter.acquire()
-        return urllib.request.urlopen(req, timeout=self.timeout)
+        return _OPENER.open(req, timeout=self.timeout)
 
     @staticmethod
     def error_text(exc: urllib.error.HTTPError) -> str:
         """``<code>: <detail>`` like the MCP tools, else ``HTTP <status>``."""
+        if 300 <= exc.code < 400:
+            return (
+                f"redirect: HTTP {exc.code} not followed (the key stays here); "
+                "set PLUGBOARD_URL to the final address"
+            )
         raw = exc.read().decode("utf-8", errors="replace")
         try:
             payload = json.loads(raw)

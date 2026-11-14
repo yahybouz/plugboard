@@ -268,3 +268,65 @@ def test_a_truncated_answer_is_a_failure_not_a_crash(tmp_path, capsys):
     assert code == 1
     assert data["results"][0]["status"] == "FAIL"
     assert data["summary"]["mcp_skipped"] is True
+
+
+def _redirecting_server(target: str, only_post: bool = False):
+    """A gateway that answers a redirect to ``target`` (302), optionally for
+    the chat calls only; ``seen`` lists what it received."""
+    seen = []
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _redirect(self):
+            self.send_response(302)
+            self.send_header("Location", target + self.path)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def do_GET(self):
+            seen.append(("GET", self.path))
+            if not only_post:
+                return self._redirect()
+            body = {"object": "list", "data": CATALOGUE[:1]}
+            if self.path == "/v1/me":
+                body = {"client_id": "cust", "usage": {}}
+            data = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            seen.append(("POST", self.path))
+            self._redirect()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, seen
+
+
+@pytest.mark.parametrize("only_post", [False, True])
+def test_a_redirect_is_a_named_failure_and_the_key_never_follows_it(
+    gateway, tmp_path, capsys, only_post
+):
+    """A redirect must fail by name: followed, it would hand the key
+    (``Authorization``) to whatever address the answer names."""
+    elsewhere, seen_elsewhere = gateway()
+    server, seen = _redirecting_server(elsewhere, only_post=only_post)
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}"
+        code, out, data = run_cli(url, tmp_path, capsys, "--skip-mcp")
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert code == 1
+    assert seen, "the first address was called"
+    assert seen_elsewhere == [], "nothing, and no key, reached the redirect target"
+    failed = [r for r in data["results"] if r["status"] == "FAIL"]
+    assert failed and all("redirect" in r["detail"] for r in failed)
+    assert all("302" in r["detail"] for r in failed)
+    assert KEY not in out and KEY not in json.dumps(data)
