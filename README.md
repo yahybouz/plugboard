@@ -65,7 +65,7 @@ Check that `.env` contains `HOST=127.0.0.1` (set by `.env.example`; without it `
 
 Then, in the dashboard:
 
-1. **Providers → + Add direct provider**: pick a preset (for example *Anthropic Direct*) and paste your API key. If Ollama is running on `http://localhost:11434`, it is registered automatically at startup.
+1. **Providers → + Add direct provider**: pick a preset (for example *Anthropic Direct*) and paste your API key. Ollama is optional and off in the shipped deployment configurations; with `OLLAMA_ENABLED=auto` or `true` and an Ollama running on `http://localhost:11434`, it is registered automatically at startup.
 2. **API keys → + New key**: enter a client ID (for example `my-app`), optionally a monthly limit and an RPM limit, and copy the `pb_...` key. It is displayed only once.
 3. **Playground**: send a test message to any listed model.
 
@@ -130,7 +130,7 @@ A model is addressed as `<provider-id>:<model>`. The provider ID is shown on the
 |---|---|---|
 | API key presets | Anthropic, Google Gemini, GitHub Models, OpenAI | Your API key or token, pasted in the dashboard |
 | Custom endpoint | Any server exposing the standard `/v1/chat/completions` chat API (vLLM, LM Studio, another gateway) | Optional bearer token |
-| Local models | Ollama | None; detected at `OLLAMA_URL` |
+| Local models | Ollama (optional, off by default in the shipped configs) | None; set `OLLAMA_ENABLED=true`, detected at `OLLAMA_URL` |
 | Subscription through an official CLI | Claude Code (`claude`), Codex (`codex`), Antigravity (`agy`) | The CLI's own login on the gateway host |
 | Subscription through CLI credentials | ChatGPT via Codex CLI, Gemini via Gemini CLI, GitHub Copilot and GitHub Models via `gh` | Tokens the CLI already stored on the gateway host |
 | GitHub device flow | GitHub Models, GitHub Copilot | Sign-in from the dashboard, with the *(OAuth via dashboard)* presets |

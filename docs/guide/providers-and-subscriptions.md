@@ -136,7 +136,9 @@ Two cases need a custom endpoint with the box left unticked:
 
 ### Ollama
 
-Start Ollama on the gateway host. At startup Plugboard checks `OLLAMA_URL` (default `http://localhost:11434`) and registers an `ollama` provider when the daemon answers. `OLLAMA_ENABLED=false` disables this; `OLLAMA_ENABLED=true` logs a warning when Ollama is not reachable.
+**Ollama is an optional provider, off by default** in the configurations this repository ships (`deploy/uat`, `deploy/ovh`, `.env.example`: `OLLAMA_ENABLED=false`); its epic is deprioritised (decision of 14/11). Nothing was removed: to use it, set `OLLAMA_ENABLED=true` (or `auto`) and start Ollama on the gateway host. At startup Plugboard then checks `OLLAMA_URL` (default `http://localhost:11434`) and registers an `ollama` provider when the daemon answers; `OLLAMA_ENABLED=true` logs a warning when Ollama is not reachable.
+
+**`OLLAMA_ENABLED=false`** turns Ollama off for the whole process, even when an `ollama` provider is already registered: no `ollama:*` model is listed (API, MCP, Playground), a chat to one gets `503` `provider_disabled` naming the configuration, embeddings through it answer *Embedding provider unavailable* (or, with no `PLUGBOARD_EMBEDDING_MODELS`, *no embedding provider is configured*), no background job calls the daemon or ollama.com, and `/health/ready` stays `200` with `ollama: not_configured`. Nothing is written: the stored switch is kept, and setting the variable back to `true` or `auto` and restarting brings Ollama back.
 
 The **Ollama** page pulls, inspects and deletes models. Ollama is a *sovereign* provider: the watchdog monitors it but never tries to restart it. Ollama cloud models are merged into the provider automatically unless `PLUGBOARD_OLLAMA_CLOUD_AUTOSYNC=0`.
 
@@ -148,7 +150,7 @@ The **Ollama** page pulls, inspects and deletes models. Ollama is a *sovereign* 
 - a request already running on Ollama goes to its end; one waiting for its slot gets the `503` when its turn comes. The switch shows how many are running and waiting;
 - nothing in the background calls the daemon: the watchdog, the probes and the startup check skip it. The Ollama page itself still works (status, list, pull, delete), as an admin gesture.
 
-Turned back on, from the switch or the Providers page, the installed model list is synced once and the models come back. Every change made with the switch is in the audit log as `ollama.switch`, with the state before and after and the requests running and waiting; one made on the Providers page is logged as `provider.update`, with the new `is_active` value. `OLLAMA_ENABLED` only decides the registration at startup: `false` does not turn off a provider already registered.
+Turned back on, from the switch or the Providers page, the installed model list is synced once and the models come back. Every change made with the switch is in the audit log as `ollama.switch`, with the state before and after and the requests running and waiting; one made on the Providers page is logged as `provider.update`, with the new `is_active` value. `OLLAMA_ENABLED=false` overrides the switch in memory (the switch cannot turn Ollama on while it is set) without changing the stored value.
 
 **Local model downloads.** On a small machine, switch **Local model downloads** off on the Ollama page (or set `PLUGBOARD_LOCAL_MODEL_DOWNLOADS=0`): pulls of local models are refused with 403 and only cloud ids (`:cloud`, `-cloud`) of the official library can be added (`user/model:x-cloud` or `hf.co/...` are local models), and a cloud pull whose layers exceed 64 MB is stopped and deleted. When downloads are on, a pull is checked against the free disk space: the size read from the Ollama registry plus `PLUGBOARD_OLLAMA_MIN_FREE_GB` must fit (507 otherwise), and a pull whose size is unknown is stopped, and its partial model deleted, before it crosses the margin. Endpoints: `GET`/`PUT /admin/ollama/settings`.
 

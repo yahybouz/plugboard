@@ -208,7 +208,7 @@ When the operator turns a provider off (the **Ollama** page switch, or **Active*
 }
 ```
 
-There is no `Retry-After`: nobody knows when the provider comes back. A key limited by `allowed_models` gets `403` first for a model outside its list. No cached answer is served for such a model. A request already running when the provider is turned off goes to its end; one still waiting for a slot on it gets this `503` when its turn comes, or when its wait (`PLUGBOARD_PROVIDER_WAIT_S`) ends. `POST /v1/preflight` answers such a pair `"ok": false` with `"error": "provider_disabled"`, without a ping. Embeddings keep their own answer: `503` *Embedding provider unavailable*.
+There is no `Retry-After`: nobody knows when the provider comes back. A key limited by `allowed_models` gets `403` first for a model outside its list. No cached answer is served for such a model. A request already running when the provider is turned off goes to its end; one still waiting for a slot on it gets this `503` when its turn comes, or when its wait (`PLUGBOARD_PROVIDER_WAIT_S`) ends. `POST /v1/preflight` answers such a pair `"ok": false` with `"error": "provider_disabled"`, without a ping. Embeddings keep their own answer: `503` *Embedding provider unavailable*. When the cause is `OLLAMA_ENABLED=false` the detail says so, and a chat to an `ollama:` model gets the same `provider_disabled` `503` even when no Ollama is registered, with a detail naming the configuration.
 
 ## MCP
 

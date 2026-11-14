@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Ollama is off by default and its epic is deprioritised** (PLU-53, decision of 14/11): `deploy/uat/compose.yml`, `deploy/ovh/compose.yml` and `.env.example` set `OLLAMA_ENABLED=false`; the composes no longer carry the relay URL, the embedding identity, the `ollama-private` bridge network or (UAT) the relay token name. `OLLAMA_ENABLED=false` now turns off an `ollama` provider already registered, in memory and without writing: no `ollama:*` model in `/v1/models`, the Playground or the MCP tools; a chat to one answers `503 provider_disabled` naming the configuration, even when no Ollama is registered; embeddings say so (`503`) or that no embedding provider is configured (`404`); the price job no longer reads ollama.com for a turned-off Ollama; `/health/ready` stays `200`. Setting `true` or `auto` brings Ollama back; nothing was removed from the code ([providers](docs/guide/providers-and-subscriptions.md#ollama)).
+
+- **`scripts/smoke_consumers.py` no longer needs Ollama**: without `--model` or `PLUGBOARD_SMOKE_MODEL` it picks the first `Codex:`, `claude-code:` or `Gemini:` model the key may use, never an `ollama:` one; the embeddings step is skipped with *no embedding provider configured for this key* when none is declared.
+
 ## [4.13.0] — 2026-11-13
 
 ### Added
