@@ -155,6 +155,11 @@ def resolve_route(model: str) -> tuple[dict, str]:
     from plugboard.legacy_connectors import is_removed_provider
     from plugboard.model_identity import registered_model_owner
 
+    if not allowed_identities():
+        raise HTTPException(
+            404,
+            "Embedding model not available: no embedding provider is configured",
+        )
     if model not in allowed_identities():
         raise HTTPException(404, "Embedding model not available")
     providers = load_providers()
@@ -165,6 +170,12 @@ def resolve_route(model: str) -> tuple[dict, str]:
     native = model[len(owner) + 1 :]
     if not native or "cloud" in native.lower():
         raise HTTPException(404, "Embedding model not available")
+    if provider.get("disabled_by_config"):
+        raise HTTPException(
+            503,
+            "Embedding provider unavailable: Ollama is turned off by the server "
+            "configuration (OLLAMA_ENABLED=false)",
+        )
     if not provider.get("is_active", True) or is_removed_provider(provider):
         raise HTTPException(503, "Embedding provider unavailable")
     if provider.get("provider_type") != "sovereign" or not _is_loopback_base(

@@ -6,6 +6,8 @@ off in memory, on every surface, and writes nothing: setting the variable back
 to ``true`` or ``auto`` brings Ollama back, switch and models untouched.
 """
 
+# ruff: noqa: F811
+# Fixtures imported from the switch tests are used by name as test arguments.
 from __future__ import annotations
 
 import json
@@ -28,7 +30,7 @@ def config_off(monkeypatch):
 
 def test_a_registered_provider_is_turned_off_in_memory_only(
     app_client,
-    config_off,  # noqa: F811
+    config_off,
 ):
     provider = config.get_provider("ollama")
     assert provider["is_active"] is False
@@ -38,7 +40,7 @@ def test_a_registered_provider_is_turned_off_in_memory_only(
 
 
 @pytest.mark.parametrize("value", ["auto", "true", ""])
-def test_any_other_value_leaves_the_provider_alone(app_client, monkeypatch, value):  # noqa: F811
+def test_any_other_value_leaves_the_provider_alone(app_client, monkeypatch, value):
     monkeypatch.setattr(ollama, "_OLLAMA_ENABLED", value)
     provider = config.get_provider("ollama")
     assert provider["is_active"] is True
@@ -48,7 +50,7 @@ def test_any_other_value_leaves_the_provider_alone(app_client, monkeypatch, valu
 async def test_every_surface_refuses_and_nothing_is_called(
     app_client,
     mcp_tools,
-    config_off,  # noqa: F811
+    config_off,
 ):
     client, auth, _key, calls = app_client
 
@@ -94,7 +96,7 @@ async def test_every_surface_refuses_and_nothing_is_called(
 
 async def test_turning_the_variable_back_on_brings_ollama_back(
     app_client,
-    monkeypatch,  # noqa: F811
+    monkeypatch,
 ):
     client, auth, _key, calls = app_client
     monkeypatch.setattr(ollama, "_OLLAMA_ENABLED", "false")
@@ -112,3 +114,103 @@ async def test_turning_the_variable_back_on_brings_ollama_back(
     )
     assert resp.status_code == 200, resp.text
     assert calls == ["ollama:qwen3:8b"]
+
+
+# ── No Ollama registered at all (fresh install, or a registry cleaned up) ───
+
+
+@pytest.fixture
+async def bare(tmp_path, monkeypatch, config_off):
+    """Ollama off by configuration and absent from the registry."""
+    import httpx
+
+    import plugboard.app as app_module
+    import plugboard.ratelimit as rl
+    from plugboard import apikeys, audit, embeddings_api, usage
+    from tests.factories import FAKE_COMPLETION
+    from tests.test_model_not_found import ACME, _isolated_providers
+    from tests.test_ollama_switch import BETA
+
+    _isolated_providers(tmp_path, monkeypatch, [ACME, BETA])
+    monkeypatch.delenv("PLUGBOARD_EMBEDDING_MODELS", raising=False)
+    monkeypatch.setattr(app_module, "_API_KEY", "instance-key")
+    monkeypatch.setattr(app_module, "_ADMIN_KEY", ADMIN_KEY)
+    monkeypatch.setattr(rl, "_LIMIT", 0)
+    monkeypatch.setattr(apikeys, "KEYS_FILE", tmp_path / "keys.json")
+    monkeypatch.setattr(apikeys, "KEYS_LOCK", tmp_path / "keys.lock")
+    monkeypatch.setattr(audit, "_DB_PATH", tmp_path / "audit.db")
+    monkeypatch.setattr(usage, "_DB_PATH", tmp_path / "usage.db")
+    monkeypatch.setattr(usage, "_schema_ready", {})
+    key = apikeys.create_key("acme", "bare")["key"]
+    calls: list = []
+
+    async def _forward(body, **_kwargs):
+        calls.append(body.get("model"))
+        return dict(FAKE_COMPLETION)
+
+    async def _forward_stream(body, **_kwargs):
+        calls.append("stream:" + str(body.get("model")))
+        raise RuntimeError("streams are not served in this test")
+        yield b""  # pragma: no cover
+
+    async def _engine(*_args, **_kwargs):
+        calls.append("embeddings._call")
+        raise embeddings_api.EngineError(502, "fake engine", "test")
+
+    monkeypatch.setattr(app_module, "forward", _forward)
+    monkeypatch.setattr(app_module, "forward_stream", _forward_stream)
+    monkeypatch.setattr(embeddings_api, "_call", _engine)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app_module.app), base_url="http://test"
+    ) as client:
+        yield client, {"Authorization": f"Bearer {key}"}, calls
+
+
+@pytest.mark.parametrize("path", ["/v1/chat/completions", "/v2/chat/completions"])
+@pytest.mark.parametrize("stream", [False, True])
+async def test_chat_to_ollama_is_refused_clearly_without_a_provider(bare, path, stream):
+    client, auth, calls = bare
+    resp = await client.post(
+        path, headers=auth, json=_chat("ollama:qwen3:8b", stream=stream)
+    )
+    assert resp.status_code == 503, resp.text
+    body = resp.json()
+    assert body["code"] == "provider_disabled"
+    assert "OLLAMA_ENABLED=false" in body["detail"]
+    assert calls == []
+
+
+async def test_models_list_has_no_ollama_without_a_provider(bare):
+    client, auth, _calls = bare
+    ids = [
+        m["id"] for m in (await client.get("/v1/models", headers=auth)).json()["data"]
+    ]
+    assert ids and not [m for m in ids if m.startswith("ollama:")]
+
+
+async def test_embeddings_say_there_is_no_provider_when_none_is_configured(bare):
+    client, auth, calls = bare
+    resp = await client.post(
+        "/v1/embeddings", headers=auth, json={"model": EMBEDDING_MODEL, "input": "hi"}
+    )
+    assert resp.status_code == 404, resp.text
+    assert "no embedding provider is configured" in resp.json()["detail"].lower()
+    listed = (await client.get("/v1/embeddings/models", headers=auth)).json()
+    assert listed["data"] == []
+    assert calls == []
+
+
+async def test_embeddings_name_the_configuration_when_ollama_is_off(
+    app_client,
+    config_off,
+    monkeypatch,
+):
+    client, auth, _key, calls = app_client
+    resp = await client.post(
+        "/v1/embeddings", headers=auth, json={"model": EMBEDDING_MODEL, "input": "hi"}
+    )
+    assert resp.status_code == 503, resp.text
+    detail = resp.json()["detail"]
+    assert detail.startswith("Embedding provider unavailable")
+    assert "OLLAMA_ENABLED=false" in detail
+    assert calls == []

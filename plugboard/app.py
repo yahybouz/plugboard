@@ -2394,6 +2394,11 @@ def _provider_disabled_response(
     log.info("provider disabled: %s", provider_id)
     if provider is None:
         provider = get_provider(provider_id) or {}
+        if not provider:
+            from plugboard import ollama
+
+            if provider_id == ollama.PROVIDER_ID and ollama.disabled_by_config():
+                provider = {"disabled_by_config": True}  # never registered
     if provider.get("disabled_by_config"):
         detail = (
             f"Provider '{provider_id}' is turned off by the server "
