@@ -1739,6 +1739,10 @@ def _agy_stream_to_json(stdout_text: str) -> str:
             and isinstance(evt.get("result"), dict)
         ):
             return json.dumps(evt["result"])
+    # Events but no result: the run was cut. Their text (cwd, tools, partial
+    # answer) is not an error message; the exit code and stderr say why.
+    if '"event"' in stdout_text:
+        return ""
     return stdout_text
 
 
@@ -1898,12 +1902,13 @@ async def complete(
     # tenant prompts.
     spawn_cwd = os.environ.get("PLUGBOARD_SUBPROCESS_CWD") or _clean_spawn_cwd()
 
-    argv = [binary_path, *backend.args]
+    read_delta = _DELTA_READERS.get(kind) if on_delta is not None else None
+    argv = [
+        binary_path,
+        *(_stream_args(kind, backend.args) if read_delta else backend.args),
+    ]
     if kind == "codex":
         argv.extend(codex_isolation_args(spawn_cwd))
-    read_delta = _DELTA_READERS.get(kind) if on_delta is not None else None
-    if read_delta is not None:
-        argv = [binary_path, *_stream_args(kind, backend.args)]
     if backend.model_arg and model:
         argv.extend([backend.model_arg, model])
 

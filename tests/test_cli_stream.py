@@ -241,3 +241,38 @@ async def test_agy_invalid_model_result_is_an_error(fake_cli):
         await cli_subprocess.complete(
             "agy", {"model": "x", "messages": BODY["messages"]}, on_delta=lambda t: None
         )
+
+
+async def test_agy_run_cut_before_its_result_does_not_quote_its_events(fake_cli):
+    fake_cli(
+        [json.dumps({"event": "init", "init": {"cwd": "/private/spawn"}})], exit_code=0
+    )
+    with pytest.raises(CliSubprocessError) as info:
+        await cli_subprocess.complete(
+            "agy", {"model": "m", "messages": BODY["messages"]}, on_delta=lambda t: None
+        )
+    assert "/private/spawn" not in str(info.value)
+
+
+async def test_a_very_long_event_line_is_read_whole(fake_cli, tmp_path):
+    big = "x" * 200_000
+    fake_cli(
+        [
+            _delta("Bon"),
+            json.dumps({"type": "result", "result": big, "is_error": False}),
+        ]
+    )
+    result = await cli_subprocess.complete("claude", BODY, on_delta=lambda t: None)
+    assert result["choices"][0]["message"]["content"] == big
+
+
+async def test_a_streaming_run_that_times_out_is_killed(fake_cli):
+    fake_cli([_delta("Bon")], pause=30)
+    seen: list[str] = []
+    t0 = time.perf_counter()
+    with pytest.raises(CliSubprocessError, match="timed out"):
+        await cli_subprocess.complete(
+            "claude", BODY, timeout_s=0.5, on_delta=seen.append
+        )
+    assert time.perf_counter() - t0 < 5
+    assert seen == ["Bon"]
