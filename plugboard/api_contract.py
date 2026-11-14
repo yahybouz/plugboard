@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "2.2.0"
+CONTRACT_VERSION = "2.3.0"
 _JSON = "application/json"
 
 

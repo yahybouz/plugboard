@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "2.2.0",
+    "version": "2.3.0",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
