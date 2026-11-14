@@ -2097,6 +2097,7 @@ def _bill_streaming(
         "completion_tokens": completion_tokens,
         "total_tokens": charge.total_tokens,
         "cost_usd": round(charge.cost_usd, 6),
+        "pricing_month": charge.pricing_month,
         "model": real_model,
         "upstream_usage_present": bool(upstream_usage),
         "text": completion_text,
@@ -2961,9 +2962,16 @@ async def chat_completions(
         # above) — saving ~10s per repeat query.
         try:
             _provider_for_stream, _ = resolve_provider_and_model(body.get("model", ""))
-            _stream_bypass = str(
-                _provider_for_stream.get("auth_source", "")
-            ).startswith("subprocess:")
+            _stream_auth = str(_provider_for_stream.get("auth_source", ""))
+            # A CLI that writes its answer as it goes (claude, agy) is streamed
+            # live by forward_stream, the first word at once (INC-2): the
+            # answer is not cached by this path. A CLI that cannot is run whole
+            # here so repeats hit the cache.
+            from plugboard import cli_subprocess as _cli
+
+            _stream_bypass = _stream_auth.startswith("subprocess:") and not (
+                _cli.can_stream(_stream_auth.removeprefix("subprocess:"))
+            )
         except Exception:
             _stream_bypass = False
 
@@ -3166,6 +3174,18 @@ async def chat_completions(
                 except Exception as exc:
                     log.warning("Stream billing error (non-fatal): %s", exc)
                     _keep_hold(_hold)
+            if bill is not None and cid and cid != "admin":
+                # As a whole answer is: the spending alert follows its billing
+                # (a CLI stream used to be billed through forward() and had it).
+                try:
+                    _send_spending_alert(
+                        cid,
+                        bill["pricing_month"],
+                        key_record=key_record,
+                        current_total_usd=spending_total + bill["cost_usd"],
+                    )
+                except Exception as exc:
+                    log.warning("Spending alert error (non-fatal): %s", exc)
             if bill is not None:
                 # Complete stream only: an interrupted one left above.
                 _record_session_turn(

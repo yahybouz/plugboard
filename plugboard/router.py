@@ -1747,9 +1747,6 @@ async def _cli_live(
                 yield text, None
                 continue
             break
-        if getter is not None and getter.done() and not getter.cancelled():
-            text, getter = getter.result(), None  # taken as the CLI ended
-            yield text, None
         while not pieces.empty():
             yield pieces.get_nowait(), None
         yield "", task.result()
@@ -1875,9 +1872,10 @@ async def _stream_route(
             # quarantine's try (BUG-51).
             if isinstance(exc, CliSubprocessError) and exc.quota:
                 route_pauses.pause(circuit_key, exc.retry_after)
-            # Nothing was sent: forward_stream hands over to the next route,
-            # or the chat route answers the error, its CLI details for the
-            # admin only (PLU-26). An error event here showed them to anyone.
+            # Before the first word nothing was sent: forward_stream hands over
+            # to the next route, or the chat route answers the error, its CLI
+            # details for the admin only (PLU-26). After it, the error ends the
+            # stream through the chat route's cut path (no details sent).
             raise
         cb_success(circuit_key)
         route_pauses.clear(circuit_key)
@@ -1901,7 +1899,7 @@ async def _stream_route(
             created=stream_created
             if sent
             else result.get("created", int(_time.time())),
-            model=result.get("model", f"{kind}-cli:{real_model}"),
+            model=stream_model if sent else result.get("model", stream_model),
             already_sent="".join(sent),
         ):
             yield chunk

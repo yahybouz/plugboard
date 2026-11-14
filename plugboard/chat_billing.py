@@ -220,8 +220,8 @@ async def replay_as_sse(
     (``index`` = position), then a final chunk with the answer's own
     ``finish_reason`` and its ``usage``, then ``[DONE]``. An empty or missing
     ``content`` sends no content delta. ``already_sent`` is the text a live
-    stream has already sent: only what follows it in ``content`` goes out (all
-    of it when ``content`` does not start with it, which cannot be retracted).
+    stream has already sent: only what follows it in ``content`` goes out (nothing
+    when ``content`` does not start with it: sent text cannot be retracted).
     """
     choice = (completion.get("choices") or [{}])[0]
     message = choice.get("message") or {}

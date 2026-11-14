@@ -171,3 +171,38 @@ async def test_a_cli_that_cannot_stream_is_called_without_a_callback(
     assert seen["on_delta"] is None
     text = "".join(e["choices"][0]["delta"].get("content", "") for e in _events(chunks))
     assert text == "Bonjour"
+
+
+async def test_the_chat_route_streams_a_cli_model_live(
+    client, only_cli, monkeypatch, tmp_path
+):
+    """Through POST /v1/chat/completions, not only router.forward_stream: the
+    route used to run the CLI whole and replay it (INC-2)."""
+    import plugboard.apikeys as ak
+    import plugboard.app as app_mod
+
+    monkeypatch.setattr(ak, "_DATA_DIR", tmp_path)
+    monkeypatch.setattr(ak, "KEYS_FILE", tmp_path / "api_keys.json")
+    monkeypatch.setattr(ak, "KEYS_LOCK", tmp_path / "api_keys.json.lock")
+    key = ak.create_key("stream-client", "stream")["key"]
+    monkeypatch.setattr(app_mod, "_check_price_known", lambda *a, **k: None)
+    seen = {}
+
+    async def fake(kind, body, *, timeout_s=None, on_delta=None):
+        seen["on_delta"] = on_delta
+        on_delta("Hel")
+        on_delta("lo")
+        return _result("Hello")
+
+    monkeypatch.setattr(cli_subprocess, "complete", fake)
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}"},
+        json={**_body(MODEL, stream=True), "cache": False},
+    )
+    assert resp.status_code == 200, resp.text
+    assert seen["on_delta"] is not None
+    events = _events([resp.content])
+    text = "".join(e["choices"][0]["delta"].get("content", "") for e in events)
+    assert text == "Hello"
+    assert sum(1 for e in events if e.get("usage")) == 1  # billed once
