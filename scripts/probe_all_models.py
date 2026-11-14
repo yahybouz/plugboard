@@ -55,12 +55,32 @@ async def probe_all():
 
             today = _dt.datetime.now(_dt.timezone.utc)
             _MONTHS_EN = [
-                "January", "February", "March", "April", "May", "June",
-                "July", "August", "September", "October", "November", "December",
+                "January",
+                "February",
+                "March",
+                "April",
+                "May",
+                "June",
+                "July",
+                "August",
+                "September",
+                "October",
+                "November",
+                "December",
             ]
             _MONTHS_FR = [
-                "janvier", "février", "mars", "avril", "mai", "juin",
-                "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+                "janvier",
+                "février",
+                "mars",
+                "avril",
+                "mai",
+                "juin",
+                "juillet",
+                "août",
+                "septembre",
+                "octobre",
+                "novembre",
+                "décembre",
             ]
             d, mo, y = today.day, today.month, today.year
             month_en, month_fr = _MONTHS_EN[mo - 1], _MONTHS_FR[mo - 1]

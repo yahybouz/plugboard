@@ -749,6 +749,31 @@ def _known_native(
     return None
 
 
+def _absent_ollama_route(
+    stripped: str, registry: List[Dict[str, Any]]
+) -> Optional[tuple[Dict[str, Any], str]]:
+    """``ollama:<model>`` while ``OLLAMA_ENABLED=false`` and no Ollama is registered.
+
+    Nothing in the registry says the provider is off, yet the configuration
+    does (PLU-53): the request is refused as ``provider_disabled``, not sent
+    to the other providers and not answered as an unknown model.
+    """
+    from plugboard import ollama
+
+    if not ollama.disabled_by_config():
+        return None
+    if not stripped.lower().startswith(ollama.PROVIDER_ID + ":"):
+        return None
+    if any(p.get("id") == ollama.PROVIDER_ID for p in registry):
+        return None  # registered: its in-memory switch already says off
+    provider = {
+        "id": ollama.PROVIDER_ID,
+        "is_active": False,
+        "disabled_by_config": True,
+    }
+    return provider, stripped[len(ollama.PROVIDER_ID) + 1 :]
+
+
 def disabled_route(model_str: str) -> Optional[tuple[Dict[str, Any], str]]:
     """(provider, native model) when only a disabled provider serves ``model_str``.
 
@@ -769,6 +794,9 @@ def disabled_route(model_str: str) -> Optional[tuple[Dict[str, Any], str]]:
     if not isinstance(model_str, str) or not model_str.strip():
         return None
     registry = [p for p in load_providers() if not is_removed_provider(p)]
+    absent = _absent_ollama_route(model_str.strip(), registry)
+    if absent is not None:
+        return absent
     inactive = [p for p in registry if not p.get("is_active", True)]
     if not inactive:
         return None

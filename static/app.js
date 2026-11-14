@@ -1174,7 +1174,7 @@ function editProvider(p) {
   document.getElementById("pf-model").value = p.default_model || "";
   // A provider whose key cannot be decrypted is off in effect only: the form
   // sends its stored switch back unchanged (BUG-57).
-  document.getElementById("pf-active").checked = p.secret_unreadable === true ? p.stored_is_active !== false : p.is_active;
+  document.getElementById("pf-active").checked = (p.secret_unreadable === true || p.disabled_by_config === true) ? p.stored_is_active !== false : p.is_active;
   document.getElementById("pf-timeout").value = p.timeout || 60;
   document.getElementById("pf-auto-discover").checked = p.auto_discover === true;
   document.getElementById("pf-pinned").value = (p.pinned_models || []).join(", ");

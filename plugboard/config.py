@@ -329,6 +329,21 @@ def _key_digest() -> str:
 
 
 def load_providers() -> List[Dict[str, Any]]:
+    """The providers as configured: ``_load_stored_providers`` plus the
+    switches the environment forces (``OLLAMA_ENABLED=false``, PLU-53)."""
+    providers = _load_stored_providers()
+    from plugboard import ollama
+
+    if ollama.disabled_by_config():
+        for p in providers:
+            if p.get("id") == ollama.PROVIDER_ID:
+                # In memory only: the stored switch waits for the variable.
+                p.setdefault("stored_is_active", p.get("is_active", True) is not False)
+                p.update(is_active=False, disabled_by_config=True)
+    return providers
+
+
+def _load_stored_providers() -> List[Dict[str, Any]]:
     """The providers, tokens decrypted; each call gets its own copy.
 
     The decrypted list is kept while providers.json is byte for byte the same

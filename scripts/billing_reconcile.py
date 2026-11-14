@@ -44,14 +44,24 @@ def _cost(entry: Dict[str, Any], provider: Any) -> Optional[float]:
     if match is None:
         return None
     return billing.calculate_cost(
-        int(entry.get("prompt_tokens") or 0), int(entry.get("completion_tokens") or 0), match.entry
+        int(entry.get("prompt_tokens") or 0),
+        int(entry.get("completion_tokens") or 0),
+        match.entry,
     )
 
 
-def reconcile(entries: Iterable[Dict[str, Any]], providers: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
+def reconcile(
+    entries: Iterable[Dict[str, Any]], providers: Dict[str, Dict[str, Any]]
+) -> List[Dict[str, Any]]:
     """One row per (client_id, provider_id) with recorded, before and after costs."""
     groups: Dict[tuple, Dict[str, Any]] = defaultdict(
-        lambda: {"calls": 0, "recorded": 0.0, "before": 0.0, "after": 0.0, "unpriced_after": 0}
+        lambda: {
+            "calls": 0,
+            "recorded": 0.0,
+            "before": 0.0,
+            "after": 0.0,
+            "unpriced_after": 0,
+        }
     )
     for entry in entries:
         key = (entry.get("client_id", ""), entry.get("provider_id", ""))
@@ -59,7 +69,11 @@ def reconcile(entries: Iterable[Dict[str, Any]], providers: Dict[str, Dict[str, 
         row["calls"] += 1
         row["recorded"] += float(entry.get("cost_usd") or 0)
         before = _cost(entry, None)
-        provider = providers.get(entry.get("provider_id", "")) or entry.get("provider_id") or None
+        provider = (
+            providers.get(entry.get("provider_id", ""))
+            or entry.get("provider_id")
+            or None
+        )
         after = _cost(entry, provider)
         row["before"] += before or 0.0
         row["after"] += after or 0.0
@@ -91,9 +105,15 @@ def reconcile(entries: Iterable[Dict[str, Any]], providers: Dict[str, Dict[str, 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--month", help="YYYY_MM (default: previous month)")
-    parser.add_argument("--fail-above-pct", type=float, default=None,
-                        help="exit 1 when a client/provider group moves by more than this")
-    parser.add_argument("--json", action="store_true", help="print JSON instead of a table")
+    parser.add_argument(
+        "--fail-above-pct",
+        type=float,
+        default=None,
+        help="exit 1 when a client/provider group moves by more than this",
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="print JSON instead of a table"
+    )
     args = parser.parse_args(argv)
 
     from plugboard import usage
@@ -118,7 +138,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.fail_above_pct is not None:
         over = [r for r in rows if abs(r["diff_pct"]) > args.fail_above_pct]
         if over:
-            print(f"{len(over)} group(s) move by more than {args.fail_above_pct}%", file=sys.stderr)
+            print(
+                f"{len(over)} group(s) move by more than {args.fail_above_pct}%",
+                file=sys.stderr,
+            )
             return 1
     return 0
 

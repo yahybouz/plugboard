@@ -23,7 +23,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "smoke_consumers.py"
 KEY = "pb_fake_smoke_key_0123456789abcdef"
-MODEL = "ollama:qwen3:0.6b"
+MODEL = "Codex:gpt-smoke"
 EMBED = "ollama:qwen3-embedding:0.6b"
 
 
@@ -467,17 +467,58 @@ def test_a_rejected_key_fails_without_showing_it(gateway):
     assert "401" in proc.stdout
 
 
-def test_missing_key_or_model_is_a_usage_error(gateway):
+def test_missing_key_is_a_usage_error(gateway):
     server, gw = gateway
 
     proc = _smoke(server, key=None)
     assert proc.returncode == 2
     assert "PLUGBOARD_SMOKE_KEY" in proc.stderr
+    assert gw.seen == []
+
+
+def test_without_a_model_the_first_cli_model_of_the_key_is_chosen(gateway):
+    """The default never needs Ollama: a CLI provider's model is picked."""
+    server, gw = gateway
+    gw.behavior["models"] = ["ollama:other", "gpt-x", MODEL]
 
     proc = _smoke(server, model=None)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    chats = [b for m, p, b in gw.seen if p == "/v1/chat/completions"]
+    assert chats and {b["model"] for b in chats} == {MODEL}
+    assert f"model={MODEL}" in proc.stdout
+
+
+def test_an_ollama_model_is_never_chosen_by_default(gateway):
+    server, gw = gateway
+    gw.behavior["models"] = ["ollama:other", "ollama:qwen3:8b"]
+    gw.behavior["me_allowed"] = ["ollama:other"]
+
+    proc = _smoke(server, model=None)
+
     assert proc.returncode == 2
-    assert "PLUGBOARD_SMOKE_MODEL" in proc.stderr
-    assert gw.seen == []
+    assert "--model" in proc.stderr and "PLUGBOARD_SMOKE_MODEL" in proc.stderr
+    assert [p for m, p, b in gw.seen if p == "/v1/chat/completions"] == []
+
+
+def test_a_model_the_key_may_not_use_is_not_chosen(gateway):
+    server, gw = gateway
+    gw.behavior["models"] = ["Codex:gpt-denied", MODEL]
+    gw.behavior["compatible"] = {"Codex:gpt-denied": False, MODEL: True}
+
+    proc = _smoke(server, model=None)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert f"model={MODEL}" in proc.stdout
+
+
+def test_the_embeddings_skip_says_there_is_no_embedding_provider(gateway):
+    server, gw = gateway
+
+    proc = _smoke(server)
+
+    (line,) = _lines(proc, "SKIP")
+    assert "no embedding provider" in line
 
 
 def test_model_can_be_given_on_the_command_line(gateway):
@@ -515,3 +556,24 @@ def test_an_unreachable_gateway_fails_fast():
 
     assert proc.returncode == 1
     assert _check_names(proc, "FAIL")[0] == "health"
+
+
+def test_a_rejected_key_while_choosing_the_model_fails_without_showing_it(gateway):
+    server, gw = gateway
+
+    proc = _smoke(server, model=None, key="pb_wrong_key_for_this_gateway_000")
+
+    assert proc.returncode == 1
+    assert "pb_wrong_key_for_this_gateway_000" not in proc.stdout + proc.stderr
+    assert "401" in proc.stderr
+
+
+def test_a_model_list_flagged_compatible_is_trusted_over_allowed_models(gateway):
+    server, gw = gateway
+    gw.behavior["models"] = [MODEL]
+    gw.behavior["compatible"] = {MODEL: True}
+    gw.behavior["me_allowed"] = ["Codex:*"]
+
+    proc = _smoke(server, model=None)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr

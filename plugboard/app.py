@@ -2394,7 +2394,21 @@ def _provider_disabled_response(
     log.info("provider disabled: %s", provider_id)
     if provider is None:
         provider = get_provider(provider_id) or {}
-    if provider.get("secret_unreadable"):
+        if not provider:
+            from plugboard import ollama
+
+            if provider_id == ollama.PROVIDER_ID and ollama.disabled_by_config():
+                provider = {"disabled_by_config": True}  # never registered
+    if provider.get("disabled_by_config"):
+        detail = (
+            f"Provider '{provider_id}' is turned off by the server "
+            "configuration (OLLAMA_ENABLED=false); nothing was called."
+        )
+        hint = (
+            "Pick another model from GET /v1/models, or ask the administrator "
+            "to set OLLAMA_ENABLED to true or auto and restart the gateway."
+        )
+    elif provider.get("secret_unreadable"):
         detail = (
             f"Provider '{provider_id}' is turned off: its stored key cannot be "
             "decrypted with the current ENCRYPTION_KEY; nothing was called."

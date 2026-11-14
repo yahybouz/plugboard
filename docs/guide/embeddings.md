@@ -1,6 +1,6 @@
 # Embeddings (`POST /v1/embeddings`)
 
-OpenAI-compatible embeddings served by a **local Ollama engine** registered as a
+OpenAI-compatible embeddings served by a **local Ollama engine** (optional: Ollama is off by default in the shipped configurations, and with no `PLUGBOARD_EMBEDDING_MODELS` the route answers `404` *no embedding provider is configured*; with `OLLAMA_ENABLED=false` an `ollama:` identity answers `503` naming the configuration when Ollama is registered, else `404`) registered as a
 provider. The route has its own admission, separate from chat: it never falls
 back to a generation model, never guesses an owner and never contacts an address
 supplied by the caller.

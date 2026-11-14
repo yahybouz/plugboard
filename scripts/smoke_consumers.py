@@ -31,8 +31,10 @@ an error body is masked. Standard library only, so it runs on a host without
 the project's virtualenv, or inside the container.
 
 Usage:
-  PLUGBOARD_SMOKE_KEY=... PLUGBOARD_SMOKE_MODEL=ollama:<model> \\
-    python3 scripts/smoke_consumers.py --url http://127.0.0.1:8765
+  PLUGBOARD_SMOKE_KEY=... python3 scripts/smoke_consumers.py --url http://127.0.0.1:8765
+  # Without --model / PLUGBOARD_SMOKE_MODEL the first model of a CLI provider
+  # (Codex:, claude-code:, Gemini:, Antigravity:) that the key may use is chosen;
+  # an ollama: model never is. Name one to check another: PLUGBOARD_SMOKE_MODEL=Codex:<model>
 
 Exit status: 0 every check passed (SKIP allowed), 1 a check failed or the
 time budget ran out, 2 usage error (missing key or model).
@@ -54,6 +56,24 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 KEY_ENV = "PLUGBOARD_SMOKE_KEY"
 MODEL_ENV = "PLUGBOARD_SMOKE_MODEL"
 EMBEDDING_ENV = "PLUGBOARD_SMOKE_EMBEDDING_MODEL"
+# Default chat model: a CLI provider's, in this order. Ollama is off by default.
+CLI_PREFIXES = ("codex:", "claude-code:", "gemini:", "antigravity:", "agy:")
+
+
+def pick_default_model(rows: list, allowed: Optional[list]) -> str:
+    """First model of a CLI provider the key may use, else ''."""
+    for prefix in CLI_PREFIXES:
+        for row in rows:
+            mid = str(row.get("id") or "")
+            if not mid.lower().startswith(prefix):
+                continue
+            if row.get("account_compatible") is False:
+                continue
+            # 4.4.0 flags what the key may use; only an older list needs allowed_models.
+            if "account_compatible" not in row and allowed and mid not in allowed:
+                continue
+            return mid
+    return ""
 
 
 def structured_schema(word: str) -> dict:
@@ -360,7 +380,10 @@ def build_checks(smoke: Smoke, args) -> list[tuple[str, Callable[[], str]]]:
                     "(PLUGBOARD_EMBEDDING_MODELS and the key's allowed_models)"
                 )
         if not rows:
-            why = "no embedding model declared for this key"
+            why = (
+                "no embedding provider configured for this key "
+                "(no embedding model declared)"
+            )
             if args.require_embeddings:
                 raise CheckFailed(why)
             raise Skipped(why)
@@ -445,10 +468,29 @@ def main(argv: Optional[list] = None) -> int:
             f"{KEY_ENV} is empty: export the limited smoke key first.", file=sys.stderr
         )
         return 2
-    if not args.model:
-        print(f"No model: pass --model or set {MODEL_ENV}.", file=sys.stderr)
-        return 2
     smoke = Smoke(args.url, key, args.timeout, args.deadline)
+    if not args.model:
+        try:
+            listed = smoke.get_json("/v1/models")
+            me = smoke.get_json("/v1/me")
+            data = listed.get("data", []) if isinstance(listed, dict) else []
+            args.model = pick_default_model(
+                [m for m in data if isinstance(m, dict)],
+                me.get("allowed_models") if isinstance(me, dict) else None,
+            )
+        except (CheckFailed, OSError, ValueError) as exc:
+            print(
+                f"FAIL models: cannot choose a default model: {smoke.mask(str(exc))}",
+                file=sys.stderr,
+            )
+            return 1
+        if not args.model:
+            print(
+                "No CLI-provider model found for this key: "
+                f"pass --model or set {MODEL_ENV}.",
+                file=sys.stderr,
+            )
+            return 2
     print(
         f"smoke {smoke.url} model={args.model} budget={args.deadline:.0f} s", flush=True
     )

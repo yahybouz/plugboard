@@ -74,7 +74,7 @@ The dashboard has these pages:
 
 The fastest options:
 
-- **Ollama**: if Ollama answers on `http://localhost:11434` when the server starts, it is registered automatically as the `ollama` provider.
+- **Ollama** (optional; the shipped deployment configurations turn it off with `OLLAMA_ENABLED=false`): with `OLLAMA_ENABLED=auto` or `true`, if Ollama answers on `http://localhost:11434` when the server starts, it is registered automatically as the `ollama` provider.
 - **API key**: Providers → **+ Add direct provider** → choose *Anthropic Direct*, *Google Gemini Direct*, *GitHub Models* or *OpenAI Direct* → paste the key → **Create**.
 
 All options are described in [Providers and subscriptions](providers-and-subscriptions.md).
