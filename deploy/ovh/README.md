@@ -4,6 +4,10 @@
 > production instance, which runs on another private host not described in
 > this directory. Use these files only to operate the old instance until it is
 > shut down; do not start a new deployment from them.
+>
+> `compose.yml` stays the reference model of the production instance, which
+> departs from it on the points listed in
+> [the production instance runbook](../../docs/runbooks/production-instance.md).
 
 ## Scope
 

@@ -16,6 +16,7 @@ TOTP code or use a session: see
 | [pricing-scheduler.md](pricing-scheduler.md) | Pricing grid stale or incomplete, scheduler circuit breaker open, billing drift | P2 (P1 if no pricing at all) |
 | [rollback-release.md](rollback-release.md) | Errors or failed health checks right after an upgrade | P1 |
 | [move-install.md](move-install.md) | The install must move to another machine (planned, or the old one is failing) | P3 (P1 if the old machine is failing) |
+| [production-instance.md](production-instance.md) | How the production instance departs from `deploy/ovh/compose.yml`: catalogue scheduler off, backup, rollback, agy conversations | Reference (not an incident) |
 | [prod-gate.md](prod-gate.md) | A new release must reach the private host (`deploy/ovh/`): ordered gate with data check, backup, smoke, rehearsed rollback and 24 h of observation | Planned (not an incident) |
 
 For general diagnostics, see the
