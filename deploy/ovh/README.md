@@ -84,6 +84,24 @@ The sandbox fix is deployed as `plugboard:private-full-sandbox-v1`. Local regres
 
 Claude CLI catalogues are exposed with the `claude-code:` model prefix, while their owner/UI group remains `claude-via-claude-cli` (distinct from the paid `anthropic-direct` API provider). Discovering preset model names is not an account entitlement or generation test; do not enable paid probes merely to refresh the list.
 
+## agy cage
+
+From 4.14.2, every agy launch runs inside a bubblewrap cage (BUG-86): what agy sees and what happens when the cage cannot start are in [agy's cage](../../docs/guide/providers-and-subscriptions.md#agys-cage). The cage needs the same user and mount namespaces as the Codex sandbox above: the `plugboard-codex` AppArmor profile and `codex-seccomp.json`. The `full` image installs `bubblewrap`.
+
+`verify-agy-sandbox.py` checks the cage inside the running gateway. It makes no model request and never runs agy: it builds the cage of an agy call with the gateway's own code (same environment, same store, a private `TMPDIR`) and runs a small Python probe in it instead of agy. Run it after each switch to a new image, once agy is signed in:
+
+```sh
+docker compose -f deploy/ovh/compose.yml exec -T gateway python - < deploy/ovh/verify-agy-sandbox.py; echo "exit $?"
+```
+
+It prints one JSON line. Expected: `"result": "pass"`, `"model_requests": 0`, `"agy_run": false`, `"sandbox_start": "pass"`, `"token": "readable, rewritable, unchanged"`, `"failures": []`, then `exit 0`. agy's token is never printed.
+
+| Exit | Meaning | What to do |
+|---|---|---|
+| `0` | Every check passed: the gateway's data and logs, `~/.claude`, `~/.codex` and `/usr/local/bin/agy` are hidden, writes outside the `TMPDIR` fail, the cage has its own pid namespace, its environment has no server secret and has `AGY_CLI_DISABLE_AUTO_UPDATE=1`, and agy's token is readable and rewritable. | Nothing. |
+| `1` | A check failed; `failures` names it. | `agy is not signed in: no token to check`: agy is not signed in; sign in inside the container (`docker compose -f deploy/ovh/compose.yml exec -it gateway agy`), then run the script again. `token changed during the check`: agy refreshed its token meanwhile; run the script again. Any other failure: the cage does not hold; turn the agy provider off and report the JSON line (BUG-86). |
+| `2` | The cage cannot start; the cause is on the standard error (`bwrap not found on PATH`, `bwrap`'s first error line...). Every agy call answers `503 provider_sandbox_unavailable`. | Check that the image is the `full` one (`docker compose -f deploy/ovh/compose.yml exec gateway bwrap --version`) and that the container runs with the `plugboard-codex` AppArmor profile and `codex-seccomp.json` ([Codex Linux sandbox](#codex-linux-sandbox)). |
+
 ## Ollama bridge
 
 Optional: `compose.yml` ships with `OLLAMA_ENABLED=false` and without this network (decision of 14/11). To use Ollama again, run the installer, set `OLLAMA_ENABLED: "true"` and `OLLAMA_URL`, add the external network `plugboard-ollama` to the gateway and `PLUGBOARD_EMBEDDING_MODELS`.

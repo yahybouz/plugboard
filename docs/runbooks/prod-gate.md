@@ -315,11 +315,15 @@ sudo docker network inspect plugboard-private_default \
   --format '{{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}{{end}}'
 # Expected: 172.30.115.0/29 172.30.115.1
 gw exec gateway sh -ec 'claude --version; codex --version; gemini --version; gh --version; agy --version'
+gw exec -T gateway python - < deploy/ovh/verify-agy-sandbox.py; echo "exit $?"
+# Expected: one JSON line with "result": "pass", then exit 0
 ```
 
-The last command shows that the CLIs start in the running container with the
-`cli-home` volume; it does not prove their sign-ins. Check those with each
-CLI's own status command (see `deploy/ovh/README.md`, CLI homes).
+The CLI versions command shows that the CLIs start in the running container
+with the `cli-home` volume; it does not prove their sign-ins. Check those with
+each CLI's own status command (see `deploy/ovh/README.md`, CLI homes). The
+last command checks agy's cage without a model request; on exit `1` or `2`,
+follow [agy cage](../../deploy/ovh/README.md#agy-cage) before going on.
 
 ### 7. Smoke the new version
 

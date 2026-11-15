@@ -99,6 +99,22 @@ completed by the operator.
   keep other traces; what to do with them is still open (BUG-97).
 - A backup taken before a purge keeps the conversations of before, in clear.
 
+## agy cage
+
+From 4.14.2, agy runs inside a bubblewrap cage (BUG-86). The container must
+allow user and mount namespaces, as for codex. Without them, every agy call
+answers `503 provider_sandbox_unavailable` and agy is not run. Check the cage
+after each switch, without a model request:
+
+```bash
+docker compose -p plugboard-private \
+  -f /etc/plugboard/compose.v<version>.json \
+  exec -T gateway python - < deploy/ovh/verify-agy-sandbox.py; echo "exit $?"
+```
+
+Expected: one JSON line with `"result": "pass"`, then `exit 0`. Exit codes
+and what to do: [agy cage](../../deploy/ovh/README.md#agy-cage).
+
 ## What to watch
 
 - The size of the CLI logins volume.

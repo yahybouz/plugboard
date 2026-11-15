@@ -112,6 +112,6 @@ There is no external database or queue, which keeps the deployment to one proces
 - **Admin plane**: `/admin/*`, `/providers*`, `/metrics*`, `/docs` and the dashboard require the `ADMIN_KEY` (bearer) or a signed session cookie obtained by logging in with it; the session is also recorded server-side and revoked at logout or on any MFA change. With MFA enforced, the bearer needs a single-use TOTP code (`X-Plugboard-Admin-TOTP`). Auto-login only applies to a local install opened from the same machine.
 - **Client plane**: `/v1/*` and `/v2/*` accept client keys (and the admin key, except `/v1/embeddings` and `/v1/decisions`, which take a client key only). Cache entries, sessions and usage are scoped to the client.
 - **Secrets at rest**: provider tokens, OAuth credentials and the MFA secret are encrypted with Fernet; client keys are stored as SHA-256 hashes.
-- **CLI execution**: CLIs are resolved to absolute paths once, run without a shell, from a neutral directory, with a concurrency limit; Codex runs in a read-only sandbox.
+- **CLI execution**: CLIs are resolved to absolute paths once, run without a shell, from a neutral directory, with a concurrency limit; Codex runs in a read-only sandbox, and every agy launch runs in a bubblewrap cage (`plugboard/agy_cage.py`), never without it.
 
 Design decisions and their history are recorded in the [ADRs](adr/README.md).

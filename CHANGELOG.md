@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.14.2] — 2026-11-15
+
+### Added
+
+- **`deploy/ovh/verify-agy-sandbox.py`: an offline check of agy's cage** (BUG-86, `884febc`): run with `docker compose exec -T gateway python - < deploy/ovh/verify-agy-sandbox.py`. It makes no model request and never runs agy: it builds the cage of an agy call with the gateway's own code (same environment, store and private `TMPDIR`) and runs a standard-library Python probe in it instead of agy. It checks that the gateway's data and logs, `~/.claude`, `~/.codex` and `/usr/local/bin/agy` are hidden, that the cage has its own pid namespace, that writes outside the `TMPDIR` fail, that the environment holds no server secret and has `AGY_CLI_DISABLE_AUTO_UPDATE=1`, and that agy's token is readable and rewritable, never printed nor changed. One JSON line; exit `0` when every check passes, `1` when one fails (agy not signed in included), `2` when the cage cannot start ([deploy/ovh](deploy/ovh/README.md#agy-cage)). The production gate runs it after the switch.
+
+### Changed
+
+- **`--mode plan` is no longer passed to agy** (BUG-86, `6528725`): agy 1.4.4 says it has no effect while slash commands are disabled. `--sandbox` and `--disable-slash-commands` stay.
+
+- **New error code `provider_sandbox_unavailable`** (BUG-86, `6528725`): `503`, no `Retry-After`, when agy's cage could not start, so agy was not run. A client key gets `The agy provider is unavailable: its sandbox (bubblewrap) could not start, so agy was not run (reference <ref> in the gateway log).`; the admin key gets the cause. API contract 2.5.0 (`docs/api/openapi.json`, `docs/api/mcp.json`): the code in `ErrorResponse.code` and in the chat's `503`. **For integrators**: handle this code like a provider failure; retrying does not help until the operator fixes the host.
+
+- **The `full` image installs `bubblewrap`** (BUG-86, `6528725`), and its build checks `bwrap --version` on every architecture.
+
+### Security
+
+- **agy runs inside a bubblewrap cage** (BUG-86, decision D-60, `6528725`): every agy launch (a chat, `agy models`, `agy --version`) runs in `bwrap` with its own user, pid, ipc and uts namespaces. agy sees, read-only, its binary, the system libraries, the few `/etc` files the loader, name resolution and TLS need, the CA certificates and the time zones; writable, only its store `~/.gemini/antigravity-cli` (its sign-in token is refreshed there) and the request's private `TMPDIR`. It no longer sees the gateway's data or logs, `~/.claude`, `~/.codex`, the rest of the home, `/usr/local`, `/tmp`, nor the gateway's processes and their environment. The network is shared. No cage, no agy: a missing `bwrap`, a host that is not Linux (macOS included), a store path through a symbolic link, or a `bwrap` that cannot set up the cage refuses the call before agy runs (`503 provider_sandbox_unavailable`); there is no setting to turn the cage off. The router handles it like a timeout: next provider, model never quarantined. The container needs the user and mount namespaces codex's sandbox already needs (BUG-43) ([providers](docs/guide/providers-and-subscriptions.md#agys-cage)).
+
+- **agy's self-update is kept inside the cage** (BUG-86, `9a5f3cf`): agy replaces its own executable from a program it leaves in the background. Every agy launch now gets `AGY_CLI_DISABLE_AUTO_UPDATE=1`; if agy tries anyway, renaming or replacing its binary fails (read-only binary and folder), and the background program ends with the cage's pid namespace when agy exits. Only agy's update state lands in its store (`updater/`). The cage also binds `/etc/ld.so.cache`, which glibc's loader uses.
+
+- **The BUG-97 purge, the private `TMPDIR`, the stream, a cut call and billing are unchanged under the cage** (`b44ed9e`): integration tests with the real `bwrap` and a fake agy check that the store is purged with the token intact, that each call's `TMPDIR` is removed, that the answer streams, that a cut call leaves no process, no entry and no `TMPDIR`, and that agy's reported usage is billed the same with and without the cage.
+
+**Not verified**: the real agy inside the cage (a real run is still to be done); the real effect of `AGY_CLI_DISABLE_AUTO_UPDATE` (known from static analysis of the binary only), and what agy does when its update fails; the cage inside the real containers (UAT and production), to check with `verify-agy-sandbox.py`. The tests use the host's `bwrap` and a fake agy.
+
 ## [4.14.1] — 2026-11-14
 
 ### Added
