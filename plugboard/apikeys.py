@@ -138,12 +138,18 @@ def load_keys() -> List[Dict[str, Any]]:
         return list(_cache_keys or [])
 
 
-def get_key_record(raw_key: str) -> Optional[Dict[str, Any]]:
+def get_key_record(
+    raw_key: str, *, log_refused: bool = True
+) -> Optional[Dict[str, Any]]:
     """Return the active key record for raw_key, or None.
 
     None also for a key whose client_id is blank or "admin" (BUG-64, BUG-60,
     D-40): it is refused like an unknown key, and the refusal is logged with
-    its key_id.
+    its key_id (``log_refused=False``: not logged, for the rate limit, which
+    looks the key up before the auth dependency does; BUG-119).
+
+    The records come from the in-process index: the file is read again only
+    when its mtime changed (one ``stat`` per call).
 
     SHA-256 hashes the incoming key and uses an O(1) dict lookup on the
     cached index. The 256-bit output space of SHA-256 makes timing attacks
@@ -168,6 +174,8 @@ def get_key_record(raw_key: str) -> Optional[Dict[str, Any]]:
         return None
     reason = refused_client_reason(rec)
     if reason:
+        if not log_refused:
+            return None
         log.warning(
             "client key refused reason=%s key_id=%s", reason, rec.get("key_id", "")
         )

@@ -14,7 +14,7 @@ The dashboard and `/suivi` call the API from their own origin and are not affect
 
 When MFA is enforced (`PLUGBOARD_ADMIN_MFA_REQUIRED=1` and a secret enrolled), the admin key alone is refused with 401 on every admin route (`/admin/*`, `/providers*`, `/metrics*`, `/docs`, the dashboard). A script either:
 
-- sends a fresh code with each call: `-H "Authorization: Bearer $ADMIN_KEY" -H "X-Plugboard-Admin-TOTP: <code>"`. A code is accepted once, and no older code after it, so this suits one call per 30 seconds; wrong codes count towards the login lockout;
+- sends a fresh code with each call: `-H "Authorization: Bearer $ADMIN_KEY" -H "X-Plugboard-Admin-TOTP: <code>"`. A code is accepted once, and no older code after it, so this suits one call per 30 seconds; wrong codes count towards the admin key's lockout (5 in a minute lock TOTP checks for 15 minutes, from every address);
 - or opens a session once and reuses its cookie:
 
 ```bash
@@ -26,7 +26,7 @@ curl -s -b admin.cookies -X POST http://localhost:8765/auth/admin/logout
 
 Sessions are stored on the server (`data/admin_sessions.json`) and last `ADMIN_SESSION_MAX_AGE` (8 hours). **Log out** revokes that session; `POST /auth/admin/logout-all` (dashboard: **Log out everywhere**) revokes every session, this one included, and forgets every browser remembered for local auto-login (sign in again with the link `make dev` opens, or with `ADMIN_KEY`); enrolling, rotating or disabling MFA revokes every session; a session opened without a code stops working once MFA is enforced. Keep the cookie file private and delete it after use. Without enforced MFA the bearer alone works as before.
 
-Once a secret is enrolled, changing the second factor needs a current code from it, even from an open session: `DELETE /admin/mfa` takes it in the `X-Plugboard-Admin-TOTP` header, and rotating through `POST /admin/mfa/setup` takes it as `current_code` next to the new `secret` and `code`. Without it the call is refused with 403; wrong codes count towards the login lockout. With a lost authenticator, run `scripts/admin_mfa_setup.py --rotate` on the host.
+Once a secret is enrolled, changing the second factor needs a current code from it, even from an open session: `DELETE /admin/mfa` takes it in the `X-Plugboard-Admin-TOTP` header, and rotating through `POST /admin/mfa/setup` takes it as `current_code` next to the new `secret` and `code`. Without it the call is refused with 403; wrong codes count towards the admin key's lockout. With a lost authenticator, run `scripts/admin_mfa_setup.py --rotate` on the host.
 
 ## Dashboard pages
 

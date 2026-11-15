@@ -121,7 +121,11 @@ from plugboard.logging_config import _request_id_var, setup_logging
 from plugboard import chat_billing
 from plugboard.storage import to_thread_to_the_end as _to_thread_to_the_end
 from plugboard.metrics import get_stats, record_busy_refusal, record_request_wait
-from plugboard.ratelimit import check_client_rate_limit, check_rate_limit
+from plugboard.ratelimit import (
+    check_client_rate_limit,
+    check_rate_limit,
+    rate_limit_on,
+)
 from plugboard.decision_api import router as decision_router
 from plugboard.embeddings_api import router as embeddings_router
 from plugboard.suivi_api import build_router as build_suivi_router
@@ -1218,10 +1222,57 @@ class _RequestIdMiddleware(BaseHTTPMiddleware):
             _request_id_var.reset(token)
 
 
+_ADMIN_SCOPE = "key:admin"
+
+
+def _client_address(request: Request) -> str:
+    """The client address: uvicorn's ``request.client.host``.
+
+    uvicorn replaces the peer with the right-most ``X-Forwarded-For`` entry
+    that is not a trusted proxy, and only when the peer is listed in
+    ``FORWARDED_ALLOW_IPS`` (``uvicorn/middleware/proxy_headers.py``).
+    Plugboard reads no header for it.
+    """
+    return request.client.host if request.client else "unknown"
+
+
+def _address_scope(request: Request) -> str:
+    """Counter of the client address, for the limit and the key lockout."""
+    return "ip:" + _client_address(request)
+
+
+def _rate_limit_scope(request: Request) -> str:
+    """Whose counter a request takes from the global limit (BUG-119).
+
+    ``key:admin`` for the admin key or an admin session, ``key:<key_id>`` for
+    a client key the auth dependency accepts, the client address otherwise:
+    a wrong, forged or revoked key never leaves the address counter. Behind a
+    proxy every client has the proxy's address unless it is trusted, so the
+    address counter only holds the calls without a valid key.
+
+    Same checks as ``_resolve_client``, in its order, with no file read in
+    the common case: the admin key is a constant-time comparison; a client
+    key is looked up in the key cache (one ``stat``, the file is read only
+    when it changed); a session cookie is checked against its signature
+    first, so only a correctly signed one is looked up in the session store.
+    """
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if _is_admin_key(token):
+        return _ADMIN_SCOPE
+    if token.startswith(KEY_PREFIXES):
+        # A client key wins over the session cookie, as in _resolve_client.
+        rec = get_key_record(token, log_refused=False)
+        key_id = str(rec.get("key_id") or "") if rec else ""
+        return f"key:{key_id}" if key_id else _address_scope(request)
+    session = request.cookies.get(_ADMIN_COOKIE_NAME, "")
+    if _admin_session_nonce(session) and _is_admin_session(session):
+        return _ADMIN_SCOPE
+    return _address_scope(request)
+
+
 class _RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        ip = request.client.host if request.client else "unknown"
-        if not check_rate_limit(ip):
+        if rate_limit_on() and not check_rate_limit(_rate_limit_scope(request)):
             return JSONResponse(
                 status_code=429, content={"detail": "Rate limit exceeded"}
             )
@@ -1600,7 +1651,8 @@ _ADMIN_TOTP_HEADER = "X-Plugboard-Admin-TOTP"
 def _admin_request_auth(request: Request) -> str:
     """Admin authentication of a request: "ok", "denied", "mfa_required"
     (admin key without a valid TOTP header while MFA is required) or
-    "locked" (too many wrong codes from this address)."""
+    "locked" (too many wrong codes for the admin key, from any address:
+    a code is only checked with the admin key; BUG-119)."""
     if _is_admin_session(request.cookies.get(_ADMIN_COOKIE_NAME, "")):
         return "ok"
     auth = request.headers.get("Authorization", "")
@@ -1616,15 +1668,15 @@ def _admin_request_auth(request: Request) -> str:
         return "mfa_required"
     from plugboard.ratelimit import check_auth_rate_limit, record_auth_failure
 
-    client_ip = request.client.host if request.client else "unknown"
-    if not check_auth_rate_limit(client_ip):
+    client_ip = _client_address(request)
+    if not check_auth_rate_limit(_ADMIN_SCOPE):
         return "locked"
     if _mfa.verify(code):
         # The code is single-use: remember it was proven in this request, so
         # an MFA change made with it (step-up) does not ask for it again.
         request.state.admin_mfa_verified = True
         return "ok"
-    locked = record_auth_failure(client_ip)
+    locked = record_auth_failure(_ADMIN_SCOPE)
     _audit(
         "auth.mfa_failed",
         details=f"header IP: {client_ip}, locked={locked}",
@@ -1640,7 +1692,8 @@ def _require_mfa_step_up(request: Request, code: Optional[str] = None) -> None:
     current secret, even from an open admin session (an auto-login session
     included): holding a session must not be enough to drop the factor.
     The code comes from ``code`` (request body) or the TOTP header; a code
-    already verified by this request's authentication counts.
+    already verified by this request's authentication counts. Wrong codes
+    lock the admin key (``key:admin``), whatever the address (BUG-119).
     """
     from plugboard import admin_mfa as _mfa
 
@@ -1649,7 +1702,7 @@ def _require_mfa_step_up(request: Request, code: Optional[str] = None) -> None:
     if getattr(request.state, "admin_mfa_verified", False):
         return
     code = (code or request.headers.get(_ADMIN_TOTP_HEADER, "")).strip()
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _client_address(request)
     if not code:
         _audit("admin.mfa.step_up_missing", details=f"IP: {client_ip}", ip=client_ip)
         raise HTTPException(
@@ -1658,14 +1711,14 @@ def _require_mfa_step_up(request: Request, code: Optional[str] = None) -> None:
         )
     from plugboard.ratelimit import check_auth_rate_limit, record_auth_failure
 
-    if not check_auth_rate_limit(client_ip):
+    if not check_auth_rate_limit(_ADMIN_SCOPE):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many failed attempts",
         )
     if _mfa.verify(code):
         return
-    locked = record_auth_failure(client_ip)
+    locked = record_auth_failure(_ADMIN_SCOPE)
     _audit(
         "admin.mfa.step_up_failed",
         details=f"IP: {client_ip}, locked={locked}",
@@ -7232,11 +7285,16 @@ async def admin_login(body: AdminLogin, request: Request):
         record_auth_failure,
     )
 
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _client_address(request)
+    address = _address_scope(request)
+    token = body.key.strip()
+    is_admin_key = _is_admin_key(token)
 
-    # Brute-force protection: check lockout before processing
-    if not check_auth_rate_limit(client_ip):
-        remaining = get_lockout_remaining(client_ip)
+    # Brute-force protection (BUG-119): wrong keys lock their address, but
+    # the address lockout never refuses the admin key itself; behind a proxy
+    # anyone could otherwise lock the operator out.
+    if not is_admin_key and not check_auth_rate_limit(address):
+        remaining = get_lockout_remaining(address)
         _audit(
             "auth.login_blocked", details=f"IP locked out: {client_ip}", ip=client_ip
         )
@@ -7246,9 +7304,8 @@ async def admin_login(body: AdminLogin, request: Request):
             headers={"Retry-After": str(remaining)},
         )
 
-    token = body.key.strip()
-    if not _is_admin_key(token):
-        locked = record_auth_failure(client_ip)
+    if not is_admin_key:
+        locked = record_auth_failure(address)
         _audit(
             "auth.login_failed",
             details=f"IP: {client_ip}, locked={locked}",
@@ -7280,8 +7337,22 @@ async def admin_login(body: AdminLogin, request: Request):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 content={"detail": "MFA code required", "mfa_required": True},
             )
+        # Wrong codes need the admin key: they lock the admin key, from any
+        # address (BUG-119).
+        if not check_auth_rate_limit(_ADMIN_SCOPE):
+            remaining = get_lockout_remaining(_ADMIN_SCOPE)
+            _audit(
+                "auth.login_blocked",
+                details=f"admin key locked out (MFA), IP: {client_ip}",
+                ip=client_ip,
+            )
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Too many failed attempts. Try again later."},
+                headers={"Retry-After": str(remaining)},
+            )
         if not _mfa.verify(code):
-            locked = record_auth_failure(client_ip)
+            locked = record_auth_failure(_ADMIN_SCOPE)
             _audit(
                 "auth.mfa_failed",
                 details=f"IP: {client_ip}, locked={locked}",

@@ -16,7 +16,7 @@ supplied by the caller.
 | The provider is active and supported | 503 |
 | The provider is `provider_type: sovereign` with a plain loopback `base_url` (`127.0.0.1`, `::1`, `localhost`) or exactly the operator's `OLLAMA_URL` when it is a private IP (container bridge); no credentials, path or query | 503 |
 | The key's `allowed_models` matches the identity exactly (empty list: unrestricted) | 403 |
-| Monthly budget and `rpm_limit` of the key; per-IP `RATE_LIMIT` as for every route | 429 |
+| Monthly budget and `rpm_limit` of the key; `RATE_LIMIT` as for every route | 429 |
 | Body ≤ 2 MiB; `input` is a string or 1–256 strings, each non-blank and ≤ 16 384 characters; `encoding_format` `float` or `base64`; `dimensions` refused; unknown fields refused. Errors never echo the input | 413 / 422 |
 
 Then the gateway reads `GET /api/tags` on the engine (the model must be installed;

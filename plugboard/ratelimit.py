@@ -24,8 +24,17 @@ def _purge_stale() -> None:
         del _buckets[ip]
 
 
+def rate_limit_on() -> bool:
+    """False when RATE_LIMIT is 0: no counter is kept."""
+    return _LIMIT != 0
+
+
 def check_rate_limit(ip: str) -> bool:
-    """Return True if the request is allowed, False if rate limit exceeded."""
+    """Return True if the request is allowed, False if rate limit exceeded.
+
+    ``ip`` names the counter: ``ip:<address>`` or ``key:<key_id>`` from the
+    app (BUG-119); any string works.
+    """
     global _call_count
 
     if _LIMIT == 0:
@@ -92,8 +101,10 @@ def _purge_auth_stale(now: float) -> None:
 
 def check_auth_rate_limit(ip: str) -> bool:
     """Return True if auth attempt allowed, False if locked out.
-    Tracks failed auth attempts per IP. After _AUTH_LIMIT failures
-    within _AUTH_WINDOW, locks out the IP for _LOCKOUT_DURATION."""
+    Tracks failed auth attempts per counter. After _AUTH_LIMIT failures
+    within _AUTH_WINDOW, locks out the counter for _LOCKOUT_DURATION.
+    The app counts wrong admin keys per ``ip:<address>`` and wrong TOTP
+    codes on ``key:admin`` (BUG-119)."""
     now = time.monotonic()
 
     # Check if currently locked out

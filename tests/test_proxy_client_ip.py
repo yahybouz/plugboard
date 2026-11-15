@@ -3,7 +3,9 @@
 run.py keeps uvicorn's proxy handling: X-Forwarded-For gives the client IP
 only when the connection comes from an address in FORWARDED_ALLOW_IPS. The
 app is wrapped here in the same middleware, as uvicorn runs it, so the per-IP
-rate limit and the admin-login lockout are checked end to end.
+rate limit and the admin-login lockout are checked end to end. The counters
+are named ``ip:<address>`` (BUG-119: a valid key is counted under ``key:``,
+see test_ratelimit_identity.py).
 """
 
 from __future__ import annotations
@@ -79,7 +81,7 @@ async def test_login_lockout_hits_the_real_client_only(limits):
         assert codes[-1] == 429  # locked out
         # The next user behind the proxy is not locked out with it.
         assert await _login(client, "203.0.113.2") == 401
-    assert set(limits._lockouts) == {"203.0.113.1"}
+    assert set(limits._lockouts) == {"ip:203.0.113.1"}
 
 
 async def test_login_lockout_cannot_be_dodged_with_a_forged_header(limits):
@@ -87,7 +89,7 @@ async def test_login_lockout_cannot_be_dodged_with_a_forged_header(limits):
     async with _gateway("198.51.100.9") as client:
         codes = [await _login(client, f"203.0.113.{n}") for n in range(1, 7)]
     assert codes[-1] == 429
-    assert set(limits._lockouts) == {"198.51.100.9"}
+    assert set(limits._lockouts) == {"ip:198.51.100.9"}
 
 
 def test_stale_login_counters_are_purged(monkeypatch):

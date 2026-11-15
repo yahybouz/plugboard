@@ -45,6 +45,50 @@ The admin key alone is refused (`401`): every admin call also needs a fresh
 TOTP code, or an admin session. See
 [admin API with MFA](../guide/monitoring.md#admin-api-with-mfa).
 
+## Client address and rate limit (BUG-119)
+
+The chain is `tailscale serve` → nginx on the host → the gateway on the
+existing Docker network. As set up before 4.14.3, the gateway sees every
+request from one address, nginx's on that network (for example `172.18.0.1`):
+60 calls without a key in a minute blocked every client, and wrong logins
+locked out everyone.
+
+Since 4.14.3 a request with a valid key (a client key, the admin key or an
+admin session) is counted under its key, not its address, and wrong TOTP codes
+lock the admin key, not an address. What still counts per address: requests
+without a valid key, and wrong admin keys at login. For those to count each
+tailnet client, the gateway must see the client's tailnet address. Apply one
+of the two options below.
+
+**Option A: nginx listens on the tailnet address.** nginx listens on
+`<tailnet-ip>:<port>` itself (TLS with a certificate for the tailnet name,
+e.g. from `tailscale cert`), and `tailscale serve` no longer serves that port.
+nginx then sees each client's `100.x` address as `$remote_addr`.
+
+**Option B: `tailscale serve` passes the address in PROXY protocol.** Run
+`tailscale serve` with `--proxy-protocol 2` (the option is in
+`tailscale serve --help` of Tailscale 1.104.7; check the version in
+production: `<tailscale-version>`), and in nginx:
+
+```nginx
+listen 127.0.0.1:<port> proxy_protocol;
+set_real_ip_from 127.0.0.1;
+real_ip_header proxy_protocol;
+```
+
+In both cases:
+
+- nginx **overwrites** the header with the address it saw:
+  `proxy_set_header X-Forwarded-For $remote_addr;`. Never
+  `$proxy_add_x_forwarded_for`, which keeps what the client sent.
+- The gateway trusts nginx only: `FORWARDED_ALLOW_IPS=<nginx address as the
+  gateway sees it>`, the gateway of the Docker network (e.g. `172.18.0.1`).
+  Never `*` nor a `/0` network: any client could then choose its address (the
+  boot log warns). uvicorn reads `X-Forwarded-For` only from a listed peer,
+  and takes its right-most address that is not a listed proxy.
+- Check: the gateway's request and audit logs show distinct `100.x` addresses
+  for distinct tailnet clients, and no longer the network gateway's address.
+
 ## Backup
 
 - **Every night, encrypted** (since 14 November 2026): `plugboard-backup.timer`

@@ -52,7 +52,7 @@ A completed rotation also signs out every dashboard session and forgets the brow
 | `PLUGBOARD_DATA` | `data` | Directory for all state (JSON files, SQLite databases, pricing grids, the pricing scheduler's `cb_state.json`). |
 | `PLUGBOARD_BIND_HOST` | set by `run.py` | Records the interface the server really listens on; used by auto-login. Do not set it yourself. |
 | `PLUGBOARD_SKIP_DOTENV` | empty | `1` stops the configuration module from loading `.env` (used by the test suite). |
-| `RATE_LIMIT` | `60` | Requests per minute per client IP address, all routes. `0` disables it. |
+| `RATE_LIMIT` | `60` | Requests per minute, all routes: per valid key (the admin key and admin sessions share one count), else per client IP address. `0` disables it. |
 | `FORWARDED_ALLOW_IPS` | `127.0.0.1,::1` | Addresses (or networks) of the reverse proxies whose `X-Forwarded-For` gives the client address for the rate limit, the admin-login lockout and the audit log (uvicorn setting, read by `run.py`; with the `uvicorn` command use `--env-file`). Never `*` or a `/0` network: the boot log warns. |
 | `MAX_BODY_BYTES` | `10485760` | Maximum request body size (10 MB). |
 | `PLUGBOARD_MAX_INFLIGHT_CHAT` | `8` | Maximum concurrent chat requests, streaming included. `0` means no cap. |
