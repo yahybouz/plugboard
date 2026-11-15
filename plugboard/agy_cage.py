@@ -13,7 +13,8 @@ This module builds the only command line that launches agy (``complete``,
   stays in the group the gateway kills on timeout or cancellation.
 - An empty root holding, read-only, the system libraries (``/usr/lib``,
   ``/usr/lib64``, the ``/lib*`` links), the few ``/etc`` files the loader,
-  name resolution and TLS need, the CA bundles and the time zones; ``/proc`` of
+  name resolution and TLS need, the CA bundles (and the system CA paths
+  ``SSL_CERT_FILE`` / ``SSL_CERT_DIR`` name) and the time zones; ``/proc`` of
   the new pid namespace (see below) and a minimal ``/dev``.
 - Writable: agy's store (``$HOME/.gemini/antigravity-cli``, where its sign-in
   token is refreshed) and the request's private ``TMPDIR``. Nothing else.
@@ -87,8 +88,11 @@ _SYSTEM_FILES = (
     "/usr/share/ca-certificates",
     "/usr/share/zoneinfo",
 )
-# CA locations the child's environment may name.
+# CA locations the child's environment may name: bound only when absolute,
+# through no symbolic link (bwrap would follow it), and under one of the
+# system's CA folders (``SSL_CERT_DIR=/app/data`` would show the app's data).
 _CA_VARIABLES = ("SSL_CERT_FILE", "SSL_CERT_DIR")
+_CA_ROOTS = ("/etc/", "/usr/share/", "/usr/lib/ssl/")
 _NAMESPACES = (
     "--unshare-user",
     "--unshare-ipc",
@@ -106,10 +110,15 @@ _PROC_CHECK_TIMEOUT_S = 10.0
 _proc_mount: Optional[bool] = None
 
 
+# CA variables already reported as ignored (logged once each).
+_ca_refused: set = set()
+
+
 def _reset_for_tests() -> None:
     """Forget what was checked or resolved once per process (tests only)."""
     global _proc_mount
     _proc_mount = None
+    _ca_refused.clear()
 
 
 def _plain_path(path: str) -> bool:
@@ -149,10 +158,32 @@ def _system_args(env: Mapping[str, str]) -> List[str]:
     for path in _SYSTEM_FILES:
         args += ["--ro-bind-try", path, path]
     for name in _CA_VARIABLES:
-        path = env.get(name) or ""
-        if os.path.isabs(path) and os.path.exists(path):
+        path = _ca_path(name, env.get(name) or "")
+        if path is not None:
             args += ["--ro-bind-try", path, path]
     return args
+
+
+def _ca_path(name: str, value: str) -> Optional[str]:
+    """The system CA path ``value`` names, if it may be bound, else None.
+
+    A value outside the system's CA folders, relative or through a link is
+    ignored and logged once, by the variable's name only (never its value).
+    """
+    if not value:
+        return None
+    path = os.path.normpath(value)
+    if not (_plain_path(value) and path.startswith(_CA_ROOTS)):
+        if name not in _ca_refused:
+            _ca_refused.add(name)
+            log.warning(
+                "%s ignored by agy's sandbox: only a system CA path "
+                "(under %s, no symbolic link) is bound",
+                name,
+                ", ".join(_CA_ROOTS),
+            )
+        return None
+    return path if os.path.exists(path) else None
 
 
 def _proc_mountable(bwrap: str, env: Mapping[str, str]) -> bool:

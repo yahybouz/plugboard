@@ -258,18 +258,87 @@ def test_cage_argv_binds_the_real_binary(setup, fake_binary, tmp_path):
     assert str(link) not in argv
 
 
-def test_cage_argv_binds_the_ssl_variables_when_they_exist(
-    setup, fake_binary, tmp_path
-):
-    bundle = tmp_path / "ca.pem"
-    bundle.write_text("x")
+def test_cage_argv_binds_system_ca_variables(setup, fake_binary):
+    present = [
+        path
+        for path in ("/etc/ssl/certs/ca-certificates.crt", "/etc/ssl/certs")
+        if os.path.exists(path) and os.path.realpath(path) == path
+    ]
+    if len(present) < 2:
+        pytest.skip("no system CA bundle and folder on this host")
+    bundle, folder = present
     argv, _ = _argv(
         setup,
         str(fake_binary),
-        env={"SSL_CERT_FILE": str(bundle), "SSL_CERT_DIR": "/nonexistent/certs"},
+        env={"SSL_CERT_FILE": bundle, "SSL_CERT_DIR": folder},
     )
-    assert (str(bundle), str(bundle)) in _pairs(argv, "--ro-bind-try")
-    assert not any("/nonexistent/certs" in a for a in argv)
+    pairs = _pairs(argv, "--ro-bind-try")
+    assert (bundle, bundle) in pairs and (folder, folder) in pairs
+
+
+def test_cage_argv_skips_missing_ca_paths(setup, fake_binary):
+    argv, _ = _argv(setup, str(fake_binary), env={"SSL_CERT_DIR": "/etc/nonexistent"})
+    assert "/etc/nonexistent" not in argv
+
+
+@pytest.mark.parametrize(
+    "where", ["app-data", "dotdot", "relative", "tmp", "usr-local", "etc-itself"]
+)
+def test_cage_argv_refuses_ca_paths_outside_the_system(
+    setup, fake_binary, caplog, where
+):
+    """A CA variable naming the app's data (or anything outside the system's
+    CA folders) would make it readable in the cage."""
+    value = {
+        "app-data": str(setup["app_data"]),
+        "dotdot": "/etc/ssl/../.." + str(setup["app_data"]),
+        "relative": "etc/ssl",
+        "tmp": str(setup["tmp"]),
+        "usr-local": "/usr/local/lib",
+        "etc-itself": "/etc",
+    }[where]
+
+    with caplog.at_level("WARNING", logger="plugboard.agy_cage"):
+        argv, _ = _argv(setup, str(fake_binary), env={"SSL_CERT_DIR": value})
+        _argv(setup, str(fake_binary), env={"SSL_CERT_DIR": value})
+
+    sep = argv.index("--")
+    assert value not in argv[:sep]
+    assert os.path.normpath(value) not in argv[:sep]
+    assert str(setup["app_data"]) not in argv[:sep]
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    ca = [w for w in warnings if "SSL_CERT_DIR" in w]
+    assert len(ca) == 1, warnings
+    message = ca[0].replace(", ".join(agy_cage._CA_ROOTS), "")
+    assert value not in message and str(setup["tmp"]) not in message
+
+
+def test_cage_argv_refuses_a_ca_path_through_a_link(
+    setup, fake_binary, caplog, monkeypatch, tmp_path
+):
+    """Even under an allowed folder, a link would be followed by bwrap."""
+    allowed = tmp_path / "certs-root"
+    allowed.mkdir()
+    (allowed / "real").mkdir()
+    (allowed / "link").symlink_to(setup["app_data"])
+    monkeypatch.setattr(agy_cage, "_CA_ROOTS", (str(allowed) + "/",))
+
+    with caplog.at_level("WARNING", logger="plugboard.agy_cage"):
+        argv, _ = _argv(
+            setup,
+            str(fake_binary),
+            env={
+                "SSL_CERT_DIR": str(allowed / "link"),
+                "SSL_CERT_FILE": str(allowed / "real"),
+            },
+        )
+
+    pairs = _pairs(argv, "--ro-bind-try")
+    assert (str(allowed / "real"), str(allowed / "real")) in pairs
+    sep = argv.index("--")
+    assert str(allowed / "link") not in argv[:sep]
+    assert str(setup["app_data"]) not in argv[:sep]
+    assert any("SSL_CERT_DIR" in r.getMessage() for r in caplog.records)
 
 
 def test_store_is_created_private_when_missing(setup, fake_binary):
