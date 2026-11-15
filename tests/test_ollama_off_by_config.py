@@ -89,8 +89,11 @@ async def test_every_surface_refuses_and_nothing_is_called(
     listed = await mcp_tools.list_models()
     assert "acme-direct:" in listed and "ollama:" not in listed
     out = await mcp_tools.chat(model="ollama:qwen3:8b", message="hi")
-    # The MCP tool gives the API's code and detail (lot B), not "HTTP 503".
-    assert out.startswith("Error: provider_disabled: ") and "OLLAMA_ENABLED" in out
+    # The MCP tool gives the API's code and detail (lot B), not "HTTP 503",
+    # as a tool error (BUG-107).
+    assert out.isError is True
+    text = out.content[0].text
+    assert text.startswith("Error: provider_disabled: ") and "OLLAMA_ENABLED" in text
 
     assert calls == [], "turned off by configuration, nothing is called"
 

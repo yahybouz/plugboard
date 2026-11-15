@@ -3,7 +3,7 @@
 A fake gateway serves the exact bodies the real error helpers build (quota,
 busy, refused subscription model, refused key, timeout). ``chat`` and
 ``chat_stream`` must show ``<code>: <detail>`` from that body, not the raw
-JSON. ``list_models`` reads the very same catalogue route.
+JSON, as a tool error (``isError``, BUG-107). ``list_models`` reads the very same catalogue route.
 """
 
 from __future__ import annotations
@@ -14,6 +14,8 @@ import pytest
 from aiohttp import web
 
 pytest.importorskip("mcp")
+from mcp.types import CallToolResult  # noqa: E402
+
 from plugboard import mcp_server  # noqa: E402
 from plugboard.app import (  # noqa: E402
     _cli_error_response,
@@ -21,6 +23,12 @@ from plugboard.app import (  # noqa: E402
 )
 from plugboard.cli_subprocess import CliSubprocessError  # noqa: E402
 from plugboard.router import ProvidersBusyError  # noqa: E402
+
+
+def _error_text(result) -> str:
+    """The text of a chat tool's error result; it must be a tool error."""
+    assert isinstance(result, CallToolResult) and result.isError is True
+    return result.content[0].text
 
 
 def _cli(**kw):
@@ -82,7 +90,7 @@ async def test_chat_error_is_code_and_detail_of_the_api(gateway, name, tool):
     gateway["scenario"] = name
     api = json.loads(gateway["built"][name].body)
     out = await getattr(mcp_server, tool)(model="claude-code:m", message="hi")
-    assert out == f"Error: {api['code']}: {api['detail']}"
+    assert _error_text(out) == f"Error: {api['code']}: {api['detail']}"
 
 
 async def test_error_without_a_code_keeps_the_status(gateway, monkeypatch):
@@ -128,8 +136,9 @@ async def test_stream_error_event_is_reported(gateway, monkeypatch):
         out = await mcp_server.chat_stream(model="m", message="hi")
     finally:
         await runner.cleanup()
-    assert out.startswith("par")
-    assert "Error: stream_interrupted: The stream was interrupted." in out
+    text = _error_text(out)
+    assert text.startswith("par")
+    assert "Error: stream_interrupted: The stream was interrupted." in text
 
 
 def test_client_error_shapes():

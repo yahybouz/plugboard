@@ -44,5 +44,6 @@ async def test_mcp_legacy_refusal_before_gateway_transport(monkeypatch, method):
     monkeypatch.setattr(mcp_server, "_api_post", forbidden)
     monkeypatch.setattr(mcp_server, "_get_http_session", forbidden)
     result = await getattr(mcp_server, method)("openclaw:gpt-5", "private")
-    assert "removed" in result.lower()
+    assert result.isError is True  # BUG-107: a tool error, not an answer
+    assert "removed" in result.content[0].text.lower()
     assert attempts == []

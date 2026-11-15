@@ -44,6 +44,7 @@ from mcp.server.auth.provider import AccessToken
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+from mcp.types import CallToolResult, TextContent
 
 from plugboard import envcompat
 from plugboard.legacy_connectors import is_removed_model, REMOVED_CONNECTOR_ERROR
@@ -209,6 +210,24 @@ def _client_error(status: int, text: str) -> str:
             return f"{code}: {detail}"
         return f"HTTP {status}: {detail}"
     return f"HTTP {status}: {text[:_DETAIL_LIMIT]}"
+
+
+def _tool_error(text: str) -> CallToolResult:
+    """A failed chat call as an MCP tool error (BUG-107).
+
+    The text stays ``Error: <code>: <detail>``; ``isError`` tells the client
+    that the call failed instead of handing it a normal answer. FastMCP
+    passes a returned ``CallToolResult`` through unchanged once its
+    ``structuredContent`` fits the tool's output schema (mcp 1.30,
+    ``server/fastmcp/utilities/func_metadata.py`` ``convert_result``), which
+    is ``{"result": <str>}`` for a tool declared ``-> str``: the same text
+    goes there, as for an answer.
+    """
+    return CallToolResult(
+        content=[TextContent(type="text", text=text)],
+        structuredContent={"result": text},
+        isError=True,
+    )
 
 
 async def _api_get(path: str, admin: bool = False) -> dict[str, Any]:
@@ -770,7 +789,7 @@ async def chat(
     # This client has no registry. Qualified names whose owner is ambiguous
     # are admitted by the authenticated API, which guards the actual transport.
     if is_removed_model(model, effective_name=True):
-        return f"Error: {REMOVED_CONNECTOR_ERROR}"
+        return _tool_error(f"Error: {REMOVED_CONNECTOR_ERROR}")
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -788,7 +807,7 @@ async def chat(
     result = await _api_post("/v1/chat/completions", body)
 
     if "error" in result:
-        return f"Error: {result['error']}"
+        return _tool_error(f"Error: {result['error']}")
 
     choices = result.get("choices", [])
     if not choices:
@@ -832,7 +851,7 @@ async def chat_stream(
         session_id: Optional PERF-1 session ID to preserve history server-side.
     """
     if is_removed_model(model, effective_name=True):
-        return f"Error: {REMOVED_CONNECTOR_ERROR}"
+        return _tool_error(f"Error: {REMOVED_CONNECTOR_ERROR}")
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -861,7 +880,7 @@ async def chat_stream(
         ) as resp:
             if resp.status != 200:
                 text = await resp.text()
-                return f"Error: {_client_error(resp.status, text)}"
+                return _tool_error(f"Error: {_client_error(resp.status, text)}")
             reasoning_chunks: List[str] = []
             stream_error = ""
             async for line in resp.content:
@@ -888,10 +907,12 @@ async def chat_stream(
                     except (json.JSONDecodeError, IndexError):
                         pass
     except aiohttp.ClientError as exc:
-        return f"Error: HTTP client error: {exc}"
+        return _tool_error(f"Error: HTTP client error: {exc}")
 
     if stream_error:
-        return ("".join(chunks) + "\n\n" if chunks else "") + f"Error: {stream_error}"
+        return _tool_error(
+            ("".join(chunks) + "\n\n" if chunks else "") + f"Error: {stream_error}"
+        )
     if chunks:
         if reasoning_chunks:
             return (

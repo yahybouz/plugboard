@@ -287,7 +287,8 @@ async def test_mcp_actual_legacy_is_rejected_before_gateway(monkeypatch, mode, m
     monkeypatch.setattr(mcp_server, "_get_http_session", forbidden)
     invoke = mcp_server.chat if mode == "chat" else mcp_server.chat_stream
     reply = await invoke(model, "synthetic")
-    assert "removed" in reply.lower()
+    assert reply.isError is True  # BUG-107: a tool error, not an answer
+    assert "removed" in reply.content[0].text.lower()
 
 
 async def test_full_scheduled_refresh_rejects_effective_default_before_auth(
