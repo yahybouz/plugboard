@@ -586,6 +586,20 @@ def _request_caused(exc: BaseException) -> bool:
     )
 
 
+def _sandbox_failed(exc: BaseException) -> bool:
+    """Whether agy's cage could not start, so agy was not run (BUG-86).
+
+    Handled like a CLI timeout: the route fails (next route, circuit and
+    provider-down count, error metrics), and the model is never quarantined.
+    A timeout's message never reads like an unknown model; bwrap's first
+    error line, quoted in this one, could ("does not exist"), and the
+    model is not at fault.
+    """
+    return isinstance(exc, CliSubprocessError) and bool(
+        getattr(exc, "sandbox_failed", False)
+    )
+
+
 def _route_refused(provider: Dict[str, Any]) -> frozenset:
     """The model names the route's subscription refuses (BUG-78): the ones a
     ChatGPT sign-in refuses on a codex route, none on any other route."""
@@ -1341,7 +1355,9 @@ async def forward(
                             record_terminal_unavailable,
                         )
 
-                        if is_account_unsupported_error(reason):
+                        if _sandbox_failed(exc):
+                            pass
+                        elif is_account_unsupported_error(reason):
                             record_account_unsupported(
                                 real_model,
                                 reason=reason[:200],
@@ -1887,7 +1903,7 @@ async def _stream_route(
                 )
 
                 reason = str(exc)
-                if refused:
+                if refused or _sandbox_failed(exc):
                     pass
                 elif is_account_unsupported_error(reason):
                     record_account_unsupported(

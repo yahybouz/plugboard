@@ -45,7 +45,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-from plugboard import agy_store, envcompat
+from plugboard import agy_cage, agy_store, envcompat
 from plugboard.circuit_breaker import (
     is_model_unsupported_by_subscription,
     is_request_too_long,
@@ -77,6 +77,10 @@ class CliSubprocessError(RuntimeError):
             ``quota``): no other provider is tried, nothing is quarantined.
         timed_out: the CLI did not finish within its deadline (BUG-67): the
             client gets 503 with Retry-After, as for an HTTP provider's timeout.
+        sandbox_failed: agy's cage (bubblewrap, see agy_cage) could not be
+            built or could not start, so agy was not run (BUG-86): the client
+            gets 503 ``provider_sandbox_unavailable``; the router treats it
+            like ``timed_out`` (next route, no quarantine).
     """
 
     def __init__(
@@ -93,9 +97,11 @@ class CliSubprocessError(RuntimeError):
         request_too_long: bool = False,
         model_unsupported: bool = False,
         timed_out: bool = False,
+        sandbox_failed: bool = False,
     ):
         super().__init__(message)
         self.timed_out = timed_out
+        self.sandbox_failed = sandbox_failed
         self.exit_code = exit_code
         self.stderr = stderr
         self.pid = pid
@@ -450,11 +456,12 @@ CLI_BACKENDS: Dict[str, CliBackend] = {
         # permission, so every tool call (file read, shell, web) is denied
         # unless the operator's agy settings.json pre-allows it (SEC-2026-10).
         # --sandbox restricts the terminal on top of that, and slash commands /
-        # skills are not expanded. --mode plan is NOT a guard: agy 1.4.4 says it
-        # "has no effect while slash command expansion is disabled" (board:
-        # BUG-86); it is kept until the sandbox of that ticket replaces it.
-        # Proven in real (UAT, 14/11): reads, commands and writes are refused,
-        # except a write inside TMPDIR, hence agy_private_tmp() in complete().
+        # skills are not expanded. Proven in real (UAT, 14/11): reads, commands
+        # and writes are refused, except a write inside TMPDIR, hence
+        # agy_private_tmp() in complete(). These are agy's own guards; the
+        # gateway's is the bubblewrap cage every agy launch runs in (BUG-86,
+        # agy_cage). `--mode plan` was removed: agy 1.4.4 says it "has no
+        # effect while slash command expansion is disabled".
         # Never add --dangerously-skip-permissions here. No -p: agy reads a
         # piped prompt when -p is omitted.
         args=[
@@ -462,8 +469,6 @@ CLI_BACKENDS: Dict[str, CliBackend] = {
             "json",
             "--disable-slash-commands",
             "--sandbox",
-            "--mode",
-            "plan",
         ],
         input_mode="stdin",
         output_mode="json",
@@ -672,6 +677,37 @@ def agy_private_tmp(spawn_cwd: str) -> Iterator[str]:
         shutil.rmtree(path, ignore_errors=True)
 
 
+def agy_sandbox_error(cause: str, model: str = "") -> CliSubprocessError:
+    """The error of an agy call whose cage could not start (agy not run).
+
+    ``cause`` (bwrap missing, a link on the store path, bwrap's first error
+    line...) is for the gateway log and the admin only.
+    """
+    return CliSubprocessError(
+        f"agy sandbox (bubblewrap) could not start, agy was not run: {cause}",
+        stderr=cause[:500],
+        provider_name="agy",
+        model_id=model,
+        sandbox_failed=True,
+    )
+
+
+@contextlib.contextmanager
+def agy_caged(binary: str, args: List[str], spawn_cwd: str) -> Iterator[tuple]:
+    """Yield ``(argv, env)`` running agy ``args`` in its cage, with a private
+    ``TMPDIR`` removed afterwards (keep the context open until the child is
+    dead and reaped).
+
+    Raises :class:`agy_cage.CageUnavailable` before anything is launched when
+    the cage cannot be built.
+    """
+    env = build_child_env("agy")
+    # Resolved: the cage binds the TMPDIR by its real path.
+    with agy_private_tmp(os.path.realpath(spawn_cwd)) as tmpdir:
+        env["TMPDIR"] = tmpdir
+        yield agy_cage.cage_argv(binary, args, env=env, tmpdir=tmpdir), env
+
+
 def gemini_isolation_env(home: str) -> Dict[str, str]:
     """Environment that makes gemini read its settings from `home` only."""
     return {
@@ -753,38 +789,49 @@ async def _kill_group(proc: asyncio.subprocess.Process) -> None:
 async def list_agy_models(timeout_s: float = 30.0) -> List[str]:
     """Ask the Antigravity CLI which models the signed-in account can use.
 
-    Returns an empty list when agy is missing, fails or times out: the caller
-    then falls back to the preset baseline.
+    Returns an empty list when agy is missing, fails, times out or its cage
+    cannot start (agy is then not run): the caller then falls back to the
+    preset baseline.
     """
     binary = _resolve_binary("agy")
     if binary is None:
         return []
+    spawn_cwd = _clean_spawn_cwd()
     try:
-        proc = await asyncio.create_subprocess_exec(
-            binary,
-            "models",
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=build_child_env("agy"),
-            cwd=_clean_spawn_cwd(),
-            start_new_session=True,
+        with agy_caged(binary, ["models"], spawn_cwd) as (argv, env):
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+                cwd=spawn_cwd,
+                start_new_session=True,
+            )
+            finished = False
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
+                finished = True
+            except asyncio.TimeoutError:
+                log.warning("agy models timed out after %.0fs", timeout_s)
+                return []
+            finally:
+                if not finished:
+                    await _kill_group(proc)
+    except agy_cage.CageUnavailable as exc:
+        log.warning(
+            "agy models not run: its sandbox (bubblewrap) cannot start: %s", exc
         )
-        finished = False
-        try:
-            stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
-            finished = True
-        except asyncio.TimeoutError:
-            log.warning("agy models timed out after %.0fs", timeout_s)
-            return []
-        finally:
-            if not finished:
-                await _kill_group(proc)
+        return []
     except Exception as exc:  # noqa: BLE001
         log.warning("agy models failed: %s", exc)
         return []
     if proc.returncode != 0:
-        log.warning("agy models exited %s", proc.returncode)
+        failure = agy_cage.setup_failure(proc.returncode, stdout, stderr)
+        if failure:
+            log.warning("agy models not run: its sandbox could not start: %s", failure)
+        else:
+            log.warning("agy models exited %s", proc.returncode)
         return []
     return parse_agy_models((stdout or b"").decode("utf-8", "replace"))
 
@@ -917,26 +964,48 @@ async def probe_cli_version(kind: str, timeout_s: float = 5.0) -> Dict[str, Any]
     backend = CLI_BACKENDS.get(kind)
     if backend is None:
         return {"ok": False, "error": f"Unknown CLI kind: {kind}"}
-    if shutil.which(backend.command) is None:
+    binary = shutil.which(backend.command)
+    if binary is None:
         return {"ok": False, "error": f"{backend.command} not on PATH"}
+    spawn_cwd = _clean_spawn_cwd()
     try:
-        proc = await asyncio.create_subprocess_exec(
-            backend.command,
-            "--version",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=build_child_env(kind),
-            cwd=_clean_spawn_cwd(),
-            # Own process group: a timeout kills the CLI's descendants too.
-            start_new_session=True,
-        )
-        finished = False
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
-            finished = True
-        finally:
-            if not finished:
-                await _kill_group(proc)
+        with contextlib.ExitStack() as cleanup:
+            argv = [backend.command, "--version"]
+            env = build_child_env(kind)
+            if kind == "agy":
+                # Like every agy launch: in its cage, or not at all (BUG-86).
+                try:
+                    argv, env = cleanup.enter_context(
+                        agy_caged(binary, ["--version"], spawn_cwd)
+                    )
+                except agy_cage.CageUnavailable as exc:
+                    return {
+                        "ok": False,
+                        "error": f"agy sandbox (bubblewrap) cannot start: {exc}",
+                    }
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+                cwd=spawn_cwd,
+                # Own process group: a timeout kills the CLI's descendants too.
+                start_new_session=True,
+            )
+            finished = False
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout_s)
+                finished = True
+            finally:
+                if not finished:
+                    await _kill_group(proc)
+        if kind == "agy":
+            failure = agy_cage.setup_failure(proc.returncode, stdout, stderr)
+            if failure:
+                return {
+                    "ok": False,
+                    "error": f"agy sandbox (bubblewrap) could not start: {failure}",
+                }
         version = (stdout or b"").decode("utf-8", "replace").strip().splitlines()
         stderr_text = (stderr or b"").decode("utf-8", "replace").strip()
         error = stderr_text or None
@@ -2006,13 +2075,20 @@ async def complete(
             gemini_home = cleanup.enter_context(gemini_private_home())
             argv.extend(gemini_isolation_args(gemini_home))
             env.update(gemini_isolation_env(gemini_home))
-        if kind == "agy":
-            # Never the server's TMPDIR nor /tmp: see agy_private_tmp(). Like
-            # the gemini home, removed once the child is dead and reaped.
-            env["TMPDIR"] = cleanup.enter_context(agy_private_tmp(spawn_cwd))
         if backend.stdin_arg:
             # Last, after every option: the operand telling the CLI to read stdin.
             argv.append(backend.stdin_arg)
+        if kind == "agy":
+            # Inside its bubblewrap cage, or not at all (BUG-86, agy_cage);
+            # raised before anything is launched. Its TMPDIR is private, never
+            # the server's nor /tmp (see agy_private_tmp()); like the gemini
+            # home, removed once the child is dead and reaped.
+            try:
+                argv, env = cleanup.enter_context(
+                    agy_caged(argv[0], argv[1:], spawn_cwd)
+                )
+            except agy_cage.CageUnavailable as exc:
+                raise agy_sandbox_error(str(exc), model) from None
         t0 = time.perf_counter()
         # Per-backend semaphore: cap concurrent spawns to PLUGBOARD_SUBPROCESS_LIMIT
         # so a burst of requests can't fork-bomb the host (TM-001 mitigation).
@@ -2042,6 +2118,11 @@ async def complete(
                     start_new_session=True,
                 )
             except FileNotFoundError as exc:
+                if kind == "agy" and argv[0] != binary_path:
+                    # bwrap itself vanished between the cage and the launch.
+                    raise agy_sandbox_error(
+                        f"{os.path.basename(argv[0])} could not be executed", model
+                    ) from exc
                 # The cached path was stale (binary was removed mid-run). Drop it
                 # so the next call rediscovers via shutil.which().
                 _binary_path_cache.pop(backend.command, None)
@@ -2091,6 +2172,11 @@ async def complete(
 
     elapsed = time.perf_counter() - t0
     _live.update(phase="cli_parse")
+    if kind == "agy":
+        # bwrap started but could not build the cage: agy never ran.
+        failure = agy_cage.setup_failure(proc.returncode, stdout, stderr)
+        if failure:
+            raise agy_sandbox_error(failure, model)
     stdout_text = (stdout or b"").decode("utf-8", "replace")
     if kind == "agy" and read_delta is not None:
         stdout_text = _agy_stream_to_json(stdout_text)

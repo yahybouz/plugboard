@@ -191,7 +191,7 @@ class _Boot:
 
 
 @pytest.fixture
-def boot(tmp_path, monkeypatch):
+def boot(tmp_path, monkeypatch, agy_without_cage):  # fake spawn, see conftest
     """A fresh install with three providers, its clock and its spies."""
     for name in (
         "MODEL_AVAILABILITY_SCHEDULER_DISABLED",

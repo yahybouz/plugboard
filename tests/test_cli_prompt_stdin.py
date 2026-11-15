@@ -30,7 +30,7 @@ _OK_STDOUT = {
 
 
 @pytest.fixture
-def cli_sandbox(tmp_path, monkeypatch):
+def cli_sandbox(tmp_path, monkeypatch, agy_without_cage):  # outside bwrap, see conftest
     """Private spawn cwd and operator home; no real CLI can be resolved."""
     spawn_cwd = tmp_path / "spawn"
     spawn_cwd.mkdir()

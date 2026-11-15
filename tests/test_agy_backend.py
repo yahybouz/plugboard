@@ -13,7 +13,8 @@ def test_agy_backend_never_skips_permissions():
     assert backend.command == "agy"
     assert "--dangerously-skip-permissions" not in backend.args
     assert "--sandbox" in backend.args
-    assert backend.args[backend.args.index("--mode") + 1] == "plan"
+    # --mode plan had no effect (agy says so): removed with the cage (BUG-86).
+    assert "--mode" not in backend.args
     # The prompt goes to stdin: no `-p <prompt>` in the argv.
     assert "-p" not in backend.args and backend.input_mode == "stdin"
 

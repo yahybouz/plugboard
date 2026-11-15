@@ -30,7 +30,7 @@ def _read(record: Path) -> dict:
 
 
 @pytest.fixture
-def fake_agy(tmp_path, monkeypatch):
+def fake_agy(tmp_path, monkeypatch, agy_without_cage):  # outside bwrap, see conftest
     """Install a fake ``agy`` that records what it was given; returns
     ``(record file, launch directory)``. ``hang=True``: it then never ends."""
     spawn = tmp_path / "spawn"

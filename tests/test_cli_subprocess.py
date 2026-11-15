@@ -1137,6 +1137,7 @@ def test_agy_auth_error_is_explicit():
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("agy_without_cage")  # fake agy process, see conftest
 async def test_agy_unsigned_raises_sign_in_hint(monkeypatch):
     from plugboard import cli_subprocess as cs
 

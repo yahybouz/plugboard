@@ -159,6 +159,25 @@ def _no_real_agy_store():
     agy_store.store_dir = real
 
 
+@pytest.fixture
+def agy_without_cage(monkeypatch):
+    """TESTS ONLY, never autouse: replaces agy's bubblewrap cage (BUG-86,
+    plugboard/agy_cage.py) by a pass-through, so agy's command line is the
+    bare binary and its arguments.
+
+    For the tests written before the cage whose fake agy is a shell script
+    run outside bwrap (it needs /bin/sh, which the cage does not hold), or
+    whose fake process stands in for agy itself: what they check (purge,
+    private TMPDIR, stream, usage, process group...) does not depend on the
+    cage. The cage itself, and agy run inside it, are tested in
+    tests/test_agy_cage.py. The gateway has no such switch."""
+    from plugboard import agy_cage
+
+    monkeypatch.setattr(
+        agy_cage, "cage_argv", lambda binary, args, **_kw: [binary, *args]
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_load_state():
     """Provider leases, route pauses, circuits, session turns and the global

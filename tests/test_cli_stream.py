@@ -41,7 +41,7 @@ FINAL = [
 
 
 @pytest.fixture
-def fake_cli(monkeypatch, tmp_path):
+def fake_cli(monkeypatch, tmp_path, agy_without_cage):  # outside bwrap, see conftest
     """Install a script as the CLI binary; it logs its argv and plays ``lines``."""
 
     def install(lines, *, pause=0.0, exit_code=0):

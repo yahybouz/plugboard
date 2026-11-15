@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "2.4.0"
+CONTRACT_VERSION = "2.5.0"
 _JSON = "application/json"
 
 
@@ -578,7 +578,9 @@ class ErrorResponse(_Open):
         "server_busy (chat and preflight, 503; also a preflight item's error), "
         "session_busy (chat, 503), "
         "provider_disabled (chat, 503), provider_timeout (chat, 503; a provider "
-        "gave no answer in time), quota_exhausted (chat, 429; the provider's "
+        "gave no answer in time), provider_sandbox_unavailable (chat, 503; the "
+        "agy provider's sandbox could not start, so agy was not run), "
+        "quota_exhausted (chat, 429; the provider's "
         "subscription or API quota is exhausted), forbidden_model (chat, 403; "
         "the key may not use the model), usage_unavailable (a key with a monthly "
         "budget while usage cannot be recorded: chat, preflight, embeddings and "
@@ -691,7 +693,9 @@ _CHAT_ERRORS = {
     " model_not_found, hint says what to send; nothing was called.",
     "413": "Request body larger than MAX_BODY_BYTES (10 MB by default).",
     "502": "The provider failed or answered with an error.",
-    "503": "Provider timeout (code provider_timeout, retry_after), the global cap of concurrent chat"
+    "503": "Provider timeout (code provider_timeout, retry_after), the agy provider's sandbox"
+    " unable to start, agy not run (code provider_sandbox_unavailable, no Retry-After),"
+    " the global cap of concurrent chat"
     " requests full for the whole wait (code server_busy, Retry-After 5), the"
     " previous turn of the request's session still answered when its wait ended,"
     " or too many of its turns already waiting"

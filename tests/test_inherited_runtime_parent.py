@@ -284,7 +284,7 @@ class _FakeProc:
 
 
 @pytest.fixture
-def cli_env(monkeypatch, tmp_path):
+def cli_env(monkeypatch, tmp_path, agy_without_cage):  # fake exec, see conftest
     """Fake binaries, fake exec, fake signals, recording semaphore/home."""
     events: list = []
     state = {"events": events, "exec": [], "proc": None, "homes": []}

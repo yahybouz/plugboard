@@ -109,8 +109,10 @@ ARG CODEX_VERSION=0.163.0
 # - git: used by the CLIs and some npm post-install scripts
 # - curl, gnupg: fetch the GitHub CLI signing key (written to a file,
 #   never piped to a shell)
+# - bubblewrap: the cage every agy launch runs in (BUG-86,
+#   plugboard/agy_cage.py); without bwrap, agy is not run at all
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl git gnupg \
+ && apt-get install -y --no-install-recommends ca-certificates curl git gnupg bubblewrap \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
  && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -157,9 +159,10 @@ RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
     else echo "[WARN] agy: no official archive for $(dpkg --print-architecture)"; fi
 
 # Every CLI must start; a missing or broken one fails the build (no pipes,
-# whose status would hide the failure). agy only ships for amd64.
+# whose status would hide the failure). agy only ships for amd64; bwrap
+# (agy's cage) is checked on every architecture.
 RUN set -e; echo "── Installed CLI binaries ──"; \
-    gemini --version; claude --version; codex --version; gh --version; \
+    gemini --version; claude --version; codex --version; gh --version; bwrap --version; \
     if [ "$(dpkg --print-architecture)" = "amd64" ]; then agy --version; fi
 
 # MCP server (scripts/run_mcp.py): its own hash-checked environment, apart

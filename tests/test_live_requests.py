@@ -314,6 +314,7 @@ async def test_mcp_requests_carry_the_mcp_surface_header(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("agy_without_cage")  # fake agy outside bwrap
 async def test_cli_call_reports_queue_run_and_parse_phases(monkeypatch, tmp_path):
     import json
 

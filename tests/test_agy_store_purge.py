@@ -160,7 +160,7 @@ class Env:
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path, monkeypatch, agy_without_cage):  # outside bwrap, see conftest
     monkeypatch.setattr(agy_store, "store_dir", _REAL_STORE_DIR)
     spawn = tmp_path / "spawn"
     spawn.mkdir(mode=0o700)

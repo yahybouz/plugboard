@@ -264,7 +264,7 @@ _STDERR = b"warning: terminal not detected /home/op/.config token=abc123\n"
 
 
 @pytest.fixture
-def cli_fails(monkeypatch):
+def cli_fails(monkeypatch, agy_without_cage):  # fake process stands in for agy
     """The real CLI wrapper runs on a fake process (exit 1 by default)."""
     from unittest.mock import AsyncMock, MagicMock
 

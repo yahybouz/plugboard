@@ -192,7 +192,11 @@ class _FakeCli:
 
 
 @pytest.fixture
-def fake_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _FakeCli:
+def fake_cli(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agy_without_cage,  # the fake process stands in for agy, see conftest
+) -> _FakeCli:
     fake = _FakeCli()
     monkeypatch.setattr(cli_subprocess, "_binary_path_cache", {})
     monkeypatch.setattr(

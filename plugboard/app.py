@@ -2588,7 +2588,8 @@ def _cli_error_response(
     """502 for a failed CLI provider, 429 when it failed on its quota, 400
     (``context_length_exceeded``) when it found the prompt too long, 400
     (``model_not_supported_by_subscription``) when its subscription does not
-    serve the model (BUG-78).
+    serve the model (BUG-78), 503 (``provider_sandbox_unavailable``) when
+    agy's cage could not start, so agy was not run (BUG-86).
 
     ``exc.quota`` and ``exc.request_too_long`` were decided by the CLI wrapper
     from the CLI's own error and stderr, never from the model's output. The
@@ -2600,6 +2601,7 @@ def _cli_error_response(
     too_long = exc.request_too_long and not quota
     unsupported = getattr(exc, "model_unsupported", False) and not quota
     timed_out = getattr(exc, "timed_out", False) and not quota
+    sandbox = getattr(exc, "sandbox_failed", False) and not quota
     ref = secrets.token_hex(4)
     log.warning(
         "cli provider error ref=%s provider=%s model=%s exit=%s pid=%s: %s | stderr=%s",
@@ -2623,7 +2625,13 @@ def _cli_error_response(
         }
     else:
         name = exc.provider_name or "CLI"
-        if quota:
+        if sandbox:
+            detail = (
+                f"The {name} provider is unavailable: its sandbox (bubblewrap) "
+                f"could not start, so {name} was not run "
+                f"(reference {ref} in the gateway log)."
+            )
+        elif quota:
             detail = _quota_detail(name, exc.retry_after)
         elif too_long:
             detail = (
@@ -2649,6 +2657,11 @@ def _cli_error_response(
             "provider_name": exc.provider_name,
             "model_id": exc.model_id,
         }
+    if sandbox:
+        # No Retry-After: a missing or refused sandbox does not come back by
+        # itself.
+        content["code"] = "provider_sandbox_unavailable"
+        return JSONResponse(status_code=503, content=content)
     if too_long:
         content["code"] = "context_length_exceeded"
         return JSONResponse(status_code=400, content=content)
