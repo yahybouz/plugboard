@@ -43,6 +43,7 @@ class _Handler(BaseHTTPRequestHandler):
     health = (200, {"ok": True, "version": "9.9.9"})
     ready = (200, {"ready": True, "checks": {}})
     methods = []
+    ready_totp = []
 
     def log_message(self, *a):
         pass
@@ -52,7 +53,11 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             status, body = self.health
         elif self.path == "/health/ready":
+            # PLU-75: the checks are shown with a valid key only.
+            type(self).ready_totp.append(self.headers.get("X-Plugboard-Admin-TOTP"))
             status, body = self.ready
+            if self.headers.get("Authorization") != f"Bearer {KEY}":
+                body = {k: v for k, v in body.items() if k != "checks"}
         elif self.path == "/admin/jobs":
             if self.headers.get("Authorization") != f"Bearer {KEY}":
                 status, body = 401, {"detail": f"denied {KEY}"}
@@ -74,7 +79,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def gateway(monkeypatch):
-    handler = type("H", (_Handler,), {"methods": []})
+    handler = type("H", (_Handler,), {"methods": [], "ready_totp": []})
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     monkeypatch.setenv(
@@ -118,6 +123,15 @@ def test_a_not_ready_gateway_fails(gateway, capsys):
     gateway.ready = (503, {"ready": False, "checks": {"usage_db": "fail"}})
     assert recette.main([]) == 1
     assert "usage_db" in capsys.readouterr().err
+
+
+def test_ready_is_read_with_the_admin_key_but_never_spends_the_totp(
+    gateway, monkeypatch
+):
+    """A TOTP code is good once: it goes to /admin/jobs, not /health/ready."""
+    monkeypatch.setenv("PLUGBOARD_RECETTE_TOTP", "123456")
+    assert recette.main([]) == 0
+    assert gateway.ready_totp == [None]
 
 
 def test_a_wrong_admin_key_fails_without_echoing_it(gateway, monkeypatch, capsys):

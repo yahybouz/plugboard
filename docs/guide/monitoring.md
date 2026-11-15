@@ -59,7 +59,17 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 
 The list of providers is on the admin `GET /providers`. The client authentication posture is the `auth` check of `GET /health/ready`: a deployment gate that must refuse an instance whose client authentication is off reads that route, which answers `503` when `API_KEY` is empty outside dev mode.
 
-`GET /health/ready` is public too and says whether the instance can serve requests: `200` when it is ready, `503` with the same body when it is not. It never calls a provider or starts a CLI, and its result is kept for 5 seconds:
+`GET /health/ready` is public too and says whether the instance can serve requests: `200` when it is ready, `503` when it is not. The status code is the answer: a load balancer or a deployment gate needs no key. It never calls a provider or starts a CLI, and its result is kept for 5 seconds. Without a key, or with a wrong, forged or revoked one (not refused here), the body is the status and the version only:
+
+```json
+{"ready": true, "version": "4.14.2"}
+```
+
+With a valid key (an active client key, the admin key, no TOTP code needed, or an admin session) it adds `checks`, which says which check failed (PLU-75, since 4.14.3; API contract 3.0.0). With both `API_KEY` and `ADMIN_KEY` empty (a keyless install, loopback only) every route is open, and so are the checks:
+
+```bash
+curl -s -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/health/ready
+```
 
 ```json
 {"ready": true, "version": "4.14.2", "checks": {"usage_db": "ok", "cli": "ok", "auth": "ok", "ollama": "not_configured", "background": "ok"}}

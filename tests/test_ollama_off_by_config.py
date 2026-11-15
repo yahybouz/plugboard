@@ -318,8 +318,8 @@ async def test_ready_stays_200_and_reports_ollama_as_not_configured(
     from plugboard import readiness
 
     readiness.reset_cache()
-    client, _auth, _key, _calls = app_client
-    resp = await client.get("/health/ready")
+    client, auth, _key, _calls = app_client
+    resp = await client.get("/health/ready", headers=auth)  # checks: PLU-75
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["ready"] is True

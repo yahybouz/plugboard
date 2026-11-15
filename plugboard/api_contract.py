@@ -41,7 +41,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "2.7.0"
+CONTRACT_VERSION = "3.0.0"
 _JSON = "application/json"
 
 
@@ -555,15 +555,21 @@ class Health(BaseModel):
 
 class Ready(BaseModel):
     """Readiness: `ready` is false when `usage_db` is not `ok`, `cli` is
-    `fail` or `auth` is `fail`; `ollama` and `background` never block."""
+    `fail` or `auth` is `fail`; `ollama` and `background` never block. The
+    route needs no key and its status code (200 or 503) is the answer; without
+    a valid key the body is `ready` and `version` only (since contract 3.0.0,
+    PLU-75)."""
 
     ready: bool
     version: str
-    checks: Dict[str, str] = Field(
+    checks: Optional[Dict[str, str]] = Field(
+        default=None,
         description=(
+            "Present only with a valid key (an active client key, the admin key "
+            "or an admin session); absent without a key or with a wrong one. "
             "usage_db: ok|fail; cli: ok|fail|none; auth: ok|dev|fail; "
             "ollama: ok|unreachable|unknown|not_configured; background: ok|degraded."
-        )
+        ),
     )
 
 

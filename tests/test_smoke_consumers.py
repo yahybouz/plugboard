@@ -89,7 +89,11 @@ class _Gateway(BaseHTTPRequestHandler):
         if self.path == "/health/ready":
             if b["ready"] is None:
                 return self._send(404, {"detail": "Not Found"})
-            return self._send(b["ready_status"], b["ready"])
+            body = b["ready"]
+            # PLU-75 (4.14.3): the checks are shown with a valid key only.
+            if self.headers.get("Authorization") != f"Bearer {KEY}":
+                body = {k: v for k, v in body.items() if k != "checks"}
+            return self._send(b["ready_status"], body)
         if b["redirect_to"] and self.path == "/v1/models":
             self.send_response(302)
             self.send_header("Location", b["redirect_to"] + self.path)
@@ -400,6 +404,22 @@ def test_each_broken_check_fails_the_smoke(gateway, change, failed):
 
     assert proc.returncode == 1, proc.stdout
     assert _check_names(proc, "FAIL") == failed
+
+
+def test_a_not_ready_gateway_says_which_check_failed(gateway):
+    """PLU-75: /health/ready shows its checks to a key holder only, so the
+    smoke reads it with its key to name the failing check."""
+    server, gw = gateway
+    gw.behavior.update(
+        {"ready": {"ready": False, "checks": {"auth": "fail"}}, "ready_status": 503}
+    )
+
+    proc = _smoke(server)
+
+    assert proc.returncode == 1, proc.stdout
+    fail = "\n".join(_lines(proc, "FAIL"))
+    assert '"auth": "fail"' in fail, proc.stdout
+    assert KEY not in proc.stdout + proc.stderr
 
 
 def test_expected_version_is_enforced(gateway):

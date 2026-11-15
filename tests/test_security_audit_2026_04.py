@@ -591,7 +591,12 @@ async def test_ready_flags_auth_disabled_outside_dev_mode(
     monkeypatch.setattr("plugboard.app._API_KEY", "")
     monkeypatch.setattr("plugboard.app._DEV_MODE", False)
 
+    # The status code is public; which check failed needs a key (PLU-75).
     resp = await client.get("/health/ready")
+    assert resp.status_code == 503, resp.text
+    assert "checks" not in resp.json()
+    admin = {"Authorization": "Bearer testkey"}  # the client fixture's admin key
+    resp = await client.get("/health/ready", headers=admin)
     assert resp.status_code == 503, resp.text
     assert resp.json()["checks"]["auth"] == "fail"
 

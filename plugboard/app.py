@@ -7,6 +7,7 @@ Endpoints:
   GET  /v1/models              -- list all available models
   GET  /health                 -- liveness check
   GET  /health/ready           -- readiness: 200 when able to serve, else 503
+                                   (its checks for a valid key only, PLU-75)
   GET  /usage/me               -- token usage for the calling client (current month)
   GET  /v1/me                  -- client info + usage + spending limit
 
@@ -244,7 +245,8 @@ _reject_comment_valued_secrets(os.environ)
 #   promoted to CRITICAL, repeated periodically by the lifespan, and
 #   `/health/ready` answers 503 with `checks.auth: "fail"` so load
 #   balancers / deployment gates can refuse traffic to the instance.
-#   The public `/health` never shows the auth posture (PLU-31).
+#   The public `/health` never shows the auth posture (PLU-31), and
+#   `/health/ready` shows its `checks` to a valid key only (PLU-75).
 _API_KEY = os.environ.get("API_KEY", "")
 _ADMIN_KEY = os.environ.get("ADMIN_KEY", "")
 _DEV_MODE = os.environ.get("PLUGBOARD_DEV", "").strip() == "1"
@@ -1243,20 +1245,20 @@ def _address_scope(request: Request) -> str:
     return "ip:" + _client_address(request)
 
 
-def _rate_limit_scope(request: Request) -> str:
-    """Whose counter a request takes from the global limit (BUG-119).
+def _key_scope(request: Request) -> str:
+    """The valid key a request carries, as ``key:<key_id>``, else "".
 
     ``key:admin`` for the admin key or an admin session, ``key:<key_id>`` for
-    a client key the auth dependency accepts, the client address otherwise:
-    a wrong, forged or revoked key never leaves the address counter. Behind a
-    proxy every client has the proxy's address unless it is trusted, so the
-    address counter only holds the calls without a valid key.
+    a client key the auth dependency accepts, "" otherwise (no key, a wrong,
+    forged or revoked key). Never raises and logs no refusal (BUG-119).
 
     Same checks as ``_resolve_client``, in its order, with no file read in
     the common case: the admin key is a constant-time comparison; a client
     key is looked up in the key cache (one ``stat``, the file is read only
     when it changed); a session cookie is checked against its signature
     first, so only a correctly signed one is looked up in the session store.
+    The admin key needs no TOTP here: callers only count or show generic
+    states with it, never act as the admin.
     """
     token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     if _is_admin_key(token):
@@ -1265,11 +1267,22 @@ def _rate_limit_scope(request: Request) -> str:
         # A client key wins over the session cookie, as in _resolve_client.
         rec = get_key_record(token, log_refused=False)
         key_id = str(rec.get("key_id") or "") if rec else ""
-        return f"key:{key_id}" if key_id else _address_scope(request)
+        return f"key:{key_id}" if key_id else ""
     session = request.cookies.get(_ADMIN_COOKIE_NAME, "")
     if _admin_session_nonce(session) and _is_admin_session(session):
         return _ADMIN_SCOPE
-    return _address_scope(request)
+    return ""
+
+
+def _rate_limit_scope(request: Request) -> str:
+    """Whose counter a request takes from the global limit (BUG-119).
+
+    The valid key it carries (``_key_scope``), the client address otherwise:
+    a wrong, forged or revoked key never leaves the address counter. Behind a
+    proxy every client has the proxy's address unless it is trusted, so the
+    address counter only holds the calls without a valid key.
+    """
+    return _key_scope(request) or _address_scope(request)
 
 
 class _RateLimitMiddleware(BaseHTTPMiddleware):
@@ -3859,17 +3872,23 @@ async def health():
 @app.get("/health/ready")
 async def health_ready(request: Request):
     """Readiness (PLU-31): 200 when this instance can serve requests, 503
-    with the same body otherwise. Public: generic states only."""
+    otherwise. Public: a load balancer reads the status code with no key.
+
+    The body is ``ready`` and ``version``; ``checks`` (generic states: which
+    check failed, the client auth posture) is added for a valid key only
+    (PLU-75): an active client key, the admin key (no TOTP: a read of
+    generic states) or an admin session. A wrong, forged or revoked key is
+    not refused here: it gets the same body as no key. With both API_KEY and
+    ADMIN_KEY empty every route is open (loopback only), so are the checks.
+    """
     from plugboard import readiness
 
     result = await readiness.evaluate(
         request.app.state, api_key=_API_KEY, dev_mode=_DEV_MODE
     )
-    body = {
-        "ready": result["ready"],
-        "version": __version__,
-        "checks": result["checks"],
-    }
+    body = {"ready": result["ready"], "version": __version__}
+    if (not _API_KEY and not _ADMIN_KEY) or _key_scope(request):
+        body["checks"] = result["checks"]
     return JSONResponse(body, status_code=200 if result["ready"] else 503)
 
 

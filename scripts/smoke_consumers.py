@@ -280,9 +280,10 @@ def build_checks(smoke: Smoke, args) -> list[tuple[str, Callable[[], str]]]:
             raise CheckFailed(f"version {version}, expected {args.expect_version}")
         # Since 4.12.0 /health shows only the status and the version; whether
         # the instance can serve (client auth on, usage writable, CLIs present)
-        # is on /health/ready, which answers 503 when it cannot.
+        # is on /health/ready, which answers 503 when it cannot. Read with the
+        # key: since 4.14.3 (PLU-75) only a valid key sees which check failed.
         try:
-            ready = smoke.get_json("/health/ready", auth=False)
+            ready = smoke.get_json("/health/ready")
         except CheckFailed as exc:
             if "HTTP 404" not in str(exc):
                 raise

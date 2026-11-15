@@ -50,8 +50,10 @@ export ADMIN_KEY=$(grep '^ADMIN_KEY=' .env | cut -d= -f2-)
 curl -s http://localhost:8765/health | python3 -m json.tool
 
 # Auth posture: checks.auth is "ok" (API_KEY set), "dev" (empty, PLUGBOARD_DEV=1)
-# or "fail" (empty outside dev mode, the route then answers 503)
-curl -s http://localhost:8765/health/ready | python3 -m json.tool
+# or "fail" (empty outside dev mode, the route then answers 503).
+# The checks are shown with a key only (since 4.14.3).
+curl -s -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/health/ready \
+  | python3 -m json.tool
 
 # Active providers (admin route)
 curl -s -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/providers \
@@ -262,7 +264,8 @@ Then, with `ADMIN_KEY` exported as in the quick diagnosis:
 curl -s http://localhost:8765/health | python3 -m json.tool
 
 # Same checks.auth as recorded; "ready": true (HTTP 200)
-curl -s http://localhost:8765/health/ready | python3 -m json.tool
+curl -s -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/health/ready \
+  | python3 -m json.tool
 
 # Same active providers as recorded
 curl -s -H "Authorization: Bearer $ADMIN_KEY" http://localhost:8765/providers \

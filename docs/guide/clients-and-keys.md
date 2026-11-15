@@ -17,7 +17,7 @@ Only a SHA-256 hash of each key is stored, in `data/api_keys.json` (file mode `0
 
 Set a non-empty `API_KEY` in `.env` (`make init` does it). From then on every `/v1/*` request must carry `Authorization: Bearer <key>` with a valid client key or the `ADMIN_KEY`; anything else gets `401 Invalid API key`. The value of `API_KEY` is only a switch: it is not accepted as a client key.
 
-With an empty `API_KEY`, the server logs a critical warning every five minutes and `/health/ready` answers `503` with `checks.auth: "fail"` (unless `PLUGBOARD_DEV=1`, where the check is `"dev"`). Even then, chat requests without a key are refused with `401` because tenant isolation is strict by default (see `PLUGBOARD_ALLOW_PERMISSIVE` in the [configuration reference](configuration.md)), and a presented `pb_` key is always validated.
+With an empty `API_KEY`, the server logs a critical warning every five minutes and `/health/ready` answers `503` with `checks.auth: "fail"`, the checks shown with a key (unless `PLUGBOARD_DEV=1`, where the check is `"dev"`). Even then, chat requests without a key are refused with `401` because tenant isolation is strict by default (see `PLUGBOARD_ALLOW_PERMISSIVE` in the [configuration reference](configuration.md)), and a presented `pb_` key is always validated.
 
 ## Create a key
 

@@ -4,7 +4,8 @@
 Checks, in order:
 
 1. ``GET /health``        answers 200 with ``ok`` true (liveness);
-2. ``GET /health/ready``  answers 200 with ``ready`` true (readiness);
+2. ``GET /health/ready``  answers 200 with ``ready`` true (readiness; read with
+                          the admin key, which shows a failing check);
 3. ``GET /admin/jobs``    lists every expected background job, each one running
                           and healthy.
 
@@ -192,7 +193,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not ok:
             problems.append(f"/health: HTTP {status}")
 
-        status, body = _get(url, "/health/ready", {}, args.timeout)
+        # With the key, to name a failing check (PLU-75); never the TOTP code,
+        # good for one call and kept for /admin/jobs.
+        status, body = _get(
+            url,
+            "/health/ready",
+            {"Authorization": admin["Authorization"]},
+            args.timeout,
+        )
         ready = status == 200 and isinstance(body, dict) and body.get("ready") is True
         print(f"{'ok  ' if ready else 'FAIL'} /health/ready  HTTP {status}")
         if not ready:

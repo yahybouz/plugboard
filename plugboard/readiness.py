@@ -10,8 +10,8 @@ requests. Blocking checks:
 Reported, never blocking: ``ollama`` (from the watchdog's last checks, no
 network call) and ``background`` (watchdog and periodic jobs running).
 
-The route is public: states are generic words, never a provider id, a path
-or an exception text. A check that raises gives its failure state and a
+The route is public and shows the checks to a valid key only (PLU-75):
+states are generic words, never a provider id, a path or an exception text. A check that raises gives its failure state and a
 server-side warning naming the exception class only.
 """
 

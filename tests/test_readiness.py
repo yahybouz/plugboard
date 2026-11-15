@@ -2,8 +2,10 @@
 
 Blocking checks: the usage database takes a write lock, every active CLI
 provider has its binary, client auth is on (or the instance is in dev mode).
-Ollama and the background tasks are reported but never block. The body is
-public: generic states only, never a provider id, a path or an error text.
+Ollama and the background tasks are reported but never block. The route is
+public; its ``checks`` are shown to a valid key only (PLU-75, see
+tests/test_readiness_visibility.py): generic states, never a provider id, a
+path or an error text.
 """
 
 from __future__ import annotations
@@ -40,6 +42,10 @@ OLLAMA_PROVIDER = {
     "provider_type": "sovereign",
     "created_at": "2026-01-01T00:00:00+00:00",
 }
+
+# The admin key of the `client` fixture: /health/ready shows its checks to a
+# valid key only (PLU-75).
+KEY = {"Authorization": "Bearer testkey"}
 
 MISSING_CLI = {
     "ok": False,
@@ -176,7 +182,7 @@ async def test_ollama_unreachable_does_not_block(client, _providers_file, monkey
         "get_watchdog_status",
         lambda: _watchdog(providers={"local-llm-7f3": _state(False)}),
     )
-    resp = await client.get("/health/ready")
+    resp = await client.get("/health/ready", headers=KEY)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["ready"] is True
@@ -187,7 +193,7 @@ async def test_ollama_unreachable_does_not_block(client, _providers_file, monkey
 async def test_missing_cli_gives_503(client, _providers_file, monkeypatch):
     _write_providers(_providers_file, [PROVIDER_A, CLI_PROVIDER])
     monkeypatch.setattr(cli_subprocess, "check_cli_installed", lambda kind: MISSING_CLI)
-    resp = await client.get("/health/ready")
+    resp = await client.get("/health/ready", headers=KEY)
     assert resp.status_code == 503, resp.text
     body = resp.json()
     assert body["ready"] is False
@@ -199,7 +205,7 @@ async def test_unwritable_usage_db_gives_503(client, monkeypatch):
         raise sqlite3.OperationalError("attempt to write a readonly database")
 
     monkeypatch.setattr(usage, "_get_conn", unwritable)
-    resp = await client.get("/health/ready")
+    resp = await client.get("/health/ready", headers=KEY)
     assert resp.status_code == 503, resp.text
     assert resp.json()["checks"]["usage_db"] == "fail"
 
@@ -207,13 +213,13 @@ async def test_unwritable_usage_db_gives_503(client, monkeypatch):
 async def test_auth_off_gives_503_except_in_dev_mode(client, monkeypatch):
     monkeypatch.setattr("plugboard.app._API_KEY", "")
     monkeypatch.setattr("plugboard.app._DEV_MODE", False)
-    resp = await client.get("/health/ready")
+    resp = await client.get("/health/ready", headers=KEY)
     assert resp.status_code == 503, resp.text
     assert resp.json()["checks"]["auth"] == "fail"
 
     readiness.reset_cache()
     monkeypatch.setattr("plugboard.app._DEV_MODE", True)
-    resp = await client.get("/health/ready")
+    resp = await client.get("/health/ready", headers=KEY)
     assert resp.status_code == 200, resp.text
     assert resp.json()["checks"]["auth"] == "dev"
 
@@ -228,7 +234,7 @@ async def test_body_names_no_provider_and_no_error_text(
         "get_watchdog_status",
         lambda: _watchdog(providers={"local-llm-7f3": _state(False)}),
     )
-    resp = await client.get("/health/ready")
+    resp = await client.get("/health/ready", headers=KEY)
     assert resp.status_code == 503
     text = resp.text
     for leak in (
@@ -289,7 +295,7 @@ async def test_a_check_that_raises_gives_503_not_500(client, monkeypatch):
         raise RuntimeError("boom /srv/secret/providers.json")
 
     monkeypatch.setattr(config, "load_providers", broken)
-    resp = await client.get("/health/ready")
+    resp = await client.get("/health/ready", headers=KEY)
     assert resp.status_code == 503, resp.text
     body = resp.json()
     assert body["checks"]["cli"] == "fail"
