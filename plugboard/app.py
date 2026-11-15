@@ -3990,6 +3990,17 @@ async def check_model_internet_access(
         }
     except Exception as exc:
         reason = str(exc)
+        if getattr(exc, "sandbox_failed", False):
+            # agy's cage could not start, so agy was not run (BUG-86):
+            # nothing was checked, so nothing is quarantined or persisted,
+            # whatever bwrap's quoted line reads like ("not found").
+            return {
+                "model_id": model_id,
+                "internet_access": False,
+                "internet_access_confidence": "low",
+                "status": "sandbox_unavailable",
+                "error": reason,
+            }
         from plugboard.model_quarantine import (
             is_account_unsupported_error,
             is_terminal_model_unavailable_error,
@@ -4200,7 +4211,9 @@ async def check_all_models_internet_access(
         elapsed = _time.monotonic() - started_at
         online = sum(1 for r in results if r.get("internet_access"))
         failed = sum(
-            1 for r in results if r.get("status") in ("error", "timeout", "busy")
+            1
+            for r in results
+            if r.get("status") in ("error", "timeout", "busy", "sandbox_unavailable")
         )
         offline = len(results) - online - failed
 

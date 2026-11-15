@@ -442,3 +442,32 @@ async def test_refresh_probes_never_quarantine_on_a_cage_failure(
     }
     stored = json.loads(qpath.read_text()) if qpath.exists() else {}
     assert not (stored.get("providers") or {}).get(AGY_PROVIDER_ID), stored
+
+
+@pytest.mark.asyncio
+async def test_an_internet_check_never_quarantines_on_a_cage_failure(
+    agy_provider, tmp_path, monkeypatch
+):
+    """The admin's internet check goes through the real router: agy's cage
+    down is not the model's fault (bwrap's line reads like "not found")."""
+    import plugboard.app as app_module
+    from plugboard import model_quarantine as mq
+
+    qfile = tmp_path / "gateway-quarantine.json"
+    for name in ("record_account_unsupported", "record_terminal_unavailable"):
+        real = getattr(mq, name)
+        monkeypatch.setattr(
+            mq, name, lambda *a, _real=real, **k: _real(*a, **{**k, "path": qfile})
+        )
+    calls: list = []
+    monkeypatch.setattr(cli_subprocess, "complete", _sandbox_complete(calls))
+    router_mod.invalidate_models_cache()
+
+    result = await app_module.check_model_internet_access(
+        {"model_id": f"{AGY_PROVIDER_ID}:{DEFAULT_MODEL}", "persist": False}, _=None
+    )
+
+    assert calls, "the agy route was tried"
+    assert result["status"] == "sandbox_unavailable", result
+    assert mq.get_quarantined_suffixes(qfile, provider_id=AGY_PROVIDER_ID) == set()
+    assert not qfile.exists() or AGY_PROVIDER_ID not in qfile.read_text()
