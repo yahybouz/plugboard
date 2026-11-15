@@ -3,8 +3,9 @@
 agy runs a tenant's prompt with the gateway's uid. Its own guards (headless
 refusal of tools, ``--sandbox``) are agy's word only; the cage is the
 gateway's: whatever agy does, it sees and changes only what is listed here.
-This module builds the only command line that launches agy (``complete``,
-``agy models``, ``agy --version``):
+This module builds the gateway's only command line that launches agy
+(``complete``, ``agy models``, ``agy --version``; the operator's
+``scripts/bench_latence.py`` runs agy bare, BUG-110):
 
 - ``bwrap`` with its own user, pid, ipc, uts (and, where possible, cgroup)
   namespaces, ended with the gateway (``--die-with-parent``). The pid

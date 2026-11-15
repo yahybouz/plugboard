@@ -112,8 +112,10 @@ docker compose -p plugboard-private \
   exec -T gateway python - < deploy/ovh/verify-agy-sandbox.py; echo "exit $?"
 ```
 
-Expected: one JSON line with `"result": "pass"`, then `exit 0`. Exit codes
-and what to do: [agy cage](../../deploy/ovh/README.md#agy-cage).
+Expected: one JSON line with `"result": "pass"` and, in this container,
+`"proc": "not mounted (the container forbids a new procfs)"` (Docker forbids
+the cage a new `/proc`; it then has none, which is safe), then `exit 0`. Exit
+codes and what to do: [agy cage](../../deploy/ovh/README.md#agy-cage).
 
 ## What to watch
 
