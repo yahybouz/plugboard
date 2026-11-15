@@ -21,7 +21,18 @@ adding optional fields or routes is a minor one.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Dict, List, Literal, Optional, Tuple, Type, Union
+from typing import (
+    Annotated,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+    get_args,
+)
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -30,7 +41,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "2.6.0"
+CONTRACT_VERSION = "2.7.0"
 _JSON = "application/json"
 
 
@@ -42,9 +53,23 @@ class _Open(BaseModel):
 
 # ── Chat completions ─────────────────────────────────────────────────────────
 
+# Largest max_tokens / max_completion_tokens a chat call may ask for (BUG-121):
+# above the longest answer of any model served (128 K tokens at most today),
+# so no real call is refused, while a value no provider can honour (1e12) is
+# a 400 rather than a budget hold or a provider error.
+MAX_OUTPUT_TOKENS_CAP = 262144
+
+# The message roles a chat call may send (BUG-121): the OpenAI ones. Any other
+# is a 400 before a provider is called.
+ChatRole = Literal["system", "developer", "user", "assistant", "tool", "function"]
+CHAT_ROLES: Tuple[str, ...] = get_args(ChatRole)
+
 
 class ChatMessage(_Open):
-    role: str = Field(description="system, user, assistant, tool (OpenAI roles).")
+    role: ChatRole = Field(
+        description="An OpenAI role: system, developer, user, assistant, tool "
+        "or function. Any other is refused (400 invalid_request)."
+    )
     content: Optional[Union[str, List[Dict[str, Any]]]] = Field(
         default=None,
         description=(
@@ -80,9 +105,17 @@ class ChatCompletionRequest(_Open):
     top_p: Optional[float] = None
     max_tokens: Optional[int] = Field(
         default=None,
-        description="Renamed to max_completion_tokens for OpenAI o-series models.",
+        ge=1,
+        le=MAX_OUTPUT_TOKENS_CAP,
+        description="Renamed to max_completion_tokens for OpenAI o-series models."
+        " A whole number from 1 to 262144, else 400 invalid_request.",
     )
-    max_completion_tokens: Optional[int] = None
+    max_completion_tokens: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=MAX_OUTPUT_TOKENS_CAP,
+        description="A whole number from 1 to 262144, else 400 invalid_request.",
+    )
     stop: Optional[Union[str, List[str]]] = None
     tools: Optional[List[Dict[str, Any]]] = Field(
         default=None,
@@ -572,6 +605,8 @@ class ErrorResponse(_Open):
     code: Optional[str] = Field(
         default=None,
         description="Stable reason for programs, when the route gives one: "
+        "invalid_request (chat, 400; messages, a role or an output cap no "
+        "provider can answer), "
         "unsupported_on_cli (chat, 400), context_length_exceeded (chat, 400), "
         "model_not_supported_by_subscription (chat, 400), "
         "model_not_found (chat, 404), providers_busy (chat, 503), "
@@ -677,9 +712,14 @@ _CHAT_ERRORS = {
     " tried. code model_not_supported_by_subscription: the account plan a CLI"
     " subscription route is signed in with does not serve the model (codex"
     " with a ChatGPT account); hint says what to do, no other provider was"
-    " tried. Without code: a body that is not valid JSON or not a JSON object, a"
-    " model that is not a string or is removed, missing or invalid messages, a"
-    " session_id that is a list or an object, a decision model (use"
+    " tried. code invalid_request (BUG-121): messages missing or invalid, a"
+    " message role other than system, developer, user, assistant, tool or"
+    " function (detail names it, cut to 40 characters), or a max_tokens or"
+    " max_completion_tokens that is not a whole number from 1 to 262144"
+    " (detail names the field); for every caller, the admin key included,"
+    " before the budget hold; nothing was called. Without code: a body that is"
+    " not valid JSON or not a JSON object, a model that is not a string or is"
+    " removed, a session_id that is a list or an object, a decision model (use"
     " /v1/decisions), or a request an HTTP provider rejected (context too long,"
     " parameters; error_ref): after the other candidates were tried, whether"
     " the request asked for a stream or not (PLU-26), or at once when the"

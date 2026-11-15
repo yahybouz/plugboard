@@ -137,6 +137,7 @@ from plugboard.legacy_connectors import (
     require_supported_provider,
 )
 from plugboard.decisions import is_decision_model
+from plugboard.api_contract import CHAT_ROLES, MAX_OUTPUT_TOKENS_CAP
 from plugboard.cli_auth import AuthError
 from plugboard.cli_limits import UNSUPPORTED_ON_CLI
 from plugboard.cli_subprocess import CliSubprocessError, ModelNotServedError
@@ -2786,31 +2787,86 @@ def _model_not_served_response() -> JSONResponse:
     )
 
 
+class _InvalidChatRequest(HTTPException):
+    """400 ``invalid_request``: a chat body no provider can answer (messages,
+    roles, output caps). Raised before the budget hold and any provider call;
+    its handler adds ``code``."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(status_code=400, detail=detail)
+
+
+@app.exception_handler(_InvalidChatRequest)
+async def _invalid_chat_request_handler(request: Request, exc: _InvalidChatRequest):
+    return JSONResponse(
+        status_code=400, content={"detail": exc.detail, "code": "invalid_request"}
+    )
+
+
+def _require_output_caps(body: Dict[str, Any]) -> None:
+    """400 for a max_tokens / max_completion_tokens no provider can honour
+    (BUG-121): absent or null passes; otherwise a whole number (5 or 5.0, not
+    a boolean nor text) from 1 to MAX_OUTPUT_TOKENS_CAP. A negative cap used
+    to reach the provider, a huge one to stop at the budget hold as a 429."""
+    for name in ("max_tokens", "max_completion_tokens"):
+        value = body.get(name)
+        if value is None:
+            continue
+        whole = isinstance(value, int) or (
+            isinstance(value, float) and value.is_integer()
+        )
+        if (
+            isinstance(value, bool)
+            or not whole
+            or not 1 <= value <= MAX_OUTPUT_TOKENS_CAP
+        ):
+            raise _InvalidChatRequest(
+                f"{name} must be an integer from 1 to {MAX_OUTPUT_TOKENS_CAP}"
+            )
+
+
+def _shown_role(role: str) -> str:
+    """A refused role as the 400 quotes it: 40 characters at most, anything
+    unprintable (a line break, a control character) as ?."""
+    shown = "".join(c if c.isprintable() else "?" for c in role[:40])
+    return shown + ("..." if len(role) > 40 else "")
+
+
 def _require_chat_messages(
     body: Dict[str, Any], *, history_may_follow: bool = False
 ) -> None:
-    """400 for a messages field no provider can answer.
+    """400 ``invalid_request`` for a messages field, or an output cap, no
+    provider can answer.
 
     Without it, an empty or malformed list reached the provider and came back
-    as a 502 carrying the upstream parser error (or the CLI's "Empty prompt").
+    as a 502 carrying the upstream parser error (or the CLI's "Empty prompt");
+    an unknown role was answered as a user turn (BUG-121).
     With ``history_may_follow`` (a session turn, before its history is merged)
     an absent or empty list passes: the stored history may fill it, and the
-    full check runs again after the merge.
+    full check runs again after the merge. The output caps are checked first,
+    in both cases.
     """
+    _require_output_caps(body)
     if history_may_follow and body.get("messages", []) == []:
         return
     messages = body.get("messages")
     if not isinstance(messages, list) or not messages:
-        raise HTTPException(400, "messages must be a non-empty array")
+        raise _InvalidChatRequest("messages must be a non-empty array")
     for i, msg in enumerate(messages):
         if not isinstance(msg, dict):
-            raise HTTPException(400, f"messages[{i}] must be an object")
-        if not isinstance(msg.get("role"), str) or not msg["role"].strip():
-            raise HTTPException(400, f"messages[{i}].role must be a non-empty string")
+            raise _InvalidChatRequest(f"messages[{i}] must be an object")
+        role = msg.get("role")
+        if not isinstance(role, str) or not role.strip():
+            raise _InvalidChatRequest(f"messages[{i}].role must be a non-empty string")
+        if role not in CHAT_ROLES:
+            raise _InvalidChatRequest(
+                f"messages[{i}].role '{_shown_role(role)}' is not supported: use "
+                "system, developer, user, assistant, tool or function"
+            )
         content = msg.get("content")
         if content is not None and not isinstance(content, (str, list)):
-            raise HTTPException(
-                400, f"messages[{i}].content must be a string or an array of parts"
+            raise _InvalidChatRequest(
+                f"messages[{i}].content must be a string or an array of parts"
             )
 
 

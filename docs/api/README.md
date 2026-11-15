@@ -159,7 +159,8 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 
 | Status | Meaning | What to do |
 |---|---|---|
-| `400` | Chat: the body is not valid JSON or not a JSON object, the model is not a string or was removed, `messages` is missing or invalid, `session_id` is a list or an object, a decision model was sent, or the provider rejected the request (context too long, parameters; `error_ref`); nothing was billed | Fix the request; `detail` says what is wrong |
+| `400` | Chat: the body is not valid JSON or not a JSON object, the model is not a string or was removed, `session_id` is a list or an object, a decision model was sent, or the provider rejected the request (context too long, parameters; `error_ref`); nothing was billed | Fix the request; `detail` says what is wrong |
+| `400` | Chat only, `code` is `invalid_request`: `messages` is missing or invalid, a message role is not one of the OpenAI roles, or `max_tokens` / `max_completion_tokens` is not a whole number from 1 to 262144 (below); nothing was called or held | Fix the field `detail` names |
 | `400` | Chat only, `code` is `unsupported_on_cli`: only CLI subscription routes serve the model and the request asks for tools, a structured `response_format` or a non-text content part, listed in `unsupported`; nothing was called ([details](../guide/providers-and-subscriptions.md#what-a-cli-subscription-route-does-not-do)) | Send plain text, or pick a model an API or Ollama provider serves |
 | `400` | Chat only, `code` is `model_not_supported_by_subscription`: the account plan of a CLI subscription route does not serve the model (codex with a ChatGPT account); no other provider was tried | Pick another model from `GET /v1/models`, or use a route with an API key |
 | `400` | Chat only, `code` is `context_length_exceeded`: a CLI subscription route found the prompt too long for the model's context; no other provider was tried | Shorten the messages or pick a model with a larger context |
@@ -176,6 +177,30 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 | `503` | `code` is `usage_unavailable`: the key has a monthly budget and usage cannot be recorded right now; nothing was called | Retry after `Retry-After` / `retry_after` seconds (30) |
 | `503` | Chat only, `code` is `provider_sandbox_unavailable`: the agy provider's sandbox (bubblewrap) could not start, so agy was not run; no `Retry-After`; `error_ref`. As for a timeout, the model's next provider is tried first, if there is one ([agy's cage](../guide/providers-and-subscriptions.md#agys-cage)) | Pick a model another provider serves, or give the operator the `error_ref` |
 | `503` | Chat only, `code` is `provider_disabled`: the model belongs to a provider the operator turned off; nothing was called and no other provider stands in (below) | Pick another model from `GET /v1/models`, or ask the operator to turn the provider back on |
+
+### `400 invalid_request`
+
+`POST /v1/chat/completions` and `/v2/chat/completions`, streamed or not, answer `400` with `code` `invalid_request` for a body no provider can answer (BUG-121, since 4.14.3), for every caller, the admin key included. The check runs before a budgeted key's spending check and budget hold, the RPM count, the cache and any provider, so nothing is called, held or billed:
+
+- `messages` is missing, empty or not an array, an entry is not an object, its `role` is not a non-empty string, or its `content` is neither a string nor an array of parts;
+- a `role` other than `system`, `developer`, `user`, `assistant`, `tool` or `function` (the OpenAI roles, compared exactly: `User` is refused). `detail` quotes it, cut after 40 characters, with anything unprintable shown as `?`;
+- a `max_tokens` or `max_completion_tokens` that is not a whole number from 1 to 262144: a negative number, `0`, `2.5`, `true`, `"100"`, or `1e12` (which used to stop at the budget hold as a `429`). Absent or `null` leaves the provider's default; a whole number written as `64.0` is accepted. 262144 is above the longest answer of any model served (128 K tokens today), so no real call is refused. `detail` names the field.
+
+```json
+{
+  "detail": "max_tokens must be an integer from 1 to 262144",
+  "code": "invalid_request"
+}
+```
+
+```json
+{
+  "detail": "messages[1].role 'bot' is not supported: use system, developer, user, assistant, tool or function",
+  "code": "invalid_request"
+}
+```
+
+A session turn (`X-LLM-Session-ID`) checks the output caps first, then the messages once its stored history is added. `POST /v1/preflight` builds its own ping (`max_tokens: 1`) and is not concerned.
 
 ### `404 model_not_found`
 
