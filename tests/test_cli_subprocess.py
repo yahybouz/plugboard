@@ -734,6 +734,13 @@ async def fake_cli(tmp_path, monkeypatch):
     from plugboard import agy_cage
 
     monkeypatch.setattr(agy_cage, "_proc_mount", True)
+    # A throwaway HOME where agy has been set up (its store, config/ and
+    # projects.json): the cage builds without reading the real HOME.
+    home = tmp_path / "home"
+    (home / ".gemini" / "antigravity-cli").mkdir(parents=True)
+    (home / ".gemini" / "config").mkdir()
+    (home / ".gemini" / "projects.json").write_text("{}\n")
+    monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(asyncio, "create_subprocess_exec", recording_exec)
     yield write, pid_file
     if pid_file.exists():

@@ -98,12 +98,18 @@ def real_bwrap():
 
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
-    """A throwaway HOME (agy's store holds a sign-in token), the private
-    launch directory, a ``bin`` holding the fake agy, and PATH on it."""
+    """A throwaway HOME (agy's store holds a sign-in token, and agy's
+    ``~/.gemini/config`` and ``~/.gemini/projects.json`` exist, as after its
+    first run), the private launch directory, a ``bin`` holding the fake agy,
+    and PATH on it."""
     home = tmp_path / "home"
     store = home / ".gemini" / "antigravity-cli"
     store.mkdir(parents=True)
     (store / "antigravity-oauth-token").write_text("old-token\n")
+    config = home / ".gemini" / "config"
+    (config / "projects").mkdir(parents=True)
+    (config / "mcp_config.json").write_text("{}\n")
+    (home / ".gemini" / "projects.json").write_text("{}\n")
     for other in (".claude", ".codex"):
         (home / other).mkdir()
         (home / other / "credentials.json").write_text("other-cli-secret")
@@ -122,6 +128,8 @@ def setup(tmp_path, monkeypatch):
     return {
         "home": home,
         "store": store,
+        "config": config,
+        "projects": home / ".gemini" / "projects.json",
         "spawn": spawn,
         "bin": bin_dir,
         "app_data": app_data,
@@ -343,7 +351,7 @@ def test_cage_argv_refuses_a_ca_path_through_a_link(
 
 
 def test_store_is_created_private_when_missing(setup, fake_binary):
-    shutil.rmtree(setup["home"] / ".gemini")
+    shutil.rmtree(setup["store"])
     argv, _ = _argv(setup, str(fake_binary))
     store = setup["store"]
     assert store.is_dir()
@@ -368,6 +376,150 @@ def test_store_behind_a_symbolic_link_is_refused(setup, fake_binary, tmp_path, w
     with pytest.raises(agy_cage.CageUnavailable) as info:
         _argv(setup, str(fake_binary))
     assert str(info.value) == "agy store path goes through a symbolic link"
+
+
+# ── agy's ~/.gemini/config and ~/.gemini/projects.json, read-only ─────────
+#
+# agy 1.4.4 reads them, outside its store; without them in the cage every
+# call failed on the UAT (15/11): "mkdir /home/app/.gemini/config: read-only
+# file system". They are shown read-only, each at its own path; nothing else
+# of HOME. Missing (agy never run on that account), the call is refused.
+
+_NOT_SET_UP = (
+    "agy is not set up for this server account: {missing} {verb} missing; "
+    "~/.gemini/config and ~/.gemini/projects.json must exist (run agy once "
+    "in a shell of the gateway user, as for its sign-in)"
+)
+
+
+def test_cage_argv_shows_agy_its_config_read_only(setup, fake_binary):
+    argv, tmpdir = _argv(setup, str(fake_binary))
+    store, config, projects = (
+        str(setup["store"]),
+        str(setup["config"]),
+        str(setup["projects"]),
+    )
+
+    ro = _pairs(argv, "--ro-bind")
+    assert (config, config) in ro and (projects, projects) in ro
+    for path in (config, projects):
+        for option in _BIND_OPTIONS - {"--ro-bind"}:
+            assert (path, path) not in _pairs(argv, option), option
+    # After the store, before the root is remounted read-only.
+    i_store = argv.index("--bind")
+    i_config = next(
+        i for i, a in enumerate(argv) if a == "--ro-bind" and argv[i + 1] == config
+    )
+    i_projects = next(
+        i for i, a in enumerate(argv) if a == "--ro-bind" and argv[i + 1] == projects
+    )
+    assert argv[i_store + 1] == store
+    assert i_store < i_config < i_projects < argv.index("--remount-ro")
+    assert argv[i_config : i_projects + 3] == [
+        *("--ro-bind", config, config),
+        *("--ro-bind", projects, projects),
+    ]
+    # Nothing else of HOME: the store, config/, projects.json.
+    sep = argv.index("--")
+    home = str(setup["home"]) + os.sep
+    under_home = [
+        tuple(argv[i : i + 3])
+        for i, a in enumerate(argv[:sep])
+        if a in _BIND_OPTIONS and argv[i + 1].startswith(home)
+    ]
+    assert under_home == [
+        ("--bind", store, store),
+        ("--ro-bind", config, config),
+        ("--ro-bind", projects, projects),
+    ]
+    assert not [a for a in argv[:sep] if a.startswith(home + ".gemini/projects.json.")]
+
+
+@pytest.mark.parametrize(
+    ("remove", "missing", "verb"),
+    [
+        (("config",), "~/.gemini/config", "is"),
+        (("projects",), "~/.gemini/projects.json", "is"),
+        (("config", "projects"), "~/.gemini/config and ~/.gemini/projects.json", "are"),
+    ],
+)
+def test_agy_not_set_up_is_refused_and_nothing_is_created(
+    setup, fake_binary, remove, missing, verb
+):
+    for name in remove:
+        path = setup[name]
+        shutil.rmtree(path) if path.is_dir() else path.unlink()
+
+    with pytest.raises(agy_cage.CageUnavailable) as info:
+        _argv(setup, str(fake_binary))
+
+    assert isinstance(info.value, agy_cage.AgyNotSetUp)
+    assert str(info.value) == _NOT_SET_UP.format(missing=missing, verb=verb)
+    assert str(setup["home"]) not in str(info.value)
+    for name in remove:
+        assert not os.path.lexists(setup[name]), "the gateway creates nothing"
+
+
+@pytest.mark.parametrize("which", ["config", "projects"])
+def test_agy_config_behind_a_symbolic_link_is_refused(
+    setup, fake_binary, tmp_path, which
+):
+    """bwrap would follow the link: whatever it names would be shown."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    path = setup[which]
+    shutil.move(str(path), str(elsewhere / path.name))
+    path.symlink_to(elsewhere / path.name)
+
+    with pytest.raises(agy_cage.CageUnavailable) as info:
+        _argv(setup, str(fake_binary))
+
+    assert str(info.value) == (
+        f"agy's ~/.gemini/{path.name} goes through a symbolic link"
+    )
+    assert not isinstance(info.value, agy_cage.AgyNotSetUp)
+
+
+def test_a_dangling_link_is_refused_as_a_link(setup, fake_binary, tmp_path):
+    setup["projects"].unlink()
+    setup["projects"].symlink_to(tmp_path / "nowhere.json")
+    with pytest.raises(agy_cage.CageUnavailable) as info:
+        _argv(setup, str(fake_binary))
+    assert str(info.value) == (
+        "agy's ~/.gemini/projects.json goes through a symbolic link"
+    )
+
+
+@pytest.mark.parametrize("which", ["config", "projects"])
+def test_agy_config_of_the_wrong_type_is_refused(setup, fake_binary, which):
+    path = setup[which]
+    if which == "config":
+        shutil.rmtree(path)
+        path.write_text("not a folder")
+        expected = "agy's ~/.gemini/config is not a directory"
+    else:
+        path.unlink()
+        path.mkdir()
+        expected = "agy's ~/.gemini/projects.json is not a regular file"
+    with pytest.raises(agy_cage.CageUnavailable) as info:
+        _argv(setup, str(fake_binary))
+    assert str(info.value) == expected
+
+
+async def test_complete_refuses_agy_not_set_up(setup):
+    ran = _fake_agy_recording(setup)
+    _install(setup["bin"], "bwrap", f"touch {setup['tmp']}/bwrap-ran\nexit 0\n")
+    shutil.rmtree(setup["config"])
+
+    with pytest.raises(cs.CliSubprocessError) as info:
+        await cs.complete("agy", dict(_BODY))
+
+    assert info.value.sandbox_failed is True
+    assert _NOT_SET_UP.format(missing="~/.gemini/config", verb="is") in str(info.value)
+    assert not ran.exists()
+    assert not (setup["tmp"] / "bwrap-ran").exists(), "refused before bwrap runs"
+    assert not setup["config"].exists()
+    assert list(setup["spawn"].iterdir()) == [], "private TMPDIR removed"
 
 
 def test_missing_bwrap_refuses(setup, fake_binary, monkeypatch):
@@ -606,6 +758,56 @@ async def test_chat_without_bwrap_answers_503(
     assert not ran.exists()
 
 
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+async def test_chat_with_agy_not_set_up_answers_503(
+    setup, client, client_key, _providers_file, monkeypatch, stream
+):
+    """agy never run on this account (no ~/.gemini/config): 503, the cause
+    for the admin only, nothing launched, nothing created."""
+    import json
+
+    import plugboard.router as router
+
+    ran = _fake_agy_recording(setup)
+    _install(setup["bin"], "bwrap", f"touch {setup['tmp']}/bwrap-ran\nexit 0\n")
+    monkeypatch.setenv("PATH", str(setup["bin"]))
+    shutil.rmtree(setup["config"])
+    setup["projects"].unlink()
+    _providers_file.write_text(json.dumps({"providers": [_AGY_PROVIDER]}))
+    router.invalidate_models_cache()
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=client_key,
+        json={
+            "model": "pbtest-agy-cli:gemini-test",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": stream,
+            "cache": False,
+        },
+    )
+
+    assert resp.status_code == 503, resp.text
+    body = resp.json()
+    assert body["code"] == "provider_sandbox_unavailable"
+    assert body["detail"] == CLIENT_DETAIL.format(ref=body["error_ref"])
+    assert ".gemini" not in resp.text and "not set up" not in resp.text
+    assert not ran.exists() and not (setup["tmp"] / "bwrap-ran").exists()
+    assert not setup["config"].exists() and not setup["projects"].exists()
+
+
+def test_agy_not_set_up_names_the_cause_for_the_admin():
+    from plugboard.app import _cli_error_response
+
+    cause = _NOT_SET_UP.format(missing="~/.gemini/config", verb="is")
+    resp = _cli_error_response(cs.agy_sandbox_error(cause, "gemini-test"), "admin")
+
+    assert resp.status_code == 503
+    body = json.loads(resp.body)
+    assert body["code"] == "provider_sandbox_unavailable"
+    assert cause in body["detail"]
+
+
 # ── Router: a sandbox failure is treated like a timeout ─────────────────────
 
 
@@ -743,6 +945,14 @@ def _probe_script(setup) -> str:
         "write_tmp": "touch /tmp/x",
         "write_usr": "touch /usr/x",
         "write_tmpdir": 'touch "$TMPDIR/x"',
+        # agy's config, outside its store: readable, never writable.
+        "read_config": f"cat {home}/.gemini/config/mcp_config.json",
+        "read_projects": f"cat {home}/.gemini/projects.json",
+        "write_mcp_config": f"echo x >> {home}/.gemini/config/mcp_config.json",
+        "write_config": f"touch {home}/.gemini/config/x",
+        "write_config_projects": f"mkdir {home}/.gemini/config/projects/x",
+        "write_projects": f"echo x >> {home}/.gemini/projects.json",
+        "write_gemini": f"touch {home}/.gemini/x",
         "token_read": "grep -q old-token antigravity-oauth-token",
         "token_rewrite": (
             "cp antigravity-oauth-token token.tmp && echo refreshed >> token.tmp"
@@ -794,9 +1004,23 @@ async def test_agy_in_the_real_cage(setup, real_bwrap, shell_in_cage, monkeypatc
         "write_tmp": "no",
         "write_usr": "no",
         "write_tmpdir": "yes",
+        "read_config": "yes",
+        "read_projects": "yes",
+        "write_mcp_config": "no",
+        "write_config": "no",
+        "write_config_projects": "no",
+        "write_projects": "no",
+        "write_gemini": "no",
         "token_read": "yes",
         "token_rewrite": "yes",
     }
+    assert (setup["config"] / "mcp_config.json").read_text() == "{}\n"
+    assert setup["projects"].read_text() == "{}\n"
+    assert sorted(p.name for p in setup["config"].iterdir()) == [
+        "mcp_config.json",
+        "projects",
+    ]
+    assert list((setup["config"] / "projects").iterdir()) == []
     # The token was rewritten by rename, in the real store.
     assert token.read_text() == "old-token\nrefreshed\n"
     assert token.stat().st_ino != token_inode

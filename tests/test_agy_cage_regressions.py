@@ -82,6 +82,8 @@ def setup(tmp_path, monkeypatch):
     home = tmp_path / "home"
     store = home / ".gemini" / "antigravity-cli"
     store.mkdir(parents=True)
+    (home / ".gemini" / "config").mkdir()
+    (home / ".gemini" / "projects.json").write_text("{}\n")
     (store / "antigravity-oauth-token").write_text("old-token\n")
     (store / "installation_id").write_text("install")
     for rel in _ENTRIES:

@@ -19,11 +19,16 @@ This module builds the gateway's only command line that launches agy
   the new pid namespace (see below) and a minimal ``/dev``.
 - Writable: agy's store (``$HOME/.gemini/antigravity-cli``, where its sign-in
   token is refreshed) and the request's private ``TMPDIR``. Nothing else.
+- Read-only, right after the store: agy's own config beside it,
+  ``$HOME/.gemini/config`` (its MCP servers' ``mcp_config.json`` included)
+  and ``$HOME/.gemini/projects.json``, which agy 1.4.4 cannot start without
+  (see :func:`_agy_config`).
 - The binary, by its real path, read-only, bound after the store; then the
   whole root is remounted read-only (HOME, the binary's folder...).
 
 Not in the cage: ``/usr/bin``, ``/usr/local``, ``/app``, the rest of HOME
-(``~/.claude``, ``~/.codex``...), ``/tmp``, ``/sys``.
+(``~/.claude``, ``~/.codex``, the rest of ``~/.gemini``...), ``/tmp``,
+``/sys``.
 
 ``/proc``: a Docker container masks paths of its ``/proc`` (``/proc/kcore``,
 ``/proc/keys``...) by mounting over them, and the kernel then refuses a new
@@ -41,8 +46,9 @@ command line nor ``--setenv``: a proxy URL can hold a password.
 
 No cage, no agy: there is no variable, option or fallback that launches agy
 without it. :class:`CageUnavailable` is raised before anything starts when
-bwrap is missing, the platform is not Linux, or the store or ``TMPDIR`` path
-goes through a symbolic link; :func:`setup_failure` recognises a bwrap that
+bwrap is missing, the platform is not Linux, the store, ``TMPDIR``, agy's
+config or ``projects.json`` path goes through a symbolic link, or agy was
+never run on the account (:class:`AgyNotSetUp`); :func:`setup_failure` recognises a bwrap that
 started but could not build the cage.
 """
 
@@ -53,6 +59,7 @@ import logging
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -68,6 +75,17 @@ class CageUnavailable(Exception):
 
     ``str()`` is the internal cause, for the gateway log and the admin only.
     """
+
+
+class AgyNotSetUp(CageUnavailable):
+    """agy was never run on this server account: its ``~/.gemini/config``
+    or ``~/.gemini/projects.json`` is missing (see :func:`_agy_config`)."""
+
+
+# What agy 1.4.4 reads under ~/.gemini outside its store (real UAT run,
+# 15/11): config/ (.migrated, mcp_config.json, projects/) and projects.json.
+_CONFIG_DIR = (".gemini", "config")
+_PROJECTS_FILE = (".gemini", "projects.json")
 
 
 # System files agy (a dynamic Go binary: glibc, its loader, DNS, TLS) needs,
@@ -164,6 +182,47 @@ def _store(env: Mapping[str, str]) -> str:
     if not _plain_path(store) or not os.path.isdir(store):
         raise CageUnavailable("agy store path goes through a symbolic link")
     return store
+
+
+def _agy_config(env: Mapping[str, str]) -> List[str]:
+    """``~/.gemini/config`` (a real folder) and ``~/.gemini/projects.json``
+    (a real regular file) under the child's HOME, shown read-only to agy.
+
+    agy 1.4.4 reads them outside its store; without them it tries to create
+    ``config/`` and every call fails ("mkdir ~/.gemini/config: read-only
+    file system", UAT, 15/11). They hold agy's own settings, its MCP servers
+    (``config/mcp_config.json``) included: agy may read them, never change
+    them. Through a symbolic link (bwrap would follow it) or of another type:
+    :class:`CageUnavailable`.
+
+    Missing: :class:`AgyNotSetUp`, and nothing is created. agy writes them
+    itself the first time it is run in a shell of the gateway user, which the
+    sign-in needs anyway; the gateway does not make up agy's own formats
+    (``projects.json``, ``mcp_config.json``) and never writes in
+    ``~/.gemini`` outside agy's store.
+    """
+    home = os.path.normpath(env.get("HOME") or "")
+    config = os.path.join(home, *_CONFIG_DIR)
+    projects = os.path.join(home, *_PROJECTS_FILE)
+    missing = [p for p in (config, projects) if not os.path.lexists(p)]
+    if missing:
+        names = " and ".join("~/" + os.path.relpath(p, home) for p in missing)
+        raise AgyNotSetUp(
+            f"agy is not set up for this server account: {names} "
+            f"{'is' if len(missing) == 1 else 'are'} missing; ~/.gemini/config "
+            "and ~/.gemini/projects.json must exist (run agy once in a shell of "
+            "the gateway user, as for its sign-in)"
+        )
+    for path, kind, wanted in (
+        (config, "a directory", stat.S_ISDIR),
+        (projects, "a regular file", stat.S_ISREG),
+    ):
+        name = "~/" + os.path.relpath(path, home)
+        if not _plain_path(path):
+            raise CageUnavailable(f"agy's {name} goes through a symbolic link")
+        if not wanted(os.lstat(path).st_mode):
+            raise CageUnavailable(f"agy's {name} is not {kind}")
+    return [config, projects]
 
 
 def _system_args(env: Mapping[str, str]) -> List[str]:
@@ -302,6 +361,7 @@ def cage_argv(
         raise CageUnavailable("agy sandbox needs Linux")
     bwrap = _bwrap()
     store = _store(env)
+    config, projects = _agy_config(env)
     if not _plain_path(tmpdir) or not os.path.isdir(tmpdir):
         raise CageUnavailable("agy TMPDIR path goes through a symbolic link")
     real_binary = os.path.realpath(binary)
@@ -323,6 +383,13 @@ def cage_argv(
         "--bind",
         store,
         store,
+        # agy's own config, beside its store: read-only, each at its path.
+        "--ro-bind",
+        config,
+        config,
+        "--ro-bind",
+        projects,
+        projects,
         "--bind",
         tmpdir,
         tmpdir,

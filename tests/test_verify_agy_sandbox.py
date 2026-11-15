@@ -61,6 +61,10 @@ def world(tmp_path):
     store.mkdir(parents=True)
     token = store / "antigravity-oauth-token"
     token.write_text(TOKEN)
+    # Written by agy at its first run (agy 1.4.4 cannot start without them).
+    (home / ".gemini" / "config" / "projects").mkdir(parents=True)
+    (home / ".gemini" / "config" / "mcp_config.json").write_text("")
+    (home / ".gemini" / "projects.json").write_text("{}\n")
     for other in (".claude", ".codex"):
         (home / other).mkdir()
         (home / other / "credentials.json").write_text("other-cli-secret")
