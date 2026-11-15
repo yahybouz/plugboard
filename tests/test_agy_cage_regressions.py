@@ -7,6 +7,9 @@ see conftest). Here the same behaviours go through ``cli_subprocess.complete``
 with the host's real ``bwrap`` around a fake agy (a shell script): agy's store
 and ``TMPDIR`` are bound into the cage at their real paths, so what the fake
 agy writes there is what the gateway finds, purges and removes afterwards.
+The HOME is a realistic ``~/.gemini`` (agy's ``config/`` and
+``projects.json`` beside its store, gemini's files next to them): with the
+store alone, the real agy 1.4.4 did not start in the cage (UAT, 15/11).
 
 The shell needs ``/usr/bin`` and the ``/bin`` link, passed through
 ``cage_argv``'s test-only parameter (see tests/test_agy_cage.py). Skipped,
@@ -66,10 +69,52 @@ _EXPECTED_USAGE = {
 }
 
 
+# ~/.gemini as the UAT container holds it (15/11), next to agy's store: agy
+# 1.4.4 reads config/ and projects.json there (and fails when it cannot,
+# trying to create config/); a temporary file agy left beside projects.json;
+# gemini's own settings and sign-in, which agy must not see.
+_PROJECTS_TMP = "projects.json.5b0e7c2a-1d3f-4a6b-8c9d-0e1f2a3b4c5d.tmp"
+_OUTSIDE_STORE = {
+    "config/.migrated": "",
+    "config/mcp_config.json": "",
+    "projects.json": "{}\n",
+    _PROJECTS_TMP: "{}\n",
+    "settings.json": '{"gemini-setting-canary": true}\n',
+    "oauth_creds.json": "gemini-oauth-canary-7d3e\n",
+}
+
+
+def realistic_gemini(home: Path) -> Path:
+    """Fill ``home/.gemini`` as agy 1.4.4 leaves it once run and signed in:
+    its store's folders, ``config/`` (``.migrated``, an empty
+    ``mcp_config.json``, an empty ``projects/``), ``projects.json`` and a
+    leftover ``projects.json.<uuid>.tmp``, plus gemini's ``settings.json``
+    and ``oauth_creds.json``. The store's token is the caller's."""
+    gemini = home / ".gemini"
+    for sub in ("antigravity-cli/cache", "antigravity-cli/log", "config/projects"):
+        (gemini / sub).mkdir(parents=True, exist_ok=True)
+    for rel, content in _OUTSIDE_STORE.items():
+        (gemini / rel).write_text(content)
+    return gemini
+
+
+def _outside_store(home: Path) -> dict:
+    """Every path of ``~/.gemini`` outside agy's store, with its content."""
+    gemini = home / ".gemini"
+    found = {}
+    for path in sorted(gemini.rglob("*")):
+        rel = path.relative_to(gemini).as_posix()
+        if rel == "antigravity-cli" or rel.startswith("antigravity-cli/"):
+            continue
+        found[rel] = None if path.is_dir() else path.read_text()
+    return found
+
+
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
     """The real bwrap around a fake agy, agy's real store lookup, a throwaway
-    HOME whose store holds a sign-in token and an older conversation."""
+    HOME with a realistic ``~/.gemini`` whose store holds a sign-in token and
+    an older conversation."""
     reason = _bwrap_unusable_reason()
     if reason:
         pytest.skip(f"bwrap unusable: {reason}")
@@ -82,8 +127,7 @@ def setup(tmp_path, monkeypatch):
     home = tmp_path / "home"
     store = home / ".gemini" / "antigravity-cli"
     store.mkdir(parents=True)
-    (home / ".gemini" / "config").mkdir()
-    (home / ".gemini" / "projects.json").write_text("{}\n")
+    realistic_gemini(home)
     (store / "antigravity-oauth-token").write_text("old-token\n")
     (store / "installation_id").write_text("install")
     for rel in _ENTRIES:
@@ -99,7 +143,7 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(cs, "_SPAWN_CWD_CACHE", str(spawn))
     monkeypatch.delenv("PLUGBOARD_SUBPROCESS_CWD", raising=False)
     monkeypatch.setattr(cs, "_binary_path_cache", {})
-    return {"store": store, "spawn": spawn, "bin": bin_dir}
+    return {"home": home, "store": store, "spawn": spawn, "bin": bin_dir}
 
 
 def _fake_agy(setup, body: str = "") -> Path:
@@ -181,6 +225,7 @@ async def test_the_store_is_purged_under_the_cage(setup):
     _fake_agy(setup)
     token = setup["store"] / "antigravity-oauth-token"
     token_inode = token.stat().st_ino
+    outside = _outside_store(setup["home"])
 
     result = await cs.complete("agy", dict(_BODY))
 
@@ -188,6 +233,8 @@ async def test_the_store_is_purged_under_the_cage(setup):
     assert _content(result) == "files=yes"
     _assert_purged(setup)
     assert token.stat().st_ino != token_inode, "rewritten by rename"
+    # The purge stays in the store: the rest of ~/.gemini is as it was.
+    assert _outside_store(setup["home"]) == outside
 
 
 # ── 2. Private TMPDIR ───────────────────────────────────────────────────────
@@ -343,3 +390,68 @@ async def test_reported_usage_is_the_same_with_and_without_the_cage(
     assert (_content(caged), _content(bare)) == ("caged=yes", "caged=no")
     assert caged["usage"] == bare["usage"] == _EXPECTED_USAGE
     _assert_purged(setup)
+
+
+# ── 6. agy's ~/.gemini outside its store ────────────────────────────────────
+#
+# agy 1.4.4 reads ~/.gemini/config/ (.migrated, mcp_config.json, projects/)
+# and ~/.gemini/projects.json, outside its store. With only the store in the
+# cage, every call on the UAT failed (15/11, 4.14.2 at c6dea07): agy could
+# not find config/ and tried to create it in a read-only ~/.gemini. The fake
+# agy below fails the same way, with agy's own words, when config/ or
+# projects.json is missing or unreadable; otherwise it tries to change them
+# and answers what it saw and could write.
+
+_AGY_1_4_4_SETUP_ERROR = (
+    "failed to start conversation: project: failed to get/create default "
+    "project: project: create projects dir $G/config/projects: mkdir $G/config: "
+    "read-only file system"
+)
+
+
+def _fake_agy_reading_its_config(setup) -> Path:
+    script = f"""cat >/dev/null
+G="$HOME/.gemini"
+if ! ls "$G/config" >/dev/null 2>&1 || ! cat "$G/projects.json" >/dev/null 2>&1
+then
+  echo "{_AGY_1_4_4_SETUP_ERROR}" >&2
+  exit 1
+fi
+try() {{ if eval "$1" >/dev/null 2>&1; then echo yes; else echo no; fi; }}
+MIGRATED=$(try 'test -e "$G/config/.migrated"')
+MCP_READ=$(try 'cat "$G/config/mcp_config.json"')
+MCP_WRITE=$(try 'printf x >> "$G/config/mcp_config.json"')
+PROJECTS_WRITE=$(try 'printf x >> "$G/projects.json"')
+PROJECTS_DIR_WRITE=$(try 'mkdir "$G/config/projects/witness"')
+CONFIG_WRITE=$(try 'touch "$G/config/new-file"')
+SEEN=$(ls -A "$G" | tr '\\n' ',')
+R="seen=$SEEN migrated=$MIGRATED mcp_read=$MCP_READ mcp_write=$MCP_WRITE"
+R="$R projects_write=$PROJECTS_WRITE projects_dir_write=$PROJECTS_DIR_WRITE"
+R="$R config_write=$CONFIG_WRITE"
+printf '{{"status":"SUCCESS","response":"%s","usage":{{}}}}\\n' "$R"
+"""
+    return _install(setup["bin"], "agy", script)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+async def test_agy_reads_its_config_and_cannot_change_it(setup, stream):
+    _fake_agy_reading_its_config(setup)
+    outside = _outside_store(setup["home"])
+
+    result = await cs.complete(
+        "agy", dict(_BODY), on_delta=(lambda text: None) if stream else None
+    )
+
+    # agy starts: config/ and projects.json are there, read-only; nothing
+    # else of ~/.gemini (neither agy's leftover .tmp nor gemini's files).
+    assert dict(part.split("=", 1) for part in _content(result).split()) == {
+        "seen": "antigravity-cli,config,projects.json,",
+        "migrated": "yes",
+        "mcp_read": "yes",
+        "mcp_write": "no",
+        "projects_write": "no",
+        "projects_dir_write": "no",
+        "config_write": "no",
+    }
+    assert _outside_store(setup["home"]) == outside
+    assert os.listdir(setup["spawn"]) == []
