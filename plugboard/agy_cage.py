@@ -112,13 +112,29 @@ _proc_mount: Optional[bool] = None
 
 # CA variables already reported as ignored (logged once each).
 _ca_refused: set = set()
+# bwrap's real path, resolved on PATH once (like the CLIs' binaries, TM-001:
+# a bwrap put on PATH later is never used).
+_bwrap_path: Optional[str] = None
 
 
 def _reset_for_tests() -> None:
     """Forget what was checked or resolved once per process (tests only)."""
-    global _proc_mount
+    global _proc_mount, _bwrap_path
     _proc_mount = None
+    _bwrap_path = None
     _ca_refused.clear()
+
+
+def _bwrap() -> str:
+    """bwrap's real path, looked up on PATH the first time only."""
+    global _bwrap_path
+    if _bwrap_path and os.path.isfile(_bwrap_path):
+        return _bwrap_path
+    found = shutil.which("bwrap")
+    if found is None:
+        raise CageUnavailable("bwrap not found on PATH")
+    _bwrap_path = os.path.realpath(found)
+    return _bwrap_path
 
 
 def _plain_path(path: str) -> bool:
@@ -263,9 +279,7 @@ def cage_argv(
     """
     if not sys.platform.startswith("linux"):
         raise CageUnavailable("agy sandbox needs Linux")
-    bwrap = shutil.which("bwrap")
-    if bwrap is None:
-        raise CageUnavailable("bwrap not found on PATH")
+    bwrap = _bwrap()
     store = _store(env)
     if not _plain_path(tmpdir) or not os.path.isdir(tmpdir):
         raise CageUnavailable("agy TMPDIR path goes through a symbolic link")

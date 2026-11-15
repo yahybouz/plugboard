@@ -376,6 +376,27 @@ def test_missing_bwrap_refuses(setup, fake_binary, monkeypatch):
     assert str(info.value) == "bwrap not found on PATH"
 
 
+def test_bwrap_is_resolved_once_by_its_real_path(
+    setup, fake_binary, tmp_path, monkeypatch
+):
+    """Like agy's binary (TM-001): a bwrap put on PATH later is not used."""
+    real = shutil.which("bwrap")
+    if real is None:
+        pytest.skip("bwrap not installed")
+    links = tmp_path / "links"
+    links.mkdir()
+    (links / "bwrap").symlink_to(real)
+    monkeypatch.setenv("PATH", f"{links}:{os.environ['PATH']}")
+
+    first, _ = _argv(setup, str(fake_binary))
+    assert first[0] == os.path.realpath(real)
+
+    _install(setup["bin"], "bwrap", "exit 0\n")
+    monkeypatch.setenv("PATH", f"{setup['bin']}:{os.environ['PATH']}")
+    second, _ = _argv(setup, str(fake_binary))
+    assert second[0] == os.path.realpath(real)
+
+
 def test_not_linux_refuses(setup, fake_binary, monkeypatch):
     monkeypatch.setattr(agy_cage.sys, "platform", "darwin")
     with pytest.raises(agy_cage.CageUnavailable) as info:
