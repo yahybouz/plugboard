@@ -21,9 +21,13 @@ without user namespaces).
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import functools
+import hashlib
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -741,3 +745,143 @@ async def test_list_models_and_version_run_in_the_cage(
 
     assert probe == {"ok": True, "version": "agy 9.9.9", "error": None}
     assert list(setup["spawn"].iterdir()) == []
+
+
+def test_cage_argv_binds_the_loader_cache(setup, fake_binary):
+    """glibc's loader finds the libraries through /etc/ld.so.cache; without
+    it, it only looks in the default folders."""
+    argv, _ = _argv(setup, str(fake_binary))
+    assert ("/etc/ld.so.cache", "/etc/ld.so.cache") in _pairs(argv, "--ro-bind-try")
+
+
+# ── agy's self-update stays in the cage ─────────────────────────────────────
+#
+# agy updates itself by replacing its own executable in place (on a host:
+# ``agy`` next to ``agy.<number>.old``), from a program it starts in the
+# background (``--bg-updater``), and records the outcome in its store
+# (``updater/update_status.json``). Three layers: the variable that turns the
+# updater off, a read-only binary and folder, a pid namespace that ends with
+# the call.
+
+
+def test_every_agy_launch_turns_the_self_update_off(monkeypatch):
+    monkeypatch.setenv("AGY_CLI_DISABLE_AUTO_UPDATE", "0")
+    monkeypatch.setenv("PLUGBOARD_SUBPROCESS_ENV_PASSTHROUGH", "")
+    assert cs.build_child_env("agy")["AGY_CLI_DISABLE_AUTO_UPDATE"] == "1"
+
+
+@pytest.mark.parametrize("kind", ["gemini", "codex", "claude"])
+def test_other_clis_do_not_get_the_agy_variable(monkeypatch, kind):
+    monkeypatch.delenv("AGY_CLI_DISABLE_AUTO_UPDATE", raising=False)
+    assert "AGY_CLI_DISABLE_AUTO_UPDATE" not in cs.build_child_env(kind)
+
+
+def _answer(text: str) -> str:
+    """A fake agy's last line: its JSON answer carrying ``text``."""
+    return f'echo "{{\\"status\\":\\"SUCCESS\\",\\"response\\":\\"{text}\\",\\"usage\\":{{}}}}"\n'
+
+
+def _content(result) -> str:
+    return result["choices"][0]["message"]["content"]
+
+
+async def test_agy_sees_the_self_update_turned_off(setup, real_bwrap, shell_in_cage):
+    _install(
+        setup["bin"],
+        "agy",
+        "cat >/dev/null\n" + _answer("disable=${AGY_CLI_DISABLE_AUTO_UPDATE-unset}"),
+    )
+
+    result = await cs.complete("agy", dict(_BODY))
+
+    assert _content(result) == "disable=1"
+
+
+async def test_agy_cannot_replace_its_own_binary(setup, real_bwrap, shell_in_cage):
+    """What agy's updater does (current binary renamed ``.old``, the new one
+    written next to it or moved over it) fails; the binary is intact."""
+    body = (
+        "cat >/dev/null\n"
+        'self="$0"\n'
+        'if mv "$self" "$self.4242.old" 2>/dev/null; then r=yes; else r=no; fi\n'
+        "if printf '#!/bin/sh\\necho new\\n' > \"$self.new\" 2>/dev/null; "
+        "then w=yes; else w=no; fi\n"
+        "if printf '#!/bin/sh\\necho new\\n' > \"$TMPDIR/agy.next\" "
+        '&& mv -f "$TMPDIR/agy.next" "$self" 2>/dev/null; then m=yes; else m=no; fi\n'
+        + _answer("rename=$r write_next=$w move_over=$m")
+    )
+    binary = _install(setup["bin"], "agy", body)
+    digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+
+    result = await cs.complete("agy", dict(_BODY))
+
+    assert _content(result) == "rename=no write_next=no move_over=no"
+    assert hashlib.sha256(binary.read_bytes()).hexdigest() == digest
+    assert sorted(p.name for p in setup["bin"].iterdir()) == ["agy"], "no .old"
+
+
+def _processes_with(marker: bytes) -> list:
+    """Pids, host-wide, whose command line holds ``marker``."""
+    found = []
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/cmdline", "rb") as fh:
+                if marker in fh.read():
+                    found.append(int(entry))
+        except OSError:
+            pass
+    return found
+
+
+async def test_a_background_updater_ends_with_the_call(
+    setup, real_bwrap, shell_in_cage
+):
+    """A program agy leaves running in the background, even in a session of
+    its own, dies with the cage's pid namespace when agy exits."""
+    markers = (b"37.4242", b"37.4343")
+    _install(
+        setup["bin"],
+        "agy",
+        "cat >/dev/null\n"
+        "setsid sleep 37.4242 </dev/null >/dev/null 2>&1 &\n"
+        "sleep 37.4343 &\n" + _answer("OK"),
+    )
+    try:
+        result = await asyncio.wait_for(cs.complete("agy", dict(_BODY)), 20)
+
+        assert _content(result) == "OK"
+        left = {m: _processes_with(m) for m in markers}
+        for _ in range(30):
+            if not any(left.values()):
+                break
+            await asyncio.sleep(0.1)
+            left = {m: _processes_with(m) for m in markers}
+        assert left == {m: [] for m in markers}
+    finally:
+        for marker in markers:
+            for pid in _processes_with(marker):
+                with contextlib.suppress(OSError):
+                    os.kill(pid, signal.SIGKILL)
+
+
+async def test_agy_records_its_update_state_in_its_store(
+    setup, real_bwrap, shell_in_cage
+):
+    state = '{"status":"Update failed"}'
+    _install(
+        setup["bin"],
+        "agy",
+        "cat >/dev/null\n"
+        'u="$HOME/.gemini/antigravity-cli/updater"\n'
+        f"mkdir -p \"$u\" && printf '%s' '{state}' > \"$u/update_status.json\" "
+        '&& touch "$u/last_check.timestamp"\n' + _answer("OK"),
+    )
+
+    result = await cs.complete("agy", dict(_BODY))
+
+    assert _content(result) == "OK"
+    updater = setup["store"] / "updater"
+    assert (updater / "update_status.json").read_text() == state
+    assert (updater / "last_check.timestamp").exists()

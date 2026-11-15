@@ -12,8 +12,8 @@ This module builds the only command line that launches agy (``complete``,
   sight. The network is shared: agy needs it. No ``--new-session``: bwrap
   stays in the group the gateway kills on timeout or cancellation.
 - An empty root holding, read-only, the system libraries (``/usr/lib``,
-  ``/usr/lib64``, the ``/lib*`` links), the few ``/etc`` files name
-  resolution and TLS need, the CA bundles and the time zones; ``/proc`` of
+  ``/usr/lib64``, the ``/lib*`` links), the few ``/etc`` files the loader,
+  name resolution and TLS need, the CA bundles and the time zones; ``/proc`` of
   the new pid namespace and a minimal ``/dev``.
 - Writable: agy's store (``$HOME/.gemini/antigravity-cli``, where its sign-in
   token is refreshed) and the request's private ``TMPDIR``. Nothing else.
@@ -55,6 +55,9 @@ class CageUnavailable(Exception):
 _SYSTEM_DIRS = ("/usr/lib", "/usr/lib64")
 _LIB_LINKS = ("/lib", "/lib64", "/lib32")
 _SYSTEM_FILES = (
+    # glibc's loader finds the libraries through it; without it, it only
+    # looks in the default folders.
+    "/etc/ld.so.cache",
     "/etc/resolv.conf",
     "/etc/hosts",
     "/etc/nsswitch.conf",

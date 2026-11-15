@@ -334,6 +334,12 @@ def build_child_env(kind: str) -> Dict[str, str]:
         env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
     else:
         env["TERM"] = "dumb"
+    if kind == "agy":
+        # agy updates itself by replacing its own executable from a program
+        # left in the background: turned off for every launch (BUG-86). The
+        # cage holds anyway: binary read-only, background programs end with
+        # its pid namespace (agy_cage).
+        env["AGY_CLI_DISABLE_AUTO_UPDATE"] = "1"
     return env
 
 
