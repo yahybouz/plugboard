@@ -509,3 +509,62 @@ def test_ci_runs_the_sdk_tests_in_their_own_step():
 @pytest.mark.parametrize("step_id", ["ruff", "ruff-format"])
 def test_ci_lints_the_sdk(step_id):
     assert "sdk/python/" in _step(step_id)["argv"]
+
+
+# ── PLU-74: no pip in the MCP virtualenv ────────────────────────────────────
+# `python -m venv` seeds /opt/venv-mcp with the pip bundled by the image's
+# ensurepip (25.0.1 in the image in service, 15/11: PYSEC-2026-196, -1795,
+# -1796, -2875, -2876, -3721). The MCP server never needs pip at run time, so
+# the virtualenv is created without it and filled by the image's own pip
+# through `--python`, which re-runs that pip under the venv's interpreter with
+# the same arguments (pip/_internal/cli/main_parser.py, pip >= 22.3).
+
+_MCP_PYTHON = "/opt/venv-mcp/bin/python"
+_NO_MCP_PIP = (
+    "sh -c 'if /opt/venv-mcp/bin/python -m pip --version; then exit 1; fi; "
+    "echo no pip in /opt/venv-mcp'"
+)
+
+
+def _mcp_run() -> str:
+    (run,) = [r for r in _runs(_full_stage()) if "requirements-mcp.lock" in r]
+    return run
+
+
+def test_the_mcp_virtualenv_is_created_without_pip():
+    run = _mcp_run()
+
+    assert re.search(r"python -m venv --without-pip /opt/venv-mcp(?: |$)", run)
+    # Filled by the image's pip, hash-checked, from the same lock.
+    assert re.search(
+        rf"python -m pip --python {_MCP_PYTHON} install\s+--no-cache-dir\s+"
+        r"--require-hashes\s+-r\s+/tmp/requirements-mcp\.lock",
+        run,
+    ), run
+    assert "/opt/venv-mcp/bin/pip" not in _full_stage()
+    assert f'{_MCP_PYTHON} -c "import mcp, aiohttp' in run
+    assert _swallowed(run) == [], run
+
+
+def test_the_build_fails_when_the_mcp_virtualenv_has_pip():
+    runs = _runs(_full_stage())
+    guards = [r for r in runs if f"if {_MCP_PYTHON} -m pip --version" in r]
+
+    assert len(guards) == 1, guards
+    assert re.search(
+        rf"if {_MCP_PYTHON} -m pip --version; then .*exit 1; fi", guards[0]
+    )
+    # `set -e` ignores a command negated by `!`.
+    assert "! " + _MCP_PYTHON not in guards[0]
+    assert runs.index(guards[0]) >= runs.index(_mcp_run())
+
+
+def test_the_ci_image_step_checks_pip_in_both_environments():
+    """The built image: no pip in the MCP virtualenv, and the version of the
+    gateway's own pip printed in the CI log."""
+    checks = _option_values(_image_step()["argv"], "--verifier")
+
+    assert _NO_MCP_PIP in checks
+    words = shlex.split(_NO_MCP_PIP)
+    assert words[:2] == ["sh", "-c"] and len(words) == 3
+    assert "python -m pip --version" in checks

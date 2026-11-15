@@ -182,12 +182,21 @@ RUN if command -v bwrap; then echo "bwrap is on PATH: codex would use it instead
 # stdio (`docker exec -i <container> /opt/venv-mcp/bin/python
 # scripts/run_mcp.py`, see docs/guide/mcp.md) and it calls the gateway with a
 # client key. The build fails when the library does not import.
+# PLU-74: the virtualenv carries no pip. `python -m venv` would seed it with
+# the pip bundled by the image's ensurepip (25.0.1, with known advisories),
+# and the server never needs one at run time. The image's own pip fills it:
+# `--python` re-runs that pip under the venv's interpreter with the same
+# arguments, so the install stays hash-checked against the same lock.
 COPY requirements-mcp.lock /tmp/requirements-mcp.lock
-RUN python -m venv /opt/venv-mcp \
- && /opt/venv-mcp/bin/pip install --no-cache-dir --require-hashes \
+RUN python -m venv --without-pip /opt/venv-mcp \
+ && python -m pip --python /opt/venv-mcp/bin/python install --no-cache-dir --require-hashes \
         -r /tmp/requirements-mcp.lock \
  && /opt/venv-mcp/bin/python -c "import mcp, aiohttp; print('mcp ok')" \
  && rm /tmp/requirements-mcp.lock
+# The build fails if pip is in the MCP virtualenv (an `if`, not `!`: `set -e`
+# ignores a command negated by `!`). The gateway's own pip version is printed.
+RUN if /opt/venv-mcp/bin/python -m pip --version; then echo "pip is in /opt/venv-mcp (PLU-74)" >&2; exit 1; fi; \
+    python -m pip --version
 
 # CLI version probes can create private state as root during the build.
 # Keep the persisted runtime HOME writable by the unprivileged app user.

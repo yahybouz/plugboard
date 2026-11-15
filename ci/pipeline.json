@@ -46,12 +46,14 @@
       "--require-hashes", "-r", "requirements-mcp.lock"], "timeout_seconds": 600},
     {"id": "pip-audit-decisions", "argv": ["{scratch}/venv/bin/pip-audit", "--strict", "--progress-spinner", "off", "--disable-pip",
       "--require-hashes", "-r", "requirements-decisions.lock"], "timeout_seconds": 600},
-    {"id": "docker-build", "description": "Image full non poussée, celle que déploient l'UAT et l'OVH (PLU-20) : utilisateur app + HEALTHCHECK /health, chaque CLI lancée dans l'image sans réseau (agy sur amd64), le bwrap de la passerelle à son chemin fixe et aucun bwrap sur le PATH (INC-4 : codex le préférerait au sien), puis retirée.",
+    {"id": "docker-build", "description": "Image full non poussée, celle que déploient l'UAT et l'OVH (PLU-20) : utilisateur app + HEALTHCHECK /health, chaque CLI lancée dans l'image sans réseau (agy sur amd64), le bwrap de la passerelle à son chemin fixe et aucun bwrap sur le PATH (INC-4 : codex le préférerait au sien), aucun pip dans /opt/venv-mcp et la version du pip de la passerelle affichée (PLU-74), puis retirée.",
      "argv": ["{python}", "-B", "ci/ci_outils.py", "image-docker", "--nom", "plugboard", "--target", "full", "--user", "app",
       "--healthcheck", "health", "--verifier", "gemini --version", "--verifier", "claude --version",
       "--verifier", "codex --version", "--verifier", "gh --version", "--verifier-amd64", "agy --version",
       "--verifier", "/usr/libexec/plugboard/bwrap --version",
-      "--verifier", "sh -c 'if command -v bwrap; then exit 1; fi; echo no bwrap on PATH'"],
+      "--verifier", "sh -c 'if command -v bwrap; then exit 1; fi; echo no bwrap on PATH'",
+      "--verifier", "sh -c 'if /opt/venv-mcp/bin/python -m pip --version; then exit 1; fi; echo no pip in /opt/venv-mcp'",
+      "--verifier", "python -m pip --version"],
      "timeout_seconds": 2400}
   ]
 }
