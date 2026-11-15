@@ -97,12 +97,69 @@ In both cases:
 - The image has no `pip` (PLU-74): `python -m pip` fails in the container.
 - `/health/ready` without a key answers `ready` and `version` only (PLU-75):
   a check that reads `checks` must send a key.
-- Claude Fable 5.2 (`claude-fable-5-2`): the claude provider keeps its saved
-  model list and the catalogue scheduler is off here, so it lists the model
-  only after a refresh of that list decided by the operator (see above for
-  the catalogue job); until then a call to it answers `404 model_not_found`.
+- Claude Fable 5.2 (`claude-fable-5-2`, PLU-72): the claude provider keeps
+  its saved model list, which does not have it, so a call to it answers
+  `404 model_not_found` (BUG-120) until the operator adds it, as below.
 - The network change of the section above is not part of the image: apply
   it, then check the logs as it says.
+
+### Add Claude Fable 5.2 to the claude provider
+
+Neither **Discover** nor the catalogue job adds the model here: with
+`PLUGBOARD_MODEL_REFRESH_PROBE_KINDS` empty, both keep the saved list of a
+claude provider, and the catalogue job must not be run (see above). Adding
+`claude` to that variable would probe every model of the preset by
+inference, on the subscription's quota: not here.
+
+After the switch, add it by hand: read the provider's saved list, then send
+it back with `claude-fable-5-2` at the end (`PUT /providers/{id}` writes only
+the fields it is given, here `models`). Each call needs the admin key and its
+own TOTP code: a code is accepted once, so wait for the next one (about 30
+seconds) between the two calls; a reused or wrong code is refused with `401`
+and counts towards the admin key's lockout. `<claude-provider-id>` is the
+`id` of the claude provider in `GET /providers` (for example
+`claude-via-claude-cli-1`); `<gateway-url>` is the address used for the
+other admin calls.
+
+```bash
+read -rs ADMIN_KEY
+# 1. The saved list, as is (first code).
+printf 'Authorization: Bearer %s\nX-Plugboard-Admin-TOTP: %s\n' "$ADMIN_KEY" "<code-1>" \
+  | curl -sf -H @- <gateway-url>/providers \
+  | jq -e '.[] | select(.id == "<claude-provider-id>") | .models' > claude-models.json
+jq -r '.[].id' claude-models.json   # the saved models: write them down
+# 2. The same list with claude-fable-5-2 added once; stops on an empty list.
+jq -e 'if (type == "array" and length > 0) then {models: (if any(.[]; .id == "claude-fable-5-2") then . else . + [{"id": "claude-fable-5-2", "name": "claude-fable-5-2"}] end)} else error("no saved model list: stop") end' \
+  claude-models.json > claude-models.put.json
+# 3. Send it back (the next code).
+printf 'Authorization: Bearer %s\nX-Plugboard-Admin-TOTP: %s\nContent-Type: application/json\n' "$ADMIN_KEY" "<code-2>" \
+  | curl -sf -X PUT -H @- --data @claude-models.put.json <gateway-url>/providers/<claude-provider-id> \
+  | jq -r '.models[].id'   # the saved models, then claude-fable-5-2
+unset ADMIN_KEY; rm claude-models.json claude-models.put.json
+```
+
+If step 1 prints nothing or step 2 stops, send nothing: a provider without
+a saved list already takes any model name, and a wrong `id` selects no
+provider. What the call does and does not do:
+
+- Only that provider's `models` change: its default model, its other
+  models and its other fields stay; no CLI starts, no model is probed, and
+  nothing is quarantined. The audit log records `provider.update` with
+  `{"fields": ["models"]}`; the catalog history does not show a hand edit.
+- Check: `GET /v1/models` with a client key lists an ID that ends with
+  `:claude-fable-5-2` (`<claude-provider-id>:claude-fable-5-2`). A call to
+  it then starts
+  claude with `--model claude-fable-5-2` and the same options as any other
+  claude model, and is billed at the official price, 8/40 USD per million
+  tokens.
+- A later Discover keeps the model, as it keeps the rest of the saved list.
+- A key limited by `allowed_models` still gets `403 forbidden_model` for it
+  until its list names it (`claude-fable-5-2` or
+  `<claude-provider-id>:claude-fable-5-2`). That list cannot be edited:
+  create a new key with the model added, then revoke the old one
+  ([allowed models](../guide/clients-and-keys.md#allowed-models)).
+- Not checked by these steps: a real answer from Claude Fable 5.2 through
+  Claude Code 2.1.325.
 
 ## Backup
 
