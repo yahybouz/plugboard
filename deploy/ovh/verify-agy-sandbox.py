@@ -23,9 +23,12 @@ without secrets) plus ``libpython``: the probe reports what it sees of
 The probe checks, from inside the cage: the application's folders
 (``/app``, ``/app/data``, ``/app/logs``), ``~/.claude``, ``~/.codex``,
 ``/usr/local/bin/agy`` and a canary written next to the private ``TMPDIR``
-cannot be read; HOME shows ``.gemini`` only; pid 1 is bwrap (its own pid
-namespace: the gateway's ``/proc/<pid>/environ`` is out of sight) and no
-visible ``/proc/*/environ`` names a server secret; writing in HOME,
+cannot be read; HOME shows ``.gemini`` only; ``/proc`` is either the one of
+the cage's own pid namespace (pid 1 is bwrap: the gateway's
+``/proc/<pid>/environ`` is out of sight, and no visible ``/proc/*/environ``
+names a server secret) or, where the container forbids a new procfs (a
+Docker container masks paths of its ``/proc``), not mounted at all (then no
+environ can be read); the report's ``proc`` says which; writing in HOME,
 ``~/.gemini``, ``/tmp``, ``/`` and ``/usr/lib`` fails while ``TMPDIR`` is
 writable; its environment holds no server secret and has
 ``AGY_CLI_DISABLE_AUTO_UPDATE=1``; agy's sign-in token is readable and
@@ -129,7 +132,12 @@ out["reads"] = {path: read_state(path) for path in p["reads"]}
 out["home_visible"] = listing(home)
 out["usr_local_bin_visible"] = listing("/usr/local/bin")
 
-pids = [d for d in os.listdir("/proc") if d.isdigit()]
+try:
+    pids = [d for d in os.listdir("/proc") if d.isdigit()]
+    mounted = True
+except FileNotFoundError:
+    # The cage goes without /proc where the container forbids a new procfs.
+    pids, mounted = [], False
 try:
     with open("/proc/1/cmdline", "rb") as handle:
         argv0 = handle.read().split(b"\0")[0].decode("utf-8", "replace")
@@ -147,6 +155,7 @@ for pid in pids:
         if secret(name):
             found.add(name)
 out["proc"] = {
+    "mounted": mounted,
     "pid1": os.path.basename(argv0),
     "visible_pids": len(pids),
     "secret_names_in_proc_environ": sorted(found),
@@ -373,16 +382,27 @@ def main() -> None:
     if isinstance(local_bin, list) and not set(local_bin) <= allowed:
         failures.append("/usr/local/bin shows more than the interpreter")
     proc = seen["proc"]
-    report["proc"] = {
-        "pid1": proc["pid1"],
-        "pid1_is_gateway": proc["pid1"] != "bwrap",
-        "visible_pids": proc["visible_pids"],
-        "secret_names_in_proc_environ": proc["secret_names_in_proc_environ"],
-    }
-    if report["proc"]["pid1_is_gateway"]:
-        failures.append("pid 1 of the cage is not bwrap: no pid namespace")
-    if proc["secret_names_in_proc_environ"]:
-        failures.append("a server secret is named in a visible /proc/*/environ")
+    # The cage has /proc (its own pid namespace's) or, where the container
+    # forbids a new procfs, none at all: never the gateway's.
+    expected_proc = "--proc" in argv
+    if proc["mounted"]:
+        report["proc"] = "mounted (own pid namespace)"
+        report["proc_details"] = {
+            "pid1": proc["pid1"],
+            "pid1_is_gateway": proc["pid1"] != "bwrap",
+            "visible_pids": proc["visible_pids"],
+            "secret_names_in_proc_environ": proc["secret_names_in_proc_environ"],
+        }
+        if not expected_proc:
+            failures.append("/proc visible in a cage built without it")
+        if report["proc_details"]["pid1_is_gateway"]:
+            failures.append("pid 1 of the cage is not bwrap: no pid namespace")
+        if proc["secret_names_in_proc_environ"]:
+            failures.append("a server secret is named in a visible /proc/*/environ")
+    else:
+        report["proc"] = "not mounted (the container forbids a new procfs)"
+        if expected_proc:
+            failures.append("/proc missing in a cage built with it")
     report["writes_denied"] = seen["writes"]
     for where, state in seen["writes"].items():
         if state == "written":

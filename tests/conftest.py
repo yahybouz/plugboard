@@ -179,6 +179,18 @@ def agy_without_cage(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _fresh_agy_cage():
+    """What agy's cage checks or resolves once per process (bwrap's path,
+    whether a new /proc can be mounted) starts unknown in every test: a test
+    puts its own bwrap on PATH."""
+    from plugboard import agy_cage
+
+    agy_cage._reset_for_tests()
+    yield
+    agy_cage._reset_for_tests()
+
+
+@pytest.fixture(autouse=True)
 def _reset_load_state():
     """Provider leases, route pauses, circuits, session turns and the global
     chat slots start empty in every test (PLU-9, PLU-8, PLU-14): a circuit

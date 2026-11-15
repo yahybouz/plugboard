@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import functools
 import hashlib
+import json
 import os
 import shutil
 import signal
@@ -744,6 +745,270 @@ async def test_list_models_and_version_run_in_the_cage(
     probe = await cs.probe_cli_version("agy")
 
     assert probe == {"ok": True, "version": "agy 9.9.9", "error": None}
+    assert list(setup["spawn"].iterdir()) == []
+
+
+# ── /proc where the container forbids a new procfs ──────────────────────────
+#
+# Docker masks paths of the container's /proc (/proc/kcore, /proc/keys...) by
+# mounting over them; the kernel then refuses a new procfs in a user
+# namespace: ``bwrap: Can't mount proc on /newroot/proc: Operation not
+# permitted``. Like codex's sandbox, the cage checks once, with bwrap itself
+# as the command (never agy), and goes without /proc when that is refused.
+# It never binds the host's /proc: the cage would read the gateway's environ.
+
+_PROC_REFUSED = "bwrap: Can't mount proc on /newroot/proc: Operation not permitted"
+
+
+def _fake_bwrap(setup, precheck: str) -> tuple:
+    """A fake bwrap recording each call (one argument per line, then
+    ``--END--``); ``precheck`` is its answer to ``... -- <bwrap> --version``."""
+    log = setup["tmp"] / "bwrap-calls"
+    answers = {
+        "ok": "echo 'bubblewrap 0.9.0'; exit 0",
+        "refused": f'echo "{_PROC_REFUSED}" >&2; exit 1',
+        "other": "echo 'bwrap: setting up uid map: Permission denied' >&2; exit 1",
+    }
+    bwrap = _install(
+        setup["bin"],
+        "bwrap",
+        f"printf '%s\\n' \"$@\" --END-- >> {log}\n"
+        'for last; do :; done\nif [ "$last" = "--version" ]; then\n'
+        f"  {answers[precheck]}\nfi\nexit 0\n",
+    )
+    return bwrap, log
+
+
+def _calls(log: Path) -> list:
+    if not log.exists():
+        return []
+    calls, current = [], []
+    for line in log.read_text().splitlines():
+        if line == "--END--":
+            calls.append(current)
+            current = []
+        else:
+            current.append(line)
+    return calls
+
+
+def test_the_proc_check_runs_bwrap_itself_never_agy(setup, fake_binary):
+    bwrap, log = _fake_bwrap(setup, "ok")
+
+    argv, _ = _argv(setup, str(fake_binary))
+
+    (check,) = _calls(log)
+    assert str(fake_binary) not in check
+    sep = check.index("--")
+    assert check[sep + 1 :] == [str(bwrap), "--version"]
+    assert ("--ro-bind", str(bwrap), str(bwrap)) in [
+        tuple(check[i : i + 3]) for i, a in enumerate(check[:sep]) if a == "--ro-bind"
+    ]
+    # The cage's namespaces and system binds, with a new /proc.
+    head = argv[1 : argv.index("--proc")]
+    assert check[: len(head)] == head
+    assert ("--proc", "/proc") in [tuple(check[i : i + 2]) for i in range(sep)]
+    assert ("--proc", "/proc") in [tuple(argv[i : i + 2]) for i in range(len(argv))]
+
+
+def test_the_proc_check_runs_once_per_process(setup, fake_binary):
+    _, log = _fake_bwrap(setup, "ok")
+
+    for _ in range(3):
+        argv, _ = _argv(setup, str(fake_binary))
+        assert "--proc" in argv
+
+    assert len(_calls(log)) == 1
+
+
+def test_the_cage_goes_without_proc_where_the_container_forbids_it(
+    setup, fake_binary, caplog
+):
+    _, log = _fake_bwrap(setup, "refused")
+
+    with caplog.at_level("WARNING", logger="plugboard.agy_cage"):
+        first, _ = _argv(setup, str(fake_binary))
+        second, _ = _argv(setup, str(fake_binary))
+
+    for argv in (first, second):
+        assert "--proc" not in argv
+        # Its own pid namespace still: the rest of agy's tree dies with it.
+        assert "--unshare-pid" in argv
+        assert not [a for a in argv if a == "/proc" or a.startswith("/proc/")]
+    assert len(_calls(log)) == 1, "checked once per process"
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "without /proc" in warnings[0].getMessage()
+    assert str(setup["tmp"]) not in warnings[0].getMessage()
+
+
+def test_any_other_check_failure_keeps_proc(setup, fake_binary):
+    """Not a procfs refusal: the cage keeps /proc (the call then fails with
+    the usual 503), and the next call checks again."""
+    _, log = _fake_bwrap(setup, "other")
+
+    for _ in range(2):
+        argv, _ = _argv(setup, str(fake_binary))
+        assert ("--proc", "/proc") in [tuple(argv[i : i + 2]) for i in range(len(argv))]
+
+    assert len(_calls(log)) == 2
+
+
+_BIND_OPTIONS = {
+    f"{o}{t}"
+    for o in ("--bind", "--ro-bind", "--dev-bind", "--bind-data", "--ro-bind-data")
+    for t in ("", "-try")
+}
+
+
+@pytest.mark.parametrize("precheck", ["ok", "refused", "other"])
+def test_no_command_line_binds_the_hosts_proc(setup, fake_binary, precheck):
+    """The host's /proc in the cage would show the gateway's environ (same
+    uid): only a procfs of the cage's own pid namespace, or none."""
+    _, log = _fake_bwrap(setup, precheck)
+
+    argv, _ = _argv(setup, str(fake_binary))
+
+    for line in [argv, *_calls(log)]:
+        sep = line.index("--")
+        for i, arg in enumerate(line[:sep]):
+            if arg in _BIND_OPTIONS:
+                for path in line[i + 1 : i + 3]:
+                    assert path != "/proc" and not path.startswith("/proc/"), line
+            if arg == "--symlink":
+                assert not line[i + 1].startswith("/proc"), line
+
+
+# The simulation of a Docker container: an outer bwrap whose /proc has a path
+# masked the way Docker does it, then the gateway's code inside it.
+
+
+def _outer(bwrap: str, inner: list) -> list:
+    return [
+        *(bwrap, "--unshare-user", "--dev-bind", "/", "/"),
+        *("--ro-bind", "/dev/null", "/proc/kcore", "--", *inner),
+    ]
+
+
+@functools.lru_cache(maxsize=1)
+def _docker_like_unusable_reason() -> str:
+    """Empty when the host reproduces Docker's refusal of a new procfs."""
+    reason = _bwrap_unusable_reason()
+    if reason:
+        return reason
+    if not os.path.exists("/proc/kcore"):
+        return "no /proc/kcore to mask"
+    bwrap = shutil.which("bwrap")
+    inner = [bwrap, "--unshare-user", "--unshare-pid", "--ro-bind", "/usr", "/usr"]
+    for path in ("/bin", "/lib", "/lib64"):
+        if os.path.islink(path):
+            inner += ["--symlink", os.readlink(path), path]
+        elif os.path.isdir(path):
+            inner += ["--ro-bind", path, path]
+    inner += ["--dev", "/dev"]
+    true = shutil.which("true") or "/bin/true"
+    try:
+        bare = subprocess.run(
+            _outer(bwrap, [*inner, "--", true]), capture_output=True, timeout=20
+        )
+        with_proc = subprocess.run(
+            _outer(bwrap, [*inner, "--proc", "/proc", "--", true]),
+            capture_output=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"{type(exc).__name__}: {exc}"
+    if bare.returncode != 0:
+        return "nested bwrap unusable: " + bare.stderr.decode("utf-8", "replace")[:200]
+    if with_proc.returncode == 0 or b"Can't mount proc" not in with_proc.stderr:
+        return "a masked /proc does not forbid a new procfs on this host"
+    return ""
+
+
+@pytest.fixture
+def docker_like(real_bwrap):
+    reason = _docker_like_unusable_reason()
+    if reason:
+        pytest.skip(f"Docker-like /proc not reproducible: {reason}")
+    return shutil.which("bwrap")
+
+
+# Run inside the outer bwrap: the gateway's complete() with a fake agy (a
+# shell, hence the test-only binds) that reports what it sees of /proc.
+_GATEWAY_IN_CONTAINER = r"""
+import asyncio, functools, json, os, sys
+
+from plugboard import agy_cage
+from plugboard import cli_subprocess as cs
+
+p = json.loads(sys.argv[1])
+cs._SPAWN_CWD_CACHE = p["spawn"]
+agy_cage.cage_argv = functools.partial(
+    agy_cage.cage_argv, _extra_ro_for_tests=tuple(p["shell_ro"])
+)
+agy = os.path.join(p["bin"], "agy")
+with open(agy, "w", encoding="utf-8") as handle:
+    handle.write(p["agy"].replace("@GATEWAY_PID@", str(os.getpid())))
+os.chmod(agy, 0o755)
+body = {"model": "gemini-test", "messages": [{"role": "user", "content": "hi"}]}
+try:
+    result = asyncio.run(cs.complete("agy", body))
+    print(json.dumps({"content": result["choices"][0]["message"]["content"]}))
+except Exception as exc:
+    print(json.dumps({"error": type(exc).__name__ + ": " + str(exc)}))
+"""
+
+_AGY_SEEING_PROC = (
+    "#!/bin/sh\ncat >/dev/null\n"
+    "if test -d /proc; then d=yes; else d=no; fi\n"
+    "if cat /proc/1/environ >/dev/null 2>&1; then e=yes; else e=no; fi\n"
+    "if cat /proc/@GATEWAY_PID@/environ >/dev/null 2>&1; then g=yes; else g=no; fi\n"
+    "if env | grep -q -e adm-secret -e api-secret -e enc-secret -e pb-secret; "
+    "then s=yes; else s=no; fi\n"
+    'R="proc=$d proc1_environ=$e gateway_environ=$g secret=$s pid=$$"\n'
+    'echo "{\\"status\\":\\"SUCCESS\\",\\"response\\":\\"$R\\",\\"usage\\":{}}"\n'
+)
+
+
+def test_agy_runs_where_the_container_forbids_a_new_procfs(
+    setup, docker_like, tmp_path
+):
+    script = tmp_path / "gateway.py"
+    script.write_text(_GATEWAY_IN_CONTAINER, encoding="utf-8")
+    params = {
+        "spawn": str(setup["spawn"]),
+        "bin": str(setup["bin"]),
+        "shell_ro": list(_SHELL_RO),
+        "agy": _AGY_SEEING_PROC,
+    }
+    env = {
+        **os.environ,
+        "HOME": str(setup["home"]),
+        "PATH": f"{setup['bin']}:/usr/bin:/bin",
+        "PYTHONPATH": str(ROOT),
+        **_SECRETS,
+    }
+    env.pop("PLUGBOARD_SUBPROCESS_CWD", None)
+
+    proc = subprocess.run(
+        _outer(docker_like, [sys.executable, str(script), json.dumps(params)]),
+        env=env,
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    # No /proc at all, so no environ to read; still a pid namespace of its
+    # own (agy is pid 2, under bwrap); and no secret in its environment.
+    assert out == {
+        "content": "proc=no proc1_environ=no gateway_environ=no secret=no pid=2"
+    }, proc.stderr
+    assert "without /proc" in proc.stderr
+    for value in _SECRETS.values():
+        assert value not in proc.stdout + proc.stderr
     assert list(setup["spawn"].iterdir()) == []
 
 

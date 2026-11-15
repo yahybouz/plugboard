@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -25,7 +26,11 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_agy_cage import _bwrap_unusable_reason
+from tests.test_agy_cage import (
+    _bwrap_unusable_reason,
+    _docker_like_unusable_reason,
+    _outer,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "deploy" / "ovh" / "verify-agy-sandbox.py"
@@ -78,7 +83,7 @@ def world(tmp_path):
 
 
 def _run(
-    world, *, path: str | None = None, extra_args=()
+    world, *, path: str | None = None, extra_args=(), wrap=()
 ) -> subprocess.CompletedProcess:
     env = {
         "HOME": str(world["home"]),
@@ -91,7 +96,7 @@ def _run(
     }
     with SCRIPT.open("rb") as source:
         return subprocess.run(
-            [sys.executable, "-", "--app-root", str(world["app"]), *extra_args],
+            [*wrap, sys.executable, "-", "--app-root", str(world["app"]), *extra_args],
             stdin=source,
             cwd=ROOT,
             env=env,
@@ -144,8 +149,9 @@ def test_the_cage_passes_every_check(world, real_bwrap):
     assert report["home_visible"] == [".gemini"]
     assert report["outside_canary"] == "invisible"
     # /proc: a pid namespace of its own, no server secret in any environ.
-    assert report["proc"]["pid1_is_gateway"] is False
-    assert report["proc"]["secret_names_in_proc_environ"] == []
+    assert report["proc"] == "mounted (own pid namespace)"
+    assert report["proc_details"]["pid1_is_gateway"] is False
+    assert report["proc_details"]["secret_names_in_proc_environ"] == []
     # Writes: only in the private TMPDIR.
     for where in ("HOME", "~/.gemini", "/tmp", "/", "/usr/lib"):
         assert report["writes_denied"][where] != "written", report["writes_denied"]
@@ -214,4 +220,21 @@ def test_a_bwrap_that_cannot_build_the_cage_fails_clearly(world, tmp_path):
     report = _report(proc)
     assert report["sandbox_start"] == "fail"
     assert "setting up uid map: Permission denied" in proc.stderr
+    _no_secret_in(proc)
+
+
+def test_the_check_passes_where_the_container_forbids_a_new_procfs(world):
+    """In a Docker-like container (a masked path of /proc), the cage goes
+    without /proc: the script says so and every check still passes (no
+    /proc, no environ of the gateway to read)."""
+    reason = _docker_like_unusable_reason()
+    if reason:
+        pytest.skip(f"Docker-like /proc not reproducible: {reason}")
+    proc = _run(world, wrap=_outer(shutil.which("bwrap"), []))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    report = _report(proc)
+    assert report["result"] == "pass", report
+    assert report["proc"] == "not mounted (the container forbids a new procfs)"
+    assert report["token"] == "readable, rewritable, unchanged"
+    assert report["env"]["secret_names"] == []
     _no_secret_in(proc)

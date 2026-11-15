@@ -14,7 +14,7 @@ This module builds the only command line that launches agy (``complete``,
 - An empty root holding, read-only, the system libraries (``/usr/lib``,
   ``/usr/lib64``, the ``/lib*`` links), the few ``/etc`` files the loader,
   name resolution and TLS need, the CA bundles and the time zones; ``/proc`` of
-  the new pid namespace and a minimal ``/dev``.
+  the new pid namespace (see below) and a minimal ``/dev``.
 - Writable: agy's store (``$HOME/.gemini/antigravity-cli``, where its sign-in
   token is refreshed) and the request's private ``TMPDIR``. Nothing else.
 - The binary, by its real path, read-only, bound after the store; then the
@@ -22,6 +22,17 @@ This module builds the only command line that launches agy (``complete``,
 
 Not in the cage: ``/usr/bin``, ``/usr/local``, ``/app``, the rest of HOME
 (``~/.claude``, ``~/.codex``...), ``/tmp``, ``/sys``.
+
+``/proc``: a Docker container masks paths of its ``/proc`` (``/proc/kcore``,
+``/proc/keys``...) by mounting over them, and the kernel then refuses a new
+procfs in a user namespace (``bwrap: Can't mount proc on /newroot/proc:
+Operation not permitted``). Like codex's own sandbox, the cage checks once
+per process, running bwrap itself (never agy) with the cage's namespaces and
+system binds and ``--proc /proc``: when that is refused, the cage has no
+``/proc`` at all. It keeps its pid namespace (what agy leaves running dies
+with it) and the gateway's ``/proc/<pid>/environ`` stays out of reach a
+fortiori. The host's ``/proc`` is never bound into the cage: it would show
+the gateway's environment (same uid).
 
 The environment reaches agy through execve (the caller's ``env=``), never the
 command line nor ``--setenv``: a proxy URL can hold a password.
@@ -35,12 +46,16 @@ started but could not build the cage.
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
+import subprocess
 import sys
 from typing import List, Mapping, Optional, Sequence
 
 from plugboard.agy_store import STORE_PARTS
+
+log = logging.getLogger(__name__)
 
 
 class CageUnavailable(Exception):
@@ -74,6 +89,27 @@ _SYSTEM_FILES = (
 )
 # CA locations the child's environment may name.
 _CA_VARIABLES = ("SSL_CERT_FILE", "SSL_CERT_DIR")
+_NAMESPACES = (
+    "--unshare-user",
+    "--unshare-ipc",
+    "--unshare-pid",
+    "--unshare-uts",
+    "--unshare-cgroup-try",
+    "--die-with-parent",
+)
+# bwrap's words when the kernel refuses a new procfs (a Docker container).
+_PROC_REFUSED = "Can't mount proc"
+_PROC_CHECK_TIMEOUT_S = 10.0
+
+# Whether the cage can mount a procfs of its own: None until checked, then
+# kept for the life of the process (see _proc_mountable).
+_proc_mount: Optional[bool] = None
+
+
+def _reset_for_tests() -> None:
+    """Forget what was checked or resolved once per process (tests only)."""
+    global _proc_mount
+    _proc_mount = None
 
 
 def _plain_path(path: str) -> bool:
@@ -119,6 +155,61 @@ def _system_args(env: Mapping[str, str]) -> List[str]:
     return args
 
 
+def _proc_mountable(bwrap: str, env: Mapping[str, str]) -> bool:
+    """Whether the cage can mount a new ``/proc``, checked once per process.
+
+    bwrap runs with the cage's namespaces, its system binds and ``--proc
+    /proc``, and bwrap itself (``--version``) as the command: agy never runs
+    here. Exit 0: yes. Refused with ``Can't mount proc``: no (a container
+    masking paths of its ``/proc``), logged once. Any other outcome says
+    nothing about ``/proc``: the cage keeps it (the call itself then fails
+    and is reported as usual) and the next call checks again.
+    """
+    global _proc_mount
+    if _proc_mount is not None:
+        return _proc_mount
+    argv = [
+        bwrap,
+        *_NAMESPACES,
+        *_system_args(env),
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--ro-bind",
+        bwrap,
+        bwrap,
+        "--remount-ro",
+        "/",
+        "--",
+        bwrap,
+        "--version",
+    ]
+    try:
+        proc = subprocess.run(
+            argv,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            env={},
+            timeout=_PROC_CHECK_TIMEOUT_S,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if proc.returncode == 0:
+        _proc_mount = True
+    elif _PROC_REFUSED in (proc.stderr or b"").decode("utf-8", "replace"):
+        _proc_mount = False
+        log.warning(
+            "agy's sandbox runs without /proc: this container forbids a new "
+            "procfs (agy keeps its own pid namespace and cannot read the "
+            "gateway's environment)"
+        )
+    else:
+        return True
+    return _proc_mount
+
+
 def cage_argv(
     binary: str,
     args: Sequence[str],
@@ -151,24 +242,16 @@ def cage_argv(
     if not os.path.isfile(real_binary):
         raise CageUnavailable("agy binary not found")
 
-    argv = [
-        bwrap,
-        "--unshare-user",
-        "--unshare-ipc",
-        "--unshare-pid",
-        "--unshare-uts",
-        "--unshare-cgroup-try",
-        "--die-with-parent",
-        *_system_args(env),
-    ]
+    argv = [bwrap, *_NAMESPACES, *_system_args(env)]
     for path in _extra_ro_for_tests:
         if os.path.islink(path):
             argv += ["--symlink", os.readlink(path), path]
         else:
             argv += ["--ro-bind", path, path]
+    if _proc_mountable(bwrap, env):
+        # The procfs of the cage's own pid namespace, never the host's.
+        argv += ["--proc", "/proc"]
     argv += [
-        "--proc",
-        "/proc",
         "--dev",
         "/dev",
         "--bind",
