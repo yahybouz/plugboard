@@ -32,6 +32,7 @@ import signal
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -942,6 +943,47 @@ def test_any_other_check_failure_keeps_proc(setup, fake_binary):
         assert ("--proc", "/proc") in [tuple(argv[i : i + 2]) for i in range(len(argv))]
 
     assert len(_calls(log)) == 2
+
+
+def test_a_hanging_proc_check_is_cut_and_not_repeated(setup, fake_binary, monkeypatch):
+    """bwrap hanging, with a child out of its session holding its stderr:
+    the check is cut at its delay (it runs before agy's call, on the
+    gateway's event loop), kills what it started, keeps /proc and does not
+    run again."""
+    monkeypatch.setattr(agy_cage, "_PROC_CHECK_TIMEOUT_S", 1.0)
+    log = setup["tmp"] / "bwrap-calls"
+    pids = setup["tmp"] / "bwrap-pids"
+    _install(
+        setup["bin"],
+        "bwrap",
+        f"echo call >> {log}\n"
+        "trap '' TERM\n"
+        "setsid sleep 8.4242 &\n"
+        f'echo "$$ $!" > {pids}\n'
+        "sleep 8.4343\n",
+    )
+    try:
+        started = time.monotonic()
+        first, _ = _argv(setup, str(fake_binary))
+        elapsed = time.monotonic() - started
+        second, _ = _argv(setup, str(fake_binary))
+
+        assert elapsed < 4.0, f"the check held the caller {elapsed:.1f}s"
+        for argv in (first, second):
+            assert ("--proc", "/proc") in [
+                tuple(argv[i : i + 2]) for i in range(len(argv))
+            ]
+        assert log.read_text().count("call") == 1
+        shell = int(pids.read_text().split()[0])
+        with pytest.raises(ProcessLookupError):
+            for _ in range(20):
+                os.kill(shell, 0)
+                time.sleep(0.1)
+    finally:
+        for marker in (b"8.4242", b"8.4343"):
+            for pid in _processes_with(marker):
+                with contextlib.suppress(OSError):
+                    os.kill(pid, signal.SIGKILL)
 
 
 _BIND_OPTIONS = {

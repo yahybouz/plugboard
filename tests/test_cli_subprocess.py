@@ -728,6 +728,12 @@ async def fake_cli(tmp_path, monkeypatch):
         script.chmod(0o755)
 
     monkeypatch.setattr(cli_subprocess.shutil, "which", lambda cmd: str(script))
+    # bwrap resolves to the fake CLI too (agy's cage launches it, the CLI
+    # under test): the cage's once-per-process /proc check is taken as done,
+    # so the script runs only as the call itself.
+    from plugboard import agy_cage
+
+    monkeypatch.setattr(agy_cage, "_proc_mount", True)
     monkeypatch.setattr(asyncio, "create_subprocess_exec", recording_exec)
     yield write, pid_file
     if pid_file.exists():

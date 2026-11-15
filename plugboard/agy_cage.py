@@ -48,11 +48,14 @@ started but could not build the cage.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 from typing import List, Mapping, Optional, Sequence
 
 from plugboard.agy_store import STORE_PARTS
@@ -104,7 +107,7 @@ _NAMESPACES = (
 )
 # bwrap's words when the kernel refuses a new procfs (a Docker container).
 _PROC_REFUSED = "Can't mount proc"
-_PROC_CHECK_TIMEOUT_S = 10.0
+_PROC_CHECK_TIMEOUT_S = 5.0
 
 # Whether the cage can mount a procfs of its own: None until checked, then
 # kept for the life of the process (see _proc_mountable).
@@ -211,7 +214,8 @@ def _proc_mountable(bwrap: str, env: Mapping[str, str]) -> bool:
     here. Exit 0: yes. Refused with ``Can't mount proc``: no (a container
     masking paths of its ``/proc``), logged once. Any other outcome says
     nothing about ``/proc``: the cage keeps it (the call itself then fails
-    and is reported as usual) and the next call checks again.
+    and is reported as usual) and the next call checks again, except after a
+    timeout, which is not repeated (the check holds the caller meanwhile).
     """
     global _proc_mount
     if _proc_mount is not None:
@@ -233,20 +237,36 @@ def _proc_mountable(bwrap: str, env: Mapping[str, str]) -> bool:
         bwrap,
         "--version",
     ]
-    try:
-        proc = subprocess.run(
-            argv,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            env={},
-            timeout=_PROC_CHECK_TIMEOUT_S,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return True
-    if proc.returncode == 0:
+    # It runs before agy's call, on the gateway's event loop: bounded, in a
+    # session of its own (killed whole on timeout), stderr in a file (a
+    # leftover child holding a pipe cannot make it wait).
+    with tempfile.TemporaryFile() as errors:
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=errors,
+                env={},
+                start_new_session=True,
+            )
+        except OSError:
+            return True
+        try:
+            returncode = proc.wait(timeout=_PROC_CHECK_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(OSError):
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+            # Never again in this process: /proc kept, the call reports.
+            _proc_mount = True
+            log.warning("agy's sandbox /proc check timed out: /proc kept")
+            return True
+        errors.seek(0)
+        stderr = errors.read(4096).decode("utf-8", "replace")
+    if returncode == 0:
         _proc_mount = True
-    elif _PROC_REFUSED in (proc.stderr or b"").decode("utf-8", "replace"):
+    elif _PROC_REFUSED in stderr:
         _proc_mount = False
         log.warning(
             "agy's sandbox runs without /proc: this container forbids a new "
