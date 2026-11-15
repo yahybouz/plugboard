@@ -56,9 +56,15 @@ account), no cage is built and the check fails (exit 1, ``agy_setup``:
 (default ``/app``); it exists for the test suite, which runs on a host
 without ``/app``.
 
+The report names the ``bwrap`` the cage uses (found through ``agy_cage``:
+``/usr/libexec/plugboard/bwrap`` in the image) and says whether one is on
+the PATH the CLIs get (``bwrap_on_path``). ``true`` fails the check (INC-4):
+codex prefers a bwrap found on PATH to the one it ships, and in a container
+Debian's cannot mount ``/proc`` (every codex call failed, 15/11).
+
 Output: one JSON line, ``model_requests: 0``. Exit code 0 when every check
-passes, 1 when a check fails (or agy is not signed in), 2 when the cage
-cannot start.
+passes, 1 when a check fails (or agy is not signed in, or a bwrap is on the
+PATH), 2 when the cage cannot start.
 """
 
 from __future__ import annotations
@@ -69,6 +75,7 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
 import subprocess
 import sys
 import sysconfig
@@ -357,6 +364,20 @@ def main() -> None:
         failures.append("the gateway runs as root")
         _emit(report, 1)
 
+    # INC-4: the PATH every CLI gets is the gateway's (build_child_env); a
+    # bwrap there is the one codex takes instead of the one it ships.
+    report["bwrap"] = None
+    codex_path = cs.build_child_env("codex").get("PATH", "")
+    on_path = shutil.which("bwrap", path=codex_path) if codex_path else None
+    report["bwrap_on_path"] = on_path is not None
+    if on_path is not None:
+        failure = (
+            f"a bwrap is on the CLIs' PATH ({on_path}): codex would take it "
+            "instead of the one it ships and fail to mount /proc (INC-4)"
+        )
+        print(failure, file=sys.stderr)
+        failures.append(failure)
+
     binary = os.path.realpath(sys.executable)
     extra = _interpreter_paths(binary)
     report["interpreter"] = binary
@@ -388,6 +409,8 @@ def main() -> None:
             with cs.agy_caged(
                 binary, ["-I", "-S", "-c", PROBE, json.dumps(params)], spawn_cwd
             ) as (argv, env):
+                # The bwrap agy_cage resolved (its fixed path in the image).
+                report["bwrap"] = argv[0]
                 expected_tmpdir = env["TMPDIR"]
                 result = subprocess.run(
                     argv,

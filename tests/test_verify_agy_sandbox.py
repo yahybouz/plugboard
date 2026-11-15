@@ -82,6 +82,9 @@ def world(tmp_path):
     tmp.mkdir()
     data = tmp_path / "data"
     data.mkdir()
+    # The image's PATH holds no bwrap (INC-4): an empty folder stands for it.
+    path = tmp_path / "path-without-bwrap"
+    path.mkdir()
     return {
         "home": home,
         "gemini": gemini,
@@ -90,15 +93,49 @@ def world(tmp_path):
         "app": app,
         "tmp": tmp,
         "data": data,
+        "path": path,
+        "no_gateway_bwrap": tmp_path / "no-gateway-bwrap",
     }
 
 
+# The script runs as in the image: the gateway's bwrap at agy_cage's fixed
+# path (INC-4), here the host's, set in the module as the image's path is
+# (never through a variable), and none on PATH. ``patch`` runs next, before
+# the script, read from stdin as with ``python - < file``.
+_LAUNCHER = """import sys
+sys.path.insert(0, {root!r})
+from plugboard import agy_cage
+agy_cage.GATEWAY_BWRAP = {bwrap!r}
+{patch}
+exec(compile(sys.stdin.read(), "verify-agy-sandbox.py", "exec"), {{"__name__": "__main__"}})
+"""
+
+
+def _host_bwrap() -> str | None:
+    found = shutil.which("bwrap")
+    return os.path.realpath(found) if found else None
+
+
 def _run(
-    world, *, path: str | None = None, extra_args=(), wrap=(), launcher=("-",)
+    world,
+    *,
+    path: str | None = None,
+    gateway_bwrap: str | None = "host",
+    patch: str = "",
+    extra_args=(),
+    wrap=(),
 ) -> subprocess.CompletedProcess:
+    """Run the script; ``gateway_bwrap=None``: no bwrap at the fixed path."""
+    if gateway_bwrap == "host":
+        gateway_bwrap = _host_bwrap()
+    launcher = _LAUNCHER.format(
+        root=str(ROOT),
+        bwrap=gateway_bwrap or str(world["no_gateway_bwrap"]),
+        patch=patch,
+    )
     env = {
         "HOME": str(world["home"]),
-        "PATH": path if path is not None else os.environ.get("PATH", "/usr/bin:/bin"),
+        "PATH": path if path is not None else str(world["path"]),
         "TMPDIR": str(world["tmp"]),
         "LANG": "C.UTF-8",
         "PLUGBOARD_SKIP_DOTENV": "1",
@@ -110,7 +147,8 @@ def _run(
             [
                 *wrap,
                 sys.executable,
-                *launcher,
+                "-c",
+                launcher,
                 "--app-root",
                 str(world["app"]),
                 *extra_args,
@@ -154,6 +192,10 @@ def test_the_cage_passes_every_check(world, real_bwrap):
     assert report["agy_run"] is False
     assert report["uid"] == os.getuid() != 0
     assert report["sandbox_start"] == "pass"
+    # The gateway's bwrap, found through agy_cage at its fixed path, and none
+    # on the PATH codex gets (INC-4).
+    assert report["bwrap"] == _host_bwrap()
+    assert report["bwrap_on_path"] is False
     # Reads: the app's folders, the other CLIs' sign-ins and /usr/local/bin.
     reads = report["reads_denied"]
     for path in (
@@ -214,10 +256,7 @@ def _assert_gemini_config_checked(report: dict, world) -> None:
     assert not [p for p in world["gemini"].rglob("*") if ".plugboard-verify-" in p.name]
 
 
-_LEAKY_CAGE = """import sys
-sys.path.insert(0, {root!r})
-from plugboard import agy_cage
-real = agy_cage.cage_argv
+_LEAKY_CAGE = """real = agy_cage.cage_argv
 
 
 def leaky(binary, args, **kw):
@@ -232,17 +271,14 @@ def leaky(binary, args, **kw):
 
 
 agy_cage.cage_argv = leaky
-exec(compile(sys.stdin.read(), "verify-agy-sandbox.py", "exec"), {{"__name__": "__main__"}})
 """
 
 
-def test_a_writable_agy_config_fails_the_check(world, real_bwrap, tmp_path):
+def test_a_writable_agy_config_fails_the_check(world, real_bwrap):
     """Not vacuous: the same cage with agy's config bound writable fails,
     and the check leaves nothing behind."""
-    leaky = tmp_path / "leaky.py"
-    leaky.write_text(_LEAKY_CAGE.format(root=str(ROOT)))
     before = _gemini_snapshot(world["gemini"])
-    proc = _run(world, launcher=(str(leaky),))
+    proc = _run(world, patch=_LEAKY_CAGE)
     assert proc.returncode == 1, proc.stdout + proc.stderr
     report = _report(proc)
     assert report["result"] == "fail"
@@ -352,12 +388,14 @@ def test_a_missing_token_fails(world, real_bwrap):
 def test_without_bwrap_the_check_fails_clearly(world, tmp_path):
     empty = tmp_path / "empty-bin"
     empty.mkdir()
-    proc = _run(world, path=str(empty))
+    proc = _run(world, path=str(empty), gateway_bwrap=None)
     assert proc.returncode != 0
     report = _report(proc)
     assert report["sandbox_start"] == "fail"
     assert report["result"] == "fail"
-    assert "bwrap not found on PATH" in proc.stderr
+    assert "bwrap not found on PATH nor at" in proc.stderr
+    assert report["bwrap"] is None
+    assert report["bwrap_on_path"] is False
     assert report["model_requests"] == 0
     _no_secret_in(proc)
 
@@ -370,12 +408,49 @@ def test_a_bwrap_that_cannot_build_the_cage_fails_clearly(world, tmp_path):
         "#!/bin/sh\necho 'bwrap: setting up uid map: Permission denied' >&2\nexit 1\n"
     )
     bwrap.chmod(0o755)
-    proc = _run(world, path=str(fake))
+    proc = _run(world, path=str(fake), gateway_bwrap=None)
     assert proc.returncode != 0
     report = _report(proc)
     assert report["sandbox_start"] == "fail"
     assert "setting up uid map: Permission denied" in proc.stderr
     _no_secret_in(proc)
+
+
+def test_a_bwrap_on_path_fails_the_check(world, real_bwrap, tmp_path):
+    """INC-4: a bwrap on the PATH the CLIs get is the one codex would take
+    instead of its own (Debian's could not mount /proc in the container):
+    the cage itself passes, the check fails (exit 1) and says why."""
+    on_path = tmp_path / "bin-with-bwrap"
+    on_path.mkdir()
+    (on_path / "bwrap").symlink_to(_host_bwrap())
+    proc = _run(world, path=str(on_path))
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    report = _report(proc)
+    assert report["result"] == "fail"
+    assert report["sandbox_start"] == "pass"
+    assert report["bwrap"] == _host_bwrap()
+    assert report["bwrap_on_path"] is True
+    (failure,) = report["failures"]
+    assert failure == (
+        f"a bwrap is on the CLIs' PATH ({on_path / 'bwrap'}): codex would take "
+        "it instead of the one it ships and fail to mount /proc (INC-4)"
+    )
+    assert failure in proc.stderr
+    _no_secret_in(proc)
+
+
+def test_outside_the_image_bwrap_is_found_on_path(world, real_bwrap, tmp_path):
+    """A host install (no bwrap at the fixed path): agy_cage takes the one
+    on PATH, which the check then reports for codex's sake."""
+    on_path = tmp_path / "bin-with-bwrap"
+    on_path.mkdir()
+    (on_path / "bwrap").symlink_to(_host_bwrap())
+    proc = _run(world, path=str(on_path), gateway_bwrap=None)
+    report = _report(proc)
+    assert report["sandbox_start"] == "pass"
+    assert report["bwrap"] == _host_bwrap()
+    assert report["bwrap_on_path"] is True
+    assert proc.returncode == 1
 
 
 def test_the_check_passes_where_the_container_forbids_a_new_procfs(world):
