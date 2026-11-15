@@ -139,7 +139,7 @@ from plugboard.legacy_connectors import (
 from plugboard.decisions import is_decision_model
 from plugboard.cli_auth import AuthError
 from plugboard.cli_limits import UNSUPPORTED_ON_CLI
-from plugboard.cli_subprocess import CliSubprocessError
+from plugboard.cli_subprocess import CliSubprocessError, ModelNotServedError
 from plugboard.router import (
     ProviderDisabledError,
     ProviderHTTPError,
@@ -155,6 +155,7 @@ from plugboard.router import (
     forward_stream,
     invalidate_models_cache,
     is_unknown_model,
+    is_unserved_cli_model,
     list_models,
     resolve_provider_and_model,
     served_by as _served_by,
@@ -2558,6 +2559,8 @@ def _chat_error_response(
         return _provider_disabled_response(exc.provider_id)
     if isinstance(exc, UnsupportedOnCliError):
         return _unsupported_on_cli_response(exc)
+    if isinstance(exc, ModelNotServedError):
+        return _model_not_served_response()  # nothing was started (BUG-120)
     # Before the timeout test: a CLI message quotes its stderr.
     if isinstance(exc, CliSubprocessError):
         return _cli_error_response(exc, client_id)
@@ -2765,6 +2768,24 @@ def _model_not_found_response(model: str) -> JSONResponse:
     )
 
 
+def _model_not_served_response() -> JSONResponse:
+    """404 for a model ID a CLI route does not serve (BUG-120).
+
+    The same ``code`` and ``hint`` as ``_model_not_found_response``. The
+    detail is generic: it never quotes the ID (it may hold line breaks or
+    options), nor a CLI, its output or a pid, since nothing was started.
+    """
+    return JSONResponse(
+        status_code=404,
+        content={
+            "detail": "Model not found: the provider this model ID selects "
+            "does not serve it; nothing was called.",
+            "code": "model_not_found",
+            "hint": MODEL_NOT_FOUND_HINT,
+        },
+    )
+
+
 def _require_chat_messages(
     body: Dict[str, Any], *, history_may_follow: bool = False
 ) -> None:
@@ -2931,6 +2952,13 @@ async def chat_completions(
     # before the 402, which would blame a price for a model that is not there.
     if is_unknown_model(body.get("model", "")):
         return _model_not_found_response(body["model"])
+    # BUG-120: a CLI route is never given a name outside its catalogue, nor
+    # one that reads as an option, whoever calls (the admin key included).
+    # Same place as the 404 above: after the key's 403 and the 503 of a
+    # turned-off provider, before the 402, the rpm count, the session turn,
+    # the cache and any provider; each of those refuses too, nothing starts.
+    if is_unserved_cli_model(body.get("model", "")):
+        return _model_not_served_response()
 
     # After the 404, before the 402 and the rpm count, the session turn and
     # the cache: a request only CLI routes serve, asking for what a CLI cannot
@@ -3533,7 +3561,7 @@ def _preflight_refusal(
             raise HTTPException(503, "provider_disabled")
 
     def _known() -> None:
-        if is_unknown_model(model_str):
+        if is_unknown_model(model_str) or is_unserved_cli_model(model_str):
             raise HTTPException(404, "model_not_found")
 
     checks = (

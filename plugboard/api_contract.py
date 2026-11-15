@@ -30,7 +30,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "2.5.0"
+CONTRACT_VERSION = "2.6.0"
 _JSON = "application/json"
 
 
@@ -689,8 +689,14 @@ _CHAT_ERRORS = {
     " could not be used on the last provider tried (a Copilot licence missing,"
     " for example): error_ref, nothing was called on that provider.",
     "404": "No provider knows the model: no provider ID prefixes it, no provider"
-    " lists it, and every active provider has a model list. code is"
-    " model_not_found, hint says what to send; nothing was called.",
+    " lists it, and every active provider has a model list. Or the model ID"
+    " selects CLI subscription routes only (claude, codex, gemini, agy) and"
+    " none serves it: the name starts with - or holds a space, a line break or"
+    " a control character, or, for a route that lists models, is not in its"
+    " catalogue (listed models, default model, family aliases, the CLI's own"
+    " aliases);"
+    " for every caller, the admin key included, and the detail is generic."
+    " code is model_not_found, hint says what to send; nothing was called.",
     "413": "Request body larger than MAX_BODY_BYTES (10 MB by default).",
     "502": "The provider failed or answered with an error.",
     "503": "Provider timeout (code provider_timeout, retry_after), the agy provider's sandbox"

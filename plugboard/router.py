@@ -52,7 +52,12 @@ from plugboard.alerts import record_provider_failure, record_provider_success
 from plugboard.circuit_breaker import is_request_too_long
 from plugboard.cli_auth import AuthError
 from plugboard.cli_limits import unsupported_on_cli
-from plugboard.cli_subprocess import MAX_RETRY_AFTER_S, CliSubprocessError
+from plugboard.cli_subprocess import (
+    MAX_RETRY_AFTER_S,
+    CliSubprocessError,
+    ModelNotServedError,
+    is_malformed_model_id,
+)
 from plugboard.config import load_providers
 from plugboard import live_requests as _live
 from plugboard.logging_config import _request_id_var
@@ -581,6 +586,8 @@ def _request_caused(exc: BaseException) -> bool:
     """Whether a CLI route's error was caused by the request, not the CLI: a
     prompt too long for the model (D-45) or a model the route's subscription
     does not serve (BUG-78). Decided by the CLI wrapper's flags."""
+    if isinstance(exc, ModelNotServedError):
+        return True  # refused before the CLI started (BUG-120)
     return isinstance(exc, CliSubprocessError) and bool(
         exc.request_too_long or exc.model_unsupported
     )
@@ -684,6 +691,71 @@ def _family_aliases(provider: Dict[str, Any]) -> List[str]:
         for alias in entry.get("aliases") or []
         if isinstance(alias, str) and alias and alias not in refused
     ]
+
+
+# Names a CLI takes beyond its listed models (BUG-120): Claude Code's family
+# aliases (2.1.325: sonnet, opus, haiku, fable; the first three are priced as
+# such, pricing_scraper) and agy's automatic choice. Never an option.
+_CLI_MODEL_ALIASES: Dict[str, frozenset] = {
+    "claude": frozenset({"sonnet", "opus", "haiku", "fable"}),
+    "agy": frozenset({"auto"}),
+}
+
+
+def _cli_catalogue(provider: Dict[str, Any]) -> Set[str]:
+    """The model names a CLI route that lists models serves (BUG-120), spelled
+    exactly: its listed models (``models``, ``extra_model_ids``; a model the
+    subscription refuses stays, so the CLI still answers BUG-78's 400), its
+    default model, the family names /v1/models publishes for its dated
+    snapshots, and the CLI's own aliases.
+    """
+    kind = str(provider.get("auth_source", "")).removeprefix("subprocess:")
+    names = set(_listed_models(provider))
+    default = provider.get("default_model")
+    if isinstance(default, str) and default:
+        names.add(default)
+    names.update(_family_aliases(provider))
+    names.update(_CLI_MODEL_ALIASES.get(kind, ()))
+    return names
+
+
+def cli_route_refuses(provider: Dict[str, Any], native_model: str) -> bool:
+    """Whether ``native_model`` must not be given to this CLI route (BUG-120).
+
+    True for a CLI route when the name reads as an option or holds a blank or
+    a control character (``is_malformed_model_id``), whatever the route; or,
+    for a route that lists models, when the name is not in its catalogue
+    (``_cli_catalogue``). A route without a list may serve any other name,
+    the gateway's rule for every provider (``is_unknown_model``). An empty
+    name is the CLI's default model. Never for a route that is not a CLI: an
+    HTTP provider gets the name in a JSON body, not on a command line.
+    """
+    if not is_cli_provider(provider) or not native_model:
+        return False
+    if not isinstance(native_model, str) or is_malformed_model_id(native_model):
+        return True
+    if not _listed_models(provider):
+        return False
+    return native_model not in _cli_catalogue(provider)
+
+
+def is_unserved_cli_model(model_str: str) -> bool:
+    """True when the request would reach CLI routes only, and none serves
+    the name it would give them (BUG-120): answer 404, start nothing.
+
+    The routes are forward()'s (``_resolve_all_providers``): a registered
+    provider ID, a display alias (``Codex:``) or a legacy vendor prefix
+    selects one route; an unprefixed name goes to every route that may serve
+    it. False when routing raises ``ValueError`` (the chat route answers it
+    as before) or a route that is not refused is left.
+    """
+    if not isinstance(model_str, str):
+        return False
+    try:
+        routes = _resolve_all_providers(model_str)
+    except ValueError:
+        return False
+    return bool(routes) and all(cli_route_refuses(p, m) for p, m in routes)
 
 
 def is_unknown_model(model_str: str) -> bool:
@@ -1092,6 +1164,13 @@ def _candidates_for(
     from plugboard.circuit_breaker import check_circuit
 
     candidates = _resolve_all_providers(body.get("model", ""))
+    # A CLI route is never given a name outside its catalogue, nor one that
+    # reads as an option (BUG-120): left out before anything else; when no
+    # route is left, the request is refused and nothing is started.
+    served = [route for route in candidates if not cli_route_refuses(*route)]
+    if candidates and not served:
+        raise ModelNotServedError(candidates[0][0]["id"])
+    candidates = served
     # A CLI route would drop tools, a structured format or an image: it is
     # left out, before any circuit read, guard or slot, and the request is
     # refused when nothing else is left.
@@ -1315,6 +1394,10 @@ async def forward(
                     _served_by.set((provider, real_model))
                     _usage_reported.set(reported)
                     return result
+                except ModelNotServedError:
+                    # The CLI wrapper refused the name before starting it
+                    # (BUG-120): the request's error, final, never counted.
+                    raise
                 except Exception as exc:
                     last_err = exc
                     log.warning(
@@ -1879,6 +1962,8 @@ async def _stream_route(
                     timeout_s=timeout,
                 )
             metrics.record(provider["id"], _time.perf_counter() - _t_cli)
+        except ModelNotServedError:
+            raise  # nothing was started (BUG-120): not the route's failure
         except Exception as exc:
             # The request's own error does not lower the score (review MIN-5).
             if not _request_caused(exc):

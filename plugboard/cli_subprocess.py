@@ -55,6 +55,37 @@ from plugboard import live_requests as _live
 log = logging.getLogger(__name__)
 
 
+class ModelNotServedError(RuntimeError):
+    """A model ID a CLI route must not be given (BUG-120): nothing was started.
+
+    Raised by the router for an ID outside the route's catalogue, and by
+    ``complete()`` for an ID that would read as a command-line option or
+    holds a blank or a control character (``is_malformed_model_id``). The
+    request's own error: no other route is tried, nothing is quarantined or
+    counted against the route, and the chat routes answer 404
+    ``model_not_found``. The message never quotes the ID.
+    """
+
+    def __init__(self, provider: str):
+        super().__init__(
+            f"Model ID refused for provider {provider!r}: not one it serves; "
+            "nothing was started"
+        )
+        self.provider = provider
+
+
+def is_malformed_model_id(model: str) -> bool:
+    """Whether ``model`` cannot be a CLI's ``--model`` value (BUG-120).
+
+    It starts with ``-`` (the CLI would read it as an option), or holds a
+    space, a line break or any other blank, control or format character
+    (zero-width included). No model name of any CLI has one.
+    """
+    return model.startswith("-") or any(
+        ch.isspace() or not ch.isprintable() for ch in model
+    )
+
+
 class CliSubprocessError(RuntimeError):
     """Raised when a CLI subprocess fails.
 
@@ -2028,6 +2059,10 @@ async def complete(
     # The router passes the provider's own model name: kept whole, since a
     # native name may hold a colon (``qwen3:8b``).
     model = body.get("model") or backend.default_model
+    if not isinstance(model, str) or is_malformed_model_id(model):
+        # Last guard before the command line is built (BUG-120): the router
+        # already refuses such an ID, it never reaches the CLI as an option.
+        raise ModelNotServedError(backend.command)
     prompt = messages_to_prompt(body.get("messages", []) or [])
     if not prompt:
         raise RuntimeError("Empty prompt — no user/assistant/system messages")

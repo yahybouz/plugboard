@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "2.5.0",
+    "version": "2.6.0",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
@@ -2866,7 +2866,7 @@
             }
           },
           "404": {
-            "description": "No provider knows the model: no provider ID prefixes it, no provider lists it, and every active provider has a model list. code is model_not_found, hint says what to send; nothing was called.",
+            "description": "No provider knows the model: no provider ID prefixes it, no provider lists it, and every active provider has a model list. Or the model ID selects CLI subscription routes only (claude, codex, gemini, agy) and none serves it: the name starts with - or holds a space, a line break or a control character, or, for a route that lists models, is not in its catalogue (listed models, default model, family aliases, the CLI's own aliases); for every caller, the admin key included, and the detail is generic. code is model_not_found, hint says what to send; nothing was called.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3733,7 +3733,7 @@
             }
           },
           "404": {
-            "description": "No provider knows the model: no provider ID prefixes it, no provider lists it, and every active provider has a model list. code is model_not_found, hint says what to send; nothing was called.",
+            "description": "No provider knows the model: no provider ID prefixes it, no provider lists it, and every active provider has a model list. Or the model ID selects CLI subscription routes only (claude, codex, gemini, agy) and none serves it: the name starts with - or holds a space, a line break or a control character, or, for a route that lists models, is not in its catalogue (listed models, default model, family aliases, the CLI's own aliases); for every caller, the admin key included, and the detail is generic. code is model_not_found, hint says what to send; nothing was called.",
             "content": {
               "application/json": {
                 "schema": {

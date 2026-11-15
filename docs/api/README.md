@@ -167,7 +167,7 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 | `401`, `403` | Chat: the provider's own credentials (a CLI login, a Copilot licence) could not be used; `error_ref` | Tell the operator the `error_ref` |
 | `402` | The key has a monthly budget and the model has no known price; nothing was called | Ask the operator to price the model, or use a priced one |
 | `403` | Chat: the key may not use this model (`code` `forbidden_model`) | Pick a model where `account_compatible` is true |
-| `404` | Chat only, `code` is `model_not_found`: no provider knows the model, so nothing was called (below) | Send an `id` from `GET /v1/models` |
+| `404` | Chat only, `code` is `model_not_found`: no provider knows the model, or the CLI subscription routes it selects do not serve it, so nothing was called (below) | Send an `id` from `GET /v1/models` |
 | `413` | Body over `MAX_BODY_BYTES` (10 MB) | Send less |
 | `429` | IP rate limit, key RPM limit or monthly budget, also when the call's estimated cost does not fit in what is left once the key's calls in progress are counted (nothing was called) | Back off, or send a smaller `max_tokens`; `GET /v1/me` shows the budget left (calls in progress not counted) |
 | `429` | `code` `quota_exhausted`: the last provider tried has exhausted its quota or rate limit, a CLI subscription's included (a streamed request is offered to the next provider only before its first chunk); `detail` names the provider | Retry after `Retry-After` / `retry_after` seconds when set (at most 7 days), else later or with another model |
@@ -193,7 +193,19 @@ Errors are JSON with a `detail` field (`ErrorResponse` in the schema):
 }
 ```
 
-`code` is stable, test it rather than the text. `detail` echoes the model you sent, cut after 100 characters. A key limited by `allowed_models` gets `403` for a model outside its list, whether a provider knows it or not, so the `404` only tells it about models it may use. A budgeted key gets this `404` rather than a `402` for a missing price. A model with a known provider prefix (`<provider-id>:no-such-model`) is still sent to that provider, which answers for it (`502` when it refuses).
+`code` is stable, test it rather than the text. `detail` echoes the model you sent, cut after 100 characters. A key limited by `allowed_models` gets `403` for a model outside its list, whether a provider knows it or not, so the `404` only tells it about models it may use. A budgeted key gets this `404` rather than a `402` for a missing price. A model with a known provider prefix (`<provider-id>:no-such-model`) is still sent to that provider, which answers for it (`502` when it refuses), unless the provider is a CLI subscription route (next paragraph).
+
+A CLI subscription route (claude, codex, gemini, agy) is given the model as a command-line value, so it only gets a name it serves (BUG-120, since 4.14.3). When the model selects CLI routes only (by its `<provider-id>:`, a display alias such as `Codex:`, an older CLI prefix, or an unprefixed name only CLI routes may serve) and none of them serves the name it would be given, the chat answers this `404`, for every caller, the admin key included: the name starts with `-` or holds a space, a line break or another control character (`Codex:--help`, `claude-code:haiku --tools Bash`), or, for a route that lists models, it is not in the route's catalogue: its listed models, its default model, the family names `/v1/models` publishes for its dated snapshots, and the CLI's own aliases (`sonnet`, `opus`, `haiku` and `fable` for claude, `auto` for agy). A route that lists no model yet may serve any other name, as any provider without a list. A vendor spelling (`openai:gpt-6.1-sol`) is not given to a CLI as is: send the ID `/v1/models` lists. The CLI is not started, no other provider is tried and nothing is quarantined. The `detail` is generic and does not echo the model:
+
+```json
+{
+  "detail": "Model not found: the provider this model ID selects does not serve it; nothing was called.",
+  "code": "model_not_found",
+  "hint": "GET /v1/models lists the model IDs this gateway serves: send one as written there, <provider-id>:<model>."
+}
+```
+
+The order is the same as above: a limited key's `403` first, then a turned-off provider's `503`, then this `404`, before a budgeted key's `402`, the RPM count, the session turn and the cache.
 
 `POST /v1/preflight` applies the same rule to each pair, read as `<provider>:<model>`: such a pair answers `"ok": false` with `"error": "model_not_found"`, and is neither pinged nor billed. As on chat, a limited key gets `forbidden_model` first, and a budgeted key gets `model_not_found` rather than `price_unavailable`.
 

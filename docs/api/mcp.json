@@ -1,6 +1,6 @@
 {
   "server": "plugboard",
-  "contract_version": "2.5.0",
+  "contract_version": "2.6.0",
   "transport": [
     "stdio",
     "sse",
