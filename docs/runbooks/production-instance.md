@@ -60,26 +60,89 @@ without a valid key, and wrong admin keys at login. For those to count each
 tailnet client, the gateway must see the client's tailnet address. Apply one
 of the two options below.
 
-**Option A: nginx listens on the tailnet address.** nginx listens on
-`<tailnet-ip>:<port>` itself (TLS with a certificate for the tailnet name,
-e.g. from `tailscale cert`), and `tailscale serve` no longer serves that port.
-nginx then sees each client's `100.x` address as `$remote_addr`.
+Placeholders: `<port>` is the tailnet port clients use today (the one
+`tailscale serve status` shows), `<nginx-port>` the port nginx listens on,
+`<tailnet-ip>` and `<tailnet-name>` the host's tailnet address and name
+(`tailscale ip -4`, `tailscale status --json | jq -r .Self.DNSName`).
+Before either option, keep the current serve configuration to roll back:
+`tailscale serve status --json > tailscale-serve.before.json`.
 
-**Option B: `tailscale serve` passes the address in PROXY protocol.** Run
-`tailscale serve` with `--proxy-protocol 2` (the option is in
-`tailscale serve --help` of Tailscale 1.104.7; check the version in
-production: `<tailscale-version>`), and in nginx:
+**Option A: nginx listens on the tailnet address.** `tailscale serve` stops
+serving that port, and nginx serves it itself with a certificate for the
+tailnet name:
+
+```bash
+tailscale serve --https=<port> off
+tailscale cert --cert-file <cert.pem> --key-file <key.pem> <tailnet-name>
+```
 
 ```nginx
-listen 127.0.0.1:<port> proxy_protocol;
-set_real_ip_from 127.0.0.1;
-real_ip_header proxy_protocol;
+server {
+    listen <tailnet-ip>:<port> ssl;
+    ssl_certificate     <cert.pem>;
+    ssl_certificate_key <key.pem>;
+    # ... the existing locations, X-Forwarded-For overwritten (below)
+}
 ```
+
+nginx then sees each client's `100.x` address as `$remote_addr`: no
+`set_real_ip_from` is needed. nginx must start once tailscaled has its
+address (it cannot bind `<tailnet-ip>` before), and the certificate from
+`tailscale cert` must be fetched again before it expires.
+
+**Option B: `tailscale serve` passes the address in PROXY protocol.** First
+check the production host's Tailscale: `tailscale version`, and
+`tailscale serve --help | grep -- --proxy-protocol` must print the option
+(Tailscale 1.104.7 has it). Tailscale sends the PROXY header on a TCP
+forwarder only (it refuses `--proxy-protocol` with `--https` or `--http`),
+and refuses a TCP forwarder on a port it serves as web: remove the web
+handler first, then add the forwarder. Choose the line by where TLS ends:
+
+```bash
+tailscale serve --https=<port> off
+# Tailscale keeps terminating TLS, as with --https today:
+tailscale serve --bg --tls-terminated-tcp=<port> --proxy-protocol=2 tcp://127.0.0.1:<nginx-port>
+# or nginx terminates TLS (its certificate must be for <tailnet-name>):
+tailscale serve --bg --tcp=<port> --proxy-protocol=2 tcp://127.0.0.1:<nginx-port>
+tailscale serve status   # the port now forwards to tcp://127.0.0.1:<nginx-port>
+```
+
+Clients are cut from the `off` line until the forwarder is added (run
+these as root or as Tailscale's operator user). In nginx, the listener gets the
+PROXY header; it keeps `ssl` when nginx terminates TLS (`--tcp`), and has
+none behind `--tls-terminated-tcp`:
+
+```nginx
+server {
+    listen 127.0.0.1:<nginx-port> proxy_protocol;        # behind --tls-terminated-tcp
+    # listen 127.0.0.1:<nginx-port> ssl proxy_protocol;  # behind --tcp
+    set_real_ip_from 127.0.0.1;
+    real_ip_header proxy_protocol;
+    # ... the existing locations, X-Forwarded-For overwritten (below)
+}
+```
+
+`real_ip_header proxy_protocol` makes `$remote_addr` the client's address
+from the PROXY header, sent only by a peer listed in `set_real_ip_from`
+(nginx's `realip` module: `nginx -V` lists `--with-http_realip_module`). A
+listener in PROXY protocol refuses any client that sends no header, a local
+probe or `curl` on `127.0.0.1:<nginx-port>` included: give such checks
+another listener without `proxy_protocol`, or call the gateway directly.
+To roll back, `tailscale serve --tls-terminated-tcp=<port> off` (or
+`--tcp=<port> off`), then serve the port as before,
+`tailscale serve --bg --https=<port> <former target>` (the target is in
+`tailscale-serve.before.json`), and put the former `listen` back.
 
 In both cases:
 
 - nginx **overwrites** the header with the address it saw:
-  `proxy_set_header X-Forwarded-For $remote_addr;`. Never
+  `proxy_set_header X-Forwarded-For $remote_addr;`, in every `location`
+  that passes to the gateway (`proxy_pass`). nginx inherits the
+  `proxy_set_header` lines of the `server` block only into a `location`
+  that has none of its own: a location with any `proxy_set_header` (`Host`,
+  `Upgrade`...) needs this line too. Check with
+  `nginx -T | grep -n 'proxy_pass\|X-Forwarded-For'`, then `nginx -t`
+  before the reload. Never
   `$proxy_add_x_forwarded_for`, which keeps what the client sent.
 - The gateway trusts nginx only: `FORWARDED_ALLOW_IPS=<nginx address as the
   gateway sees it>`, the gateway of the Docker network (e.g. `172.18.0.1`).
