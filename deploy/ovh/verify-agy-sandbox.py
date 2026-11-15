@@ -37,6 +37,21 @@ rewritable without being changed (opened ``r+b`` without writing,
 removed). The token's content is never printed nor copied anywhere; the
 script checks, in memory, that it is unchanged afterwards.
 
+agy 1.4.4 cannot start without ``~/.gemini/config`` and
+``~/.gemini/projects.json``, beside its store (UAT, 15/11: every call failed
+when the cage did not show them). The probe checks that ``~/.gemini`` shows
+exactly ``antigravity-cli``, ``config`` and ``projects.json``
+(``gemini_visible``), that ``config/``, ``projects.json`` and
+``config/mcp_config.json`` are readable, and that writing there fails with
+``EROFS``: a file created in ``config/``, ``config/mcp_config.json`` and
+``projects.json`` opened for writing (nothing created nor truncated), a
+folder created in ``config/projects/``. It reports how many MCP servers
+``mcp_config.json`` declares (``mcp_servers``, 0 when empty or not JSON),
+never which: one set up by the operator applies to every client's prompt.
+When ``config/`` or ``projects.json`` is missing (agy never run on this
+account), no cage is built and the check fails (exit 1, ``agy_setup``:
+``missing``), saying to run agy once.
+
 ``--app-root`` changes where the application's folders are looked for
 (default ``/app``); it exists for the test suite, which runs on a host
 without ``/app``.
@@ -69,6 +84,8 @@ SECRET_NAMES += ("ALERT_WEBHOOK_URL",)
 SECRET_PREFIXES = ("PLUGBOARD_", "LLM_" + "ENABLER_")
 TOKEN_NAME = "antigravity-oauth-token"
 WITNESS = ".plugboard-verify-"
+# What the cage shows of ~/.gemini: agy's store and its config beside it.
+GEMINI_VISIBLE = ["antigravity-cli", "config", "projects.json"]
 
 # Runs inside the cage with -I -S: standard library only, prints one JSON
 # object. It never prints, writes or returns the token's content.
@@ -168,6 +185,55 @@ out["writes"] = {
     "/": write_state("/"),
     "/usr/lib": write_state("/usr/lib"),
 }
+
+# agy's config beside its store (agy 1.4.4 cannot start without it): shown
+# read-only. Opened for writing without creating nor truncating anything.
+def open_for_writing(path):
+    try:
+        fd = os.open(path, os.O_WRONLY)
+    except OSError as exc:
+        return "absent" if exc.errno == errno.ENOENT else why(exc)
+    os.close(fd)
+    return "opened"
+
+
+def mkdir_state(folder):
+    # Inside it when it exists, else the folder itself (agy creates both).
+    path = os.path.join(folder, p["witness"] + "d") if os.path.isdir(folder) else folder
+    try:
+        os.mkdir(path, 0o700)
+    except OSError as exc:
+        return why(exc)
+    os.rmdir(path)
+    return "written"
+
+
+config = os.path.join(gemini, "config")
+projects = os.path.join(gemini, "projects.json")
+mcp = os.path.join(config, "mcp_config.json")
+out["gemini_visible"] = listing(gemini)
+out["gemini_config_reads"] = {
+    "~/.gemini/config": read_state(config),
+    "~/.gemini/projects.json": read_state(projects),
+    "~/.gemini/config/mcp_config.json": read_state(mcp),
+}
+out["gemini_config_writes"] = {
+    "~/.gemini/config": write_state(config),
+    "~/.gemini/config/mcp_config.json": open_for_writing(mcp),
+    "~/.gemini/projects.json": open_for_writing(projects),
+    "~/.gemini/config/projects/": mkdir_state(os.path.join(config, "projects")),
+}
+# How many MCP servers agy would use, never which: 0 when empty or not JSON.
+servers = 0
+try:
+    with open(mcp, "rb") as handle:
+        declared = json.loads(handle.read() or b"null")
+    if isinstance(declared, dict) and isinstance(declared.get("mcpServers"), dict):
+        servers = len(declared["mcpServers"])
+except (OSError, ValueError):
+    pass
+out["mcp_servers"] = servers
+
 try:
     probe = os.path.join(tmpdir, p["witness"] + "t")
     with open(probe, "xb") as handle:
@@ -331,6 +397,12 @@ def main() -> None:
                     timeout=30,
                     check=False,
                 )
+    except agy_cage.AgyNotSetUp as exc:
+        # agy never run on this account: every agy call answers 503.
+        report["agy_setup"] = "missing"
+        print(f"agy cannot run here: {exc}", file=sys.stderr)
+        failures.append(str(exc))
+        _emit(report, 1)
     except agy_cage.CageUnavailable as exc:
         report["sandbox_start"] = "fail"
         print(f"agy sandbox (bubblewrap) cannot start: {exc}", file=sys.stderr)
@@ -360,6 +432,7 @@ def main() -> None:
         failures.append("probe printed no report")
         _emit(report, 2)
     report["sandbox_start"] = "pass"
+    report["agy_setup"] = "set up"
 
     if os.path.normpath(seen["home"]) != home or seen["tmpdir"] != expected_tmpdir:
         failures.append("probe ran with another HOME or TMPDIR than agy's")
@@ -407,6 +480,27 @@ def main() -> None:
     for where, state in seen["writes"].items():
         if state == "written":
             failures.append(f"write allowed in {where}")
+    # agy's config: visible and readable, on a read-only mount, nothing else
+    # of ~/.gemini.
+    report["gemini_visible"] = seen["gemini_visible"]
+    if seen["gemini_visible"] != GEMINI_VISIBLE:
+        failures.append(
+            "~/.gemini shows other than antigravity-cli, config and "
+            "projects.json in the cage"
+        )
+    report["gemini_config_reads"] = seen["gemini_config_reads"]
+    for where, state in seen["gemini_config_reads"].items():
+        if state != "readable" and not (
+            where.endswith("mcp_config.json") and state == "absent"
+        ):
+            failures.append(f"{where} not readable in the cage ({state})")
+    report["gemini_config_writes_denied"] = seen["gemini_config_writes"]
+    for where, state in seen["gemini_config_writes"].items():
+        if state != "EROFS" and not (
+            where.endswith("mcp_config.json") and state == "absent"
+        ):
+            failures.append(f"{where} not read-only in the cage ({state})")
+    report["mcp_servers"] = seen["mcp_servers"]
     report["tmpdir_write"] = seen["tmpdir_write"]
     if seen["tmpdir_write"] != "pass":
         failures.append("TMPDIR not writable in the cage")
