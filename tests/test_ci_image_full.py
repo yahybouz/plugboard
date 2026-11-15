@@ -560,11 +560,71 @@ def test_the_build_fails_when_the_mcp_virtualenv_has_pip():
 
 
 def test_the_ci_image_step_checks_pip_in_both_environments():
-    """The built image: no pip in the MCP virtualenv, and the version of the
-    gateway's own pip printed in the CI log."""
+    """The built image has no pip, in the MCP virtualenv or in the gateway's
+    own environment."""
     checks = _option_values(_image_step()["argv"], "--verifier")
 
-    assert _NO_MCP_PIP in checks
-    words = shlex.split(_NO_MCP_PIP)
-    assert words[:2] == ["sh", "-c"] and len(words) == 3
-    assert "python -m pip --version" in checks
+    for check in (_NO_MCP_PIP, _NO_GATEWAY_PIP):
+        assert check in checks
+        words = shlex.split(check)
+        assert words[:2] == ["sh", "-c"] and len(words) == 3
+    # The gateway's pip is no longer expected to start.
+    assert "python -m pip --version" not in checks
+
+
+# ── PLU-74: no pip at all in the runtime image ──────────────────────────────
+# Nothing runs pip once the image is built (plugboard/, scripts/, deploy/,
+# run.py, the CI checks). The base stage keeps it to install the locks; the
+# final targets remove it after its last use, so no pip advisory can reach a
+# running gateway. `(?<![/\w])` keeps the MCP venv's `/opt/venv-mcp/bin/python
+# -m pip` apart from the gateway's `python -m pip`.
+
+_NO_GATEWAY_PIP = (
+    "sh -c 'if python -m pip --version; then exit 1; fi; "
+    "echo no pip in the gateway environment'"
+)
+_GATEWAY_PIP = r"(?<![/\w])python -m pip"
+
+
+def _stage(name: str) -> str:
+    parts = re.split(r"(?m)^FROM .* AS (\w+)\s*$", DOCKERFILE)
+    return dict(zip(parts[1::2], parts[2::2]))[name]
+
+
+def _uses_pip(run: str) -> bool:
+    return bool(
+        re.search(_GATEWAY_PIP + r"(?! uninstall -y pip)", run)
+        or re.search(r"(?:^RUN |[;&|] )\s*pip3? ", run)
+    )
+
+
+@pytest.mark.parametrize("target", ["api", "full"])
+def test_the_runtime_image_removes_pip_after_its_last_use(target):
+    runs = _runs(_stage(target))
+    removals = [
+        i
+        for i, r in enumerate(runs)
+        if re.search(_GATEWAY_PIP + " uninstall -y pip", r)
+    ]
+    assert len(removals) == 1, runs
+    (removed,) = removals
+    guard = runs[removed]
+    # Removed, then checked in the same step (an `if`, not `!`).
+    assert re.search(
+        _GATEWAY_PIP + r" uninstall -y pip .*if python -m pip --version; "
+        r"then .*exit 1; fi",
+        guard,
+    ), guard
+    assert _swallowed(guard) == [], guard
+    # No step uses pip afterwards (the MCP install comes before, in full).
+    assert [r for r in runs[removed + 1 :] if _uses_pip(r)] == []
+    if target == "full":
+        assert runs.index(_mcp_run()) < removed
+
+
+def test_the_base_stage_keeps_pip_to_install_the_lock():
+    base = _stage("base")
+    assert re.search(
+        r"(?m)^RUN pip install --require-hashes -r requirements\.lock$", base
+    )
+    assert "uninstall" not in base

@@ -88,6 +88,9 @@ CMD ["python", "run.py"]
 
 # ── api: slim gateway image ──────────────────────────────────
 FROM base AS api
+# PLU-74: no pip in the runtime image (see the full target).
+RUN python -m pip uninstall -y pip \
+ && if python -m pip --version; then echo "pip is in the gateway environment (PLU-74)" >&2; exit 1; fi
 USER app
 
 # ── node: source of the Node.js runtime for the full image ───
@@ -194,9 +197,14 @@ RUN python -m venv --without-pip /opt/venv-mcp \
  && /opt/venv-mcp/bin/python -c "import mcp, aiohttp; print('mcp ok')" \
  && rm /tmp/requirements-mcp.lock
 # The build fails if pip is in the MCP virtualenv (an `if`, not `!`: `set -e`
-# ignores a command negated by `!`). The gateway's own pip version is printed.
-RUN if /opt/venv-mcp/bin/python -m pip --version; then echo "pip is in /opt/venv-mcp (PLU-74)" >&2; exit 1; fi; \
-    python -m pip --version
+# ignores a command negated by `!`).
+RUN if /opt/venv-mcp/bin/python -m pip --version; then echo "pip is in /opt/venv-mcp (PLU-74)" >&2; exit 1; fi
+
+# PLU-74: no pip in the runtime image. Nothing runs it once the image is built;
+# the base stage keeps it to install the lock, this target removes it after
+# its last use (the MCP install above) and fails if it is still there.
+RUN python -m pip uninstall -y pip \
+ && if python -m pip --version; then echo "pip is in the gateway environment (PLU-74)" >&2; exit 1; fi
 
 # CLI version probes can create private state as root during the build.
 # Keep the persisted runtime HOME writable by the unprivileged app user.
