@@ -378,3 +378,67 @@ async def test_non_agy_new_candidates_still_need_a_probe(
     assert report["verified_count"] == 3
     assert report["trusted_account_catalog"] is False
     assert {d["id"] for d in report["dropped"]} == {"claude-new-6"}
+
+
+# -- a cage failure is not the model's ---------------------------------------------
+
+
+def _sandbox_complete(calls):
+    """agy's cage cannot start (agy not run); bwrap's line, quoted, even reads
+    like an unknown model."""
+
+    async def complete(kind, body, **_kwargs):
+        calls.append(body.get("model"))
+        raise cli_subprocess.CliSubprocessError(
+            "agy sandbox (bubblewrap) could not start, agy was not run: "
+            "bwrap: Can't find source path /x: model_not_found does not exist",
+            provider_name="agy",
+            model_id=body.get("model", ""),
+            sandbox_failed=True,
+        )
+
+    return complete
+
+
+@pytest.mark.asyncio
+async def test_a_cage_failure_is_neither_a_failure_nor_terminal(monkeypatch):
+    calls: list = []
+    monkeypatch.setattr(cli_subprocess, "complete", _sandbox_complete(calls))
+
+    probe = await ma.probe_subprocess_model("agy", DEFAULT_MODEL, timeout_s=5)
+
+    assert calls == [DEFAULT_MODEL]
+    assert probe["ok"] is False
+    assert probe["terminal"] is False
+    assert probe["sandbox_failed"] is True
+
+
+@pytest.mark.asyncio
+async def test_refresh_probes_never_quarantine_on_a_cage_failure(
+    agy_provider, tmp_path, monkeypatch
+):
+    """PLUGBOARD_MODEL_REFRESH_PROBE_KINDS=agy, agy's cage down: `agy models`
+    gives nothing, the fallback list is probed, every probe fails in the
+    cage. Refresh after refresh, no model is counted as failing: the saved
+    ones stay, a new one is not published, the quarantine is untouched."""
+
+    async def untrusted_discover(_provider):
+        router_mod._discovery_trusted.set(False)
+        return _entries(SAVED_IDS + ARGON_IDS[:1])
+
+    calls: list = []
+    monkeypatch.setattr("plugboard.router.discover_models", untrusted_discover)
+    monkeypatch.setattr(cli_subprocess, "complete", _sandbox_complete(calls))
+    qpath = tmp_path / "quarantine.json"
+
+    for _ in range(QUARANTINE_THRESHOLD + 1):
+        report = await _refresh(tmp_path, {"agy"})
+
+    assert calls, "the probes ran"
+    assert _ids(report) == SAVED_IDS
+    assert report["default_model"] == DEFAULT_MODEL
+    assert {d["id"]: d["reason"] for d in report["dropped"]} == {
+        ARGON_IDS[0]: "sandbox_unavailable"
+    }
+    stored = json.loads(qpath.read_text()) if qpath.exists() else {}
+    assert not (stored.get("providers") or {}).get(AGY_PROVIDER_ID), stored

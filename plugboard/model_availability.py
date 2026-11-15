@@ -242,6 +242,17 @@ async def probe_subprocess_model(
         return {"ok": True, "reason": ""}
     except Exception as exc:  # noqa: BLE001
         reason = str(exc)
+        if getattr(exc, "sandbox_failed", False):
+            # agy's cage could not start, so agy was not run (BUG-86): the
+            # model was not tried, nothing is said of it. Never terminal and
+            # never counted towards the quarantine, whatever bwrap's quoted
+            # line reads like.
+            return {
+                "ok": False,
+                "terminal": False,
+                "sandbox_failed": True,
+                "reason": reason[:400],
+            }
         return {
             "ok": False,
             "terminal": is_terminal_model_unavailable_error(reason),
@@ -735,6 +746,19 @@ async def refresh_subprocess_provider_models(
             continue
 
         reason = str(probe.get("reason") or "")
+        if probe.get("sandbox_failed"):
+            # Not a result (agy's cage could not start): no failure recorded,
+            # a published model stays (unless already quarantined), a new
+            # one waits for a real probe.
+            if mid in quarantined:
+                dropped.append({"id": mid, "reason": "quarantined"})
+            elif mid in previous_set:
+                kept.append(mid)
+            else:
+                dropped.append(
+                    {"id": mid, "reason": "sandbox_unavailable", "detail": reason[:400]}
+                )
+            continue
         if probe.get("terminal"):
             if probe.get("terminal_reason"):
                 terminal_reason = str(probe["terminal_reason"])
