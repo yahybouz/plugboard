@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -130,6 +131,160 @@ def test_the_cli_check_step_fails_on_a_missing_cli():
     for cli in ("gemini", "claude", "codex", "gh"):
         assert re.search(rf"(?:; |^RUN )\s*{cli} --version;", run), cli
     assert re.search(r"= \"amd64\" \]; then agy --version; fi$", run)
+
+
+# ── INC-4: no bwrap on the image's PATH ─────────────────────────────────────
+# codex 0.163.0 prefers a bwrap found on PATH to the one it ships
+# (codex-resources/bwrap). 4.14.2's first image installed Debian's bubblewrap
+# at /usr/bin/bwrap: codex took it, and it could not mount /proc in the
+# container (every codex call answered 502, production and UAT, 15/11). The
+# gateway's bwrap (agy's cage) lives at a fixed path off PATH instead.
+
+# The image's PATH when the Dockerfile sets none: python:3.12-slim's
+# (``/usr/local/bin`` put before Debian's default).
+_BASE_IMAGE_PATH = (
+    "/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+)
+# Debian's merged /usr: /bin and /sbin are links to /usr/bin and /usr/sbin.
+_MERGED_USR = {"/bin": "/usr/bin", "/sbin": "/usr/sbin"}
+# Where Debian's bubblewrap package installs its command.
+_DEBIAN_BWRAP = "/usr/bin/bwrap"
+_SHELL_OPERATORS = {";", "&&", "||", "|", "&", "(", ")"}
+_SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "do", "done", "!", "set"}
+
+
+def _merged(path: str) -> str:
+    for link, target in _MERGED_USR.items():
+        if path == link or path.startswith(link + "/"):
+            return target + path[len(link) :]
+    return path
+
+
+def image_path_dirs(dockerfile: str = DOCKERFILE) -> list:
+    """The directories of the image's PATH (``ENV PATH`` applied in order)."""
+    path = _BASE_IMAGE_PATH
+    for match in re.finditer(r"^ENV\s+PATH[= ]\s*(\S+)", dockerfile, re.M):
+        value = match.group(1).strip("\"'")
+        path = value.replace("${PATH}", path).replace("$PATH", path)
+    return [_merged(d.rstrip("/")) for d in path.split(":") if d]
+
+
+def _statements(run: str) -> list:
+    """The simple commands of a RUN step, as word lists (shell quoting kept)."""
+    lexer = shlex.shlex(run[len("RUN ") :], posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    statements, words = [], []
+    for token in lexer:
+        if token in _SHELL_OPERATORS:
+            if words:
+                statements.append(words)
+            words = []
+        elif words or token not in _SHELL_KEYWORDS:
+            words.append(token)
+    if words:
+        statements.append(words)
+    return statements
+
+
+def bwrap_files_in_image(stage: str) -> set:
+    """Where a ``bwrap`` file is once the stage's RUN steps are done.
+
+    ``apt-get install ... bubblewrap`` puts Debian's at ``/usr/bin/bwrap``;
+    ``mv``, ``install`` and ``cp`` move or copy it, ``rm`` removes it, and
+    ``ln -s`` may name a new one.
+    """
+    files: set = set()
+    for run in _runs(stage):
+        for words in _statements(run):
+            command, args = words[0], words[1:]
+            operands = [_merged(a) for a in args if not a.startswith("-")]
+            if command == "apt-get" and "install" in args and "bubblewrap" in args:
+                files.add(_DEBIAN_BWRAP)
+            elif command == "mv" and len(operands) == 2 and operands[0] in files:
+                files.discard(operands[0])
+                files.add(operands[1])
+            elif command in ("install", "cp") and "-d" not in args:
+                # install's -m/-o/-g take a value: only the last two operands
+                # are the source and the destination.
+                if len(operands) >= 2 and operands[-2] in files:
+                    files.add(operands[-1])
+            elif command == "rm":
+                files.difference_update(operands)
+            elif command == "ln" and operands and operands[-1].endswith("/bwrap"):
+                files.add(operands[-1])
+    return files
+
+
+def test_the_simulation_sees_a_bwrap_left_on_path():
+    """Not vacuous: 4.14.2's first image (bubblewrap installed, nothing moved)
+    leaves /usr/bin/bwrap on PATH; moving it off PATH clears it."""
+    first = "RUN apt-get update \\\n && apt-get install -y curl bubblewrap\n"
+    moved = (
+        first.rstrip("\n")
+        + " \\\n && install -m 0755 /usr/bin/bwrap /opt/x/bwrap && rm /bin/bwrap\n"
+    )
+    assert bwrap_files_in_image(first) == {"/usr/bin/bwrap"}
+    assert bwrap_files_in_image(moved) == {"/opt/x/bwrap"}
+    assert "/usr/bin" in image_path_dirs("FROM x\n")
+
+
+def test_no_bwrap_on_the_image_path():
+    """INC-4: codex must keep its own bwrap, so the image has none on PATH;
+    the gateway's (agy's cage) is at agy_cage.GATEWAY_BWRAP, off PATH."""
+    from plugboard import agy_cage
+
+    files = bwrap_files_in_image(_full_stage())
+    path = image_path_dirs()
+    on_path = sorted(f for f in files if os.path.dirname(f) in path)
+
+    assert on_path == [], f"bwrap on the image's PATH {path}: {on_path}"
+    assert agy_cage.GATEWAY_BWRAP in files
+    assert os.path.dirname(agy_cage.GATEWAY_BWRAP) not in path
+
+
+def test_the_build_fails_when_a_bwrap_is_on_path():
+    """The build itself checks it (a step after every install), and starts
+    the gateway's bwrap by its fixed path."""
+    from plugboard import agy_cage
+
+    runs = _runs(_full_stage())
+    guards = [r for r in runs if "command -v bwrap" in r]
+    assert len(guards) == 1, guards
+    # An `if`, not `! command -v`: `set -e` ignores a command negated by `!`.
+    assert re.search(r"if command -v bwrap; then .*exit 1; fi", guards[0])
+    assert "! command -v" not in guards[0]
+    # After the last step that installs anything.
+    installs = [
+        i for i, r in enumerate(runs) if "apt-get install" in r or "npm install" in r
+    ]
+    assert runs.index(guards[0]) > max(installs)
+    check = next(r for r in runs if "Installed CLI binaries" in r)
+    assert f"; {agy_cage.GATEWAY_BWRAP} --version;" in check
+    assert re.search(r"(?:; |^RUN )\s*bwrap --version", check) is None
+
+
+def test_the_ci_image_step_checks_bwrap_off_path():
+    """The CI's docker-build step runs the same two checks in the built image,
+    as its user and with its PATH."""
+    from plugboard import agy_cage
+
+    checks = _option_values(_image_step()["argv"], "--verifier")
+
+    assert f"{agy_cage.GATEWAY_BWRAP} --version" in checks
+    (guard,) = [c for c in checks if "command -v bwrap" in c]
+    words = shlex.split(guard)
+    assert words[:2] == ["sh", "-c"] and len(words) == 3
+    assert re.search(r"if command -v bwrap; then .*exit 1; fi", words[2])
+
+
+def test_a_shell_check_reaches_docker_run_as_one_command(fake_docker):
+    """ci_outils splits a check with shlex: `sh -c '...'` reaches `docker run`
+    as three words, the script whole."""
+    script = "if command -v bwrap; then exit 1; fi; echo no bwrap on PATH"
+    proc, calls = fake_docker("--verifier", f"sh -c '{script}'")
+
+    assert proc.returncode == 0, proc.stderr
+    assert _docker_runs(calls)[0][-3:] == ["sh", "-c", script]
 
 
 def test_the_swallow_detector_sees_the_known_bypasses():

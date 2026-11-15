@@ -7,7 +7,9 @@ This module builds the gateway's only command line that launches agy
 (``complete``, ``agy models``, ``agy --version``; the operator's
 ``scripts/bench_latence.py`` runs agy bare, BUG-110):
 
-- ``bwrap`` with its own user, pid, ipc, uts (and, where possible, cgroup)
+- ``bwrap`` (the image's at :data:`GATEWAY_BWRAP`, off PATH so that codex
+  keeps its own, INC-4; else the one on PATH) with its own user, pid, ipc,
+  uts (and, where possible, cgroup)
   namespaces, ended with the gateway (``--die-with-parent``). The pid
   namespace keeps ``/proc/<gateway pid>/environ`` (the server's keys) out of
   sight. agy is its pid 1 (``--as-pid-1``): bwrap's own init there would be
@@ -143,8 +145,15 @@ _proc_mount: Optional[bool] = None
 
 # CA variables already reported as ignored (logged once each).
 _ca_refused: set = set()
-# bwrap's real path, resolved on PATH once (like the CLIs' binaries, TM-001:
-# a bwrap put on PATH later is never used).
+# The gateway's bwrap in the image: a fixed path, off PATH (INC-4). codex
+# prefers a bwrap found on PATH to the one it ships (codex-resources/bwrap);
+# with Debian's at /usr/bin/bwrap, codex took it and every codex call failed
+# (``bwrap: Can't mount proc on /proc``, production and UAT, 15/11). Named
+# here, never by a variable. Outside the image (a workstation, a host), bwrap
+# is looked up on PATH.
+GATEWAY_BWRAP = "/usr/libexec/plugboard/bwrap"
+# bwrap's real path, resolved once (like the CLIs' binaries, TM-001: a bwrap
+# put on PATH later is never used).
 _bwrap_path: Optional[str] = None
 
 
@@ -157,13 +166,17 @@ def _reset_for_tests() -> None:
 
 
 def _bwrap() -> str:
-    """bwrap's real path, looked up on PATH the first time only."""
+    """bwrap's real path, resolved the first time only: :data:`GATEWAY_BWRAP`
+    (the image's) when it is an executable file, else on PATH."""
     global _bwrap_path
     if _bwrap_path and os.path.isfile(_bwrap_path):
         return _bwrap_path
-    found = shutil.which("bwrap")
+    if os.path.isfile(GATEWAY_BWRAP) and os.access(GATEWAY_BWRAP, os.X_OK):
+        found: Optional[str] = GATEWAY_BWRAP
+    else:
+        found = shutil.which("bwrap")
     if found is None:
-        raise CageUnavailable("bwrap not found on PATH")
+        raise CageUnavailable(f"bwrap not found on PATH nor at {GATEWAY_BWRAP}")
     _bwrap_path = os.path.realpath(found)
     return _bwrap_path
 

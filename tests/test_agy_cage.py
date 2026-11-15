@@ -125,6 +125,11 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setattr(cs, "_SPAWN_CWD_CACHE", str(spawn))
     monkeypatch.delenv("PLUGBOARD_SUBPROCESS_CWD", raising=False)
     monkeypatch.setattr(cs, "_binary_path_cache", {})
+    # bwrap is looked up on PATH, as outside the image: whatever this machine
+    # holds at the image's fixed path (INC-4) is not used.
+    monkeypatch.setattr(
+        agy_cage, "GATEWAY_BWRAP", str(tmp_path / "no-gateway-bwrap"), raising=False
+    )
     return {
         "home": home,
         "store": store,
@@ -528,7 +533,61 @@ def test_missing_bwrap_refuses(setup, fake_binary, monkeypatch):
     monkeypatch.setenv("PATH", str(setup["bin"]))
     with pytest.raises(agy_cage.CageUnavailable) as info:
         _argv(setup, str(fake_binary))
-    assert str(info.value) == "bwrap not found on PATH"
+    assert str(info.value) == (
+        f"bwrap not found on PATH nor at {agy_cage.GATEWAY_BWRAP}"
+    )
+
+
+def test_the_gateway_bwrap_is_at_a_fixed_path_off_path():
+    """INC-4: in the image, the gateway's bwrap is not on PATH (codex would
+    take it instead of its own); the cage names it in its code, never through
+    a variable."""
+    assert agy_cage.GATEWAY_BWRAP == "/usr/libexec/plugboard/bwrap"
+    source = (ROOT / "plugboard" / "agy_cage.py").read_text(encoding="utf-8")
+    assert 'GATEWAY_BWRAP = "/usr/libexec/plugboard/bwrap"' in source
+
+
+def test_the_fixed_path_is_preferred_to_path(setup, fake_binary, tmp_path, monkeypatch):
+    """The image's bwrap (fixed path) wins over any bwrap on PATH."""
+    (tmp_path / "libexec").mkdir()
+    fixed = _install(tmp_path / "libexec", "bwrap", "exit 0\n")
+    monkeypatch.setattr(agy_cage, "GATEWAY_BWRAP", str(fixed))
+    on_path = _install(setup["bin"], "bwrap", "exit 0\n")
+    assert shutil.which("bwrap") == str(on_path)
+
+    argv, _ = _argv(setup, str(fake_binary))
+
+    assert argv[0] == os.path.realpath(fixed)
+
+
+def test_without_the_fixed_path_bwrap_is_found_on_path(
+    setup, fake_binary, tmp_path, monkeypatch
+):
+    """Installs outside the image (a workstation, a host): bwrap on PATH, by
+    its real path."""
+    monkeypatch.setattr(agy_cage, "GATEWAY_BWRAP", str(tmp_path / "absent" / "bwrap"))
+    (tmp_path / "real").mkdir()
+    target = _install(tmp_path / "real", "bwrap", "exit 0\n")
+    (setup["bin"] / "bwrap").symlink_to(target)
+
+    argv, _ = _argv(setup, str(fake_binary))
+
+    assert argv[0] == os.path.realpath(target)
+
+
+def test_a_fixed_path_that_is_not_executable_is_skipped(
+    setup, fake_binary, tmp_path, monkeypatch
+):
+    fixed = tmp_path / "libexec" / "bwrap"
+    fixed.parent.mkdir()
+    fixed.write_text("not a program\n")
+    fixed.chmod(0o644)
+    monkeypatch.setattr(agy_cage, "GATEWAY_BWRAP", str(fixed))
+    on_path = _install(setup["bin"], "bwrap", "exit 0\n")
+
+    argv, _ = _argv(setup, str(fake_binary))
+
+    assert argv[0] == os.path.realpath(on_path)
 
 
 def test_bwrap_is_resolved_once_by_its_real_path(
@@ -600,7 +659,9 @@ def test_the_full_image_ships_and_checks_bwrap():
     installs = [line for line in full.splitlines() if "apt-get install" in line]
     assert any("bubblewrap" in line for line in installs), installs
     check = full.split("Installed CLI binaries", 1)[1].split("\n\n", 1)[0]
-    assert "; bwrap --version;" in check.replace("\n", " ").replace("\\", "")
+    check = check.replace("\n", " ").replace("\\", "")
+    # By its fixed path, off PATH (INC-4, tests/test_ci_image_full.py).
+    assert f"; {agy_cage.GATEWAY_BWRAP} --version;" in check
 
 
 # ── No cage, no agy: 503 and nothing launched ───────────────────────────────

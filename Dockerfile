@@ -110,9 +110,16 @@ ARG CODEX_VERSION=0.163.0
 # - curl, gnupg: fetch the GitHub CLI signing key (written to a file,
 #   never piped to a shell)
 # - bubblewrap: the cage every agy launch runs in (BUG-86,
-#   plugboard/agy_cage.py); without bwrap, agy is not run at all
+#   plugboard/agy_cage.py); without bwrap, agy is not run at all. Its bwrap
+#   is moved off PATH, to /usr/libexec/plugboard/bwrap (agy_cage.GATEWAY_BWRAP),
+#   INC-4: codex prefers a bwrap found on PATH to the one it ships, and
+#   Debian's cannot mount /proc in the container (every codex call failed,
+#   15/11). See the check after the CLIs below.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl git gnupg bubblewrap \
+ && install -d -m 0755 /usr/libexec/plugboard \
+ && install -m 0755 -o root -g root /usr/bin/bwrap /usr/libexec/plugboard/bwrap \
+ && rm /usr/bin/bwrap \
  && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
         -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
  && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
@@ -160,10 +167,15 @@ RUN if [ "$(dpkg --print-architecture)" = "amd64" ]; then \
 
 # Every CLI must start; a missing or broken one fails the build (no pipes,
 # whose status would hide the failure). agy only ships for amd64; bwrap
-# (agy's cage) is checked on every architecture.
+# (agy's cage) is checked on every architecture, by its fixed path.
 RUN set -e; echo "── Installed CLI binaries ──"; \
-    gemini --version; claude --version; codex --version; gh --version; bwrap --version; \
+    gemini --version; claude --version; codex --version; gh --version; /usr/libexec/plugboard/bwrap --version; \
     if [ "$(dpkg --print-architecture)" = "amd64" ]; then agy --version; fi
+
+# INC-4: no bwrap on the image's PATH, after every install. codex would take
+# it instead of the one it ships, and fail to mount /proc in the container.
+# An `if`, not `! command -v`: `set -e` ignores a command negated by `!`.
+RUN if command -v bwrap; then echo "bwrap is on PATH: codex would use it instead of its own (INC-4)" >&2; exit 1; fi
 
 # MCP server (scripts/run_mcp.py): its own hash-checked environment, apart
 # from the gateway's. It opens no port by itself: a client starts it over
