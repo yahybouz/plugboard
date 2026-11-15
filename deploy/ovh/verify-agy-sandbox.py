@@ -24,7 +24,7 @@ The probe checks, from inside the cage: the application's folders
 (``/app``, ``/app/data``, ``/app/logs``), ``~/.claude``, ``~/.codex``,
 ``/usr/local/bin/agy`` and a canary written next to the private ``TMPDIR``
 cannot be read; HOME shows ``.gemini`` only; ``/proc`` is either the one of
-the cage's own pid namespace (pid 1 is bwrap: the gateway's
+the cage's own pid namespace (the probe is its pid 1, as agy is: the gateway's
 ``/proc/<pid>/environ`` is out of sight, and no visible ``/proc/*/environ``
 names a server secret) or, where the container forbids a new procfs (a
 Docker container masks paths of its ``/proc``), not mounted at all (then no
@@ -174,6 +174,7 @@ for pid in pids:
 out["proc"] = {
     "mounted": mounted,
     "pid1": os.path.basename(argv0),
+    "self_pid": os.getpid(),
     "visible_pids": len(pids),
     "secret_names_in_proc_environ": sorted(found),
 }
@@ -462,14 +463,16 @@ def main() -> None:
         report["proc"] = "mounted (own pid namespace)"
         report["proc_details"] = {
             "pid1": proc["pid1"],
-            "pid1_is_gateway": proc["pid1"] != "bwrap",
+            # The probe runs as agy does (``--as-pid-1``): pid 1 of the
+            # cage's own pid namespace, or there is no such namespace.
+            "pid1_is_gateway": proc["self_pid"] != 1,
             "visible_pids": proc["visible_pids"],
             "secret_names_in_proc_environ": proc["secret_names_in_proc_environ"],
         }
         if not expected_proc:
             failures.append("/proc visible in a cage built without it")
         if report["proc_details"]["pid1_is_gateway"]:
-            failures.append("pid 1 of the cage is not bwrap: no pid namespace")
+            failures.append("the probe is not pid 1 of the cage: no pid namespace")
         if proc["secret_names_in_proc_environ"]:
             failures.append("a server secret is named in a visible /proc/*/environ")
     else:

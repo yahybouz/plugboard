@@ -10,8 +10,10 @@ This module builds the gateway's only command line that launches agy
 - ``bwrap`` with its own user, pid, ipc, uts (and, where possible, cgroup)
   namespaces, ended with the gateway (``--die-with-parent``). The pid
   namespace keeps ``/proc/<gateway pid>/environ`` (the server's keys) out of
-  sight. The network is shared: agy needs it. No ``--new-session``: bwrap
-  stays in the group the gateway kills on timeout or cancellation.
+  sight. agy is its pid 1 (``--as-pid-1``): bwrap's own init there would be
+  left unreaped, a zombie of the gateway when it is its container's PID 1.
+  The network is shared: agy needs it. No ``--new-session``: bwrap stays in
+  the group the gateway kills on timeout or cancellation.
 - An empty root holding, read-only, the system libraries (``/usr/lib``,
   ``/usr/lib64``, the ``/lib*`` links), the few ``/etc`` files the loader,
   name resolution and TLS need, the CA bundles (and the system CA paths
@@ -119,6 +121,13 @@ _NAMESPACES = (
     "--unshare-user",
     "--unshare-ipc",
     "--unshare-pid",
+    # The command is the pid 1 of the cage, bwrap starts no init of its own:
+    # the outer bwrap leaves without reaping that init, which then becomes a
+    # zombie of whoever reaps orphans (the gateway, PID 1 of its container on
+    # the UAT: one zombie per call and per version probe, 15/11). The cage
+    # still ends with agy: when the pid 1 of a pid namespace exits, the kernel
+    # kills everything left in it.
+    "--as-pid-1",
     "--unshare-uts",
     "--unshare-cgroup-try",
     "--die-with-parent",

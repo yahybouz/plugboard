@@ -206,6 +206,8 @@ def test_cage_argv_isolates_agy(setup, fake_binary):
         "--unshare-user",
         "--unshare-ipc",
         "--unshare-pid",
+        # agy is pid 1 of the cage: no init of bwrap's left unreaped.
+        "--as-pid-1",
         "--unshare-uts",
         "--unshare-cgroup-try",
         "--die-with-parent",
@@ -937,7 +939,8 @@ def _probe_script(setup) -> str:
         "see_codex": f"ls {home}/.codex",
         "see_usr_local": "ls /usr/local",
         "see_gateway_proc": f"test -e /proc/{os.getpid()}",
-        "proc1_is_cage": "grep -q bwrap /proc/1/cmdline",
+        # agy is pid 1 of the cage's own pid namespace (--as-pid-1).
+        "agy_is_pid1": 'test "$$" = 1 && grep -q agy /proc/1/cmdline',
         "write_home": f"touch {home}/x",
         "write_bin_dir": f"touch {setup['bin']}/agy.new",
         "overwrite_binary": f"echo x >> {setup['bin']}/agy",
@@ -996,7 +999,7 @@ async def test_agy_in_the_real_cage(setup, real_bwrap, shell_in_cage, monkeypatc
         "see_codex": "no",
         "see_usr_local": "no",
         "see_gateway_proc": "no",
-        "proc1_is_cage": "yes",
+        "agy_is_pid1": "yes",
         "write_home": "no",
         "write_bin_dir": "no",
         "overwrite_binary": "no",
@@ -1358,9 +1361,9 @@ def test_agy_runs_where_the_container_forbids_a_new_procfs(
     assert proc.returncode == 0, proc.stdout + proc.stderr
     out = json.loads(proc.stdout.strip().splitlines()[-1])
     # No /proc at all, so no environ to read; still a pid namespace of its
-    # own (agy is pid 2, under bwrap); and no secret in its environment.
+    # own (agy is its pid 1, --as-pid-1); and no secret in its environment.
     assert out == {
-        "content": "proc=no proc1_environ=no gateway_environ=no secret=no pid=2"
+        "content": "proc=no proc1_environ=no gateway_environ=no secret=no pid=1"
     }, proc.stderr
     assert "without /proc" in proc.stderr
     for value in _SECRETS.values():

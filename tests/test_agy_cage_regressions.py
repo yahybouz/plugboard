@@ -377,7 +377,8 @@ async def test_reported_usage_is_the_same_with_and_without_the_cage(
     _fake_agy(
         setup,
         "CAGED=no\n"
-        "grep -q bwrap /proc/1/cmdline 2>/dev/null && CAGED=yes\n"
+        # In the cage, agy is pid 1 of its own pid namespace (--as-pid-1).
+        '[ "$$" = 1 ] && CAGED=yes\n'
         'ANSWER="caged=$CAGED"\n'
         '[ "$STREAM" = yes ] && delta "$ANSWER"',
     )
