@@ -99,7 +99,7 @@ For a budgeted key, a model counts as priced when the [pricing grid](pricing.md)
 | Ollama cloud model whose only match is a built-in local 0 (`gemma4:31b-cloud`), or not priced at all | unknown | `402` |
 | A local model name (`llama3`, `qwen3:8b`) on any other provider | not free: a local 0 by name (built-in, or written in a grid by a source) applies to Ollama providers only; an admin's `manual` 0 is a price | `402` unless priced |
 | Subscription CLIs (Claude Code, Codex, Gemini, Antigravity) and OAuth/broker providers | API price of the model when known (`claude-haiku-4-5`, `gpt-5.5`) | allowed |
-| Official price table (checked 2026-11-13, dated) | Claude Fable 5.1 10/50, Opus 5.5 4/20, Sonnet 5.5 2/10, Haiku 5.5 0.10/0.50; agy `-medium` variants as their base model; `gemini-4-argon-*` 2/10 through November 2026, 4/20 from December 2026; `gemini-3.8-flash-*` 0.75/3.75 through December 2026, 1.50/7.50 from January 2027; `gpt-4o-mini` 0.15/0.60 (USD per million tokens, input/output) | allowed |
+| Official price table (checked 2026-11-13, dated) | Claude Fable 5.2 8/40, Fable 5.1 10/50, Opus 5.5 4/20, Sonnet 5.5 2/10, Haiku 5.5 0.10/0.50; agy `-medium` variants as their base model; `gemini-4-argon-*` 2/10 through November 2026, 4/20 from December 2026; `gemini-3.8-flash-*` 0.75/3.75 through December 2026, 1.50/7.50 from January 2027; `gpt-4o-mini` 0.15/0.60 (USD per million tokens, input/output) | allowed |
 | No official price: `gpt-oss-120b-medium` (agy), `meta-llama-3.1-405b-instruct` (GitHub broker), and any model the grid and the table do not price | unknown | `402` |
 | Custom provider, model not in the grid | unknown | `402` |
 

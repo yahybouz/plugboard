@@ -286,7 +286,7 @@ sudo docker run --rm --network none --entrypoint sh \
   'id -u; gemini --version; claude --version; codex --version; gh --version; agy --version'
 ```
 
-Expected: `1000`, then `0.65.0`, `2.1.306 (Claude Code)`, `codex-cli 0.163.0`,
+Expected: `1000`, then `0.65.0`, `2.1.325 (Claude Code)`, `codex-cli 0.163.0`,
 the `gh version` lines and `1.4.4`: the versions pinned in the `Dockerfile`
 (the Compose file passes none). Another version or an error stops the gate.
 

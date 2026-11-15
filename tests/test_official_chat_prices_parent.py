@@ -17,6 +17,7 @@ OFFICIAL = {
     "claude-sonnet-5-5": (2.0, 10.0),
     "claude-haiku-5-5": (0.10, 0.50),  # standard tier, prompts <= 100k tokens
     "claude-fable-5-1": (10.0, 50.0),
+    "claude-fable-5-2": (8.0, 40.0),
     "gemini-4-argon-low": (2.0, 10.0),
     "gemini-4-argon-medium": (2.0, 10.0),
     "gemini-4-argon-high": (2.0, 10.0),

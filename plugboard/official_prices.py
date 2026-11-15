@@ -62,6 +62,8 @@ _TABLE = (
         "laya-multilingual", 0.0, 0.0, _LAYA, note="runs locally; free by user decision"
     ),
     _entry("claude-fable-5-1", 10.0, 50.0, _ANTHROPIC),
+    # Successor of Fable 5.1 at a lower price; cache reads 0.20 (PLU-72).
+    _entry("claude-fable-5-2", 8.0, 40.0, _ANTHROPIC),
     _entry("claude-opus-5-5", 4.0, 20.0, _ANTHROPIC),
     _entry("claude-sonnet-5-5", 2.0, 10.0, _ANTHROPIC),
     _entry(

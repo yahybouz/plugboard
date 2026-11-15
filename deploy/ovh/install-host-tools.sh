@@ -34,7 +34,7 @@ case "${1:-}" in
     ;;
   claude)
     # This reviewed vendor installer verifies the downloaded native binary.
-    bash "$HOME/claude-native-install.sh" 2.1.306
+    bash "$HOME/claude-native-install.sh" 2.1.325
     link_cli claude
     claude --version
     claude --help > /dev/null

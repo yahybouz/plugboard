@@ -630,6 +630,7 @@ PRESETS: Dict[str, Dict[str, Any]] = {
             "claude-sonnet-5-5",
             "claude-haiku-5-5",
             "claude-fable-5-1",
+            "claude-fable-5-2",  # Claude Code 2.1.325 (PLU-72)
             # Claude 4 family (2025-2026)
             "claude-opus-4-7",
             "claude-opus-4-7-20260416",

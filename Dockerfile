@@ -103,7 +103,7 @@ FROM base AS full
 # checksum per release). A one-off local build may still override a version
 # with --build-arg.
 ARG GEMINI_CLI_VERSION=0.65.0
-ARG CLAUDE_CODE_VERSION=2.1.306
+ARG CLAUDE_CODE_VERSION=2.1.325
 ARG CODEX_VERSION=0.163.0
 
 # - git: used by the CLIs and some npm post-install scripts
