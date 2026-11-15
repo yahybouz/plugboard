@@ -89,6 +89,21 @@ In both cases:
 - Check: the gateway's request and audit logs show distinct `100.x` addresses
   for distinct tailnet clients, and no longer the network gateway's address.
 
+## Switching to 4.14.3
+
+- Image `plugboard:private-full-v4.14.3`. In the image, the
+  [production gate](prod-gate.md) expects `0.65.0`, `2.1.325 (Claude Code)`
+  (was `2.1.306`), `codex-cli 0.163.0` and agy `1.4.4`.
+- The image has no `pip` (PLU-74): `python -m pip` fails in the container.
+- `/health/ready` without a key answers `ready` and `version` only (PLU-75):
+  a check that reads `checks` must send a key.
+- Claude Fable 5.2 (`claude-fable-5-2`): the claude provider keeps its saved
+  model list and the catalogue scheduler is off here, so it lists the model
+  only after a refresh of that list decided by the operator (see above for
+  the catalogue job); until then a call to it answers `404 model_not_found`.
+- The network change of the section above is not part of the image: apply
+  it, then check the logs as it says.
+
 ## Backup
 
 - **Every night, encrypted** (since 14 November 2026): `plugboard-backup.timer`
