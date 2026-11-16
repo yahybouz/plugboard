@@ -53,7 +53,7 @@ import struct
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple
 from plugboard import envcompat
-from plugboard.storage import data_dir, private_sqlite_file
+from plugboard.storage import data_dir, open_sqlite_store
 
 log = logging.getLogger(__name__)
 
@@ -231,19 +231,16 @@ _IDX_CREATED = (
 
 def _get_conn() -> sqlite3.Connection:
     # SEC-005: owner-only, the cache may hold sensitive cached responses.
-    private_sqlite_file(_DB_PATH)
-    conn = sqlite3.connect(str(_DB_PATH), timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.row_factory = sqlite3.Row
+    # Set up once per process, under a lock (BUG-128).
+    return open_sqlite_store(_DB_PATH, _set_up, foreign_keys=True)
+
+
+def _set_up(conn: sqlite3.Connection) -> None:
     conn.execute(_CREATE_ENTRIES)
     conn.execute(_CREATE_BANDS)
     conn.execute(_IDX_BANDS)
     conn.execute(_IDX_CREATED)
     _migrate_schema(conn)
-    conn.commit()
-    return conn
 
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
@@ -261,9 +258,11 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
     ):
         try:
             conn.execute(ddl)
-        except sqlite3.OperationalError:
-            # column already exists — migration is idempotent
-            pass
+        except sqlite3.OperationalError as exc:
+            # Column already there: the migration is idempotent. Any other
+            # error (a locked store) is raised, so the set-up runs again.
+            if "duplicate column" not in str(exc).lower():
+                raise
 
 
 # -- Prompt normalization + shingling -----------------------------------------

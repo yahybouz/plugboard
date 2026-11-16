@@ -79,7 +79,6 @@ def session_db(tmp_path, monkeypatch):
     from plugboard import session_store
 
     monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "sessions.db")
-    monkeypatch.setattr(session_store, "_INITIALISED", False)
     return session_store
 
 

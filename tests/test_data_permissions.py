@@ -109,8 +109,6 @@ STORES = [
 
 # Module-level record of "schema already created", with its fresh value.
 _SCHEMA_FLAGS = {
-    "plugboard.session_store": ("_INITIALISED", lambda: False),
-    "plugboard.mcp_server": ("_TRACKING_SCHEMA_READY", lambda: False),
     "plugboard.usage": ("_schema_ready", dict),
 }
 

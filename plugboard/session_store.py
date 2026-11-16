@@ -28,18 +28,14 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
-from threading import Lock
 from typing import Any, Dict, List, Optional
 from plugboard import envcompat
-from plugboard.storage import data_dir, private_sqlite_file, purge_sqlite_rows
+from plugboard.storage import data_dir, open_sqlite_store, purge_sqlite_rows
 
 _DATA_DIR = data_dir()
 _DB_PATH = _DATA_DIR / "sessions.db"
 _TTL_S = envcompat.get_int("PLUGBOARD_SESSION_TTL_S", default=24 * 3600)
 _MAX_TURNS = envcompat.get_int("PLUGBOARD_SESSION_MAX_TURNS", default=50)
-
-_INIT_LOCK = Lock()
-_INITIALISED = False
 
 _CREATE = """
 CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -56,22 +52,13 @@ _INDEX = "CREATE INDEX IF NOT EXISTS idx_sessions_updated ON chat_sessions(updat
 
 
 def _get_conn() -> sqlite3.Connection:
-    global _INITIALISED
-    if not _DB_PATH.exists():
-        _INITIALISED = False  # deleted or not created yet: set it up again
-    private_sqlite_file(_DB_PATH)
-    conn = sqlite3.connect(str(_DB_PATH), timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.row_factory = sqlite3.Row
-    if not _INITIALISED:
-        with _INIT_LOCK:
-            if not _INITIALISED:
-                conn.execute(_CREATE)
-                conn.execute(_INDEX)
-                conn.commit()
-                _INITIALISED = True
-    return conn
+    # Set up once per process, under a lock: WAL mode included (BUG-128).
+    return open_sqlite_store(_DB_PATH, _set_up)
+
+
+def _set_up(conn: sqlite3.Connection) -> None:
+    conn.execute(_CREATE)
+    conn.execute(_INDEX)
 
 
 def load_session(client_id: str, session_id: str) -> List[Dict[str, Any]]:

@@ -246,7 +246,6 @@ async def test_a_cut_stream_records_no_session_turn(
     from plugboard import session_store
 
     monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "sessions.db")
-    monkeypatch.setattr(session_store, "_INITIALISED", False)
 
     async def cut_stream(body, **options):
         yield FAKE_STREAM_CHUNK_1

@@ -49,7 +49,6 @@ def _own_session_store(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sessions, "_DATA_DIR", tmp_path)
     monkeypatch.setattr(sessions, "_DB_PATH", tmp_path / "sessions.db")
-    monkeypatch.setattr(sessions, "_INITIALISED", False)
 
 
 @pytest.fixture

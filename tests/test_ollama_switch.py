@@ -348,7 +348,6 @@ async def test_session_turn_gets_503_and_stores_nothing(
     # per process; earlier test files leave it on another file. Own one here.
     monkeypatch.setattr(session_store, "_DATA_DIR", tmp_path)
     monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "sessions.db")
-    monkeypatch.setattr(session_store, "_INITIALISED", False)
 
     client, auth, calls = http
     resp = await client.post(

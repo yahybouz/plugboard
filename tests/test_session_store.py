@@ -18,9 +18,8 @@ def _isolated_session_db(tmp_path, monkeypatch):
     """
     from plugboard import session_store
 
+    # Each test creates its own schema: the store is set up once per path.
     monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "sessions.db")
-    # Each test creates its own schema.
-    monkeypatch.setattr(session_store, "_INITIALISED", False)
     return session_store
 
 

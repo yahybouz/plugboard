@@ -68,7 +68,6 @@ def registry(tmp_path, monkeypatch):
     monkeypatch.setattr(mcp_server, "_REGISTRY_PATH", path)
     monkeypatch.setattr(mcp_server, "_DATA_DIR", tmp_path)
     monkeypatch.setattr(mcp_server, "_TRACKING_DB", tmp_path / "client_updates.db")
-    monkeypatch.setattr(mcp_server, "_TRACKING_SCHEMA_READY", False)
     return path
 
 
@@ -432,7 +431,6 @@ async def net_server(monkeypatch, fake_gateway, net_data):
     monkeypatch.setattr(ms, "_REGISTRY_PATH", net_data / "registry.json")
     monkeypatch.setattr(ms, "_DATA_DIR", net_data)
     monkeypatch.setattr(ms, "_TRACKING_DB", net_data / "client_updates.db")
-    monkeypatch.setattr(ms, "_TRACKING_SCHEMA_READY", False)
     try:
         yield ms
     finally:

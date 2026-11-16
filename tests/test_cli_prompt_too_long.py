@@ -83,7 +83,6 @@ def isolated(_providers_file, monkeypatch, tmp_path):
     monkeypatch.setattr(metrics, "_stats", {})
     monkeypatch.setattr(sessions, "_DATA_DIR", tmp_path)
     monkeypatch.setattr(sessions, "_DB_PATH", tmp_path / "sessions.db")
-    monkeypatch.setattr(sessions, "_INITIALISED", False)
     # The record functions bound the file as a default when imported.
     qfile = tmp_path / "quarantined_models.json"
     monkeypatch.setattr(quarantine, "_QUARANTINE_FILE", qfile)

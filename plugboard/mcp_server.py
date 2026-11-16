@@ -48,7 +48,7 @@ from mcp.types import CallToolResult, TextContent
 
 from plugboard import envcompat
 from plugboard.legacy_connectors import is_removed_model, REMOVED_CONNECTOR_ERROR
-from plugboard.storage import data_dir, private_sqlite_file
+from plugboard.storage import data_dir, open_sqlite_store
 
 log = logging.getLogger(__name__)
 
@@ -1391,21 +1391,12 @@ CREATE TABLE IF NOT EXISTS applied_updates (
     PRIMARY KEY (client_id, prompt_id)
 );
 """
-_TRACKING_SCHEMA_READY = False
 
 
 def _tracking_conn() -> sqlite3.Connection:
-    private_sqlite_file(_TRACKING_DB)
-    conn = sqlite3.connect(str(_TRACKING_DB), timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.row_factory = sqlite3.Row
-    global _TRACKING_SCHEMA_READY
-    if not _TRACKING_SCHEMA_READY:
-        conn.execute(_TRACKING_CREATE)
-        conn.commit()
-        _TRACKING_SCHEMA_READY = True
-    return conn
+    # Set up once per process and per path, under a lock; a deleted store is
+    # set up again (BUG-128).
+    return open_sqlite_store(_TRACKING_DB, lambda conn: conn.execute(_TRACKING_CREATE))
 
 
 _LEGACY_REGISTRY_PATH = (

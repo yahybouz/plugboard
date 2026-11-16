@@ -12,6 +12,8 @@
 * ``ensure_private_dir()`` creates directories owner-only (0700) and
   ``private_sqlite_file()`` keeps an SQLite store owner-only (0600): they hold
   cached answers, usage, audit rows, sessions and credentials.
+* ``open_sqlite_store()`` opens such a store in WAL mode and sets it up once
+  per process, under a lock (BUG-128).
 * ``to_thread_to_the_end()`` runs blocking file work in a worker thread and,
   when the caller is cancelled meanwhile, still waits for it to end.
 * ``purge_sqlite_rows()`` deletes old rows from an SQLite store and
@@ -28,9 +30,10 @@ import os
 import sqlite3
 import stat
 import tempfile
+import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence, Tuple, TypeVar
+from typing import Any, Callable, Dict, Optional, Sequence, Tuple, TypeVar
 
 log = logging.getLogger(__name__)
 
@@ -103,6 +106,63 @@ def private_sqlite_file(path: Path) -> Path:
                 _sqlite_mode_warned.add(target)
                 log.warning("Cannot restrict %s to 0600: %s", target, exc)
     return path
+
+
+# Stores already set up in this process (by path), and one lock per path.
+_sqlite_ready: set = set()
+_sqlite_setup_locks: Dict[str, threading.Lock] = {}
+_sqlite_setup_locks_guard = threading.Lock()
+
+
+def _sqlite_setup_lock(key: str) -> threading.Lock:
+    with _sqlite_setup_locks_guard:
+        return _sqlite_setup_locks.setdefault(key, threading.Lock())
+
+
+def forget_sqlite_store(path: Path) -> None:
+    """Have the next ``open_sqlite_store(path)`` set the store up again."""
+    _sqlite_ready.discard(str(Path(path)))
+
+
+def open_sqlite_store(
+    path: Path,
+    set_up: Optional[Callable[[sqlite3.Connection], None]] = None,
+    *,
+    foreign_keys: bool = False,
+) -> sqlite3.Connection:
+    """Open an owner-only SQLite store in WAL mode, set up once per process.
+
+    ``busy_timeout`` is set before anything else. The store's set-up (WAL
+    mode, then ``set_up(conn)``: tables, indexes, migrations, committed here)
+    runs once per path per process, under a lock: threads that switched a
+    brand-new database to WAL at once got "database is locked" (SQLite does
+    not call the busy handler on that lock upgrade) and lost their write
+    (BUG-122, BUG-128). A store missing on disk (deleted while the gateway
+    runs) is set up again. Rows are ``sqlite3.Row``.
+    """
+    path = Path(path)
+    key = str(path)
+    if not path.exists():
+        forget_sqlite_store(path)  # deleted or not created yet: set it up again
+    private_sqlite_file(path)
+    conn = sqlite3.connect(key, timeout=10)
+    try:
+        conn.execute("PRAGMA busy_timeout=5000")
+        if foreign_keys:
+            conn.execute("PRAGMA foreign_keys=ON")
+        conn.row_factory = sqlite3.Row
+        if key not in _sqlite_ready:
+            with _sqlite_setup_lock(key):
+                if key not in _sqlite_ready:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    if set_up is not None:
+                        set_up(conn)
+                    conn.commit()
+                    _sqlite_ready.add(key)
+    except BaseException:
+        conn.close()
+        raise
+    return conn
 
 
 def _open_existing_sqlite(

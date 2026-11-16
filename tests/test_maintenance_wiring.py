@@ -23,7 +23,6 @@ def stores(tmp_path, monkeypatch):
     monkeypatch.setattr(provider_watchdog, "_DB_PATH", tmp_path / "watchdog.db")
     monkeypatch.setattr(monitoring, "_DB_PATH", tmp_path / "monitoring.db")
     monkeypatch.setattr(session_store, "_DB_PATH", tmp_path / "sessions.db")
-    monkeypatch.setattr(session_store, "_INITIALISED", False)
     monkeypatch.setattr(retention, "report_path", lambda: tmp_path / "retention.json")
     for name in (
         "PLUGBOARD_USAGE_RETENTION_MONTHS",

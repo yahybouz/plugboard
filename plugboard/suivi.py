@@ -15,7 +15,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from plugboard.storage import data_dir, private_sqlite_file
+from plugboard.storage import data_dir, open_sqlite_store
 
 STATUTS = ("a_trier", "pret", "en_cours", "en_revue", "termine", "bloque", "abandonne")
 PRIORITES = ("P0", "P1", "P2", "P3")
@@ -79,14 +79,12 @@ def _now() -> str:
 
 
 def _connect() -> sqlite3.Connection:
-    db = private_sqlite_file(data_dir() / "suivi.db")
-    conn = sqlite3.connect(str(db), timeout=10)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.row_factory = sqlite3.Row
-    conn.executescript(_SCHEMA)
-    return conn
+    # Set up once per process, under a lock: WAL mode included (BUG-128).
+    return open_sqlite_store(
+        data_dir() / "suivi.db",
+        lambda conn: conn.executescript(_SCHEMA),
+        foreign_keys=True,
+    )
 
 
 def _check_choice(value: str, allowed: tuple, label: str) -> None:
