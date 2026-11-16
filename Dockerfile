@@ -52,6 +52,19 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
+# BUG-113, BUG-123: an init as PID 1 of the container, whatever the Compose
+# file. Without one the gateway is PID 1 and every orphan handed to it (codex's
+# bwrap, git, a shell left by a CLI) stays a zombie until no fork is possible.
+# Debian's tini reaps them and passes SIGTERM on to the gateway, which ends
+# its CLIs' process groups itself (no -g). An `init: true` in a Compose file
+# only adds Docker's own tini in front of this one: harmless. The build fails
+# when the binary is not where the ENTRYPOINT below names it.
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tini \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/* \
+ && /usr/bin/tini --version
+
 WORKDIR /app
 
 # Dependencies first (cache layer), pinned and hash-checked.
@@ -84,6 +97,8 @@ EXPOSE 8765
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
     CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ.get('PORT', '8765'), timeout=5)"]
 
+# tini is PID 1 and starts the command as its child (BUG-113, BUG-123).
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python", "run.py"]
 
 # ── api: slim gateway image ──────────────────────────────────

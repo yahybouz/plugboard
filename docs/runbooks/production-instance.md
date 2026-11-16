@@ -224,6 +224,27 @@ provider. What the call does and does not do:
 - Not checked by these steps: a real answer from Claude Fable 5.2 through
   Claude Code 2.1.325.
 
+## PID 1 of the container: tini
+
+From 4.14.4 the image starts `tini` as PID 1 (BUG-113, BUG-123), whatever the
+Compose file: it reaps every orphan (codex's `bwrap`, `git`, a shell left by a
+CLI) and passes `SIGTERM` on to the gateway, which stops its CLIs itself.
+Before, the gateway was PID 1 and kept each orphan as a zombie (68 in one hour
+on the UAT with 4.14.2) until the container could fork no more. A Compose file
+with `init: true` only puts Docker's own init in front of tini: harmless.
+An `--entrypoint` given to `docker run` replaces tini for that one-off
+container only.
+
+Read `/proc` (the slim image may have no `ps`). After each switch:
+
+```bash
+c="$(docker compose -p plugboard-private -f /etc/plugboard/compose.v<version>.json ps -q gateway)"
+docker exec "$c" sh -c 'tr "\0" " " < /proc/1/cmdline; echo'
+# Expected: /usr/bin/tini -- python run.py
+docker exec "$c" sh -c "grep -s '^State:[[:space:]]*Z' /proc/[0-9]*/status | wc -l"
+# Expected: 0 zombies (read it again after some agy and codex calls)
+```
+
 ## Backup
 
 - **Every night, encrypted** (since 14 November 2026): `plugboard-backup.timer`

@@ -13,6 +13,14 @@ claude did not change; this file pins it so that it never does by accident:
   argument of agy's cage, and PATH reaches the CLI as it is;
 - the image's PATH holds no ``bwrap`` (see tests/test_ci_image_full.py).
 
+4.14.4 puts tini as PID 1 of the container (BUG-113, BUG-123); the gateway's
+launch of its CLIs must not change with it. gemini and agy are pinned too,
+as ``release/4.14.2`` (v4.14.2, 2b4c5ae) launches them: gemini's command
+line (its private home's admin policy), environment and working directory;
+agy's command after its cage's ``--``, its environment and working
+directory, and that it starts inside bwrap. The binds of agy's cage are
+pinned by tests/test_agy_cage.py.
+
 No CLI is run: ``asyncio.create_subprocess_exec`` is replaced by a recorder.
 """
 
@@ -124,7 +132,7 @@ def server(tmp_path, monkeypatch):
     in place of create_subprocess_exec."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name in ("codex", "claude", "bwrap"):
+    for name in ("codex", "claude", "gemini", "agy", "bwrap"):
         exe = bin_dir / name
         exe.write_text("#!/bin/sh\nexit 0\n")
         exe.chmod(0o755)
@@ -230,3 +238,158 @@ def test_the_image_path_holds_no_bwrap():
     path = image_path_dirs()
 
     assert [f for f in files if os.path.dirname(f) in path] == []
+
+
+# ── gemini and agy, as in 4.14.2 (release/4.14.2, 2b4c5ae) ─────────────────
+# gemini: CLI_BACKENDS["gemini"].args, --model, then the admin policy of its
+# private home (gemini_isolation_args). <GHOME> is that home.
+GEMINI_4142 = [
+    "--skip-trust",
+    "-e",
+    "none",
+    "--allowed-mcp-server-names",
+    "__plugboard_no_mcp__",
+    "--approval-mode",
+    "default",
+    "--output-format",
+    "json",
+    "--model",
+    "m-1",
+    "--admin-policy",
+    "<GHOME>/deny-all-tools.toml",
+]
+# agy: what follows the cage's "--" after its binary; streamed, its output
+# format is stream-json.
+AGY_4142 = [
+    "--output-format",
+    "json",
+    "--disable-slash-commands",
+    "--sandbox",
+    "--model",
+    "m-1",
+]
+AGY_STREAM_4142 = ["--output-format", "stream-json", *AGY_4142[2:]]
+ENV_4142 = {
+    "gemini": {
+        "COLORTERM",
+        "GEMINI_CLI_HOME",
+        "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
+        "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+        "GEMINI_CLI_TRUST_WORKSPACE",
+        "HOME",
+        "LANG",
+        "NO_COLOR",
+        "PATH",
+        "TERM",
+    },
+    "agy": {
+        "AGY_CLI_DISABLE_AUTO_UPDATE",
+        "HOME",
+        "LANG",
+        "NO_COLOR",
+        "PATH",
+        "TERM",
+        "TMPDIR",
+    },
+}
+# What every agy launch keeps of its cage (the binds: tests/test_agy_cage.py).
+AGY_CAGE_FLAGS = ("--unshare-user", "--unshare-pid", "--as-pid-1", "--die-with-parent")
+
+
+@pytest.fixture
+def agy_home(server, tmp_path, monkeypatch):
+    """agy set up for the server account (its store, ``~/.gemini/config`` and
+    ``projects.json``), the fake ``bwrap`` of ``server`` found on PATH."""
+    from plugboard import agy_cage
+
+    home = tmp_path / "home"
+    store = home / ".gemini" / "antigravity-cli"
+    store.mkdir(parents=True)
+    (store / "antigravity-oauth-token").write_text("token\n")
+    (home / ".gemini" / "config" / "projects").mkdir(parents=True)
+    (home / ".gemini" / "projects.json").write_text("{}\n")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(agy_cage, "GATEWAY_BWRAP", str(tmp_path / "no-gateway-bwrap"))
+    agy_cage._reset_for_tests()
+    yield home
+    agy_cage._reset_for_tests()
+
+
+def _env_names(env: dict, kind: str, server) -> None:
+    assert set(env) == ENV_4142[kind]
+    assert not [
+        name
+        for name in env
+        if name.startswith("AGY_") and name != ("AGY_CLI_DISABLE_AUTO_UPDATE")
+    ]
+    assert env["PATH"] == server["path"]
+    assert env["NO_COLOR"] == "1"
+
+
+async def test_gemini_starts_as_in_4142(server):
+    call = await _launch(server, "gemini", stream=False)
+
+    env = call["env"]
+    ghome = env["GEMINI_CLI_HOME"]
+    expected = [a.replace("<GHOME>", ghome) for a in GEMINI_4142]
+    assert call["argv"] == [str(server["bin"] / "gemini"), *expected]
+    _no_cage(call["argv"])
+    _env_names(env, "gemini", server)
+    assert (env["TERM"], env["COLORTERM"]) == ("xterm-256color", "truecolor")
+    assert env["GEMINI_CLI_TRUST_WORKSPACE"] == "true"
+    assert env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] == f"{ghome}/system-settings.json"
+    assert env["GEMINI_CLI_SYSTEM_DEFAULTS_PATH"] == f"{ghome}/system-defaults.json"
+    assert call["cwd"] == server["spawn"]
+    assert call["start_new_session"] is True
+    pipe = asyncio.subprocess.PIPE
+    assert (call["stdin"], call["stdout"], call["stderr"]) == (pipe, pipe, pipe)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+async def test_agy_starts_in_its_cage_as_in_4142(server, agy_home, stream):
+    call = await _launch(server, "agy", stream)
+
+    argv, env = call["argv"], call["env"]
+    assert argv[0] == os.path.realpath(server["bin"] / "bwrap")
+    for flag in AGY_CAGE_FLAGS:
+        assert flag in argv, flag
+    sep = argv.index("--")
+    args = AGY_STREAM_4142 if stream else AGY_4142
+    assert argv[sep + 1 :] == [os.path.realpath(server["bin"] / "agy"), *args]
+    _env_names(env, "agy", server)
+    assert (env["TERM"], env["AGY_CLI_DISABLE_AUTO_UPDATE"]) == ("dumb", "1")
+    assert env["HOME"] == str(agy_home)
+    # Its private TMPDIR, under the launch directory, is its cage's cwd.
+    assert os.path.dirname(env["TMPDIR"]) == os.path.realpath(server["spawn"])
+    assert argv[argv.index("--chdir") + 1] == env["TMPDIR"]
+    assert call["cwd"] == server["spawn"]
+    assert call["start_new_session"] is True
+
+
+async def test_gemini_version_probe_starts_as_in_4142(server):
+    probe = await cs.probe_cli_version("gemini")
+
+    assert probe["ok"] is False
+    (call,) = server["calls"]
+    assert call["argv"] == ["gemini", "--version"]
+    assert set(call["env"]) == ENV_4142["gemini"] - {
+        "GEMINI_CLI_HOME",
+        "GEMINI_CLI_SYSTEM_DEFAULTS_PATH",
+        "GEMINI_CLI_SYSTEM_SETTINGS_PATH",
+    }
+    assert call["cwd"] == server["spawn"]
+    assert call["start_new_session"] is True
+
+
+async def test_agy_version_probe_runs_in_its_cage_as_in_4142(server, agy_home):
+    probe = await cs.probe_cli_version("agy")
+
+    assert probe["ok"] is False
+    (call,) = server["calls"]
+    argv = call["argv"]
+    assert argv[0] == os.path.realpath(server["bin"] / "bwrap")
+    sep = argv.index("--")
+    assert argv[sep + 1 :] == [os.path.realpath(server["bin"] / "agy"), "--version"]
+    assert set(call["env"]) == ENV_4142["agy"]
+    assert call["cwd"] == server["spawn"]
+    assert call["start_new_session"] is True

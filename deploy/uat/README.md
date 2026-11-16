@@ -37,6 +37,17 @@ When the host file changes, copy it here again in the same change and update its
 
 Only the values of `secrets/runtime.env`: they are not in the repository and are never committed. `runtime.env.example` lists the names with nothing after `=`. The value of `PLUGBOARD_IMAGE` is not a secret; it changes on every deployment, so `compose.env.example` leaves it empty too.
 
+## PID 1 of the gateway container: tini
+
+From 4.14.4 the image starts `tini` as PID 1 (BUG-113, BUG-123); `compose.yml` needs no `init: true` (with it, Docker's own init would only sit in front of tini, harmlessly). tini reaps the orphans the gateway's CLIs leave (codex's `bwrap`, `git`, a shell) and passes `SIGTERM` on to the gateway. With 4.14.2, the gateway was PID 1 and kept 68 zombies in one hour. A root operator checks `/proc` after each deployment (the slim image may have no `ps`):
+
+```bash
+docker exec uat-plugboard-gateway-1 sh -c 'tr "\0" " " < /proc/1/cmdline; echo'
+# Expected: /usr/bin/tini -- python run.py
+docker exec uat-plugboard-gateway-1 sh -c "grep -s '^State:[[:space:]]*Z' /proc/[0-9]*/status | wc -l"
+# Expected: 0 (zombies), again after some agy and codex calls
+```
+
 ## CLI versions
 
 The provider CLI versions of the `full` image come from the `Dockerfile` only (the `ARG` lines of its `full` stage); see [Deployment, CLI versions](../../docs/guide/deployment.md#cli-versions). `deployer-entry.json` is the target state of the deployer's entry: its image carries no `build_args`. The live entry on the host must carry no `build_args` either; a root operator removes them there, otherwise the deployer would pass a second copy of the versions that overrides the `Dockerfile`.
