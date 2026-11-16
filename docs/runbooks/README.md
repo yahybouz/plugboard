@@ -18,6 +18,7 @@ TOTP code or use a session: see
 | [move-install.md](move-install.md) | The install must move to another machine (planned, or the old one is failing) | P3 (P1 if the old machine is failing) |
 | [production-instance.md](production-instance.md) | How the production instance departs from `deploy/ovh/compose.yml`: catalogue scheduler off, backup, rollback, agy conversations | Reference (not an incident) |
 | [prod-gate.md](prod-gate.md) | A new release must reach the production instance (Compose project `plugboard-private`): ordered gate with data check, backup, image checks, smoke, rehearsed rollback and 24 h of observation | Planned (not an incident) |
+| [release-publish.md](release-publish.md) | A release must be sent to GitLab and GitHub: identities, secrets and private terms checked on the range, CI green, GitLab first | Planned (not an incident) |
 
 For general diagnostics, see the
 [troubleshooting guide](../guide/troubleshooting.md) and the

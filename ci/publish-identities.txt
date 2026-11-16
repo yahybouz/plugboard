@@ -1,0 +1,6 @@
+# Identities allowed as author AND committer of a published commit
+# (ci/publish_check.py, PB-REL-01). One "Name <email>" per line; the email
+# is compared without case. Extend it without committing anything personal:
+# private/publish-identities.txt (ignored by git), PLUGBOARD_PUBLISH_IDENTITIES
+# or --identities FILE.
+Hermes UAT <hermes@uat.local>

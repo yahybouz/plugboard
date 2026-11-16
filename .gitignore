@@ -93,6 +93,8 @@ data/*
 CLAUDE.local.md
 .equipe/
 graphify-out/
-private/
+# Private files (scan terms, identities): only the examples are tracked
+private/*
+!private/*.example
 .venv
 .scannerwork/

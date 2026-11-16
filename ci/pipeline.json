@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "name": "plugboard",
-  "description": "CI locale Plugboard (qd-ci, arbre exact du commit) : environnements figés par requirements-*.lock (--require-hashes) dans {scratch}, ruff et ruff format (dont sdk/python), JSON du registre, pytest + couverture >= 80 %, tests du SDK Python, contrat MCP dans son environnement propre, gitleaks (commits propres à la branche vs main, sinon arbre), bandit, pip-audit, docker build de la cible full déployée (utilisateur app + healthcheck + CLI lancées). Hors CI : sonarqube (docker-compose.sonar.yml, à la main), smoke-models (planifiés, secrets). Lancer : make ci ; sur l'UAT : python3 /srv/dev/.ci/outils/ci.py lancer plugboard <ref>. Aucune CI distante : rien ne se lance à l'envoi vers GitLab ou GitHub. Linux et macOS : uv et python3.12 cherchés dans le PATH ; caches via UV_CACHE_DIR/DOCKER_HOST transmis.",
+  "description": "CI locale Plugboard (qd-ci, arbre exact du commit) : environnements figés par requirements-*.lock (--require-hashes) dans {scratch}, ruff et ruff format (dont sdk/python), JSON du registre, pytest + couverture >= 80 %, tests du SDK Python, contrat MCP dans son environnement propre, gitleaks (commits propres à la branche vs main, sinon arbre), contrôle avant publication (identités et termes privés, PB-REL-01), bandit, pip-audit, docker build de la cible full déployée (utilisateur app + healthcheck + CLI lancées). Hors CI : sonarqube (docker-compose.sonar.yml, à la main), smoke-models (planifiés, secrets). Lancer : make ci ; sur l'UAT : python3 /srv/dev/.ci/outils/ci.py lancer plugboard <ref>. Aucune CI distante : rien ne se lance à l'envoi vers GitLab ou GitHub. Linux et macOS : uv et python3.12 cherchés dans le PATH ; caches via UV_CACHE_DIR/DOCKER_HOST transmis.",
   "path": ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"],
   "env": {
     "LANG": "C.UTF-8",
@@ -13,7 +13,7 @@
     "PLUGBOARD_SKIP_DOTENV": "1",
     "PLUGBOARD_DATA": "{scratch}/data"
   },
-  "env_passthrough": ["UV_CACHE_DIR", "DOCKER_HOST", "CI_GIT_DIR", "CI_COMMIT_SHA"],
+  "env_passthrough": ["UV_CACHE_DIR", "DOCKER_HOST", "CI_GIT_DIR", "CI_COMMIT_SHA", "PLUGBOARD_SCAN_TERMS", "PLUGBOARD_PUBLISH_IDENTITIES"],
   "steps": [
     {"id": "env-dev", "description": "Environnement dev + MCP figé (requirements-dev.lock + requirements-mcp.lock, hachages exigés).",
      "argv": ["uv", "venv", "--quiet", "--python", "3.12", "{scratch}/venv"], "timeout_seconds": 300},
@@ -36,6 +36,8 @@
     {"id": "git-depot", "description": "Dépôt Git du commit exact (objets du dépôt source en lecture seule) pour gitleaks.",
      "argv": ["{python}", "-B", "ci/ci_outils.py", "git-depot", "--ref", "main"], "timeout_seconds": 120},
     {"id": "gitleaks", "argv": ["{python}", "-B", "ci/ci_outils.py", "gitleaks", "--base", "main", "--config", ".gitleaks.toml"], "timeout_seconds": 600},
+    {"id": "publish-check", "description": "Avant publication (PB-REL-01) : auteur et committer de chaque commit propre à la branche dans ci/publish-identities.txt (ou la liste privée), termes privés absents des lignes ajoutées, messages, noms de fichiers et identités. Termes lus dans private/scan-terms.txt du dépôt source, à côté de CI_GIT_DIR (l'export jetable n'a pas private/) ; absent = échec. gitleaks non relancé : l'étape précédente a balayé la même plage.",
+     "argv": ["{python}", "-B", "ci/publish_check.py", "--base", "main", "--skip-gitleaks"], "timeout_seconds": 300},
     {"id": "bandit", "argv": ["{scratch}/venv/bin/bandit", "-q", "-r", "plugboard/", "-x", "tests/", "-ll"], "timeout_seconds": 600},
     {"id": "pip-audit", "description": "CVE des dépendances, un lock par étape (PLU-30) : dev, image (requirements.lock), serveur MCP, décisions. Avis sans correctif sur le runtime décisions (optionnel, hors image) : --ignore-vuln <ID> sur pip-audit-decisions seulement, avec la réserve écrite dans docs/guide/decisions-runtime.md.",
      "argv": ["{scratch}/venv/bin/pip-audit", "--strict", "--progress-spinner", "off", "--disable-pip",

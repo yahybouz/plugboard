@@ -1,0 +1,14 @@
+# Private terms refused before publication (ci/publish_check.py and
+# scripts/pre-push). Copy to private/scan-terms.txt, which git ignores, and
+# never commit the real file.
+#
+# Format: one term per line, case-insensitive. Blank lines and lines starting
+# with "#" are ignored. A line is an exact text (as grep -F); a line starting
+# with "re:" is a Python regular expression (ci/publish_check.py only;
+# scripts/pre-push reads every line as exact text).
+# A finding prints the term's number and line here, never the term itself.
+#
+# The terms below are fictitious examples.
+example-client-name
+example-internal-host.invalid
+re:example-project-\d+
