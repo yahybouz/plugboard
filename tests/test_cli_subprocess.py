@@ -247,21 +247,23 @@ def test_extract_claude_jsonl_content_block_deltas():
 
 
 def test_extract_claude_jsonl_thinking_blocks():
-    """Extended-thinking mode emits ``thinking`` blocks (BENCH-001)."""
+    """Extended-thinking mode emits ``thinking`` blocks (BENCH-001): next to
+    text, they are not the answer, which is the text a stream sends (BUG-92)."""
     lines = [
         '{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Deep thought"}]}}',
         '{"type":"assistant","message":{"content":[{"type":"text","text":"Answer"}]}}',
     ]
-    assert _extract_text_from_claude_jsonl(lines) == "Deep thoughtAnswer"
+    assert _extract_text_from_claude_jsonl(lines) == "Answer"
 
 
 def test_extract_claude_jsonl_thinking_delta():
-    """Thinking deltas must be collected just like text deltas."""
+    """Thinking deltas are the answer only when there is no text (BUG-92)."""
     lines = [
         '{"type":"content_block_delta","delta":{"type":"thinking_delta","text":"t1"}}',
         '{"type":"content_block_delta","delta":{"type":"text_delta","text":"t2"}}',
     ]
-    assert _extract_text_from_claude_jsonl(lines) == "t1t2"
+    assert _extract_text_from_claude_jsonl(lines) == "t2"
+    assert _extract_text_from_claude_jsonl(lines[:1]) == "t1"
 
 
 def test_extract_claude_jsonl_result_fallback():

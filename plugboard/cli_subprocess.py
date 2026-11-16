@@ -1771,11 +1771,14 @@ def _extract_text_from_codex_jsonl(lines: List[str]) -> str:
 def _extract_text_from_claude_jsonl(lines: List[str]) -> str:
     """Parse Claude CLI `--output-format stream-json` events.
 
-    Handles ``text`` / ``thinking`` blocks (Anthropic "extended thinking"
-    mode) and their corresponding deltas so that a thinking-only response
-    does not silently yield empty content (BENCH-001).
+    The answer is the ``text`` blocks (and ``text_delta`` deltas), the same
+    text a streamed call sends (BUG-92): ``thinking`` is not part of it. An
+    answer made of ``thinking`` only is returned rather than an empty one
+    (BENCH-001); without any block, the ``result`` text.
     """
-    parts: List[str] = []
+    texts: List[str] = []
+    thoughts: List[str] = []
+    result_text = ""
     for line in lines:
         line = line.strip()
         if not line:
@@ -1791,23 +1794,31 @@ def _extract_text_from_claude_jsonl(lines: List[str]) -> str:
                 if not isinstance(block, dict):
                     continue
                 btype = block.get("type")
-                if btype in ("text", "thinking"):
+                if btype == "text":
+                    text = block.get("text", "")
+                elif btype == "thinking":
                     text = block.get("text") or block.get("thinking", "")
-                    if isinstance(text, str):
-                        parts.append(text)
+                else:
+                    continue
+                if isinstance(text, str):
+                    (texts if btype == "text" else thoughts).append(text)
         elif etype == "content_block_delta":
             delta = evt.get("delta", {})
-            if delta.get("type") in ("text_delta", "thinking_delta"):
-                parts.append(delta.get("text", ""))
+            dtype = delta.get("type")
+            if dtype == "text_delta":
+                texts.append(delta.get("text", ""))
+            elif dtype == "thinking_delta":
+                thoughts.append(delta.get("text") or delta.get("thinking", ""))
         elif etype == "result":
-            # Fallback: some CLI versions surface the final text here.
-            # Only use it when no earlier text/thinking blocks were found
-            # so we don't duplicate content already collected above.
-            if not parts:
-                result_text = evt.get("result", "")
-                if isinstance(result_text, str) and result_text:
-                    parts.append(result_text)
-    return "".join(parts).strip()
+            # Fallback: some CLI versions surface the final text here only.
+            text = evt.get("result", "")
+            if isinstance(text, str) and text and not result_text:
+                result_text = text
+    for parts in (texts, thoughts):
+        answer = "".join(p for p in parts if isinstance(p, str)).strip()
+        if answer:
+            return answer
+    return result_text.strip()
 
 
 def _try_parse_stdout_text(
@@ -2055,7 +2066,10 @@ async def complete(
         body: OpenAI-format request body (model, messages, max_tokens, ...).
         timeout_s: per-request wall-clock limit (overrides backend default).
         on_delta: called with each piece of answer text as the CLI writes it
-            (see ``can_stream``); the returned response is the same either way.
+            (see ``can_stream``). The returned answer is then the text those
+            pieces carried, or extends it: what was sent cannot be taken back,
+            so the answer billed and replayed is the one the client got
+            (BUG-92).
 
     Returns:
         OpenAI-style response dict.
@@ -2097,6 +2111,14 @@ async def complete(
     spawn_cwd = os.environ.get("PLUGBOARD_SUBPROCESS_CWD") or _clean_spawn_cwd()
 
     read_delta = _DELTA_READERS.get(kind) if on_delta is not None else None
+    # The answer text handed to on_delta, in order (BUG-92).
+    streamed: List[str] = []
+
+    def relay(text: str) -> None:
+        streamed.append(text)
+        if on_delta is not None:
+            on_delta(text)
+
     argv = [
         binary_path,
         *(_stream_args(kind, backend.args) if read_delta else backend.args),
@@ -2194,7 +2216,7 @@ async def complete(
                         prompt.encode("utf-8"),
                         # agy's first event already names the conversation.
                         store_call.watching(read_delta) if store_call else read_delta,
-                        on_delta,
+                        relay,
                     )
                 else:
                     pending_io = proc.communicate(prompt.encode("utf-8"))
@@ -2374,6 +2396,20 @@ async def complete(
             model_id=model,
             **_quota_fields(ended_error, stderr_text, rate_limited=rate_limited),
         )
+
+    sent = "".join(streamed)
+    if sent and not text.startswith(sent):
+        # The deltas already sent differ from the CLI's final text (several
+        # agy agent_response steps, whitespace the final text strips): the
+        # answer is the text the client received, never one it did not get.
+        log.info(
+            "CLI %r: answer taken from its streamed text (%d chars, final text "
+            "%d chars)",
+            backend.command,
+            len(sent),
+            len(text),
+        )
+        text = sent
 
     # Only agy reports token counts; the other CLIs keep usage=0 and the
     # router estimates. agy errors raise above, so this is a success payload.

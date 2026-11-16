@@ -275,7 +275,7 @@ When another provider that is not a CLI also serves the model name sent without 
 
 **Ignored.** `temperature`, `top_p`, `max_tokens`, `max_completion_tokens` and `stop` are accepted and not passed to the CLI: the CLI uses its own settings, and the answer can be longer than `max_tokens` or go past a stop sequence.
 
-**Streaming.** With `claude` and `agy`, a `stream: true` request gets the text as the CLI writes it. Nothing is sent before the first word, so a failure before it still goes to the next provider; a failure after it ends the stream with the `stream_interrupted` event, and what was sent is billed. This path does not fill the response cache. With `codex` and `gemini`, the CLI's answer is complete before the first chunk is sent: the chunks replay it, and the first token comes as late as the whole answer.
+**Streaming.** With `claude` and `agy`, a `stream: true` request gets the text as the CLI writes it. Nothing is sent before the first word, so a failure before it still goes to the next provider; a failure after it ends the stream with the `stream_interrupted` event, and what was sent is billed. The text sent is the text counted and billed (BUG-92): claude's thinking is not part of the answer, streamed or not (it is returned only when the answer holds no text), and when the CLI's final answer does not continue the text already sent (agy answering in several steps, a blank line the final text drops), the answer billed and returned is the text the client received. This path does not fill the response cache. With `codex` and `gemini`, the CLI's answer is complete before the first chunk is sent: the chunks replay it, and the first token comes as late as the whole answer.
 
 ### Subscriptions through CLI credentials
 

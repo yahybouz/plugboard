@@ -130,14 +130,17 @@ async def test_a_failing_callback_does_not_break_the_answer(fake_cli):
 
 
 def _agy_step(
-    text: str, state: str = "ACTIVE", step_type: str = "agent_response"
+    text: str,
+    state: str = "ACTIVE",
+    step_type: str = "agent_response",
+    step_index: int = 1,
 ) -> str:
     return json.dumps(
         {
             "event": "step_update",
             "step_update": {
                 "conversation_id": "c",
-                "step_index": 1,
+                "step_index": step_index,
                 "state": state,
                 "step_type": step_type,
                 "text_delta": text,
@@ -258,7 +261,7 @@ async def test_a_very_long_event_line_is_read_whole(fake_cli, tmp_path):
     big = "x" * 200_000
     fake_cli(
         [
-            _delta("Bon"),
+            _delta("xxx"),  # a delta the final text extends (BUG-92)
             json.dumps({"type": "result", "result": big, "is_error": False}),
         ]
     )
@@ -383,3 +386,86 @@ async def test_agy_invalid_json_keeps_its_message(fake_cli):
     message = str(await _agy_error(False))
 
     assert "returned invalid JSON" in message
+
+
+# ── The streamed text is the billed text (BUG-92) ───────────────────────────
+# What reached the client cannot be taken back: the answer complete() returns
+# (billed, cached, replayed) is the text its deltas carried, or extends it.
+
+
+async def test_agy_several_agent_responses_answer_is_the_streamed_text(fake_cli):
+    # Shape assumed, not captured: a first agent_response, a tool step, then
+    # a second agent_response; the result's response holds only the last.
+    fake_cli(
+        [
+            json.dumps({"event": "init", "init": {"model": "m"}}),
+            _agy_step("Je regarde.", "DONE", step_index=1),
+            _agy_step("", "DONE", "tool_call", step_index=2),
+            _agy_step("Fini.", "DONE", step_index=3),
+            json.dumps(
+                {
+                    "event": "result",
+                    "result": {
+                        "status": "SUCCESS",
+                        "response": "Fini.",
+                        "usage": {"input_tokens": 7, "output_tokens": 4},
+                    },
+                }
+            ),
+        ]
+    )
+    seen: list[str] = []
+    result = await cli_subprocess.complete(
+        "agy", {"model": "m", "messages": BODY["messages"]}, on_delta=seen.append
+    )
+    assert seen == ["Je regarde.", "Fini."]
+    assert result["choices"][0]["message"]["content"] == "".join(seen)
+
+
+_THINKING = [
+    json.dumps(
+        {
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "thinking_delta", "thinking": "Je pense."},
+            },
+        }
+    ),
+    json.dumps(
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "thinking", "thinking": "Je pense."}]},
+        }
+    ),
+    _delta("Bon"),
+    _delta("jour"),
+    *FINAL,
+]
+
+
+async def test_claude_visible_thinking_is_neither_streamed_nor_billed(fake_cli):
+    fake_cli(_THINKING)
+    seen: list[str] = []
+    streamed = await cli_subprocess.complete("claude", BODY, on_delta=seen.append)
+    plain = await cli_subprocess.complete("claude", BODY)
+    assert seen == ["Bon", "jour"]
+    assert streamed["choices"][0]["message"]["content"] == "Bonjour"
+    assert plain["choices"][0]["message"]["content"] == "Bonjour"
+
+
+async def test_claude_thinking_only_answer_is_still_returned(fake_cli):
+    # BENCH-001: an answer made of thinking only is not an empty answer.
+    fake_cli(_THINKING[:2])
+    result = await cli_subprocess.complete("claude", BODY, on_delta=lambda t: None)
+    assert result["choices"][0]["message"]["content"] == "Je pense."
+
+
+async def test_claude_streamed_text_kept_when_the_final_text_differs(fake_cli):
+    # The deltas carried a leading blank line the final text strips.
+    fake_cli([_delta("\n"), _delta("Bonjour"), *FINAL])
+    seen: list[str] = []
+    result = await cli_subprocess.complete("claude", BODY, on_delta=seen.append)
+    assert "".join(seen) == "\nBonjour"
+    assert result["choices"][0]["message"]["content"] == "\nBonjour"

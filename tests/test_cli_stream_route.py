@@ -206,3 +206,54 @@ async def test_the_chat_route_streams_a_cli_model_live(
     text = "".join(e["choices"][0]["delta"].get("content", "") for e in events)
     assert text == "Hello"
     assert sum(1 for e in events if e.get("usage")) == 1  # billed once
+
+
+async def test_the_billed_count_is_the_count_of_the_streamed_text(
+    only_cli, monkeypatch, tmp_path
+):
+    """A real complete() over a fake claude binary whose thinking is visible:
+    the client receives "Bonjour" and is billed for "Bonjour" (BUG-92)."""
+    import stat
+
+    from plugboard.tokenizer import count_tokens
+
+    lines = [
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "thinking", "thinking": "Je pense."}]},
+        },
+        *(
+            {
+                "type": "stream_event",
+                "event": {
+                    "type": "content_block_delta",
+                    "index": 1,
+                    "delta": {"type": "text_delta", "text": t},
+                },
+            }
+            for t in ("Bon", "jour")
+        ),
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "Bonjour"}]},
+        },
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "Bonjour",
+        },
+    ]
+    script = tmp_path / "fakeclaude"
+    script.write_text(
+        "#!/bin/sh\ncat >/dev/null\n"
+        + "".join(f"printf '%s\\n' '{json.dumps(evt)}'\n" for evt in lines)
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setattr(cli_subprocess, "_resolve_binary", lambda command: str(script))
+
+    chunks = [c async for c in router.forward_stream(_body(MODEL, stream=True))]
+    events = _events(chunks)
+    text = "".join(e["choices"][0]["delta"].get("content", "") for e in events)
+    assert text == "Bonjour"
+    assert events[-1]["usage"]["completion_tokens"] == count_tokens("Bonjour")
