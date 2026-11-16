@@ -39,20 +39,14 @@ Only the values of `secrets/runtime.env`: they are not in the repository and are
 
 ## PID 1 of the gateway container: tini
 
-From 4.14.4 the image starts `tini` as PID 1 (BUG-113, BUG-123); `compose.yml` needs no `init: true` (with it, Docker's own init, `docker-init`, would be PID 1 with tini as its direct child: harmless, it reaps the orphans itself, tini then logs once `Tini is not running as PID 1`, and the check below passes). tini reaps the orphans the gateway's CLIs leave (codex's `bwrap`, `git`, a shell) and passes `SIGTERM` on to the gateway. With 4.14.2, the gateway was PID 1 and kept 68 zombies in one hour. A root operator checks `/proc` after each deployment (the slim image may have no `ps`):
+From 4.14.4 the image starts `tini` as PID 1 (BUG-113, BUG-123); `compose.yml` needs no `init: true` (with it, Docker's own init, `docker-init`, would be PID 1 with tini as its direct child: harmless, it reaps the orphans itself, tini then logs once `Tini is not running as PID 1`, and the check below passes). tini reaps the orphans the gateway's CLIs leave (codex's `bwrap`, `git`, a shell) and passes `SIGTERM` on to the gateway. With 4.14.2, the gateway was PID 1 and kept 68 zombies in one hour. A root operator checks `/proc` after each deployment, from a checkout of the deployed commit (the slim image may have no `ps`). [`deploy/check-pid1.py`](../check-pid1.py) reads the binary of PID 1 (`readlink /proc/1/exe`), not its name, and each parent after the last `)` of `/proc/<pid>/stat` (BUG-132); the gateway as PID 1 (an `entrypoint:` bypassed tini) or a binary it cannot read is a `STOP`:
 
 ```bash
 docker exec uat-plugboard-gateway-1 sh -c 'tr "\0" " " < /proc/1/cmdline; echo'
 # Expected: /usr/bin/tini -- python run.py
 # (with init: true: /sbin/docker-init -- /usr/bin/tini -- python run.py)
-docker exec uat-plugboard-gateway-1 sh -c 'p1=$(cat /proc/1/comm); echo "PID 1: $p1"
-[ "$p1" = tini ] && exit 0
-[ "$p1" = docker-init ] && for s in /proc/[0-9]*/stat; do
-  read -r pid comm state ppid rest < "$s" || continue
-  [ "$ppid" = 1 ] && [ "$comm" = "(tini)" ] && echo "tini under it: pid $pid" && exit 0
-done
-echo "STOP: neither tini nor docker-init with tini under it"; exit 1'
-# Expected: "PID 1: tini", or "PID 1: docker-init" then "tini under it: pid <n>"; exit 0
+docker exec -i uat-plugboard-gateway-1 python - < deploy/check-pid1.py; echo "exit $?"
+# Expected: "PID 1: /usr/bin/tini", or "PID 1: /sbin/docker-init" then "tini under it: pid <n>"; exit 0
 docker exec uat-plugboard-gateway-1 sh -c "grep -s '^State:[[:space:]]*Z' /proc/[0-9]*/status | wc -l"
 # Expected: 0 (zombies) in both cases, again after some agy and codex calls
 ```

@@ -407,14 +407,9 @@ health                                    # "version": <new-version>
 gw exec -T gateway sh -c 'tr "\0" " " < /proc/1/cmdline; echo'
 # Expected from 4.14.4: /usr/bin/tini -- python run.py
 # (or, with init: true in the Compose file: /sbin/docker-init -- /usr/bin/tini -- python run.py)
-gw exec -T gateway sh -c 'p1=$(cat /proc/1/comm); echo "PID 1: $p1"
-[ "$p1" = tini ] && exit 0
-[ "$p1" = docker-init ] && for s in /proc/[0-9]*/stat; do
-  read -r pid comm state ppid rest < "$s" || continue
-  [ "$ppid" = 1 ] && [ "$comm" = "(tini)" ] && echo "tini under it: pid $pid" && exit 0
-done
-echo "STOP: neither tini nor docker-init with tini under it"; exit 1'
-# Expected: "PID 1: tini", or "PID 1: docker-init" then "tini under it: pid <n>"; exit 0
+gw exec -T gateway python - < deploy/check-pid1.py; echo "exit $?"
+# Expected: "PID 1: /usr/bin/tini", or "PID 1: /sbin/docker-init" then "tini under it: pid <n>"; exit 0
+# (it reads the binary of PID 1, not its name: BUG-132)
 gw exec -T gateway sh -c "grep -s '^State:[[:space:]]*Z' /proc/[0-9]*/status | wc -l"
 # Expected: 0 zombies, in both cases
 gw exec gateway sh -ec 'claude --version; codex --version; gemini --version; gh --version; agy --version'

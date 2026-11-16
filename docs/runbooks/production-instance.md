@@ -274,27 +274,29 @@ isn't registered as a child subreaper`: expected in that case. Both are a
 pass; anything else is a go-back. An `--entrypoint` given to `docker run` replaces
 tini for that one-off container only.
 
-Read `/proc` (the slim image may have no `ps`). After each switch:
+Read `/proc` (the slim image may have no `ps`). After each switch, from a
+checkout of the deployed commit:
 
 ```bash
 c="$(docker compose -p plugboard-private -f /etc/plugboard/compose.v<version>.json ps -q gateway)"
 docker exec "$c" sh -c 'tr "\0" " " < /proc/1/cmdline; echo'
 # Expected: /usr/bin/tini -- python run.py
 # (with init: true: /sbin/docker-init -- /usr/bin/tini -- python run.py)
-docker exec "$c" sh -c 'p1=$(cat /proc/1/comm); echo "PID 1: $p1"
-[ "$p1" = tini ] && exit 0
-[ "$p1" = docker-init ] && for s in /proc/[0-9]*/stat; do
-  read -r pid comm state ppid rest < "$s" || continue
-  [ "$ppid" = 1 ] && [ "$comm" = "(tini)" ] && echo "tini under it: pid $pid" && exit 0
-done
-echo "STOP: neither tini nor docker-init with tini under it"; exit 1'
-# Expected: "PID 1: tini", or "PID 1: docker-init" then "tini under it: pid <n>"; exit 0
+docker exec -i "$c" python - < deploy/check-pid1.py; echo "exit $?"
+# Expected: "PID 1: /usr/bin/tini", or "PID 1: /sbin/docker-init" then
+# "tini under it: pid <n>"; exit 0. A line "STOP: ..." and exit 1: go back.
 docker exec "$c" sh -c "grep -s '^State:[[:space:]]*Z' /proc/[0-9]*/status | wc -l"
 # Expected: 0 zombies in both cases (read it again after some agy and codex calls)
 ```
 
-The check reads each process's parent in `/proc/<pid>/stat` (fourth field),
-which every Linux kernel shows. Where the kernel has `CONFIG_PROC_CHILDREN`
+[`deploy/check-pid1.py`](../../deploy/check-pid1.py) (BUG-132) checks the
+**binary** of PID 1 (`readlink /proc/1/exe`), not its name: any program can
+call itself `tini`. With `docker-init` as PID 1, it looks for a direct child
+whose binary is `/usr/bin/tini`, reading each parent in `/proc/<pid>/stat`
+after the last `)` (the name between the parentheses may itself hold `) S 1`).
+The gateway (python, uvicorn) as PID 1 means an `entrypoint:` bypassed tini:
+`STOP`. A binary it cannot read is a `STOP` too, never a pass; run it again
+with `docker exec -u 0 -i`. Where the kernel has `CONFIG_PROC_CHILDREN`
 (the VPS's 6.8 kernel does), `cat /proc/1/task/1/children` lists PID 1's
 children directly; the check does not rely on it.
 
