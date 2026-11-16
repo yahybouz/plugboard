@@ -14,7 +14,11 @@ This module builds the gateway's only command line that launches agy
   namespace keeps ``/proc/<gateway pid>/environ`` (the server's keys) out of
   sight. agy is its pid 1 (``--as-pid-1``): bwrap's own init there would be
   left unreaped, a zombie of the gateway when it is its container's PID 1.
-  The network is shared: agy needs it. No ``--new-session``: bwrap stays in
+  The network is shared: agy needs it (BUG-109: ``--unshare-net`` leaves
+  no internet, and bwrap has no unprivileged filter of the loopback; the
+  cage reaches what the container reaches, the gateway's port as any
+  client, but binds no unix socket file: no ``/run``, ``/var/run``,
+  ``/tmp``). No ``--new-session``: bwrap stays in
   the group the gateway kills on timeout or cancellation.
 - An empty root holding, read-only, the system libraries (``/usr/lib``,
   ``/usr/lib64``, the ``/lib*`` links), the few ``/etc`` files the loader,

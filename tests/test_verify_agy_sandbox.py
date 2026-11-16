@@ -16,9 +16,11 @@ create namespaces.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -133,6 +135,7 @@ def _run(
     patch: str = "",
     extra_args=(),
     wrap=(),
+    port: int | None = None,
 ) -> subprocess.CompletedProcess:
     """Run the script; ``gateway_bwrap=None``: no bwrap at the fixed path."""
     if gateway_bwrap == "host":
@@ -151,6 +154,8 @@ def _run(
         "PLUGBOARD_DATA": str(world["data"]),
         **SECRETS,
     }
+    if port is not None:
+        env["PORT"] = str(port)
     with SCRIPT.open("rb") as source:
         return subprocess.run(
             [
@@ -226,6 +231,9 @@ def test_the_cage_passes_every_check(world, real_bwrap):
     for where in ("HOME", "~/.gemini", "/tmp", "/", "/usr/lib"):
         assert report["writes_denied"][where] != "written", report["writes_denied"]
     assert report["tmpdir_write"] == "pass"
+    # No unix socket file in the cage; the network is the container's.
+    assert report["socket_files"] == []
+    assert report["network"]["shared_with_container"] is True
     assert report["env"]["secret_names"] == []
     assert report["env"]["AGY_CLI_DISABLE_AUTO_UPDATE"] == "1"
     assert report["token"] == "readable, rewritable, unchanged"
@@ -632,3 +640,88 @@ def test_the_store_is_left_as_it_was(world, real_bwrap):
     proc = _run(world)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert _store_snapshot(world["store"]) == before
+
+
+# ── What the cage can reach on the network (BUG-109) ────────────────────────
+#
+# The cage shares the container's network: agy needs the internet, and
+# bwrap has no option that keeps the internet while hiding the loopback. The
+# check reports, as information, whether the gateway's port answers from
+# inside the cage and what listens in that network; it fails only when a
+# unix socket file is visible in the cage (the container's /run, /var/run or
+# /tmp bound into it).
+
+
+@contextlib.contextmanager
+def _listener():
+    """A TCP listener on 127.0.0.1, standing for the gateway's port."""
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind(("127.0.0.1", 0))
+    server.listen(4)
+    try:
+        yield server.getsockname()[1]
+    finally:
+        server.close()
+
+
+def test_the_gateway_port_is_reported_reachable_not_failed(world, real_bwrap):
+    with _listener() as port:
+        proc = _run(world, port=port)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    report = _report(proc)
+    assert report["result"] == "pass"
+    network = report["network"]
+    assert network["shared_with_container"] is True
+    assert network["gateway_port"] == port
+    assert network["gateway_port_from_cage"] == "connected"
+    assert port in network["loopback_listeners"]
+    assert isinstance(network["abstract_unix_sockets"], list)
+    assert report["socket_files"] == []
+    _no_secret_in(proc)
+
+
+def test_a_closed_gateway_port_is_reported(world, real_bwrap):
+    with _listener() as port:
+        pass  # closed again: nothing listens there now
+    proc = _run(world, port=port)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    report = _report(proc)
+    assert report["network"]["gateway_port_from_cage"] == "refused"
+
+
+_RUN_BOUND = """real = agy_cage.cage_argv
+
+
+def leaky(binary, args, **kw):
+    # The host's /run (unix sockets) bound into the cage: what the check
+    # must catch.
+    argv = real(binary, args, **kw)
+    i = argv.index("--remount-ro")
+    return argv[:i] + ["--ro-bind", "/run", "/run"] + argv[i:]
+
+
+agy_cage.cage_argv = leaky
+"""
+
+
+def _host_sockets_under_run() -> list:
+    found = []
+    for root, _dirs, files in os.walk("/run"):
+        for name in files:
+            path = os.path.join(root, name)
+            with contextlib.suppress(OSError):
+                if stat.S_ISSOCK(os.lstat(path).st_mode):
+                    found.append(path)
+    return found
+
+
+def test_a_unix_socket_file_in_the_cage_fails(world, real_bwrap):
+    if not _host_sockets_under_run():
+        pytest.skip("no unix socket file under the host's /run")
+    proc = _run(world, patch=_RUN_BOUND)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    report = _report(proc)
+    assert report["result"] == "fail"
+    assert report["socket_files"]
+    assert all(path.startswith("/run/") for path in report["socket_files"])
+    assert report["failures"] == ["a unix socket file is visible in the cage"]

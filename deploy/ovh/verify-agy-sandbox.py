@@ -65,6 +65,16 @@ each must fail with ``EROFS`` (``store_settings_writes_denied``), or be
 a witness in ``conversations/`` (``store_conversation_write``: ``written``, or
 ``absent`` when agy never made the folder).
 
+The cage shares the container's network (agy needs the internet, BUG-109).
+The report says what it reaches, as information only (``network``): whether
+a TCP connection to the gateway's port (``PORT``, default 8765) from inside
+the cage succeeds (closed at once, nothing sent), and, read outside the cage
+in the same network namespace, the TCP ports listening on the loopback or
+every address and the names of the abstract unix sockets. A unix socket
+file visible in the cage, outside agy's store and its ``TMPDIR``
+(``socket_files``), fails the check: the cage binds no ``/run``,
+``/var/run`` nor ``/tmp``.
+
 ``--app-root`` changes where the application's folders are looked for
 (default ``/app``); it exists for the test suite, which runs on a host
 without ``/app``.
@@ -262,6 +272,51 @@ out["store_conversation_write"] = (
     write_state(conversations) if os.path.isdir(conversations) else "absent"
 )
 
+# The network is the container's (BUG-109): does the gateway's port answer
+# from inside the cage? A TCP connection, closed at once, nothing sent.
+# Information only. No unix socket file may be visible (outside agy's own
+# store and TMPDIR): the cage binds no /run, /var/run nor /tmp.
+import socket
+import stat
+
+
+def connect_state(port):
+    conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    conn.settimeout(2)
+    try:
+        conn.connect(("127.0.0.1", port))
+        return "connected"
+    except ConnectionRefusedError:
+        return "refused"
+    except socket.timeout:
+        return "timeout"
+    except OSError as exc:
+        return why(exc)
+    finally:
+        conn.close()
+
+
+out["gateway_port_from_cage"] = connect_state(p["gateway_port"])
+
+
+def socket_files(skip):
+    found = []
+    for root, dirs, files in os.walk("/"):
+        dirs[:] = sorted(d for d in dirs if os.path.join(root, d) not in skip)
+        for name in sorted(files):
+            path = os.path.join(root, name)
+            try:
+                if stat.S_ISSOCK(os.lstat(path).st_mode):
+                    found.append(path)
+            except OSError:
+                pass
+            if len(found) >= 20:
+                return found
+    return found
+
+
+out["socket_files"] = socket_files({"/proc", "/dev", "/sys", store, tmpdir})
+
 # How many MCP servers agy would use, never which: 0 when empty or not JSON.
 servers = 0
 try:
@@ -376,6 +431,61 @@ def _token_fingerprint(path: str) -> Optional[tuple]:
     return digest, info.st_size, info.st_mtime_ns
 
 
+def _gateway_port() -> int:
+    """The gateway's port, as ``run.py`` reads it (``PORT``, default 8765)."""
+    try:
+        return int(os.environ.get("PORT") or 8765)
+    except ValueError:
+        return 8765
+
+
+# Addresses a listener reaches from the loopback: 127.0.0.1, ::1, any.
+_LOOPBACK_HEX = {
+    "0100007F",
+    "00000000",
+    "00000000000000000000000001000000",
+    "00000000000000000000000000000000",
+}
+
+
+def _loopback_listeners() -> List[int]:
+    """TCP ports listening on the loopback (or every address) in this
+    network namespace, which the cage shares: from ``/proc/net/tcp`` and
+    ``tcp6`` of this process (outside the cage)."""
+    ports = set()
+    for name in ("tcp", "tcp6"):
+        try:
+            with open(f"/proc/net/{name}", encoding="ascii") as handle:
+                lines = handle.read().splitlines()[1:]
+        except OSError:
+            continue
+        for line in lines:
+            fields = line.split()
+            if len(fields) < 4 or fields[3] != "0A":  # LISTEN
+                continue
+            address, _, port = fields[1].partition(":")
+            if address.upper() in _LOOPBACK_HEX:
+                ports.add(int(port, 16))
+    return sorted(ports)
+
+
+def _abstract_unix_sockets() -> List[str]:
+    """Names of the abstract unix sockets of this network namespace (shared
+    with the cage, which binds no socket file but can reach these), from
+    ``/proc/net/unix`` of this process."""
+    names = set()
+    try:
+        with open("/proc/net/unix", encoding="utf-8", errors="replace") as handle:
+            lines = handle.read().splitlines()[1:]
+    except OSError:
+        return []
+    for line in lines:
+        fields = line.split(None, 7)
+        if len(fields) == 8 and fields[7].startswith("@"):
+            names.add(fields[7][:120])
+    return sorted(names)
+
+
 def _emit(report: Dict, code: int) -> None:
     report["result"] = "pass" if code == 0 else "fail"
     print(json.dumps(report))
@@ -429,6 +539,7 @@ def main() -> None:
         "witness": f"{WITNESS}{tag}.",
         "token_name": TOKEN_NAME,
         "store_read_only": list(agy_cage.STORE_READ_ONLY),
+        "gateway_port": _gateway_port(),
         "secret_names": list(SECRET_NAMES),
         "secret_prefixes": list(SECRET_PREFIXES),
     }
@@ -575,6 +686,21 @@ def main() -> None:
             "agy cannot write its conversations in the cage "
             f"({seen['store_conversation_write']})"
         )
+    # The network (BUG-109): information, not a failure. The cage shares the
+    # container's network (agy needs the internet): it reaches the gateway's
+    # port and whatever listens on the loopback or in abstract unix sockets.
+    report["network"] = {
+        "shared_with_container": "--unshare-net" not in argv,
+        "gateway_port": params["gateway_port"],
+        "gateway_port_from_cage": seen["gateway_port_from_cage"],
+        "loopback_listeners": _loopback_listeners(),
+        "abstract_unix_sockets": _abstract_unix_sockets(),
+    }
+    # No unix socket file is visible in the cage (outside agy's store and
+    # TMPDIR): no /run, /var/run nor /tmp of the container is bound.
+    report["socket_files"] = seen["socket_files"]
+    if seen["socket_files"]:
+        failures.append("a unix socket file is visible in the cage")
     report["mcp_servers"] = seen["mcp_servers"]
     report["tmpdir_write"] = seen["tmpdir_write"]
     if seen["tmpdir_write"] != "pass":

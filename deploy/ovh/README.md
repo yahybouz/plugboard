@@ -109,7 +109,9 @@ When `~/.gemini/config` is missing (agy never run on this account), no cage is b
 
 Since 4.14.4 the cage shows agy's settings in its store read-only (BUG-108), and the script checks it: `"store_settings_writes_denied"` gives, for `settings.json`, `installation_id`, `jetski_state.pbtxt`, `bin` and `builtin`, `"EROFS"` (read-only) or `"absent"` (not in the store: nothing to protect, not a failure; `settings.json` is usually absent); anything else fails the check. `"store_conversation_write": "written"` says agy can still write its conversations (`"absent"` when agy never made the folder).
 
-Known limits, not checked by the script: agy can write the rest of its store (other calls' conversations while they run; a `settings.json` when none exists yet: BUG-108), and it shares the container's network (its loopback, the gateway's port included, and abstract unix sockets: BUG-109). `scripts/bench_latence.py` runs agy outside the cage: never run it in this container (BUG-110).
+Known limits, not checked by the script: agy can write the rest of its store (other calls' conversations while they run; a `settings.json` when none exists yet: BUG-108), and it shares the container's network (BUG-109: see below). `scripts/bench_latence.py` runs agy outside the cage: never run it in this container (BUG-110).
+
+What the cage reaches on the network (BUG-109) is reported, never failed: `"network"` holds `"shared_with_container": true` (agy needs the internet), `"gateway_port"` (`PORT`, `8765`), `"gateway_port_from_cage"` (expect `"connected"`: the cage reaches the gateway like any client, which needs a key for every route that returns data or acts), `"loopback_listeners"` (TCP ports listening on the loopback or every address of the container) and `"abstract_unix_sockets"` (names; expect few or none: the gateway opens none). Report anything unexpected there. `"socket_files": []` is checked: a unix socket file visible in the cage (the container's `/run`, `/var/run` or `/tmp` bound into it) fails the check.
 
 | Exit | Meaning | What to do |
 |---|---|---|
