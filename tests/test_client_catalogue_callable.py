@@ -206,6 +206,168 @@ async def test_model_info_hides_every_spelling_of_a_hidden_model(
     assert await _info(client, rec["key"], bare) == derived_model_info(bare)
 
 
+# -- PLU-55: the last real call feeds the same filter -------------------------
+#
+# The shipped configuration probes no CLI model, so the probe-only filter never
+# hid one. A real call's outcome now counts too: a failure the provider caused
+# hides the route's model from client keys, a later success brings it back.
+# No CLI runs: ``cli_subprocess.complete`` is replaced, nothing is probed.
+
+_BETA = "agy-sub:agy-beta"
+_PROVIDER_DOWN = "agy exited with code 1"
+
+
+@pytest.fixture
+def real_call(monkeypatch):
+    """Send one chat through the router (plain or streamed); the CLI answers
+    or raises ``error``. Returns nothing: only the router's records count."""
+    import json
+
+    import plugboard.alerts as alerts
+    from plugboard import circuit_breaker as cb
+    from plugboard import cli_subprocess, provider_admission
+    from tests.factories import FAKE_COMPLETION
+
+    monkeypatch.setattr(cb, "_circuits", {})
+    monkeypatch.setattr(alerts, "_provider_failures", {})
+    monkeypatch.setattr(alerts, "_provider_alerted", {})
+    provider_admission.reset()
+    outcome = {"error": None}
+
+    async def fake_complete(kind, body, *, timeout_s=None, on_delta=None):
+        if outcome["error"] is not None:
+            raise outcome["error"]
+        return json.loads(json.dumps(FAKE_COMPLETION))
+
+    monkeypatch.setattr(cli_subprocess, "complete", fake_complete)
+
+    async def call(model, error=None, *, stream=False):
+        outcome["error"] = error
+        body = {"model": model, "messages": [{"role": "user", "content": "hi"}]}
+        try:
+            if stream:
+                async for _ in router.forward_stream({**body, "stream": True}):
+                    pass
+            else:
+                await router.forward(body)
+        except Exception:  # noqa: BLE001 - the outcome is read from the catalogue
+            pass
+
+    yield call
+    provider_admission.reset()
+
+
+def _cli_error(**flags):
+    from plugboard.cli_subprocess import CliSubprocessError
+
+    return CliSubprocessError(_PROVIDER_DOWN, exit_code=1, **flags)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+async def test_a_failed_real_call_hides_the_model_from_a_client_key(
+    client, keys, tmp_path, monkeypatch, real_call, stream
+):
+    _prepare(tmp_path, monkeypatch)  # no probe at all, as shipped
+    rec = keys.create_key("cust", "synthetic")
+    keys._invalidate_cache()
+    assert _BETA in await _ids(client, rec["key"])
+
+    await real_call(_BETA, _cli_error(), stream=stream)
+
+    ids = await _ids(client, rec["key"])
+    assert _BETA not in ids
+    assert {"agy-sub:agy-alpha", "agy-sub:agy-gamma"} <= ids  # same provider
+    assert _BETA in await _ids(client, "testkey")  # the admin keeps it
+    assert (await _info(client, rec["key"], _BETA))["info_source"] == "derived"
+
+
+async def test_a_later_successful_call_brings_the_model_back(
+    client, keys, tmp_path, monkeypatch, real_call
+):
+    _prepare(tmp_path, monkeypatch)
+    rec = keys.create_key("cust", "synthetic")
+    keys._invalidate_cache()
+    await real_call(_BETA, _cli_error())
+    assert _BETA not in await _ids(client, rec["key"])
+
+    await real_call(_BETA)
+
+    assert _BETA in await _ids(client, rec["key"])
+
+
+@pytest.mark.parametrize(
+    "flags", [{"request_too_long": True}, {"model_unsupported": True}]
+)
+async def test_a_call_the_request_failed_does_not_hide_the_model(
+    client, keys, tmp_path, monkeypatch, real_call, flags
+):
+    """A prompt too long, or a model this subscription does not serve: the
+    request's fault, not the provider's."""
+    _prepare(tmp_path, monkeypatch)
+    rec = keys.create_key("cust", "synthetic")
+    keys._invalidate_cache()
+
+    await real_call(_BETA, _cli_error(**flags))
+
+    assert _BETA in await _ids(client, rec["key"])
+
+
+async def test_a_client_refusal_does_not_hide_the_model(
+    client, keys, tmp_path, monkeypatch, real_call
+):
+    """A key refused by the gateway never reaches the provider."""
+    _prepare(tmp_path, monkeypatch)
+    limited = keys.create_key("lim", "synthetic", allowed_models=["agy-sub:agy-alpha"])
+    rec = keys.create_key("cust", "synthetic")
+    keys._invalidate_cache()
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers=_auth(limited["key"]),
+        json={"model": _BETA, "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert resp.status_code == 403, resp.text
+
+    assert _BETA in await _ids(client, rec["key"])
+
+
+async def test_the_newest_of_probe_and_call_decides(
+    client, keys, tmp_path, monkeypatch, real_call
+):
+    # A recent failed probe, then a successful call: the call is newer.
+    _prepare(tmp_path, monkeypatch, status={_BETA: _FAILED})
+    rec = keys.create_key("cust", "synthetic")
+    keys._invalidate_cache()
+    assert _BETA not in await _ids(client, rec["key"])
+    await real_call(_BETA)
+    assert _BETA in await _ids(client, rec["key"])
+
+    # A failed call, then a successful probe after it: the probe is newer.
+    await real_call(_BETA, _cli_error())
+    assert _BETA not in await _ids(client, rec["key"])
+    import plugboard.model_availability as ma
+
+    probed_ok = {"connected": True, "last_probed_at": _ago(-0.01)}
+    monkeypatch.setattr(ma, "load_model_status", lambda: {"models": {_BETA: probed_ok}})
+    router.invalidate_models_cache()
+    assert _BETA in await _ids(client, rec["key"])
+
+
+async def test_a_failed_call_older_than_the_window_does_not_hide(
+    client, keys, tmp_path, monkeypatch, real_call
+):
+    import time
+
+    from plugboard import circuit_breaker as cb
+
+    _prepare(tmp_path, monkeypatch)
+    rec = keys.create_key("cust", "synthetic")
+    keys._invalidate_cache()
+    await real_call(_BETA, _cli_error())
+    cb._circuits[_BETA].last_failure = time.monotonic() - 37 * 3600
+
+    assert _BETA in await _ids(client, rec["key"])
+
+
 @pytest.mark.parametrize("status", [_OK, _STALE, None])
 async def test_model_info_keeps_the_profile_of_a_listed_model(
     client, keys, tmp_path, monkeypatch, status

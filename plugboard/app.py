@@ -3534,29 +3534,49 @@ async def chat_completions(
 # -- /v1/models --------------------------------------------------------------
 
 
-# A probe failure hides a model only while it is fresh: probes are periodic
-# (nightly), and a stale failure says nothing about the model today.
+# A probe or call failure hides a model only while it is fresh: probes are
+# periodic (nightly), and a stale failure says nothing about the model today.
 _PROBE_FAILURE_MAX_AGE_S = 36 * 3600
 
 
-def _not_callable_now(item: Dict[str, Any]) -> bool:
-    """A catalogue entry whose last connectivity probe failed recently.
-
-    A model never probed, or probed long ago, stays listed. Quarantine is not
-    used: it is keyed by the bare model name, so one provider's refusal would
-    hide the model at every other provider.
-    """
+def _probe_age(item: Dict[str, Any]) -> Optional[float]:
+    """Seconds since the entry's last connectivity probe, or None."""
     probed = item.get("last_probed_at")
-    if item.get("connected") is not False or not isinstance(probed, str):
-        return False
+    if not isinstance(probed, str):
+        return None
     try:
         when = datetime.fromisoformat(probed.replace("Z", "+00:00"))
     except ValueError:
-        return False
+        return None
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
-    age = (datetime.now(timezone.utc) - when).total_seconds()
-    return age <= _PROBE_FAILURE_MAX_AGE_S
+    return (datetime.now(timezone.utc) - when).total_seconds()
+
+
+def _not_callable_now(item: Dict[str, Any]) -> bool:
+    """A catalogue entry whose last observation, a probe or a real call
+    (PLU-55), is a recent failure.
+
+    The newer of the two decides: a successful call after a failed probe
+    brings the model back, and so does a successful probe after a failed
+    call. A model never probed nor called, or failed long ago, stays listed.
+    Quarantine is not used: it is keyed by the bare model name, so one
+    provider's refusal would hide the model at every other provider.
+    """
+    from plugboard.call_outcome import last_call
+    from plugboard.model_identity import catalogue_native_model
+
+    observations = []  # (age in seconds, succeeded)
+    probe_age = _probe_age(item)
+    if probe_age is not None:
+        observations.append((probe_age, item.get("connected") is not False))
+    call = last_call(item.get("owned_by") or "", catalogue_native_model(item))
+    if call is not None:
+        observations.append(call)
+    if not observations:
+        return False
+    age, succeeded = min(observations, key=lambda seen: seen[0])
+    return not succeeded and age <= _PROBE_FAILURE_MAX_AGE_S
 
 
 async def _models_for_key(
