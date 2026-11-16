@@ -48,7 +48,7 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 try:
@@ -93,6 +93,17 @@ _DEPRECATION_KEYWORDS = (
 )
 
 
+class _NoRedirect(HTTPRedirectHandler):
+    """Never follow a redirect: urllib would copy the key to the new address
+    (BUG-94). The 3xx comes back as an HTTPError, as in recette_acces.py."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = build_opener(_NoRedirect)
+
+
 def _http_json(
     method: str,
     path: str,
@@ -107,7 +118,7 @@ def _http_json(
     req.add_header("Authorization", f"Bearer {token}")
     if data is not None:
         req.add_header("Content-Type", "application/json")
-    with urlopen(req, timeout=timeout) as resp:
+    with _OPENER.open(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
@@ -115,6 +126,12 @@ def _fetch_models(only: str | None) -> List[Dict[str, Any]]:
     try:
         data = _http_json("GET", "/v1/models", token=ADMIN_KEY)
     except HTTPError as exc:
+        if 300 <= exc.code < 400:
+            print(
+                f"failed to list models: HTTP {exc.code} redirect not followed "
+                "(the key stays here); set PLUGBOARD_URL to the final address"
+            )
+            sys.exit(2)
         print(f"failed to list models: HTTP {exc.code}: {exc.read().decode()[:200]}")
         sys.exit(2)
     except URLError as exc:
