@@ -1206,7 +1206,9 @@ def _guarded_routes(
     The policy is checked before any slot, in the resolved order: the
     request may use the routes before the first one it refuses, whatever
     order pauses, open circuits or full providers then give them. When they
-    all fail, that refusal is the answer, as before the reordering.
+    all fail, their failure is the answer (BUG-90): a provider's 403 is not
+    the key's forbidden_model. The refusal answers only when no route the
+    key may use was tried.
     """
     if route_guard is None:
         return candidates, None
@@ -1698,7 +1700,9 @@ async def forward(
                 )
         if disabled_seen is not None and refused is None and last_err is None:
             raise ProviderDisabledError(disabled_seen)
-        raise refused or last_err or RuntimeError("All providers failed")
+        # A route the request tried failed: that failure is the answer, never
+        # the key's refusal of a route it did not try (BUG-90).
+        raise last_err or refused or RuntimeError("All providers failed")
     finally:
         if granted is not None:
             granted.release()  # granted by the wait, never used
@@ -1807,7 +1811,8 @@ async def forward_stream(
         return
     if disabled_seen is not None and refused is None and last_err is None:
         raise ProviderDisabledError(disabled_seen)
-    raise refused or last_err or RuntimeError("All providers failed")
+    # As in forward(): a tried route's failure first (BUG-90).
+    raise last_err or refused or RuntimeError("All providers failed")
 
 
 def _stream_hands_over(exc: Exception) -> bool:

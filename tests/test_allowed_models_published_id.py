@@ -620,7 +620,8 @@ async def test_fallback_candidate_outside_the_policy_is_refused(
     """The guard runs on the fallback too, not only on the first candidate.
 
     The first candidate is the granted model and fails; the second one is
-    outside the policy and must be refused before it is called.
+    outside the policy and must be refused before it is called. The answer
+    is the granted route's failure, not the key's 403 (BUG-90).
     """
     registry(_THREE_CLIS)
     rec = _key(keys, ["claude-code:claude-sonnet-4-6"])
@@ -649,12 +650,11 @@ async def test_fallback_candidate_outside_the_policy_is_refused(
 
     monkeypatch.setattr(router, "record_provider_failure", _no_alert)
     guard = _model_route_guard("limited-client", rec)
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(RuntimeError, match="synthetic CLI failure"):
         await router.forward(
             {"model": "claude-code:claude-sonnet-4-6", "messages": []},
             route_guard=guard,
         )
-    assert exc.value.status_code == 403
     assert router.served_by() is None
     assert cli_calls == [("claude", "claude-sonnet-4-6")]
 
