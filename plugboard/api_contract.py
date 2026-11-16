@@ -41,7 +41,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "3.0.0"
+CONTRACT_VERSION = "3.0.1"
 _JSON = "application/json"
 
 
@@ -474,7 +474,14 @@ class ClientInfo(_Open):
     allowed_models: Optional[List[str]] = Field(
         default=None, description="Empty = every model."
     )
-    rpm_limit: Optional[int] = Field(default=None, description="0 = none.")
+    rpm_limit: Optional[int] = Field(
+        default=None,
+        description=(
+            "Calls per minute to the routes that call a model (chat, preflight"
+            " pings, embeddings, decisions); the reads are not counted."
+            " 0 = none."
+        ),
+    )
     org_id: Optional[str] = None
     current_month: Optional[str] = None
     usage: Optional[UsageSummary] = None

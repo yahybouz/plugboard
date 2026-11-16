@@ -6084,7 +6084,7 @@ class KeyCreate(BaseModel):
     allowed_decision_models: Optional[
         List[Literal["jev", "laya", "laya-multilingual"]]
     ] = None
-    rpm_limit: Optional[int] = None  # requests per minute
+    rpm_limit: Optional[int] = None  # calls to a model per minute (BUG-124)
     org_id: str = ""  # organisation (empty = no org)
 
     @field_validator("client_id")

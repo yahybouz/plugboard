@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Plugboard client API",
-    "version": "3.0.0",
+    "version": "3.0.1",
     "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md."
   },
   "servers": [
@@ -634,7 +634,7 @@
               }
             ],
             "default": null,
-            "description": "0 = none.",
+            "description": "Calls per minute to the routes that call a model (chat, preflight pings, embeddings, decisions); the reads are not counted. 0 = none.",
             "title": "Rpm Limit"
           },
           "org_id": {
