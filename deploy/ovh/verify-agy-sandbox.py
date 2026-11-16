@@ -40,20 +40,21 @@ rewritable without being changed (opened ``r+b`` without writing,
 removed). The token's content is never printed nor copied anywhere; the
 script checks, in memory, that it is unchanged afterwards.
 
-agy 1.4.4 cannot start without ``~/.gemini/config`` and
-``~/.gemini/projects.json``, beside its store (UAT, 15/11: every call failed
-when the cage did not show them). The probe checks that ``~/.gemini`` shows
-exactly ``antigravity-cli``, ``config`` and ``projects.json``
-(``gemini_visible``), that ``config/``, ``projects.json`` and
-``config/mcp_config.json`` are readable, and that writing there fails with
-``EROFS``: a file created in ``config/``, ``config/mcp_config.json`` and
+agy 1.4.4 cannot start without ``~/.gemini/config``, beside its store (UAT,
+15/11: every call failed when the cage did not show it). The cage also shows
+gemini's ``~/.gemini/projects.json`` when it exists (never required, BUG-115).
+The probe checks that ``~/.gemini`` shows exactly ``antigravity-cli``,
+``config`` and, when the server has it, ``projects.json``
+(``gemini_visible``), that ``config/``, ``projects.json`` (when it exists)
+and ``config/mcp_config.json`` are readable, and that writing there fails
+with ``EROFS``: a file created in ``config/``, ``config/mcp_config.json`` and
 ``projects.json`` opened for writing (nothing created nor truncated), a
 folder created in ``config/projects/``. It reports how many MCP servers
 ``mcp_config.json`` declares (``mcp_servers``, 0 when empty or not JSON),
 never which: one set up by the operator applies to every client's prompt.
-When ``config/`` or ``projects.json`` is missing (agy never run on this
-account), no cage is built and the check fails (exit 1, ``agy_setup``:
-``missing``), saying to run agy once.
+When ``config/`` is missing (agy never run on this account), no cage is built
+and the check fails (exit 1, ``agy_setup``: ``missing``), saying to run agy
+once.
 
 agy's settings in its store (``agy_cage.STORE_READ_ONLY``: ``settings.json``,
 ``installation_id``, ``jetski_state.pbtxt``, ``bin/``, ``builtin/``) are bound
@@ -103,7 +104,8 @@ SECRET_NAMES += ("ALERT_WEBHOOK_URL",)
 SECRET_PREFIXES = ("PLUGBOARD_", "LLM_" + "ENABLER_")
 TOKEN_NAME = "antigravity-oauth-token"
 WITNESS = ".plugboard-verify-"
-# What the cage shows of ~/.gemini: agy's store and its config beside it.
+# What the cage shows of ~/.gemini: agy's store, its config beside it and,
+# when the server has it, gemini's projects.json (BUG-115).
 GEMINI_VISIBLE = ["antigravity-cli", "config", "projects.json"]
 
 # Runs inside the cage with -I -S: standard library only, prints one JSON
@@ -546,24 +548,20 @@ def main() -> None:
         if state == "written":
             failures.append(f"write allowed in {where}")
     # agy's config: visible and readable, on a read-only mount, nothing else
-    # of ~/.gemini.
+    # of ~/.gemini. projects.json (gemini's, BUG-115) only when it exists.
+    has_projects = os.path.lexists(os.path.join(home, ".gemini", "projects.json"))
+    expected = GEMINI_VISIBLE if has_projects else GEMINI_VISIBLE[:2]
+    optional = ("mcp_config.json",) + (() if has_projects else ("projects.json",))
     report["gemini_visible"] = seen["gemini_visible"]
-    if seen["gemini_visible"] != GEMINI_VISIBLE:
-        failures.append(
-            "~/.gemini shows other than antigravity-cli, config and "
-            "projects.json in the cage"
-        )
+    if seen["gemini_visible"] != expected:
+        failures.append(f"~/.gemini shows other than {', '.join(expected)} in the cage")
     report["gemini_config_reads"] = seen["gemini_config_reads"]
     for where, state in seen["gemini_config_reads"].items():
-        if state != "readable" and not (
-            where.endswith("mcp_config.json") and state == "absent"
-        ):
+        if state != "readable" and not (where.endswith(optional) and state == "absent"):
             failures.append(f"{where} not readable in the cage ({state})")
     report["gemini_config_writes_denied"] = seen["gemini_config_writes"]
     for where, state in seen["gemini_config_writes"].items():
-        if state != "EROFS" and not (
-            where.endswith("mcp_config.json") and state == "absent"
-        ):
+        if state != "EROFS" and not (where.endswith(optional) and state == "absent"):
             failures.append(f"{where} not read-only in the cage ({state})")
     # agy's settings in its store: never writable (absent: nothing to show);
     # its conversations folder: writable (BUG-108).

@@ -426,15 +426,8 @@ def test_agy_mcp_servers_are_counted_never_shown(world, real_bwrap, content, cou
     _no_secret_in(proc)
 
 
-@pytest.mark.parametrize(
-    ("remove", "missing"),
-    [
-        (("config",), "~/.gemini/config is missing"),
-        (("projects.json",), "~/.gemini/projects.json is missing"),
-        (("config", "projects.json"), "~/.gemini/config and ~/.gemini/projects.json"),
-    ],
-)
-def test_agy_not_set_up_fails_clearly(world, real_bwrap, remove, missing):
+@pytest.mark.parametrize("remove", [("config",), ("config", "projects.json")])
+def test_agy_not_set_up_fails_clearly(world, real_bwrap, remove):
     """A server where agy was never run: no cage is built, the check fails
     and says to run agy once; nothing is created."""
     for name in remove:
@@ -447,13 +440,33 @@ def test_agy_not_set_up_fails_clearly(world, real_bwrap, remove, missing):
     assert report["agy_setup"] == "missing"
     assert report["model_requests"] == 0 and report["agy_run"] is False
     (failure,) = report["failures"]
-    assert missing in failure
+    assert "~/.gemini/config is missing" in failure
+    assert "projects.json" not in failure
     assert "run agy once in a shell of the gateway user" in failure
     assert "run agy once" in proc.stderr
     assert str(world["home"]) not in proc.stdout + proc.stderr
     for name in remove:
         assert not (world["gemini"] / name).exists()
     assert list(world["tmp"].iterdir()) == []
+    _no_secret_in(proc)
+
+
+def test_without_projects_json_the_check_passes(world, real_bwrap):
+    """BUG-115: ~/.gemini/projects.json is gemini's, not agy's: a server
+    without it passes; the cage shows agy's store and config only, and
+    nothing is created."""
+    (world["gemini"] / "projects.json").unlink()
+    proc = _run(world)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    report = _report(proc)
+    assert report["result"] == "pass", report
+    assert report["agy_setup"] == "set up"
+    assert report["gemini_visible"] == ["antigravity-cli", "config"]
+    assert report["gemini_config_reads"]["~/.gemini/projects.json"] == "absent"
+    assert report["gemini_config_writes_denied"]["~/.gemini/projects.json"] == (
+        "absent"
+    )
+    assert not (world["gemini"] / "projects.json").exists()
     _no_secret_in(proc)
 
 

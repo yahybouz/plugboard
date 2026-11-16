@@ -395,13 +395,14 @@ async def test_reported_usage_is_the_same_with_and_without_the_cage(
 
 # ── 6. agy's ~/.gemini outside its store ────────────────────────────────────
 #
-# agy 1.4.4 reads ~/.gemini/config/ (.migrated, mcp_config.json, projects/)
-# and ~/.gemini/projects.json, outside its store. With only the store in the
-# cage, every call on the UAT failed (15/11, 4.14.2 at c6dea07): agy could
-# not find config/ and tried to create it in a read-only ~/.gemini. The fake
-# agy below fails the same way, with agy's own words, when config/ or
-# projects.json is missing or unreadable; otherwise it tries to change them
-# and answers what it saw and could write.
+# agy 1.4.4 reads ~/.gemini/config/ (.migrated, mcp_config.json, projects/),
+# outside its store. With only the store in the cage, every call on the UAT
+# failed (15/11, 4.14.2 at c6dea07): agy could not find config/ and tried to
+# create it in a read-only ~/.gemini. The fake agy below fails the same way,
+# with agy's own words, when config/ is missing or unreadable; otherwise it
+# tries to change it, and projects.json when it is there (gemini's file,
+# shown read-only, never required: BUG-115), and answers what it saw and
+# could write.
 
 _AGY_1_4_4_SETUP_ERROR = (
     "failed to start conversation: project: failed to get/create default "
@@ -413,7 +414,7 @@ _AGY_1_4_4_SETUP_ERROR = (
 def _fake_agy_reading_its_config(setup) -> Path:
     script = f"""cat >/dev/null
 G="$HOME/.gemini"
-if ! ls "$G/config" >/dev/null 2>&1 || ! cat "$G/projects.json" >/dev/null 2>&1
+if ! ls "$G/config" >/dev/null 2>&1
 then
   echo "{_AGY_1_4_4_SETUP_ERROR}" >&2
   exit 1
@@ -434,8 +435,11 @@ printf '{{"status":"SUCCESS","response":"%s","usage":{{}}}}\\n' "$R"
     return _install(setup["bin"], "agy", script)
 
 
+@pytest.mark.parametrize("projects", [True, False], ids=["projects", "no-projects"])
 @pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
-async def test_agy_reads_its_config_and_cannot_change_it(setup, stream):
+async def test_agy_reads_its_config_and_cannot_change_it(setup, stream, projects):
+    if not projects:
+        (setup["home"] / ".gemini" / "projects.json").unlink()
     _fake_agy_reading_its_config(setup)
     outside = _outside_store(setup["home"])
 
@@ -443,10 +447,16 @@ async def test_agy_reads_its_config_and_cannot_change_it(setup, stream):
         "agy", dict(_BODY), on_delta=(lambda text: None) if stream else None
     )
 
-    # agy starts: config/ and projects.json are there, read-only; nothing
-    # else of ~/.gemini (neither agy's leftover .tmp nor gemini's files).
+    # agy starts: config/ (and projects.json when it exists) are there,
+    # read-only; nothing else of ~/.gemini (neither the leftover .tmp nor
+    # gemini's other files).
+    seen = (
+        "antigravity-cli,config,projects.json,"
+        if projects
+        else ("antigravity-cli,config,")
+    )
     assert dict(part.split("=", 1) for part in _content(result).split()) == {
-        "seen": "antigravity-cli,config,projects.json,",
+        "seen": seen,
         "migrated": "yes",
         "mcp_read": "yes",
         "mcp_write": "no",

@@ -26,9 +26,10 @@ This module builds the gateway's only command line that launches agy
 - Read-only over the store, each when it exists: agy's settings, identity
   and unpacked programs and skills (:data:`STORE_READ_ONLY`, BUG-108).
 - Read-only, right after the store: agy's own config beside it,
-  ``$HOME/.gemini/config`` (its MCP servers' ``mcp_config.json`` included)
-  and ``$HOME/.gemini/projects.json``, which agy 1.4.4 cannot start without
-  (see :func:`_agy_config`).
+  ``$HOME/.gemini/config`` (its MCP servers' ``mcp_config.json`` included),
+  which agy 1.4.4 cannot start without, and gemini's
+  ``$HOME/.gemini/projects.json`` when it exists, never required (BUG-115,
+  see :func:`_agy_config`).
 - The binary, by its real path, read-only, bound after the store; then the
   whole root is remounted read-only (HOME, the binary's folder...).
 
@@ -86,11 +87,12 @@ class CageUnavailable(Exception):
 
 class AgyNotSetUp(CageUnavailable):
     """agy was never run on this server account: its ``~/.gemini/config``
-    or ``~/.gemini/projects.json`` is missing (see :func:`_agy_config`)."""
+    is missing (see :func:`_agy_config`)."""
 
 
 # What agy 1.4.4 reads under ~/.gemini outside its store (real UAT run,
-# 15/11): config/ (.migrated, mcp_config.json, projects/) and projects.json.
+# 15/11): config/ (.migrated, mcp_config.json, projects/). projects.json
+# beside it is gemini's, shown when it exists (BUG-115).
 _CONFIG_DIR = (".gemini", "config")
 _PROJECTS_FILE = (".gemini", "projects.json")
 
@@ -230,44 +232,53 @@ def _store(env: Mapping[str, str]) -> str:
 
 
 def _agy_config(env: Mapping[str, str]) -> List[str]:
-    """``~/.gemini/config`` (a real folder) and ``~/.gemini/projects.json``
-    (a real regular file) under the child's HOME, shown read-only to agy.
+    """``~/.gemini/config`` (a real folder) and, when it exists,
+    ``~/.gemini/projects.json`` (a real regular file) under the child's
+    HOME, shown read-only to agy.
 
-    agy 1.4.4 reads them outside its store; without them it tries to create
-    ``config/`` and every call fails ("mkdir ~/.gemini/config: read-only
-    file system", UAT, 15/11). They hold agy's own settings, its MCP servers
-    (``config/mcp_config.json``) included: agy may read them, never change
-    them. Through a symbolic link (bwrap would follow it) or of another type:
-    :class:`CageUnavailable`.
-
-    Missing: :class:`AgyNotSetUp`, and nothing is created. agy writes them
+    agy 1.4.4 reads ``config/`` outside its store; without it it tries to
+    create it and every call fails ("mkdir ~/.gemini/config: read-only file
+    system", UAT, 15/11). It holds agy's own settings, its MCP servers
+    (``config/mcp_config.json``) included: agy may read it, never change it.
+    Missing: :class:`AgyNotSetUp`, and nothing is created. agy writes it
     itself the first time it is run in a shell of the gateway user, which the
     sign-in needs anyway; the gateway does not make up agy's own formats
-    (``projects.json``, ``mcp_config.json``) and never writes in
-    ``~/.gemini`` outside agy's store.
+    (``mcp_config.json``) and never writes in ``~/.gemini`` outside agy's
+    store.
+
+    ``projects.json`` is not agy's (BUG-115): the agy 1.4.4 binary names no
+    ``~/.gemini/projects.json``, only its own ``cache/projects.json`` in its
+    store (its changelog, 1.0.4: workspace-to-project mappings moved
+    there); ``~/.gemini/projects.json`` is the project registry of the
+    gemini CLI (0.65.0, ``ProjectRegistry`` under its runtime folder
+    ``~/.gemini``, written through ``projects.json.<uuid>.tmp``). It is shown
+    read-only when it exists (as since 4.14.2), never required: missing, it
+    is skipped and nothing is created.
+
+    Through a symbolic link (bwrap would follow it) or of another type:
+    :class:`CageUnavailable`.
     """
     home = os.path.normpath(env.get("HOME") or "")
     config = os.path.join(home, *_CONFIG_DIR)
     projects = os.path.join(home, *_PROJECTS_FILE)
-    missing = [p for p in (config, projects) if not os.path.lexists(p)]
-    if missing:
-        names = " and ".join("~/" + os.path.relpath(p, home) for p in missing)
+    if not os.path.lexists(config):
         raise AgyNotSetUp(
-            f"agy is not set up for this server account: {names} "
-            f"{'is' if len(missing) == 1 else 'are'} missing; ~/.gemini/config "
-            "and ~/.gemini/projects.json must exist (run agy once in a shell of "
-            "the gateway user, as for its sign-in)"
+            "agy is not set up for this server account: ~/.gemini/config is "
+            "missing (run agy once in a shell of the gateway user, as for its "
+            "sign-in)"
         )
-    for path, kind, wanted in (
-        (config, "a directory", stat.S_ISDIR),
-        (projects, "a regular file", stat.S_ISREG),
-    ):
+    shown = [config]
+    checks = [(config, "a directory", stat.S_ISDIR)]
+    if os.path.lexists(projects):
+        shown.append(projects)
+        checks.append((projects, "a regular file", stat.S_ISREG))
+    for path, kind, wanted in checks:
         name = "~/" + os.path.relpath(path, home)
         if not _plain_path(path):
             raise CageUnavailable(f"agy's {name} goes through a symbolic link")
         if not wanted(os.lstat(path).st_mode):
             raise CageUnavailable(f"agy's {name} is not {kind}")
-    return [config, projects]
+    return shown
 
 
 def _store_read_only(store: str) -> List[str]:
@@ -436,7 +447,7 @@ def cage_argv(
         raise CageUnavailable("agy sandbox needs Linux")
     bwrap = _bwrap()
     store = _store(env)
-    config, projects = _agy_config(env)
+    config = _agy_config(env)
     settings = _store_read_only(store)
     if not _plain_path(tmpdir) or not os.path.isdir(tmpdir):
         raise CageUnavailable("agy TMPDIR path goes through a symbolic link")
@@ -460,17 +471,12 @@ def cage_argv(
         store,
         store,
     ]
-    # agy's settings in its store: read-only over it, each at its path.
-    for path in settings:
+    # agy's settings in its store, then its own config beside the store
+    # (and gemini's projects.json when it exists): read-only, each at its
+    # path.
+    for path in (*settings, *config):
         argv += ["--ro-bind", path, path]
     argv += [
-        # agy's own config, beside its store: read-only, each at its path.
-        "--ro-bind",
-        config,
-        config,
-        "--ro-bind",
-        projects,
-        projects,
         "--bind",
         tmpdir,
         tmpdir,

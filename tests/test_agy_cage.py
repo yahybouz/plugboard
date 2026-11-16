@@ -387,15 +387,15 @@ def test_store_behind_a_symbolic_link_is_refused(setup, fake_binary, tmp_path, w
 
 # ── agy's ~/.gemini/config and ~/.gemini/projects.json, read-only ─────────
 #
-# agy 1.4.4 reads them, outside its store; without them in the cage every
+# agy 1.4.4 reads config/, outside its store; without it in the cage every
 # call failed on the UAT (15/11): "mkdir /home/app/.gemini/config: read-only
-# file system". They are shown read-only, each at its own path; nothing else
-# of HOME. Missing (agy never run on that account), the call is refused.
+# file system". It is shown read-only; missing (agy never run on that
+# account), the call is refused. projects.json is gemini's (BUG-115): shown
+# read-only when it exists, never required. Nothing else of HOME.
 
 _NOT_SET_UP = (
-    "agy is not set up for this server account: {missing} {verb} missing; "
-    "~/.gemini/config and ~/.gemini/projects.json must exist (run agy once "
-    "in a shell of the gateway user, as for its sign-in)"
+    "agy is not set up for this server account: ~/.gemini/config is missing "
+    "(run agy once in a shell of the gateway user, as for its sign-in)"
 )
 
 
@@ -442,17 +442,8 @@ def test_cage_argv_shows_agy_its_config_read_only(setup, fake_binary):
     assert not [a for a in argv[:sep] if a.startswith(home + ".gemini/projects.json.")]
 
 
-@pytest.mark.parametrize(
-    ("remove", "missing", "verb"),
-    [
-        (("config",), "~/.gemini/config", "is"),
-        (("projects",), "~/.gemini/projects.json", "is"),
-        (("config", "projects"), "~/.gemini/config and ~/.gemini/projects.json", "are"),
-    ],
-)
-def test_agy_not_set_up_is_refused_and_nothing_is_created(
-    setup, fake_binary, remove, missing, verb
-):
+@pytest.mark.parametrize("remove", [("config",), ("config", "projects")])
+def test_agy_not_set_up_is_refused_and_nothing_is_created(setup, fake_binary, remove):
     for name in remove:
         path = setup[name]
         shutil.rmtree(path) if path.is_dir() else path.unlink()
@@ -461,7 +452,7 @@ def test_agy_not_set_up_is_refused_and_nothing_is_created(
         _argv(setup, str(fake_binary))
 
     assert isinstance(info.value, agy_cage.AgyNotSetUp)
-    assert str(info.value) == _NOT_SET_UP.format(missing=missing, verb=verb)
+    assert str(info.value) == _NOT_SET_UP
     assert str(setup["home"]) not in str(info.value)
     for name in remove:
         assert not os.path.lexists(setup[name]), "the gateway creates nothing"
@@ -485,6 +476,21 @@ def test_agy_config_behind_a_symbolic_link_is_refused(
         f"agy's ~/.gemini/{path.name} goes through a symbolic link"
     )
     assert not isinstance(info.value, agy_cage.AgyNotSetUp)
+
+
+def test_projects_json_is_optional(setup, fake_binary):
+    """BUG-115: ~/.gemini/projects.json is gemini's project registry (agy
+    1.4.4 keeps its own in its store, ``cache/projects.json``): missing, the
+    cage is built without it, and nothing is created."""
+    setup["projects"].unlink()
+    argv, _ = _argv(setup, str(fake_binary))
+
+    sep = argv.index("--")
+    projects = str(setup["projects"])
+    assert projects not in argv[:sep]
+    config = str(setup["config"])
+    assert (config, config) in _pairs(argv, "--ro-bind")
+    assert not os.path.lexists(projects), "the gateway creates nothing"
 
 
 def test_a_dangling_link_is_refused_as_a_link(setup, fake_binary, tmp_path):
@@ -522,7 +528,7 @@ async def test_complete_refuses_agy_not_set_up(setup):
         await cs.complete("agy", dict(_BODY))
 
     assert info.value.sandbox_failed is True
-    assert _NOT_SET_UP.format(missing="~/.gemini/config", verb="is") in str(info.value)
+    assert _NOT_SET_UP in str(info.value)
     assert not ran.exists()
     assert not (setup["tmp"] / "bwrap-ran").exists(), "refused before bwrap runs"
     assert not setup["config"].exists()
@@ -862,7 +868,7 @@ async def test_chat_with_agy_not_set_up_answers_503(
 def test_agy_not_set_up_names_the_cause_for_the_admin():
     from plugboard.app import _cli_error_response
 
-    cause = _NOT_SET_UP.format(missing="~/.gemini/config", verb="is")
+    cause = _NOT_SET_UP
     resp = _cli_error_response(cs.agy_sandbox_error(cause, "gemini-test"), "admin")
 
     assert resp.status_code == 503
