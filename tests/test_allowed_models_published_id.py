@@ -700,3 +700,57 @@ async def test_model_list_builds_one_guard_per_request(
     monkeypatch.setattr(app_mod, "_model_route_guard", counting)
     assert await _ids(client, rec["key"]) == ["Codex:gpt-6.1-sol"]
     assert len(built) == 1
+
+
+# ── PLU-60: the info page follows the routing rule, whatever the spelling ─────
+
+# The bare name and the upper-case alias reach the gateway's other providers
+# first (test-provider takes any name): chat refuses them, and the info page
+# used to show the profile, as it checked only the first route it resolved.
+_INFO_SPELLINGS = [
+    "claude-code:claude-sonnet-4-6",
+    f"{_CLAUDE}:claude-sonnet-4-6",
+    "claude-sonnet-4-6",
+    "CLAUDE-CODE:claude-sonnet-4-6",
+    "claude-code:CLAUDE-SONNET-4-6",
+    "Claude-Sonnet-4-6",
+    "other-provider:claude-sonnet-4-6",
+    "test-provider:claude-sonnet-4-6",
+    "claude-code:claude-haiku-4-5",
+    f"{_CLAUDE}:claude-haiku-4-5",
+    "claude-haiku-4-5",
+    "Codex:gpt-6.1-sol",
+    "gpt-6.1-sol",
+    "anthropic/claude-sonnet-4-6",
+    "claude-sonnet-4-6-latest",
+    "no-such-model-anywhere",
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("spelling", _INFO_SPELLINGS)
+async def test_model_info_answers_as_chat_for_every_spelling(
+    client, registry, keys, cli_calls, spelling
+):
+    """A limited key gets on the info page what chat answers for the same
+    spelling: the profile where chat would serve it, chat's own refusal
+    (the answer to an unknown name too) where chat would refuse it."""
+    registry(_THREE_CLIS)
+    rec = _key(keys, ["claude-code:claude-sonnet-4-6"])
+
+    chat = await _chat(client, rec["key"], spelling)
+    info = await client.get(f"/v1/models/{spelling}/info", headers=_auth(rec["key"]))
+
+    if chat.status_code == 200:
+        assert info.status_code == 200, info.text
+        assert (
+            info.json()
+            == (
+                await client.get(
+                    f"/v1/models/{spelling}/info", headers=_auth("testkey")
+                )
+            ).json()
+        )
+    else:
+        assert chat.status_code == 403, chat.text
+        assert (info.status_code, info.json()) == (chat.status_code, chat.json())

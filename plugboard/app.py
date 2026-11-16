@@ -150,6 +150,7 @@ from plugboard.router import (
     ProviderQuotaError,
     ProviderTimeoutError,
     UnsupportedOnCliError,
+    chat_routes,
     cli_refusal,
     disabled_route,
     discover_models,
@@ -3795,21 +3796,36 @@ async def model_info(
     """Get detailed info for a specific model: benchmarks, capabilities, best_for."""
     from plugboard.benchmarks import derived_model_info, get_model_info
 
-    key_record = _get_request_key_record(request, client_id=client_id)
-    try:
-        # A model the key may not call is refused as chat refuses it:
-        # 403 forbidden_model, same detail, no profile.
-        _check_model_access(client_id or "", model_id, key_record=key_record)
-    except ValueError:
-        # No route to check the key against (no active provider, a decision
-        # model): the unknown-model answer, never the curated profile.
-        return derived_model_info(model_id)
     if client_id and client_id != "admin":
+        # A client key reads the routes chat would use for this spelling
+        # (PLU-60), whatever the spelling: the admin keeps the full view.
+        key_record = _get_request_key_record(request, client_id=client_id)
+        guard = _model_route_guard(client_id, key_record)
+        disabled = disabled_route(model_id)
+        try:
+            # A model the key may not call is refused as chat refuses it:
+            # 403 forbidden_model, same detail, no profile. Chat checks the
+            # first route, then every route it would try, in order.
+            if guard is not None:
+                guard(*(disabled or resolve_provider_and_model(model_id)))
+            routes = [disabled] if disabled else chat_routes(model_id, guard)
+        except (ValueError, ModelNotServedError):
+            # No route chat would use (no active provider, a decision model,
+            # a name the CLI routes refuse): the unknown-model answer, never
+            # the curated profile.
+            return derived_model_info(model_id)
         # So does a model the client's catalogue leaves out (_models_for_key):
-        # its last probe failed recently. The admin keeps the full view.
+        # every route chat would use was probed and failed recently.
+        failing = set()
         for item in await list_models():
-            if item.get("id") == model_id and _not_callable_now(item):
-                return derived_model_info(model_id)
+            if _not_callable_now(item):
+                try:
+                    provider, native = resolve_provider_and_model(item.get("id", ""))
+                except ValueError:
+                    continue
+                failing.add((provider["id"], native))
+        if routes and all((p["id"], m) in failing for p, m in routes):
+            return derived_model_info(model_id)
     info = get_model_info(model_id)
     if not info:
         raise HTTPException(404, f"No benchmark data for model '{model_id}'")

@@ -187,6 +187,25 @@ async def test_model_info_follows_the_client_catalogue(
     assert client_view == derived_model_info(hidden)
 
 
+async def test_model_info_hides_every_spelling_of_a_hidden_model(
+    client, keys, tmp_path, monkeypatch
+):
+    """PLU-60: chat sends the bare name to the same route as the published ID,
+    so it is hidden too; the check follows chat's routes, not the spelling."""
+    from plugboard.benchmarks import derived_model_info
+
+    hidden = "claude-sub:claude-sonnet-4-6"
+    bare = "claude-sonnet-4-6"
+    _prepare(tmp_path, monkeypatch, status={hidden: _FAILED})
+    rec = keys.create_key("cust", "synthetic")
+    keys._invalidate_cache()
+    routes = router._resolve_all_providers(bare)
+    assert [(p["id"], m) for p, m in routes] == [("claude-sub", bare)]
+
+    assert (await _info(client, "testkey", bare))["info_source"] == "benchmark_db"
+    assert await _info(client, rec["key"], bare) == derived_model_info(bare)
+
+
 @pytest.mark.parametrize("status", [_OK, _STALE, None])
 async def test_model_info_keeps_the_profile_of_a_listed_model(
     client, keys, tmp_path, monkeypatch, status

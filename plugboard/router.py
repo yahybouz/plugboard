@@ -1163,14 +1163,7 @@ def _candidates_for(
     """
     from plugboard.circuit_breaker import check_circuit
 
-    candidates = _resolve_all_providers(body.get("model", ""))
-    # A CLI route is never given a name outside its catalogue, nor one that
-    # reads as an option (BUG-120): left out before anything else; when no
-    # route is left, the request is refused and nothing is started.
-    served = [route for route in candidates if not cli_route_refuses(*route)]
-    if candidates and not served:
-        raise ModelNotServedError(candidates[0][0]["id"])
-    candidates = served
+    candidates = _served_routes(body.get("model", ""))
     # A CLI route would drop tools, a structured format or an image: it is
     # left out, before any circuit read, guard or slot, and the request is
     # refused when nothing else is left.
@@ -1186,24 +1179,61 @@ def _candidates_for(
         if not check_circuit(key)["allowed"]:
             open_routes.add(key)
 
-    # The key's policy is checked before any slot, in the resolved order: the
-    # request may use the routes before the first one it refuses, whatever
-    # order pauses, open circuits or full providers then give them. When they
-    # all fail, that refusal is the answer, as before the reordering.
-    refused: Optional[Exception] = None
-    if route_guard is not None:
-        allowed: List[tuple] = []
-        for route in candidates:
-            try:
-                route_guard(*route)
-            except Exception as exc:
-                refused = exc
-                break
-            allowed.append(route)
-        if refused is not None and not allowed:
-            raise refused
-        candidates = allowed
+    candidates, refused = _guarded_routes(candidates, route_guard)
     return _order_routes(candidates, open_routes), refused
+
+
+def _served_routes(model_str: str) -> List[tuple]:
+    """Every route for ``model_str``, without a CLI route that refuses it.
+
+    A CLI route is never given a name outside its catalogue, nor one that
+    reads as an option (BUG-120): left out before anything else; when no
+    route is left, the request is refused and nothing is started.
+    """
+    candidates = _resolve_all_providers(model_str)
+    served = [route for route in candidates if not cli_route_refuses(*route)]
+    if candidates and not served:
+        raise ModelNotServedError(candidates[0][0]["id"])
+    return served
+
+
+def _guarded_routes(
+    candidates: List[tuple],
+    route_guard: Optional[Callable[[Dict[str, Any], str], None]],
+) -> Tuple[List[tuple], Optional[Exception]]:
+    """The routes a key's policy lets through, and its first refusal.
+
+    The policy is checked before any slot, in the resolved order: the
+    request may use the routes before the first one it refuses, whatever
+    order pauses, open circuits or full providers then give them. When they
+    all fail, that refusal is the answer, as before the reordering.
+    """
+    if route_guard is None:
+        return candidates, None
+    allowed: List[tuple] = []
+    for route in candidates:
+        try:
+            route_guard(*route)
+        except Exception as exc:
+            if not allowed:
+                raise
+            return allowed, exc
+        allowed.append(route)
+    return allowed, None
+
+
+def chat_routes(
+    model_str: str,
+    route_guard: Optional[Callable[[Dict[str, Any], str], None]] = None,
+) -> List[tuple]:
+    """The routes chat would send ``model_str`` to under a key's policy, in
+    the resolved order, without reading a circuit or taking a slot (PLU-60).
+
+    Raises as chat's routing does: ``ValueError`` when nothing routes,
+    ``ModelNotServedError`` when only CLI routes that refuse the name are
+    left, the key's refusal when it may use none of the routes.
+    """
+    return _guarded_routes(_served_routes(model_str), route_guard)[0]
 
 
 async def forward(
