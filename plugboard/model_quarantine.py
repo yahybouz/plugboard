@@ -10,7 +10,9 @@ of every API response.
 
 A single subsequent success resets the counter and removes the model
 from quarantine — so a temporary upstream outage cannot durably blacklist
-a model that came back to life.
+a model that came back to life. A real call that succeeds counts as such a
+success for its provider+model pair (BUG-105, :func:`lift_after_success`):
+the probes are off in production, so they cannot be the only way back.
 
 An entry belongs to the provider it was observed on (BUG-102): the same
 model name can be refused by one provider and served by another, so a
@@ -33,7 +35,7 @@ import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from plugboard.storage import data_dir
 
@@ -275,6 +277,57 @@ def record_success(
         if provider_id and not models:
             del state["providers"][provider_id]
         _save_raw(state, path)
+
+
+# (path, inode, mtime_ns, size) of the file last read by lift_after_success,
+# and the (provider, model) pairs it held: a success reads the file only when
+# it changed (every save is a new file, so a new inode), and the chat path
+# pays one stat per call (BUG-105).
+_pairs_seen: Tuple[Optional[Tuple[str, int, int, int]], frozenset] = (
+    None,
+    frozenset(),
+)
+
+
+def _recorded_pairs(path: Path) -> frozenset:
+    """The (provider, model) pairs with an entry in ``path``, any count."""
+    global _pairs_seen
+    try:
+        st = path.stat()
+    except OSError:
+        return frozenset()
+    stamp = (str(path), st.st_ino, st.st_mtime_ns, st.st_size)
+    seen_stamp, pairs = _pairs_seen
+    if stamp == seen_stamp:
+        return pairs
+    providers = _load_raw(path).get("providers")
+    found = set()
+    if isinstance(providers, dict):
+        for pid, entries in providers.items():
+            if isinstance(entries, dict):
+                found.update((pid, suffix) for suffix in entries)
+    pairs = frozenset(found)
+    _pairs_seen = (stamp, pairs)
+    return pairs
+
+
+def lift_after_success(
+    suffix: str, *, provider_id: str, path: Optional[Path] = None
+) -> bool:
+    """A real call to ``suffix`` at ``provider_id`` succeeded: drop that
+    pair's entry, quarantined or only counting failures (BUG-105).
+
+    Only that pair: the same name at another provider keeps its entry
+    (BUG-102). Returns True when an entry was dropped. Cheap when there is
+    none: one ``stat`` of the store, which is read again only once changed.
+    """
+    if not suffix or not provider_id:
+        return False
+    store = path if path is not None else _QUARANTINE_FILE
+    if (provider_id, suffix) not in _recorded_pairs(store):
+        return False
+    record_success(suffix, store, provider_id=provider_id)
+    return True
 
 
 def get_state(path: Path = _QUARANTINE_FILE) -> Dict[str, Any]:

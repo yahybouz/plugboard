@@ -4179,6 +4179,27 @@ async def check_model_internet_access(
             record_terminal_unavailable,
         )
 
+        refused_model = is_account_unsupported_error(
+            reason
+        ) or is_terminal_model_unavailable_error(reason)
+        timed_out = (
+            isinstance(exc, ProviderTimeoutError)
+            or getattr(exc, "timed_out", False)
+            or "timeout" in reason.lower()
+            or "timed out" in reason.lower()
+        )
+        if timed_out and not refused_model:
+            # A timeout says nothing of the model (BUG-105): a slow answer,
+            # a busy CLI. Nothing is quarantined, counted or persisted; the
+            # bulk check counts it failed, as its own per-model timeout.
+            return {
+                "model_id": model_id,
+                "internet_access": False,
+                "internet_access_confidence": "low",
+                "status": "timeout",
+                "error": reason,
+            }
+
         is_terminal = (
             "404" in reason
             or "not found" in reason.lower()
@@ -4188,11 +4209,8 @@ async def check_model_internet_access(
             or "unauthorized" in reason.lower()
             or "forbidden" in reason.lower()
             or "key" in reason.lower()
-            or "timeout" in reason.lower()
-            or "timed out" in reason.lower()
             or "exited" in reason.lower()
-            or is_account_unsupported_error(reason)
-            or is_terminal_model_unavailable_error(reason)
+            or refused_model
         )
 
         if is_terminal:

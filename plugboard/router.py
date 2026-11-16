@@ -607,6 +607,25 @@ def _tool_refused(exc: BaseException) -> bool:
     )
 
 
+def _lift_quarantine(provider: Dict[str, Any], real_model: str) -> None:
+    """A real call to ``real_model`` at ``provider`` succeeded: lift that
+    pair's quarantine, the same name elsewhere untouched (BUG-105). The
+    probes are off in production, so a model that answers again must not
+    stay hidden, nor be removed by the catalogue pass. Never raises."""
+    try:
+        from plugboard.model_quarantine import lift_after_success
+
+        if lift_after_success(real_model, provider_id=str(provider.get("id") or "")):
+            invalidate_models_cache()
+            log.info(
+                "quarantine lifted after a successful call | provider=%s model=%s",
+                provider.get("id"),
+                real_model,
+            )
+    except Exception as exc:  # noqa: BLE001 - the answer is served anyway
+        log.warning("quarantine lift failed: %r", exc)
+
+
 def _sandbox_failed(exc: BaseException) -> bool:
     """Whether agy's cage could not start, so agy was not run (BUG-86).
 
@@ -1437,6 +1456,7 @@ async def forward(
                         route_pauses.clear(_circuit_key(provider, real_model))
                     except Exception:
                         pass
+                    _lift_quarantine(provider, real_model)
                     _served_by.set((provider, real_model))
                     _usage_reported.set(reported)
                     return result
@@ -1615,6 +1635,7 @@ async def forward(
                                 route_pauses.clear(_circuit_key(provider, real_model))
                             except Exception:
                                 pass
+                            _lift_quarantine(provider, real_model)
                             _served_by.set((provider, real_model))
                             return result
                     except asyncio.TimeoutError:
@@ -2071,6 +2092,7 @@ async def _stream_route(
         cb_success(circuit_key)
         route_pauses.clear(circuit_key)
         record_provider_success(provider["id"])
+        _lift_quarantine(provider, real_model)
         # Counted, priced and replayed by chat_billing, as the chat routes do
         # (PLU-28): the counts the CLI reported (agy), else tiktoken's.
         from plugboard import chat_billing
@@ -2150,6 +2172,7 @@ async def _stream_route(
                     cb_success(circuit_key)
                     route_pauses.clear(circuit_key)
                     record_provider_success(provider["id"])
+                    _lift_quarantine(provider, real_model)
                 meter.feed(chunk)
                 yield chunk
             meter.finish()

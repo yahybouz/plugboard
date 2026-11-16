@@ -1877,6 +1877,8 @@ function _initPlaygroundEvents() {
         toast("The provider is busy: nothing was checked. Retry in a few seconds.", "warning");
       } else if (data.status === "sandbox_unavailable") {
         toast("agy's sandbox could not start: nothing was checked (see the gateway log).", "error");
+      } else if (data.status === "timeout") {
+        toast("The model did not answer in time: nothing was checked nor recorded. Retry later.", "warning");
       } else if (data.status === "online" || data.internet_access) {
         toast("Verified: Model has internet access! 🌐", "success");
         await loadPlayground();
