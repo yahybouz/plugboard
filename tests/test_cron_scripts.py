@@ -69,6 +69,10 @@ def test_cron_scripts_honour_pre_rename_variable_names(monkeypatch, script, sour
         monkeypatch.setenv("LLM_ENABLER_URL", legacy_url)
         monkeypatch.setattr(dotenv, "load_dotenv", lambda *a, **k: False)
     else:
+        # The suite runs with PLUGBOARD_SKIP_DOTENV=1 (conftest), which the
+        # script now honours (BUG-130): this case reads a .env, so lift it.
+        monkeypatch.delenv("PLUGBOARD_SKIP_DOTENV", raising=False)
+        monkeypatch.delenv("LLM_" + "ENABLER_SKIP_DOTENV", raising=False)
 
         def load_dotenv_with_legacy_line(*_args, **_kwargs):
             # What load_dotenv() does with a `.env` line LLM_ENABLER_URL=...

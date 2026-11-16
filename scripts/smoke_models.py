@@ -32,6 +32,10 @@ Environment:
   PLUGBOARD_URL  base URL (default: http://localhost:8765)
   API_KEY          bearer token for /v1 calls
   ADMIN_KEY        bearer token for /v1/models (admin-gated on some builds)
+  PLUGBOARD_SKIP_DOTENV  1 leaves .env unread, as for the gateway
+
+HTTP(S)_PROXY from the environment is ignored, and a redirect is never
+followed: the key only goes to PLUGBOARD_URL.
 
 Costs are capped by ``max_tokens=64`` (enough for a model to say its
 name and version, no more). A full nightly across ~150 models stays
@@ -48,15 +52,22 @@ import sys
 import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.error import HTTPError, URLError
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 
-try:
-    from dotenv import load_dotenv
+# Load .env, unless PLUGBOARD_SKIP_DOTENV=1 (or its old name) asks to ignore
+# it: the same rule as the gateway (plugboard/__init__.py, BUG-91, BUG-130).
+_SKIP_DOTENV = "1" in (
+    os.environ.get("PLUGBOARD_SKIP_DOTENV"),
+    os.environ.get("LLM_" + "ENABLER_SKIP_DOTENV"),
+)
+if not _SKIP_DOTENV:
+    try:
+        from dotenv import load_dotenv
 
-    load_dotenv()
-except ImportError:
-    pass
+        load_dotenv()
+    except ImportError:
+        pass
 
 # After .env is loaded: accept names from before the Plugboard rename.
 _OLD = "LLM_" + "ENABLER_"
@@ -101,7 +112,9 @@ class _NoRedirect(HTTPRedirectHandler):
         return None
 
 
-_OPENER = build_opener(_NoRedirect)
+# ProxyHandler({}) ignores HTTP(S)_PROXY from the environment: the key goes
+# to the gateway only, never to a proxy (BUG-130, as smoke_consumers.py).
+_OPENER = build_opener(ProxyHandler({}), _NoRedirect)
 
 
 def _http_json(
