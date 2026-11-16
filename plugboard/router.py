@@ -584,12 +584,26 @@ def _listed_models(provider: Dict[str, Any]) -> List[str]:
 
 def _request_caused(exc: BaseException) -> bool:
     """Whether a CLI route's error was caused by the request, not the CLI: a
-    prompt too long for the model (D-45) or a model the route's subscription
-    does not serve (BUG-78). Decided by the CLI wrapper's flags."""
+    prompt too long for the model (D-45), a model the route's subscription
+    does not serve (BUG-78), or a tool headless agy refused (BUG-104).
+    Decided by the CLI wrapper's flags."""
     if isinstance(exc, ModelNotServedError):
         return True  # refused before the CLI started (BUG-120)
     return isinstance(exc, CliSubprocessError) and bool(
-        exc.request_too_long or exc.model_unsupported
+        exc.request_too_long or exc.model_unsupported or _tool_refused(exc)
+    )
+
+
+def _tool_refused(exc: BaseException) -> bool:
+    """Whether headless agy refused a tool the answer needed (BUG-104).
+
+    agy works: the request asked for what it does not do without a human.
+    Not a provider fault: no circuit count, no provider_down alert, no error
+    metric, no quarantine. The route still hands over to the next one and
+    the client's answer is unchanged.
+    """
+    return isinstance(exc, CliSubprocessError) and bool(
+        getattr(exc, "tool_refused", False)
     )
 
 
@@ -1451,7 +1465,8 @@ async def forward(
                     # the CLI found too long is the request's fault. Outside
                     # the quarantine's try: its failure never skips them
                     # (BUG-51).
-                    if is_provider_fault(reason):
+                    # A tool agy refused is not a fault (BUG-104).
+                    if is_provider_fault(reason) and not _tool_refused(exc):
                         cb_failure(_circuit_key(provider, real_model))
                         try:
                             await record_provider_failure(provider["id"])
@@ -1470,7 +1485,7 @@ async def forward(
                             record_terminal_unavailable,
                         )
 
-                        if _sandbox_failed(exc):
+                        if _sandbox_failed(exc) or _tool_refused(exc):
                             pass
                         elif is_account_unsupported_error(reason):
                             record_account_unsupported(
@@ -2011,7 +2026,11 @@ async def _stream_route(
             # the CLI's error (exit 0 without an answer).
             refused = isinstance(exc, CliSubprocessError) and exc.model_unsupported
             too_long = isinstance(exc, CliSubprocessError) and exc.request_too_long
-            if not (refused or too_long) and is_provider_fault(str(exc)):
+            # Nor is a tool agy refused (BUG-104).
+            tool_refused = _tool_refused(exc)
+            if not (refused or too_long or tool_refused) and is_provider_fault(
+                str(exc)
+            ):
                 cb_failure(circuit_key)
                 await _alert_failure(provider["id"])
             try:
@@ -2023,7 +2042,7 @@ async def _stream_route(
                 )
 
                 reason = str(exc)
-                if refused or _sandbox_failed(exc):
+                if refused or tool_refused or _sandbox_failed(exc):
                     pass
                 elif is_account_unsupported_error(reason):
                     record_account_unsupported(

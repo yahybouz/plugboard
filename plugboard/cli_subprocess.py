@@ -112,6 +112,11 @@ class CliSubprocessError(RuntimeError):
             built or could not start, so agy was not run (BUG-86): the client
             gets 503 ``provider_sandbox_unavailable``; the router treats it
             like ``timed_out`` (next route, no quarantine).
+        tool_refused: headless agy refused a tool the answer needed (its valid
+            JSON names ``denied_actions``, BUG-100): agy works, the request
+            asked for what it does not do without a human. Not a provider
+            fault (BUG-104): no circuit count, no provider_down alert, no
+            error metric, no quarantine; the client's answer is unchanged.
     """
 
     def __init__(
@@ -129,10 +134,12 @@ class CliSubprocessError(RuntimeError):
         model_unsupported: bool = False,
         timed_out: bool = False,
         sandbox_failed: bool = False,
+        tool_refused: bool = False,
     ):
         super().__init__(message)
         self.timed_out = timed_out
         self.sandbox_failed = sandbox_failed
+        self.tool_refused = tool_refused
         self.exit_code = exit_code
         self.stderr = stderr
         self.pid = pid
@@ -1623,8 +1630,9 @@ _AGY_ACTION_RE = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
 _AGY_ACTIONS_SHOWN = 8
 
 
-def _agy_empty_answer(stdout_text: str, command: str) -> str:
-    """Why agy's valid payload holds no answer (BUG-100), else ``""``.
+def _agy_empty_answer(stdout_text: str, command: str) -> Tuple[str, bool]:
+    """Why agy's valid payload holds no answer (BUG-100), else ``""``; and
+    whether agy refused a tool (``denied_actions``, BUG-104).
 
     Headless agy cannot ask for a tool permission: it refuses the tool and
     answers ``{"status": "SUCCESS", "response": "", "denied_actions": [...]}``
@@ -1634,14 +1642,14 @@ def _agy_empty_answer(stdout_text: str, command: str) -> str:
     try:
         payload = _parse_gemini_json_stdout(stdout_text)
     except Exception:  # noqa: BLE001 - then it is invalid JSON indeed
-        return ""
+        return "", False
     if not isinstance(payload, dict) or "response" not in payload:
-        return ""
+        return "", False
     if str(payload.get("status", "SUCCESS")).upper() != "SUCCESS":
-        return ""
+        return "", False
     response = payload.get("response")
     if not isinstance(response, str) or response.strip():
-        return ""
+        return "", False
     denied = payload.get("denied_actions")
     if isinstance(denied, list) and denied:
         names: List[str] = []
@@ -1658,8 +1666,8 @@ def _agy_empty_answer(stdout_text: str, command: str) -> str:
             f"CLI {command!r} refused the tools its answer needed{listed}: "
             "headless agy cannot ask for a tool permission, so nothing was done "
             "and there is no answer."
-        )
-    return f"CLI {command!r} returned an empty answer and gave no reason."
+        ), True
+    return f"CLI {command!r} returned an empty answer and gave no reason.", False
 
 
 # Key set on complete()'s result when the CLI reported validated token counts.
@@ -2327,10 +2335,14 @@ async def complete(
             )
         if text is None and backend.output_mode == "json":
             # Valid agy JSON without an answer is not invalid JSON (BUG-100):
-            # said as such, same error and same classification otherwise.
-            empty = (
-                _agy_empty_answer(stdout_text, backend.command) if kind == "agy" else ""
+            # said as such, same error and same classification otherwise; a
+            # refused tool is flagged, it is not agy's fault (BUG-104).
+            empty, tool_refused = (
+                _agy_empty_answer(stdout_text, backend.command)
+                if kind == "agy"
+                else ("", False)
             )
+            fields = _quota_fields("", stderr_text)
             raise CliSubprocessError(
                 empty
                 or f"CLI {backend.command!r} returned invalid JSON. "
@@ -2340,7 +2352,8 @@ async def complete(
                 pid=proc.pid,
                 provider_name=backend.command,
                 model_id=model,
-                **_quota_fields("", stderr_text),
+                tool_refused=tool_refused and not fields["quota"],
+                **fields,
             )
         if text is None:
             text = ""
