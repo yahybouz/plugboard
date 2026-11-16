@@ -35,3 +35,49 @@ async def test_dashboard_usable_at_mobile_width(browser, e2e_server):
         assert page_errors == [], page_errors
     finally:
         await context.close()
+
+
+async def test_tables_read_as_cards_at_mobile_width(browser, e2e_server):
+    """BUG-125: at 390 px a table row is a card that fits the screen.
+
+    Every cell carries its column title, no cell or button runs off the right
+    edge, the action buttons and the page's main button are 44 px targets.
+    """
+    context = await browser.new_context(viewport=_MOBILE)
+    page = await context.new_page()
+    try:
+        await page.goto(
+            login_url(e2e_server), wait_until="domcontentloaded", timeout=20_000
+        )
+        await page.wait_for_selector("#app:not(.hidden)", timeout=15_000)
+        await page.evaluate("location.hash = 'providers'")
+        await page.wait_for_selector(
+            "#providers-table-container table.table-cards tbody tr", timeout=10_000
+        )
+        report = await page.evaluate(
+            """() => {
+              const t = document.querySelector('#providers-table-container table');
+              const cells = Array.from(t.querySelectorAll('tbody td'));
+              const buttons = Array.from(t.querySelectorAll('tbody button'));
+              return {
+                pageWidth: document.documentElement.scrollWidth,
+                unlabelled: cells.filter(td => !td.hasAttribute('data-label')).length,
+                offscreen: cells.concat(buttons)
+                  .filter(e => e.getBoundingClientRect().right > innerWidth + 1).length,
+                smallButtons: buttons
+                  .filter(b => b.getBoundingClientRect().height < 44).length,
+                roles: [t.getAttribute('role'), cells[0].getAttribute('role')],
+              };
+            }"""
+        )
+        assert report["pageWidth"] <= _MOBILE["width"], report
+        assert report["unlabelled"] == 0, report
+        assert report["offscreen"] == 0, report
+        assert report["smallButtons"] == 0, report
+        assert report["roles"] == ["table", "cell"], report
+        await page.evaluate("location.hash = 'keys'")
+        await page.wait_for_selector("#page-keys.active", timeout=10_000)
+        box = await page.locator("#btn-create-key").bounding_box()
+        assert box and box["height"] >= 44, box
+    finally:
+        await context.close()

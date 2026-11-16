@@ -191,12 +191,39 @@ function h(tag, attrs) {
 }
 
 function table(headers, rows) {
-  return h("div", { className: "table-wrap" },
-    h("table", null,
+  return h("div", { className: "table-wrap table-wrap-cards" },
+    cardTable(h("table", null,
       h("thead", null, h("tr", null, headers.map(function (hd) { return h("th", null, hd); }))),
       h("tbody", null, rows)
-    )
+    ))
   );
+}
+
+// On a phone (below 640 px, style.css) each row reads as a card (BUG-125):
+// every cell carries its column title in data-label, shown above the value.
+// The card layout turns the table elements into blocks, which drops their
+// table semantics in some browsers: explicit roles keep them for screen
+// readers. Call it once the rows are in the table.
+function cardTable(tableEl) {
+  tableEl.classList.add("table-cards");
+  tableEl.setAttribute("role", "table");
+  const heads = Array.prototype.map.call(tableEl.querySelectorAll("thead th"), function (th) {
+    th.setAttribute("role", "columnheader");
+    return th.textContent.trim();
+  });
+  tableEl.querySelectorAll("thead, tbody").forEach(function (g) { g.setAttribute("role", "rowgroup"); });
+  tableEl.querySelectorAll("tr").forEach(function (tr) { tr.setAttribute("role", "row"); });
+  tableEl.querySelectorAll("tbody tr").forEach(function (tr) {
+    Array.prototype.forEach.call(tr.children, function (td, i) {
+      const label = heads[i] || "";
+      td.setAttribute("role", "cell");
+      td.setAttribute("data-label", label);
+      if (i === 0) td.classList.add("cell-title");
+      else if (/^status$/i.test(label)) td.classList.add("cell-status");
+      else if (/^actions$/i.test(label) || (!label && i === heads.length - 1)) td.classList.add("cell-actions");
+    });
+  });
+  return tableEl;
 }
 
 function skeleton(count) {
@@ -1595,9 +1622,6 @@ async function loadOllamaCloudCatalog() {
       el.appendChild(h("div", { className: "alert alert-warning" },
         "Ollama offline: cloud models can be added once Ollama answers at the URL above."));
     }
-    const table = h("table", { className: "data-table" },
-      h("thead", null, h("tr", null, h("th", null, "Cloud model"), h("th", null, "Status"), h("th", null, "Actions")))
-    );
     const tbody = h("tbody");
     models.forEach(function (m) {
       const id = m.id;
@@ -1611,8 +1635,10 @@ async function loadOllamaCloudCatalog() {
         h("td", null, (!online || m.installed) ? null : h("button", { className: "btn btn-ghost btn-sm", onClick: function () { _pullFromCatalog(id); } }, "Add"))
       ));
     });
-    table.appendChild(tbody);
-    el.appendChild(table);
+    el.appendChild(cardTable(h("table", { className: "data-table" },
+      h("thead", null, h("tr", null, h("th", null, "Cloud model"), h("th", null, "Status"), h("th", null, "Actions"))),
+      tbody
+    )));
   } catch (err) {
     el.innerHTML = "";
     el.appendChild(h("div", { className: "alert alert-error" }, "Failed to load the cloud catalog: " + err.message));
@@ -1670,16 +1696,6 @@ async function loadOllamaModels() {
       el.appendChild(h("div", { className: "muted empty-note" }, "No models installed. Use \"+ Pull model\" to download one."));
       return;
     }
-    const table = h("table", { className: "data-table" },
-      h("thead", null,
-        h("tr", null,
-          h("th", null, "Model"),
-          h("th", null, "Size"),
-          h("th", null, "Modified"),
-          h("th", null, "Actions")
-        )
-      )
-    );
     const tbody = h("tbody");
     models.forEach(function (m) {
       const name = m.name || m.model || "-";
@@ -1697,7 +1713,17 @@ async function loadOllamaModels() {
         )
       ));
     });
-    table.appendChild(tbody);
+    const table = cardTable(h("table", { className: "data-table" },
+      h("thead", null,
+        h("tr", null,
+          h("th", null, "Model"),
+          h("th", null, "Size"),
+          h("th", null, "Modified"),
+          h("th", null, "Actions")
+        )
+      ),
+      tbody
+    ));
     el.innerHTML = "";
     el.appendChild(table);
   } catch (err) {

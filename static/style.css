@@ -520,6 +520,56 @@ textarea:focus-visible, .nav-link:focus-visible, summary:focus-visible {
   .au-row > strong { min-width: 100%; }
   .toolbar input[type="search"] { max-width: none; }
 }
+
+/* Phones (BUG-125): each table row reads as a card instead of a grid twice
+   the screen wide. cardTable() (app.js, portal.js) gives every cell its column
+   title in data-label and the first cell, status and actions their place:
+   title and status on top, then label/value pairs, then the actions. */
+@media (max-width: 640px) {
+  .table-wrap-cards { overflow: visible; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+  .table-wrap table.table-cards, table.table-cards { display: block; min-width: 0; }
+  .table-cards thead { display: block; background: transparent; }
+  .table-cards thead tr { display: block; }
+  /* Column titles stay for screen readers; a select-all box stays visible. */
+  .table-cards th {
+    position: absolute; width: 1px; height: 1px; margin: 0; padding: 0;
+    overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+  .table-cards th:has(input) { position: static; width: auto; height: auto; overflow: visible; clip: auto; padding: var(--space-2) 0; }
+  .table-cards tbody { display: block; }
+  .table-cards tbody tr {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--space-2);
+    margin-bottom: var(--space-3); padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border); border-radius: var(--radius-lg);
+    background: var(--bg-card); box-shadow: var(--shadow-sm);
+  }
+  .table-cards tbody tr:hover { background: var(--bg-card); }
+  .table-cards tbody tr.subrow { background: var(--bg-secondary); }
+  .table-cards tr.subrow td { background: transparent; }
+  .table-cards td {
+    order: 2; flex: 1 1 100%; min-width: 0; padding: var(--space-1) 0; border-bottom: 0;
+    font-size: var(--fs-md); overflow-wrap: anywhere; hyphens: none;
+  }
+  .table-cards td::before {
+    content: attr(data-label); display: block;
+    font-size: var(--fs-md); font-weight: var(--fw-medium); color: var(--text-muted);
+  }
+  .table-cards td[data-label=""]::before, .table-cards td.cell-title::before,
+  .table-cards td.cell-status::before, .table-cards td.cell-actions::before { content: none; }
+  .table-cards td:empty { display: none; }
+  .table-cards td.cell-title { order: 0; flex: 1 1 0; color: var(--text); }
+  .table-cards td.cell-status { order: 1; flex: 0 0 auto; }
+  .table-cards td.cell-actions { order: 3; padding: var(--space-2) 0 0; }
+  /* Ids fill the line rather than breaking at each hyphen. */
+  .table-cards td code { font-size: var(--fs-md); word-break: break-all; hyphens: none; }
+  .table-cards td .muted, .table-cards td .small { font-size: var(--fs-md); }
+  .table-cards .btn-group { gap: var(--space-2); }
+  .table-cards .btn { min-height: 44px; font-size: var(--fs-md); padding: var(--pad-control); }
+  .table-cards input, .table-cards select { min-height: 44px; }
+  .topbar { flex-wrap: wrap; gap: var(--space-2) var(--space-3); }
+  .topbar-actions { flex-wrap: wrap; }
+  .topbar-actions .btn { min-height: 44px; font-size: var(--fs-md); padding: var(--pad-control); }
+}
 .llm-panel { margin: var(--space-4) 0; padding: var(--space-3) var(--space-5); }
 .llm-panel summary { cursor: pointer; display: flex; gap: var(--space-2); align-items: center; min-height: 32px; list-style: none; }
 .llm-panel summary::before { content: "▸"; color: var(--text-muted); transition: transform var(--transition); }

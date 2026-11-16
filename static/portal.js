@@ -40,12 +40,34 @@ function h(tag, attrs, ...children) {
 }
 
 function buildTable(headers, rows) {
-  return h("div", { className: "table-wrap" },
-    h("table", null,
+  return h("div", { className: "table-wrap table-wrap-cards" },
+    cardTable(h("table", null,
       h("thead", null, h("tr", null, ...headers.map(function (hd) { return h("th", null, hd); }))),
       h("tbody", null, ...rows)
-    )
+    ))
   );
+}
+
+// Same card layout as the admin tables on a phone (BUG-125, cardTable in
+// app.js): each cell carries its column title; explicit roles keep the table
+// semantics that the card layout drops in some browsers.
+function cardTable(tableEl) {
+  tableEl.classList.add("table-cards");
+  tableEl.setAttribute("role", "table");
+  const heads = Array.prototype.map.call(tableEl.querySelectorAll("thead th"), function (th) {
+    th.setAttribute("role", "columnheader");
+    return th.textContent.trim();
+  });
+  tableEl.querySelectorAll("thead, tbody").forEach(function (g) { g.setAttribute("role", "rowgroup"); });
+  tableEl.querySelectorAll("tr").forEach(function (tr) { tr.setAttribute("role", "row"); });
+  tableEl.querySelectorAll("tbody tr").forEach(function (tr) {
+    Array.prototype.forEach.call(tr.children, function (td, i) {
+      td.setAttribute("role", "cell");
+      td.setAttribute("data-label", heads[i] || "");
+      if (i === 0) td.classList.add("cell-title");
+    });
+  });
+  return tableEl;
 }
 
 function statCard(label, value, color) {
