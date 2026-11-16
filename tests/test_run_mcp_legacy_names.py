@@ -46,24 +46,35 @@ runpy.run_path(script, run_name="__main__")
 """
 
 
-def _launch(tmp_path: Path, *flags: str, env=None, dotenv: str = "") -> dict:
+def _launch(
+    tmp_path: Path, *flags: str, env=None, dotenv: str = "", skip_dotenv=True
+) -> dict:
+    """Run the launcher copy; ``skip_dotenv=False`` lets it read the scratch .env.
+
+    Without the skip, the package is linked into the scratch tree, so the
+    gateway's own loader (python-dotenv, from the package's directory) finds
+    the scratch ``.env`` too, never the repository's.
+    """
     tree = tmp_path / "tree"
     (tree / "scripts").mkdir(parents=True)
     shutil.copy2(ROOT / "scripts" / "run_mcp.py", tree / "scripts" / "run_mcp.py")
     (tree / ".env").write_text(dotenv, encoding="utf-8")
+    base = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": str(tmp_path / "home"),
+        "PYTHONPATH": str(ROOT),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PLUGBOARD_DATA": str(tmp_path / "data"),
+    }
+    if skip_dotenv:
+        base["PLUGBOARD_SKIP_DOTENV"] = "1"
+    else:
+        (tree / "plugboard").symlink_to(ROOT / "plugboard", target_is_directory=True)
     result = subprocess.run(
         [sys.executable, "-c", PROBE, str(tree / "scripts" / "run_mcp.py"), LEGACY]
         + list(flags),
         cwd=tree,
-        env={
-            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-            "HOME": str(tmp_path / "home"),
-            "PYTHONPATH": str(ROOT),
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "PLUGBOARD_SKIP_DOTENV": "1",
-            "PLUGBOARD_DATA": str(tmp_path / "data"),
-            **(env or {}),
-        },
+        env={**base, **(env or {})},
         capture_output=True,
         text=True,
         timeout=60,
@@ -93,6 +104,7 @@ def test_old_names_in_the_environment_reach_the_server(tmp_path):
 def test_old_names_in_dotenv_reach_the_server(tmp_path):
     seen = _launch(
         tmp_path,
+        skip_dotenv=False,
         dotenv=(
             f"{LEGACY}URL=http://from-dotenv.invalid:9001\n"
             f"{LEGACY}API_KEY=synthetic-dotenv-client-key\n"
@@ -120,9 +132,46 @@ def test_new_name_in_dotenv_wins_over_an_old_name_in_the_environment(tmp_path):
         tmp_path,
         env={LEGACY + "API_KEY": "synthetic-old-client-key"},
         dotenv="PLUGBOARD_API_KEY=synthetic-new-client-key\n",
+        skip_dotenv=False,
     )
 
     assert seen["api_key"] == "synthetic-new-client-key"
+
+
+# -- BUG-91: PLUGBOARD_SKIP_DOTENV is honoured as by the gateway -----------------
+
+DOTENV = (
+    "PLUGBOARD_URL=http://from-dotenv.invalid:9001\n"
+    "PLUGBOARD_API_KEY=synthetic-dotenv-client-key\n"
+    f"PLUGBOARD_MCP_TOKEN={TOKEN}\n"
+)
+
+
+@pytest.mark.parametrize("flags", [(), ("--http",)], ids=["stdio", "http"])
+def test_skip_dotenv_leaves_the_dotenv_unread(tmp_path, flags):
+    seen = _launch(tmp_path, *flags, env={"PLUGBOARD_MCP_TOKEN": TOKEN}, dotenv=DOTENV)
+
+    assert seen["url"] != "http://from-dotenv.invalid:9001"
+    assert seen["api_key"] == ""
+
+
+def test_old_skip_dotenv_name_leaves_the_dotenv_unread(tmp_path):
+    seen = _launch(
+        tmp_path,
+        env={LEGACY + "SKIP_DOTENV": "1"},
+        dotenv=DOTENV,
+        skip_dotenv=False,
+    )
+
+    assert seen["url"] != "http://from-dotenv.invalid:9001"
+    assert seen["api_key"] == ""
+
+
+def test_without_the_skip_the_dotenv_is_read(tmp_path):
+    seen = _launch(tmp_path, dotenv=DOTENV, skip_dotenv=False)
+
+    assert seen["url"] == "http://from-dotenv.invalid:9001"
+    assert seen["api_key"] == "synthetic-dotenv-client-key"
 
 
 def test_unprefixed_server_keys_are_never_borrowed(tmp_path):

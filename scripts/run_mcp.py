@@ -19,6 +19,7 @@ Environment variables:
     MCP_PORT              — Port for SSE/HTTP transport (default: 8766)
     PLUGBOARD_MCP_ALLOWED_HOSTS   — Comma-separated Host values (default: loopback)
     PLUGBOARD_MCP_ALLOWED_ORIGINS — Comma-separated Origin values (default: loopback)
+    PLUGBOARD_SKIP_DOTENV — 1 leaves .env unread, as for the gateway
 """
 
 from __future__ import annotations
@@ -29,11 +30,16 @@ import sys
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Load .env
+# Load .env, unless PLUGBOARD_SKIP_DOTENV=1 (or its old name) asks to ignore
+# it: the same rule as the gateway (plugboard/__init__.py, BUG-91).
 _env_file = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"
 )
-if os.path.exists(_env_file):
+_SKIP_DOTENV = "1" in (
+    os.environ.get("PLUGBOARD_SKIP_DOTENV"),
+    os.environ.get("LLM_" + "ENABLER_SKIP_DOTENV"),
+)
+if not _SKIP_DOTENV and os.path.exists(_env_file):
     with open(_env_file) as f:
         for line in f:
             line = line.strip()
