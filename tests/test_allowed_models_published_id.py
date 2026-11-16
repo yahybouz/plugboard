@@ -643,7 +643,9 @@ async def test_fallback_candidate_outside_the_policy_is_refused(
         lambda _m: {"allowed": True, "fallback": None},
     )
     # The synthetic failure must not stay in the process-wide failure counters.
-    monkeypatch.setattr("plugboard.circuit_breaker.record_failure", lambda _m: None)
+    monkeypatch.setattr(
+        "plugboard.circuit_breaker.record_failure", lambda _m, **_k: None
+    )
 
     async def _no_alert(_provider_id):
         return None

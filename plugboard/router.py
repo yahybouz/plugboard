@@ -1294,6 +1294,7 @@ async def forward(
     is, the request waits up to ``PLUGBOARD_PROVIDER_WAIT_S`` for the first
     freed slot, then raises ``ProvidersBusyError``.
     """
+    from plugboard.call_outcome import is_transient
     from plugboard.circuit_breaker import (
         is_provider_fault,
         record_failure as cb_failure,
@@ -1487,7 +1488,10 @@ async def forward(
                     # (BUG-51).
                     # A tool agy refused is not a fault (BUG-104).
                     if is_provider_fault(reason) and not _tool_refused(exc):
-                        cb_failure(_circuit_key(provider, real_model))
+                        cb_failure(
+                            _circuit_key(provider, real_model),
+                            transient=is_transient(exc),
+                        )
                         try:
                             await record_provider_failure(provider["id"])
                         except Exception as alert_exc:
@@ -1706,7 +1710,10 @@ async def forward(
             # The provider failed: count it against the route's circuit, unless
             # the request caused the error (400, 413, 422, a prompt too long...).
             if provider_fault:
-                cb_failure(_circuit_key(provider, real_model))
+                cb_failure(
+                    _circuit_key(provider, real_model),
+                    transient=last_err is not None and is_transient(last_err),
+                )
 
             # Record error metrics and try next provider
             if not provider_failed:
@@ -1980,6 +1987,7 @@ async def _stream_route(
     timeout: float,
 ) -> AsyncIterator[bytes]:
     """Stream ``body`` from ``provider`` (the body of ``forward_stream``)."""
+    from plugboard.call_outcome import is_transient
     from plugboard.circuit_breaker import (
         check_circuit,
         is_provider_fault,
@@ -2052,7 +2060,7 @@ async def _stream_route(
             if not (refused or too_long or tool_refused) and is_provider_fault(
                 str(exc)
             ):
-                cb_failure(circuit_key)
+                cb_failure(circuit_key, transient=is_transient(exc))
                 await _alert_failure(provider["id"])
             try:
                 from plugboard.model_quarantine import (
@@ -2159,9 +2167,9 @@ async def _stream_route(
             if resp.status != 200:
                 text = await resp.text()
                 refused_fault = is_provider_fault(text, resp.status)
-                if refused_fault:
-                    cb_failure(circuit_key)
                 err = _http_error(provider["id"], resp.status, text, resp.headers)
+                if refused_fault:
+                    cb_failure(circuit_key, transient=is_transient(err))
                 if isinstance(err, ProviderQuotaError):
                     route_pauses.pause(circuit_key, err.retry_after)
                 raise err
@@ -2194,7 +2202,7 @@ async def _stream_route(
         # No answer: a timeout or a network error counts, as in forward().
         # Once the stream has begun, its success is already recorded.
         if not streaming:
-            cb_failure(circuit_key)
+            cb_failure(circuit_key, transient=True)
         await _stream_failed(provider["id"], not streaming)
         raise ProviderTimeoutError(
             f"[{provider['id']}] timeout (>{effective_timeout}s) — model={real_model}",

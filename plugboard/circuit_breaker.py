@@ -111,12 +111,23 @@ def is_provider_fault(message: str, status: Optional[int] = None) -> bool:
 class _CircuitState:
     """State for a single model circuit."""
 
-    __slots__ = ("state", "failures", "last_failure", "last_success", "opened_at")
+    __slots__ = (
+        "state",
+        "failures",
+        "last_failure",
+        "last_failure_transient",
+        "last_success",
+        "opened_at",
+    )
 
     def __init__(self):
         self.state: str = CLOSED
         self.failures: int = 0
         self.last_failure: float = 0
+        # Whether the last failure was a timeout or a quota: kept for the
+        # client catalogue (call_outcome, review M1 of PLU-55), never read
+        # by the breaker itself.
+        self.last_failure_transient: bool = False
         self.last_success: float = 0
         self.opened_at: float = 0
 
@@ -201,11 +212,17 @@ def record_success(model: str) -> None:
         log.info("Circuit CLOSED for %s — model recovered", suffix)
 
 
-def record_failure(model: str) -> None:
-    """Record a failed request — may open the circuit."""
+def record_failure(model: str, *, transient: bool = False) -> None:
+    """Record a failed request — may open the circuit.
+
+    ``transient``: the failure was a timeout or a quota. It counts and opens
+    the circuit like any other; only the client catalogue reads it
+    (call_outcome).
+    """
     circuit = _get_circuit(model)
     circuit.failures += 1
     circuit.last_failure = time.monotonic()
+    circuit.last_failure_transient = transient
 
     if circuit.state == HALF_OPEN:
         # Failed during test — reopen

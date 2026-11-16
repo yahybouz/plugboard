@@ -3554,8 +3554,10 @@ def _probe_age(item: Dict[str, Any]) -> Optional[float]:
 
 
 def _not_callable_now(item: Dict[str, Any]) -> bool:
-    """A catalogue entry whose last observation, a probe or a real call
-    (PLU-55), is a recent failure.
+    """A catalogue entry whose last observation, a probe or the route's real
+    calls (PLU-55, read by ``call_outcome.last_call``: failures up to the
+    breaker's threshold, the last neither a timeout nor a quota), is a recent
+    failure.
 
     The newer of the two decides: a successful call after a failed probe
     brings the model back, and so does a successful probe after a failed

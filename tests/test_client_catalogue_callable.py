@@ -209,8 +209,11 @@ async def test_model_info_hides_every_spelling_of_a_hidden_model(
 # -- PLU-55: the last real call feeds the same filter -------------------------
 #
 # The shipped configuration probes no CLI model, so the probe-only filter never
-# hid one. A real call's outcome now counts too: a failure the provider caused
-# hides the route's model from client keys, a later success brings it back.
+# hid one. A real call's outcome now counts too: failures the provider caused
+# hide the route's model from client keys once the route's circuit breaker
+# counts its threshold of them in a row, the last one neither a timeout nor a
+# quota (review M1: one client's single failed call no longer hides a model
+# from every other client); a later success brings it back.
 # No CLI runs: ``cli_subprocess.complete`` is replaced, nothing is probed.
 
 _BETA = "agy-sub:agy-beta"
@@ -263,8 +266,20 @@ def _cli_error(**flags):
     return CliSubprocessError(_PROVIDER_DOWN, exit_code=1, **flags)
 
 
+def _threshold():
+    """The circuit breaker's own threshold, not a second constant."""
+    from plugboard import circuit_breaker as cb
+
+    return cb._FAILURE_THRESHOLD
+
+
+async def _fail_to_threshold(real_call, model, error=None, *, stream=False):
+    for _ in range(_threshold()):
+        await real_call(model, error or _cli_error(), stream=stream)
+
+
 @pytest.mark.parametrize("stream", [False, True])
-async def test_a_failed_real_call_hides_the_model_from_a_client_key(
+async def test_failed_runs_up_to_the_breaker_threshold_hide_the_model(
     client, keys, tmp_path, monkeypatch, real_call, stream
 ):
     _prepare(tmp_path, monkeypatch)  # no probe at all, as shipped
@@ -272,7 +287,7 @@ async def test_a_failed_real_call_hides_the_model_from_a_client_key(
     keys._invalidate_cache()
     assert _BETA in await _ids(client, rec["key"])
 
-    await real_call(_BETA, _cli_error(), stream=stream)
+    await _fail_to_threshold(real_call, _BETA, stream=stream)
 
     ids = await _ids(client, rec["key"])
     assert _BETA not in ids
@@ -287,12 +302,67 @@ async def test_a_later_successful_call_brings_the_model_back(
     _prepare(tmp_path, monkeypatch)
     rec = keys.create_key("cust", "synthetic")
     keys._invalidate_cache()
-    await real_call(_BETA, _cli_error())
+    await _fail_to_threshold(real_call, _BETA)
     assert _BETA not in await _ids(client, rec["key"])
 
     await real_call(_BETA)
 
     assert _BETA in await _ids(client, rec["key"])
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "flags",
+    [{}, {"timed_out": True}, {"quota": True}],
+    ids=["exit", "timeout", "quota"],
+)
+async def test_one_failed_call_does_not_hide_the_model(
+    client, keys, tmp_path, monkeypatch, real_call, flags, stream
+):
+    """Review M1: one client's single failure (a failed run, a timeout, a
+    quota) stays below the breaker's threshold: every other client still
+    sees the model."""
+    from plugboard import circuit_breaker as cb
+
+    _prepare(tmp_path, monkeypatch)
+    rec = keys.create_key("cust", "synthetic")
+    keys._invalidate_cache()
+
+    await real_call(_BETA, _cli_error(**flags), stream=stream)
+
+    assert cb._circuits[_BETA].failures == 1  # counted, as before
+    assert _BETA in await _ids(client, rec["key"])
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "flags", [{"timed_out": True}, {"quota": True}], ids=["timeout", "quota"]
+)
+async def test_timeouts_and_quotas_never_hide_the_model(
+    client, keys, tmp_path, monkeypatch, real_call, flags, stream
+):
+    """A timeout or a quota is left to the route pauses and the breaker, even
+    when it is the call that reaches the threshold."""
+    from plugboard import circuit_breaker as cb
+
+    _prepare(tmp_path, monkeypatch)
+    rec = keys.create_key("cust", "synthetic")
+    keys._invalidate_cache()
+
+    await _fail_to_threshold(real_call, _BETA, _cli_error(**flags), stream=stream)
+    assert cb._circuits[_BETA].failures >= _threshold()
+    assert _BETA in await _ids(client, rec["key"])
+
+    # Failed runs up to the threshold, the last one a timeout: still listed.
+    await real_call(_BETA)
+    for _ in range(_threshold() - 1):
+        await real_call(_BETA, _cli_error(), stream=stream)
+    await real_call(_BETA, _cli_error(**flags), stream=stream)
+    assert _BETA in await _ids(client, rec["key"])
+
+    # One more failed run after them: hidden.
+    await real_call(_BETA, _cli_error(), stream=stream)
+    assert _BETA not in await _ids(client, rec["key"])
 
 
 @pytest.mark.parametrize(
@@ -341,8 +411,8 @@ async def test_the_newest_of_probe_and_call_decides(
     await real_call(_BETA)
     assert _BETA in await _ids(client, rec["key"])
 
-    # A failed call, then a successful probe after it: the probe is newer.
-    await real_call(_BETA, _cli_error())
+    # Failed calls, then a successful probe after them: the probe is newer.
+    await _fail_to_threshold(real_call, _BETA)
     assert _BETA not in await _ids(client, rec["key"])
     import plugboard.model_availability as ma
 
@@ -362,7 +432,8 @@ async def test_a_failed_call_older_than_the_window_does_not_hide(
     _prepare(tmp_path, monkeypatch)
     rec = keys.create_key("cust", "synthetic")
     keys._invalidate_cache()
-    await real_call(_BETA, _cli_error())
+    await _fail_to_threshold(real_call, _BETA)
+    assert _BETA not in await _ids(client, rec["key"])
     cb._circuits[_BETA].last_failure = time.monotonic() - 37 * 3600
 
     assert _BETA in await _ids(client, rec["key"])
