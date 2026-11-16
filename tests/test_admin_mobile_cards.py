@@ -69,6 +69,19 @@ def test_ids_and_labels_wrap_without_hyphen_cuts():
 
 
 @pytest.mark.parametrize(
+    "selector", [".table-cards td code", ".table-cards td.cell-title strong"]
+)
+def test_ids_and_card_titles_are_not_cut_at_hyphens(selector):
+    """A hyphen is a line-break opportunity: ``overflow-wrap`` alone still
+    wraps ``client-de-demo`` after each hyphen. Ids (``code``) and the card
+    title (the first cell's ``strong``, a client_id or a provider name, review
+    B5) fill the line and break only where it ends."""
+    rule = _rule(_phone_block(), selector)
+    assert "word-break: break-all" in rule, selector
+    assert "hyphens: none" in rule, selector
+
+
+@pytest.mark.parametrize(
     "selector",
     [
         ".table-cards td",
@@ -120,9 +133,10 @@ def test_portal_has_its_own_card_helper():
 @pytest.mark.parametrize(
     "page, asset, first_carded_version",
     [
-        ("index.html", "style.css", 15),
+        # 16: card titles not cut at hyphens (review B5).
+        ("index.html", "style.css", 16),
         ("index.html", "app.js", 29),
-        ("portal.html", "style.css", 15),
+        ("portal.html", "style.css", 16),
         ("portal.html", "portal.js", 6),
     ],
 )
