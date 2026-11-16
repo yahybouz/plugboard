@@ -279,16 +279,15 @@ _STORE_SETTINGS_DENIED = {
     "settings.json": "EROFS",
     "installation_id": "EROFS",
     "jetski_state.pbtxt": "EROFS",
-    "bin": "EROFS",
-    "builtin": "EROFS",
 }
 
 
 def _assert_store_settings_checked(report: dict) -> None:
     """BUG-108: agy's settings in its store cannot be changed; it can still
-    write its conversations."""
+    write its conversations and what it unpacks (review M2)."""
     assert report["store_settings_writes_denied"] == _STORE_SETTINGS_DENIED
     assert report["store_conversation_write"] == "written"
+    assert report["store_unpacked_write"] == {"bin": "written", "builtin": "written"}
 
 
 _LEAKY_CAGE = """real = agy_cage.cage_argv
@@ -378,8 +377,6 @@ def test_writable_agy_settings_fail_the_check(world, real_bwrap):
         "settings.json": "opened",
         "installation_id": "opened",
         "jetski_state.pbtxt": "opened",
-        "bin": "written",
-        "builtin": "written",
     }
     assert sorted(report["failures"]) == sorted(
         f"agy's {name} not read-only in the cage ({state})"
@@ -387,6 +384,51 @@ def test_writable_agy_settings_fail_the_check(world, real_bwrap):
     )
     assert _store_snapshot(world["store"]) == before
     _no_secret_in(proc)
+
+
+_UNPACKED_READ_ONLY = """real = agy_cage.cage_argv
+
+
+def frozen(binary, args, **kw):
+    # bin/ and builtin/ bound read-only over the store (as in 4.14.4 before
+    # review M2): agy could not rewrite them, and would fail.
+    argv = real(binary, args, **kw)
+    store = kw["env"]["HOME"] + "/.gemini/antigravity-cli/"
+    i = argv.index("--bind", argv.index("--bind") + 1)
+    extra = []
+    for name in ("bin", "builtin"):
+        extra += ["--ro-bind", store + name, store + name]
+    return argv[:i] + extra + argv[i:]
+
+
+agy_cage.cage_argv = frozen
+"""
+
+
+def test_read_only_unpacked_folders_fail_the_check(world, real_bwrap):
+    """Review M2, not vacuous: agy rewrites bin/ and builtin/ after its
+    install; a cage that shows them read-only fails the check."""
+    before = _store_snapshot(world["store"])
+    proc = _run(world, patch=_UNPACKED_READ_ONLY)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    report = _report(proc)
+    assert report["store_unpacked_write"] == {"bin": "EROFS", "builtin": "EROFS"}
+    assert sorted(report["failures"]) == [
+        "agy cannot write its bin/ in the cage (EROFS)",
+        "agy cannot write its builtin/ in the cage (EROFS)",
+    ]
+    assert _store_snapshot(world["store"]) == before
+    _no_secret_in(proc)
+
+
+def test_missing_unpacked_folders_are_reported_not_failed(world, real_bwrap):
+    for name in ("bin", "builtin"):
+        shutil.rmtree(world["store"] / name)
+    proc = _run(world)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    report = _report(proc)
+    assert report["store_unpacked_write"] == {"bin": "absent", "builtin": "absent"}
+    assert not (world["store"] / "bin").exists()
 
 
 def test_missing_agy_settings_are_reported_not_failed(world, real_bwrap):

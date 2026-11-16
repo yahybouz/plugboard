@@ -57,13 +57,16 @@ and the check fails (exit 1, ``agy_setup``: ``missing``), saying to run agy
 once.
 
 agy's settings in its store (``agy_cage.STORE_READ_ONLY``: ``settings.json``,
-``installation_id``, ``jetski_state.pbtxt``, ``bin/``, ``builtin/``) are bound
-read-only over the writable store (BUG-108): the probe opens each file for
-writing (nothing created nor truncated) and creates a witness in each folder;
-each must fail with ``EROFS`` (``store_settings_writes_denied``), or be
-``absent`` (not in the store: not a failure). It also creates, then removes,
-a witness in ``conversations/`` (``store_conversation_write``: ``written``, or
-``absent`` when agy never made the folder).
+``installation_id``, ``jetski_state.pbtxt``) are bound read-only over the
+writable store (BUG-108): the probe opens each file for writing (nothing
+created nor truncated); each must fail with ``EROFS``
+(``store_settings_writes_denied``), or be ``absent`` (not in the store: not a
+failure). It also creates, then removes, a witness in ``conversations/``
+(``store_conversation_write``) and in what agy unpacks,
+``agy_cage.STORE_UNPACKED``: ``bin/`` and ``builtin/``, which agy rewrites
+after its install (``store_unpacked_write``). Each must be ``written``, or
+``absent`` when agy never made the folder; ``EROFS`` there fails the check:
+agy would fail.
 
 The cage shares the container's network (agy needs the internet, BUG-109).
 The report says what it reaches, as information only (``network``): whether
@@ -271,6 +274,15 @@ conversations = os.path.join(store, "conversations")
 out["store_conversation_write"] = (
     write_state(conversations) if os.path.isdir(conversations) else "absent"
 )
+# What agy unpacks (bin/, builtin/): writable, agy rewrites it (review M2).
+out["store_unpacked_write"] = {
+    name: (
+        write_state(os.path.join(store, name))
+        if os.path.isdir(os.path.join(store, name))
+        else "absent"
+    )
+    for name in p["store_unpacked"]
+}
 
 # The network is the container's (BUG-109): does the gateway's port answer
 # from inside the cage? A TCP connection, closed at once, nothing sent.
@@ -539,6 +551,7 @@ def main() -> None:
         "witness": f"{WITNESS}{tag}.",
         "token_name": TOKEN_NAME,
         "store_read_only": list(agy_cage.STORE_READ_ONLY),
+        "store_unpacked": list(agy_cage.STORE_UNPACKED),
         "gateway_port": _gateway_port(),
         "secret_names": list(SECRET_NAMES),
         "secret_prefixes": list(SECRET_PREFIXES),
@@ -686,6 +699,10 @@ def main() -> None:
             "agy cannot write its conversations in the cage "
             f"({seen['store_conversation_write']})"
         )
+    report["store_unpacked_write"] = seen["store_unpacked_write"]
+    for name, state in seen["store_unpacked_write"].items():
+        if state not in ("written", "absent"):
+            failures.append(f"agy cannot write its {name}/ in the cage ({state})")
     # The network (BUG-109): information, not a failure. The cage shares the
     # container's network (agy needs the internet): it reaches the gateway's
     # port and whatever listens on the loopback or in abstract unix sockets.

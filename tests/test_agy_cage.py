@@ -1583,9 +1583,10 @@ async def test_agy_records_its_update_state_in_its_store(
 # The store stays writable (conversations, summaries, caches, logs, the
 # sign-in token agy refreshes), but what agy keeps there and never changes
 # at a call is shown read-only, each entry at its own path when it exists:
-# its settings (``settings.json``: permission rules), its identity
-# (``installation_id``, ``jetski_state.pbtxt``) and the programs and skills
-# it unpacks (``bin/``, ``builtin/``). The gateway creates none of them.
+# its settings (``settings.json``: permission rules) and its identity
+# (``installation_id``, ``jetski_state.pbtxt``). The programs and skills it
+# unpacks (``bin/``, ``builtin/``) stay writable: agy rewrites them after
+# its install (review M2 of 4.14.4). The gateway creates none of them.
 
 _STORE_SETTINGS = {
     "settings.json": "{}\n",
@@ -1611,11 +1612,14 @@ def test_the_read_only_entries_of_the_store_are_named():
         "settings.json",
         "installation_id",
         "jetski_state.pbtxt",
-        "bin",
-        "builtin",
     )
     # The sign-in token stays writable: agy refreshes it.
     assert "antigravity-oauth-token" not in agy_cage.STORE_READ_ONLY
+    # What agy unpacks stays writable: it rewrites it after its install
+    # (bin/ and builtin/ dated after installation_id on a real store), and a
+    # read-only folder would make agy fail (review M2).
+    assert agy_cage.STORE_UNPACKED == ("bin", "builtin")
+    assert not set(agy_cage.STORE_UNPACKED) & set(agy_cage.STORE_READ_ONLY)
 
 
 def test_cage_argv_shows_agy_its_settings_read_only(setup, fake_binary):
@@ -1635,9 +1639,12 @@ def test_cage_argv_shows_agy_its_settings_read_only(setup, fake_binary):
     # Right after the store, in this order, before the root is remounted.
     assert argv[i_first : i_first + len(expected)] == expected
     assert i_first + len(expected) < i_remount
-    # The token is never bound by itself (read-only or otherwise).
+    # The token is never bound by itself (read-only or otherwise), nor
+    # what agy unpacks: both stay writable with the store.
     sep = argv.index("--")
     assert token not in argv[:sep]
+    for name in agy_cage.STORE_UNPACKED:
+        assert paths[name] not in argv[:sep]
 
 
 def test_missing_settings_are_skipped_and_never_created(setup, fake_binary):
@@ -1649,7 +1656,7 @@ def test_missing_settings_are_skipped_and_never_created(setup, fake_binary):
         assert not os.path.lexists(path), "the gateway creates nothing"
 
 
-@pytest.mark.parametrize("name", list(_STORE_SETTINGS) + list(_STORE_FOLDERS))
+@pytest.mark.parametrize("name", list(_STORE_SETTINGS))
 def test_a_setting_behind_a_symbolic_link_is_refused(
     setup, fake_binary, tmp_path, name
 ):
@@ -1673,8 +1680,6 @@ def test_a_setting_behind_a_symbolic_link_is_refused(
     [
         ("settings.json", "is not a regular file"),
         ("installation_id", "is not a regular file"),
-        ("bin", "is not a directory"),
-        ("builtin", "is not a directory"),
     ],
 )
 def test_a_setting_of_the_wrong_type_is_refused(setup, fake_binary, name, expected):
@@ -1713,7 +1718,6 @@ def _settings_probe(store: Path) -> str:
         "append_jetski_state": "echo x >> jetski_state.pbtxt",
         "write_bin": "touch bin/agentapi.new",
         "overwrite_bin": "echo x >> bin/agentapi",
-        "remove_builtin": "rm -rf builtin && test ! -e builtin",
         "write_builtin": "touch builtin/.checksum",
         "write_conversation": (
             "mkdir -p conversations && echo c > conversations/c0ffee.db"
@@ -1764,10 +1768,9 @@ async def test_agy_cannot_change_its_settings_in_the_real_cage(
         "link_settings": "no",
         "append_installation_id": "no",
         "append_jetski_state": "no",
-        "write_bin": "no",
-        "overwrite_bin": "no",
-        "remove_builtin": "no",
-        "write_builtin": "no",
+        "write_bin": "yes",
+        "overwrite_bin": "yes",
+        "write_builtin": "yes",
         "write_conversation": "yes",
         "write_summaries": "yes",
         "write_cache": "yes",
@@ -1781,7 +1784,13 @@ async def test_agy_cannot_change_its_settings_in_the_real_cage(
         )
         for name, path in paths.items()
     }
-    assert after == before
+    unpacked = set(agy_cage.STORE_UNPACKED)
+    assert {k: v for k, v in after.items() if k not in unpacked} == {
+        k: v for k, v in before.items() if k not in unpacked
+    }
+    # What agy unpacks, rewritten in place, as agy does after its install.
+    assert after["bin"] == ["agentapi", "agentapi.new"]
+    assert after["builtin"] == [".checksum", ".manifest"]
     token = setup["store"] / "antigravity-oauth-token"
     assert token.read_text() == "old-token\nrefreshed\n"
     assert not (setup["store"] / "settings.link").exists()

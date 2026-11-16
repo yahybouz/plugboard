@@ -27,8 +27,9 @@ This module builds the gateway's only command line that launches agy
   the new pid namespace (see below) and a minimal ``/dev``.
 - Writable: agy's store (``$HOME/.gemini/antigravity-cli``, where its sign-in
   token is refreshed) and the request's private ``TMPDIR``. Nothing else.
-- Read-only over the store, each when it exists: agy's settings, identity
-  and unpacked programs and skills (:data:`STORE_READ_ONLY`, BUG-108).
+- Read-only over the store, each when it exists: agy's settings and
+  identity (:data:`STORE_READ_ONLY`, BUG-108). What it unpacks (``bin/``,
+  ``builtin/``, :data:`STORE_UNPACKED`) stays writable: agy rewrites it.
 - Read-only, right after the store: agy's own config beside it,
   ``$HOME/.gemini/config`` (its MCP servers' ``mcp_config.json`` included),
   which agy 1.4.4 cannot start without, and gemini's
@@ -101,24 +102,28 @@ _CONFIG_DIR = (".gemini", "config")
 _PROJECTS_FILE = (".gemini", "projects.json")
 
 # What agy keeps in its store and never changes at a call (BUG-108), shown
-# read-only over the writable store, each entry at its own path when it
+# read-only over the writable store, each file at its own path when it
 # exists: its settings (``settings.json``, where permission rules would give
-# every later prompt a tool), its identity (``installation_id``,
+# every later prompt a tool) and its identity (``installation_id``,
 # ``jetski_state.pbtxt``: written at its first run, unchanged since on the
-# UAT and on a host) and what it unpacks from its own binary (``bin/``,
-# programs it runs; ``builtin/``, skills it loads). Writable, because agy
-# writes them at every call: the sign-in token it refreshes
-# (``antigravity-oauth-token``), the conversations and their summaries,
-# ``cache/``, ``log/`` and ``cli.log``, ``implicit/``, ``crashes/``,
-# ``mcp/``, ``updater/``.
+# UAT and on a host). Writable, because agy writes them at every call: the
+# sign-in token it refreshes (``antigravity-oauth-token``), the
+# conversations and their summaries, ``cache/``, ``log/`` and ``cli.log``,
+# ``implicit/``, ``crashes/``, ``mcp/``, ``updater/``.
 STORE_READ_ONLY = (
     "settings.json",
     "installation_id",
     "jetski_state.pbtxt",
-    "bin",
-    "builtin",
 )
-_STORE_FOLDERS = frozenset({"bin", "builtin"})
+
+# What agy unpacks from its own binary, ``bin/`` (programs it runs) and
+# ``builtin/`` (skills it loads, with a ``.checksum``): writable, not
+# settings. agy writes there after its install (on a real store, files dated
+# days after ``installation_id``: at a new version or on demand), and a
+# read-only folder would fail that write with EROFS and agy with it (review
+# M2 of 4.14.4). A call can therefore leave content there that a later call
+# runs or loads: a limit of the cage, documented with BUG-108.
+STORE_UNPACKED = ("bin", "builtin")
 
 
 # System files agy (a dynamic Go binary: glibc, its loader, DNS, TLS) needs,
@@ -290,7 +295,7 @@ def _store_read_only(store: str) -> List[str]:
     bind read-only over it (BUG-108).
 
     Missing: skipped, never created (agy's own files, in its own format).
-    Through a symbolic link (bwrap would follow it), of another type, or a
+    Through a symbolic link (bwrap would follow it), not a regular file, or a
     file with a second name (a hard link in the writable store would change
     it behind its read-only mount): :class:`CageUnavailable`.
     """
@@ -304,10 +309,7 @@ def _store_read_only(store: str) -> List[str]:
                 f"agy's store entry {name} goes through a symbolic link"
             )
         info = os.lstat(path)
-        if name in _STORE_FOLDERS:
-            if not stat.S_ISDIR(info.st_mode):
-                raise CageUnavailable(f"agy's store entry {name} is not a directory")
-        elif not stat.S_ISREG(info.st_mode):
+        if not stat.S_ISREG(info.st_mode):
             raise CageUnavailable(f"agy's store entry {name} is not a regular file")
         elif info.st_nlink != 1:
             raise CageUnavailable(f"agy's store entry {name} has another hard link")
