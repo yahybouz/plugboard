@@ -4196,14 +4196,11 @@ async def check_model_internet_access(
                 "error": reason,
             }
         from plugboard.model_quarantine import (
-            is_account_unsupported_error,
-            is_terminal_model_unavailable_error,
+            is_refused_model_error,
             record_terminal_unavailable,
         )
 
-        refused_model = is_account_unsupported_error(
-            reason
-        ) or is_terminal_model_unavailable_error(reason)
+        refused_model = is_refused_model_error(reason, getattr(exc, "status", None))
         timed_out = (
             isinstance(exc, ProviderTimeoutError)
             or getattr(exc, "timed_out", False)
@@ -4222,20 +4219,7 @@ async def check_model_internet_access(
                 "error": reason,
             }
 
-        is_terminal = (
-            "404" in reason
-            or "not found" in reason.lower()
-            or "model_not_found" in reason
-            or "401" in reason
-            or "403" in reason
-            or "unauthorized" in reason.lower()
-            or "forbidden" in reason.lower()
-            or "key" in reason.lower()
-            or "exited" in reason.lower()
-            or refused_model
-        )
-
-        if is_terminal:
+        if refused_model:
             record_terminal_unavailable(
                 real_model, reason=reason[:200], provider_id=provider["id"]
             )
@@ -4247,7 +4231,17 @@ async def check_model_internet_access(
                 "error": reason,
             }
 
-        error_str = reason
+        # Any other failure (a 401 or 403 of the account, a key error, a CLI
+        # that exited in error, a 5xx) says nothing of the model (BUG-127):
+        # the quarantine stays the router's, which counts the failed call
+        # once in forward(). Nothing was checked, so nothing is persisted.
+        return {
+            "model_id": model_id,
+            "internet_access": False,
+            "internet_access_confidence": "low",
+            "status": "error",
+            "error": reason,
+        }
 
     # 3. Optionally persist the result back into providers.json.
     if persist:

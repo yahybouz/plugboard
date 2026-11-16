@@ -193,6 +193,25 @@ def is_terminal_model_unavailable_error(reason: str) -> bool:
     )
 
 
+# "model "x" not found" (Ollama), "model x not found": the name, then the verdict.
+_MODEL_NOT_FOUND = re.compile(r"\bmodel\b[^\n]{0,80}?\bnot found\b")
+
+
+def is_refused_model_error(reason: str, status: Optional[int] = None) -> bool:
+    """True when ``reason`` says the model is refused or does not exist.
+
+    The router's classification (:func:`is_terminal_model_unavailable_error`,
+    which includes :func:`is_account_unsupported_error`), plus an HTTP 404
+    whose body says the model is not found. Any other 401, 403, 404, key
+    error or CLI exit says nothing of the model (BUG-90, BUG-127).
+    """
+    if is_terminal_model_unavailable_error(reason):
+        return True
+    text = (reason or "").lower()
+    answered_404 = status == 404 or "http 404" in text
+    return answered_404 and _MODEL_NOT_FOUND.search(text) is not None
+
+
 def record_failure(
     suffix: str,
     *,
