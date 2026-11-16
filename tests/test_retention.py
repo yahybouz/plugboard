@@ -369,7 +369,9 @@ def test_audit_line_when_rows_were_deleted(stores):
     entries = audit.get_audit_log(action="retention.run")
     assert len(entries) == 1
     assert entries[0]["actor"] == "system"
-    assert entries[0]["details"] == "usage=0 audit=0 watchdog=1 monitoring=0 sessions=0"
+    assert entries[0]["details"] == (
+        "usage=0 audit=0 watchdog=1 monitoring=0 sessions=0 budget_holds=0"
+    )
 
 
 def test_hour_is_clamped_and_disabled_is_read(stores, monkeypatch):
@@ -699,3 +701,48 @@ async def test_get_admin_retention_shows_the_hold_until_a_pass_runs(
     await job.run_now("manual")  # an admin checked the clock
     body = (await admin_client.get("/admin/retention", headers=ADMIN)).json()
     assert body["held"] is None
+
+
+# --- BUG-84: lapsed budget holds ------------------------------------------
+
+
+def seed_hold(hold_id: str, created: float, cost: float = 0.25) -> None:
+    from plugboard import usage
+
+    hold = {
+        "id": hold_id,
+        "scope": "key:k1",
+        "month": "2026_11",
+        "cost_usd": cost,
+        "created": created,
+        "client_id": "c1",
+        "key_id": "k1",
+        "model": "m1",
+    }
+    _seed(usage._get_conn, "budget_holds", [hold])
+
+
+def test_the_pass_records_lapsed_budget_holds_and_keeps_live_ones(stores):
+    """A hold whose key never calls again used to stay in budget_holds, out
+    of every count (BUG-84): the daily pass records it at its estimate, as
+    the next hold of any key would, and leaves a call in progress alone."""
+    from plugboard import retention, usage
+
+    now = NOW.timestamp()
+    seed_hold("h-lapsed", now - usage.HOLD_TTL_S - 60)
+    seed_hold("h-live", now - 60, cost=0.5)
+
+    report = retention.run_retention(NOW)
+
+    assert column(stores["usage"], "budget_holds", "id") == ["h-live"]
+    assert column(stores["usage"], "usage_entries", "price_source") == [
+        usage.LAPSED_SOURCE
+    ]
+    assert column(stores["usage"], "usage_entries", "cost_usd") == [0.25]
+    assert column(stores["usage"], "usage_entries", "key_id") == ["k1"]
+    assert report["stores"]["budget_holds"] == {"deleted": 1, "compacted": False}
+
+    # Run again: nothing left to record, the live hold is still there.
+    again = retention.run_retention(NOW)
+    assert again["stores"]["budget_holds"]["deleted"] == 0
+    assert column(stores["usage"], "budget_holds", "id") == ["h-live"]

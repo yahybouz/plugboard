@@ -20,7 +20,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from plugboard import billing as _billing
 from plugboard import envcompat
@@ -278,13 +278,13 @@ def get_held_cost(month: str, *, key_id: str = "", client_id: str = "") -> float
 _DROP_HOLD = "DELETE FROM budget_holds WHERE id = ?"
 
 
-def _record_lapsed_holds(conn: sqlite3.Connection, now: float) -> None:
+def _record_lapsed_holds(conn: sqlite3.Connection, now: float) -> int:
     """Turn the holds past HOLD_TTL_S into usage entries at their estimate.
 
     Such a call was served but not recorded (the usage write failed), or
     its process died mid-call: the provider may have billed it, so its
     estimate is counted rather than forgotten. Runs inside the caller's
-    transaction."""
+    transaction. Returns how many holds were recorded."""
     stale = conn.execute(
         "SELECT id, client_id, key_id, model, cost_usd FROM budget_holds "
         "WHERE created < ?",
@@ -313,6 +313,34 @@ def _record_lapsed_holds(conn: sqlite3.Connection, now: float) -> None:
             cost,
             key_id or "-",
         )
+    return len(stale)
+
+
+def record_lapsed_holds(now: Optional[float] = None) -> int:
+    """Record the lapsed holds now, as hold_budget() does on its way.
+
+    hold_budget() only runs for a key with a budget: a hold whose key never
+    calls again, with no other budgeted call after it, stayed in
+    budget_holds, out of every count (BUG-84). The daily retention pass
+    calls this. A hold younger than HOLD_TTL_S (a call in progress) is left
+    alone. A missing store is not created. Returns how many were recorded.
+    """
+    if not _DB_PATH.exists():
+        return 0
+    conn = _get_conn()
+    conn.isolation_level = None  # explicit transaction below
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            count = _record_lapsed_holds(conn, time.time() if now is None else now)
+            conn.execute("COMMIT")
+            return count
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.close()
 
 
 def hold_budget(

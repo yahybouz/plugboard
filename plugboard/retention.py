@@ -9,7 +9,9 @@ stores, which requests write: BUG-76), writes a report to
 - audit (``audit_log``): ``PLUGBOARD_AUDIT_RETENTION_DAYS``;
 - watchdog (``watchdog_events``): ``PLUGBOARD_WATCHDOG_RETENTION_DAYS``;
 - monitoring (``monitoring_snapshots``): ``PLUGBOARD_MONITORING_RETENTION_DAYS``;
-- sessions (``chat_sessions``): the session TTL (``PLUGBOARD_SESSION_TTL_S``).
+- sessions (``chat_sessions``): the session TTL (``PLUGBOARD_SESSION_TTL_S``);
+- budget holds (``budget_holds``): a hold past ``PLUGBOARD_BUDGET_HOLD_TTL_S``
+  is recorded at its estimate as a usage entry, never just deleted (BUG-84).
 
 ``0`` keeps a store's rows for ever, and so does a retention reaching before
 year 1. A value that is not a whole number, or is negative, gives the
@@ -220,6 +222,13 @@ def run_retention(now: Optional[datetime] = None) -> Dict[str, Any]:
             # Written by chat requests too: not compacted, as usage (BUG-76).
             session_store._DB_PATH,
             session_store.purge_expired,
+            compact=False,
+        ),
+        # The usage store again, not compacted: a lapsed hold becomes a usage
+        # entry at its estimate; a call in progress keeps its hold (BUG-84).
+        "budget_holds": _purge_and_compact(
+            usage._DB_PATH,
+            lambda: usage.record_lapsed_holds(now.timestamp()),
             compact=False,
         ),
     }
