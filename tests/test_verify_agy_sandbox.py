@@ -210,6 +210,7 @@ def test_the_cage_passes_every_check(world, real_bwrap):
     assert report["outside_canary"] == "invisible"
     # /proc: a pid namespace of its own, no server secret in any environ.
     assert report["proc"] == "mounted (own pid namespace)"
+    assert report["probe_is_pid1"] is True
     assert report["proc_details"]["pid1_is_gateway"] is False
     assert report["proc_details"]["secret_names_in_proc_environ"] == []
     # Writes: only in the private TMPDIR.
@@ -453,6 +454,46 @@ def test_outside_the_image_bwrap_is_found_on_path(world, real_bwrap, tmp_path):
     assert proc.returncode == 1
 
 
+_NO_PID_NAMESPACE = """real = agy_cage.cage_argv
+
+
+def shared_pids(binary, args, **kw):
+    # The cage without a pid namespace of its own (and so without
+    # --as-pid-1): what the check must catch, with or without /proc.
+    drop = ("--unshare-pid", "--as-pid-1")
+    return [arg for arg in real(binary, args, **kw) if arg not in drop]
+
+
+agy_cage.cage_argv = shared_pids
+"""
+
+_PID1_FAILURE = (
+    "the probe is not pid 1 of the cage: no pid namespace of its own "
+    "(--unshare-pid with --as-pid-1)"
+)
+
+
+@pytest.mark.parametrize("procfs", ["mounted", "forbidden"])
+def test_a_cage_without_its_own_pid_namespace_fails(world, real_bwrap, procfs):
+    """BUG-114: the probe checks that it is pid 1 of the cage (as agy is,
+    ``--as-pid-1``) whether or not the cage has a /proc: where the container
+    forbids a new procfs (UAT, production), a cage without its own pid
+    namespace must fail the check too."""
+    wrap = ()
+    if procfs == "forbidden":
+        reason = _docker_like_unusable_reason()
+        if reason:
+            pytest.skip(f"Docker-like /proc not reproducible: {reason}")
+        wrap = _outer(shutil.which("bwrap"), [])
+    proc = _run(world, patch=_NO_PID_NAMESPACE, wrap=wrap)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    report = _report(proc)
+    assert report["result"] == "fail"
+    assert report["probe_is_pid1"] is False
+    assert _PID1_FAILURE in report["failures"]
+    _no_secret_in(proc)
+
+
 def test_the_check_passes_where_the_container_forbids_a_new_procfs(world):
     """In a Docker-like container (a masked path of /proc), the cage goes
     without /proc: the script says so and every check still passes (no
@@ -465,6 +506,8 @@ def test_the_check_passes_where_the_container_forbids_a_new_procfs(world):
     report = _report(proc)
     assert report["result"] == "pass", report
     assert report["proc"] == "not mounted (the container forbids a new procfs)"
+    # Without /proc too, the probe is pid 1 of the cage's pid namespace.
+    assert report["probe_is_pid1"] is True
     assert report["token"] == "readable, rewritable, unchanged"
     assert report["env"]["secret_names"] == []
     _assert_gemini_config_checked(report, world)

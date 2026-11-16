@@ -28,7 +28,10 @@ the cage's own pid namespace (the probe is its pid 1, as agy is: the gateway's
 ``/proc/<pid>/environ`` is out of sight, and no visible ``/proc/*/environ``
 names a server secret) or, where the container forbids a new procfs (a
 Docker container masks paths of its ``/proc``), not mounted at all (then no
-environ can be read); the report's ``proc`` says which; writing in HOME,
+environ can be read); the report's ``proc`` says which. In both cases the
+probe must be pid 1 of the cage (``probe_is_pid1``, from ``os.getpid()``,
+which needs no ``/proc``): a cage without its own pid namespace fails the
+check even where there is no ``/proc`` (BUG-114); writing in HOME,
 ``~/.gemini``, ``/tmp``, ``/`` and ``/usr/lib`` fails while ``TMPDIR`` is
 writable; its environment holds no server secret and has
 ``AGY_CLI_DISABLE_AUTO_UPDATE=1``; agy's sign-in token is readable and
@@ -479,6 +482,17 @@ def main() -> None:
     if isinstance(local_bin, list) and not set(local_bin) <= allowed:
         failures.append("/usr/local/bin shows more than the interpreter")
     proc = seen["proc"]
+    # BUG-114: the probe runs as agy does (``--as-pid-1``), so it is pid 1 of
+    # the cage's own pid namespace, with or without /proc. Checked from
+    # os.getpid() in the probe, which needs no /proc: where the container
+    # forbids a new procfs (UAT, production), this is the only check of the
+    # pid namespace.
+    report["probe_is_pid1"] = proc["self_pid"] == 1
+    if not report["probe_is_pid1"]:
+        failures.append(
+            "the probe is not pid 1 of the cage: no pid namespace of its own "
+            "(--unshare-pid with --as-pid-1)"
+        )
     # The cage has /proc (its own pid namespace's) or, where the container
     # forbids a new procfs, none at all: never the gateway's.
     expected_proc = "--proc" in argv
@@ -494,8 +508,6 @@ def main() -> None:
         }
         if not expected_proc:
             failures.append("/proc visible in a cage built without it")
-        if report["proc_details"]["pid1_is_gateway"]:
-            failures.append("the probe is not pid 1 of the cage: no pid namespace")
         if proc["secret_names_in_proc_environ"]:
             failures.append("a server secret is named in a visible /proc/*/environ")
     else:
