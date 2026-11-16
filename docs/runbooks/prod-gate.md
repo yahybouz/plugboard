@@ -406,6 +406,17 @@ wait_healthy                              # plugboard:private-full-v<new-version
 health                                    # "version": <new-version>
 gw exec -T gateway sh -c 'tr "\0" " " < /proc/1/cmdline; echo'
 # Expected from 4.14.4: /usr/bin/tini -- python run.py
+# (or, with init: true in the Compose file: /sbin/docker-init -- /usr/bin/tini -- python run.py)
+gw exec -T gateway sh -c 'p1=$(cat /proc/1/comm); echo "PID 1: $p1"
+[ "$p1" = tini ] && exit 0
+[ "$p1" = docker-init ] && for s in /proc/[0-9]*/stat; do
+  read -r pid comm state ppid rest < "$s" || continue
+  [ "$ppid" = 1 ] && [ "$comm" = "(tini)" ] && echo "tini under it: pid $pid" && exit 0
+done
+echo "STOP: neither tini nor docker-init with tini under it"; exit 1'
+# Expected: "PID 1: tini", or "PID 1: docker-init" then "tini under it: pid <n>"; exit 0
+gw exec -T gateway sh -c "grep -s '^State:[[:space:]]*Z' /proc/[0-9]*/status | wc -l"
+# Expected: 0 zombies, in both cases
 gw exec gateway sh -ec 'claude --version; codex --version; gemini --version; gh --version; agy --version'
 gw exec -T gateway python - < deploy/ovh/verify-agy-sandbox.py; echo "exit $?"
 # Expected: one JSON line with "result": "pass", then exit 0
@@ -592,7 +603,7 @@ place. Before step 6 nothing was switched: `git checkout <previous-ref>` and
 | 5 | a CLI version differs or does not start | `git checkout <previous-ref>`, restart the backup timer; the image is not the one the CI checked |
 | 5 | a `bwrap` is on the image's `PATH`, or the gateway's `bwrap` does not start | `git checkout <previous-ref>`, restart the backup timer; [remove the image](#remove-an-image-that-failed-the-gate) and report it (INC-4, BUG-117) |
 | 6 | `STOP`: the tag or the container is not on the image ID checked at step 5 | before `up`: do not switch, get and check the image again (steps 4 and 5); after `up`: go back (block above) |
-| 6, 7 | not `healthy`, PID 1 is not tini, a sandbox check fails, or the smoke fails | go back (block above); keep the outputs |
+| 6, 7 | not `healthy`, the PID 1 check says `STOP` (neither tini nor `docker-init` with tini under it), a zombie, a sandbox check fails, or the smoke fails | go back (block above); keep the outputs |
 | 8 | the previous version fails its smoke, or does not run `<running-image-id>` | go forward again (**Forward**); a real way back would need the restore of rollback-release.md step 5: escalate before relying on it |
 | 9 | 1 % or more `5xx` on the client routes | go back (block above), then investigate with [rollback-release.md](rollback-release.md) |
 | 7, 9 | `mem` at or above the stop threshold, or `oom_kill` above 0 | go back (block above); report the figures |

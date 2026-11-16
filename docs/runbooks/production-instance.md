@@ -233,9 +233,12 @@ provider. What the call does and does not do:
   PATH and that `/usr/libexec/plugboard/bwrap` answers, then that the tag and
   the running container both name that ID (BUG-117).
 - The image starts `tini` as PID 1 (BUG-113, BUG-123). After the switch,
-  check as in [PID 1 of the container](#pid-1-of-the-container-tini):
-  `/proc/1/cmdline` reads `/usr/bin/tini -- python run.py`, and the count of
-  zombies is `0` (read it again after some agy and codex calls).
+  check as in [PID 1 of the container](#pid-1-of-the-container-tini): PID 1
+  is `tini` (`/proc/1/cmdline` reads `/usr/bin/tini -- python run.py`), or
+  `docker-init` with tini as its direct child when the Compose file sets
+  `init: true` (`/sbin/docker-init -- /usr/bin/tini -- python run.py`), and
+  the count of zombies is `0` in both cases (read it again after some agy
+  and codex calls).
 - **A Compose file that sets `entrypoint:` for the gateway replaces tini**:
   the gateway is PID 1 again and keeps every orphan as a zombie. None in the
   repository does; check the production file before the switch
@@ -263,9 +266,13 @@ Compose file: it reaps every orphan (codex's `bwrap`, `git`, a shell left by a
 CLI) and passes `SIGTERM` on to the gateway, which stops its CLIs itself.
 Before, the gateway was PID 1 and kept each orphan as a zombie (68 in one hour
 on the UAT with 4.14.2) until the container could fork no more. A Compose file
-with `init: true` only puts Docker's own init in front of tini: harmless.
-An `--entrypoint` given to `docker run` replaces tini for that one-off
-container only.
+with `init: true` only puts Docker's own init in front of tini: harmless, but
+PID 1 is then `docker-init` (Docker's build of tini, `/sbin/docker-init`) and
+the image's tini its direct child; the orphans go to `docker-init`, which
+reaps them, and tini logs once at start `Tini is not running as PID 1 and
+isn't registered as a child subreaper`: expected in that case. Both are a
+pass; anything else is a go-back. An `--entrypoint` given to `docker run` replaces
+tini for that one-off container only.
 
 Read `/proc` (the slim image may have no `ps`). After each switch:
 
@@ -273,9 +280,23 @@ Read `/proc` (the slim image may have no `ps`). After each switch:
 c="$(docker compose -p plugboard-private -f /etc/plugboard/compose.v<version>.json ps -q gateway)"
 docker exec "$c" sh -c 'tr "\0" " " < /proc/1/cmdline; echo'
 # Expected: /usr/bin/tini -- python run.py
+# (with init: true: /sbin/docker-init -- /usr/bin/tini -- python run.py)
+docker exec "$c" sh -c 'p1=$(cat /proc/1/comm); echo "PID 1: $p1"
+[ "$p1" = tini ] && exit 0
+[ "$p1" = docker-init ] && for s in /proc/[0-9]*/stat; do
+  read -r pid comm state ppid rest < "$s" || continue
+  [ "$ppid" = 1 ] && [ "$comm" = "(tini)" ] && echo "tini under it: pid $pid" && exit 0
+done
+echo "STOP: neither tini nor docker-init with tini under it"; exit 1'
+# Expected: "PID 1: tini", or "PID 1: docker-init" then "tini under it: pid <n>"; exit 0
 docker exec "$c" sh -c "grep -s '^State:[[:space:]]*Z' /proc/[0-9]*/status | wc -l"
-# Expected: 0 zombies (read it again after some agy and codex calls)
+# Expected: 0 zombies in both cases (read it again after some agy and codex calls)
 ```
+
+The check reads each process's parent in `/proc/<pid>/stat` (fourth field),
+which every Linux kernel shows. Where the kernel has `CONFIG_PROC_CHILDREN`
+(the VPS's 6.8 kernel does), `cat /proc/1/task/1/children` lists PID 1's
+children directly; the check does not rely on it.
 
 ## Backup
 

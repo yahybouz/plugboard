@@ -24,6 +24,8 @@ import re
 import shlex
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 TINI = "/usr/bin/tini"
@@ -105,3 +107,75 @@ def test_the_runbooks_say_how_to_see_pid_1_and_the_zombies():
         assert "/usr/bin/tini -- python run.py" in text, doc
         assert "/proc/1/cmdline" in text, doc
         assert "/proc/[0-9]*/status | wc -l" in text, doc
+
+
+# -- The runbooks' PID 1 check accepts docker-init in front of tini ----------
+#
+# Review B3 of 4.14.4: with ``init: true`` in a Compose file, Docker's own
+# init (``/sbin/docker-init``, a tini build: ``tini version 0.19.0`` on the
+# VPS) is PID 1 and the image's tini its direct child. "PID 1 is not tini:
+# go back" would then roll back a sound switch. The check reads ``/proc``
+# only (the slim image may have no ``ps``): PID 1's ``comm`` is ``tini``, or
+# ``docker-init`` with a ``tini`` among its children (``/proc/*/stat``: the
+# fourth field is the parent). Zombies: 0 in both cases (the zombie count is
+# unchanged).
+
+_RUNBOOKS = (
+    "docs/runbooks/prod-gate.md",
+    "docs/runbooks/production-instance.md",
+    "deploy/uat/README.md",
+)
+
+
+def _pid1_script(doc: str) -> str:
+    text = (ROOT / doc).read_text(encoding="utf-8")
+    found = re.findall(r"sh -c '(p1=\$\(cat /proc/1/comm\).*?)'", text, re.S)
+    assert found, f"{doc}: no PID 1 check"
+    assert len(set(found)) == 1, doc
+    return found[0]
+
+
+def test_the_runbooks_share_one_pid_1_check():
+    scripts = {doc: _pid1_script(doc) for doc in _RUNBOOKS}
+    assert len(set(scripts.values())) == 1, scripts
+    for doc in _RUNBOOKS:
+        text = (ROOT / doc).read_text(encoding="utf-8")
+        assert "docker-init" in text, doc
+        assert "/sbin/docker-init -- /usr/bin/tini -- python run.py" in text, doc
+    gate = (ROOT / "docs/runbooks/prod-gate.md").read_text(encoding="utf-8")
+    assert "PID 1 is not tini," not in gate
+
+
+def _fake_proc(root: Path, processes) -> Path:
+    """``processes``: (pid, comm, ppid), as /proc shows them."""
+    proc = root / "proc"
+    for pid, comm, ppid in processes:
+        (proc / str(pid)).mkdir(parents=True)
+        (proc / str(pid) / "comm").write_text(comm + "\n")
+        (proc / str(pid) / "stat").write_text(f"{pid} ({comm}) S {ppid} {pid} 0 0\n")
+    return proc
+
+
+@pytest.mark.parametrize(
+    ("processes", "ok"),
+    [
+        ([(1, "tini", 0), (7, "python", 1)], True),
+        ([(1, "docker-init", 0), (7, "tini", 1), (8, "python", 7)], True),
+        ([(1, "python", 0), (7, "bash", 1)], False),
+        ([(1, "docker-init", 0), (7, "python", 1)], False),
+        # tini deeper than a direct child does not count.
+        ([(1, "docker-init", 0), (7, "sh", 1), (8, "tini", 7)], False),
+    ],
+    ids=["tini", "docker-init+tini", "no-init", "docker-init-alone", "tini-deeper"],
+)
+def test_the_pid_1_check_runs(tmp_path, processes, ok):
+    import subprocess
+
+    proc = _fake_proc(tmp_path, processes)
+    script = _pid1_script("docs/runbooks/prod-gate.md").replace("/proc", str(proc))
+    done = subprocess.run(
+        ["sh", "-c", script], capture_output=True, text=True, timeout=10
+    )
+    assert (done.returncode == 0) is ok, done.stdout + done.stderr
+    if not ok:
+        assert "STOP" in done.stdout
