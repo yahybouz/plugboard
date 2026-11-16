@@ -123,7 +123,8 @@ Layout: `--sidebar-w` (256px, 0 under 768px) offsets the main column.
 Tables on a phone: below 640px every table built by `table()` or `cardTable()` (`static/app.js`,
 `static/portal.js`) shows each row as a card: first cell and status on top, then each cell
 under its column title (`data-label`, `--fs-md`), then the actions as 44px buttons. Ids wrap to
-fill the line instead of breaking at each hyphen. A new table goes through one of these helpers.
+fill the line instead of breaking at each hyphen; the card title wraps between words, never inside
+one. A new table goes through one of these helpers.
 
 ## Radii and motion
 

@@ -68,17 +68,34 @@ def test_ids_and_labels_wrap_without_hyphen_cuts():
     assert "hyphens: none" in td
 
 
-@pytest.mark.parametrize(
-    "selector", [".table-cards td code", ".table-cards td.cell-title strong"]
-)
-def test_ids_and_card_titles_are_not_cut_at_hyphens(selector):
+def test_ids_are_not_cut_at_hyphens():
     """A hyphen is a line-break opportunity: ``overflow-wrap`` alone still
-    wraps ``client-de-demo`` after each hyphen. Ids (``code``) and the card
-    title (the first cell's ``strong``, a client_id or a provider name, review
-    B5) fill the line and break only where it ends."""
-    rule = _rule(_phone_block(), selector)
-    assert "word-break: break-all" in rule, selector
-    assert "hyphens: none" in rule, selector
+    wraps ``client-de-demo`` after each hyphen. Ids (``code``, one token) fill
+    the line and break only where it ends."""
+    rule = _rule(_phone_block(), ".table-cards td code")
+    assert "word-break: break-all" in rule
+    assert "hyphens: none" in rule
+
+
+def test_card_titles_wrap_between_words():
+    """BUG-133: the card title (a client_id, a provider name, a key label) is
+    often several words. ``break-all`` cut it inside a word ("nor|thern");
+    ``overflow-wrap: anywhere`` keeps words whole and still breaks a long
+    unspaced id where the line ends, so nothing runs off the card."""
+    rule = _rule(_phone_block(), ".table-cards td.cell-title strong")
+    assert "break-all" not in rule
+    assert "overflow-wrap: anywhere" in rule
+    assert "hyphens: none" in rule
+
+
+def test_break_all_is_kept_for_ids_only():
+    """No text of several words in a phone card is cut inside a word: the only
+    ``break-all`` of the 640 px block is the one on ids (``code``)."""
+    selectors = set()
+    for sels, body in re.findall(r"([^{}]+)\{([^{}]*)\}", _phone_block()):
+        if "break-all" in body:
+            selectors |= {s.strip() for s in sels.split(",")}
+    assert selectors == {".table-cards td code"}
 
 
 @pytest.mark.parametrize(
@@ -134,9 +151,10 @@ def test_portal_has_its_own_card_helper():
     "page, asset, first_carded_version",
     [
         # 16: card titles not cut at hyphens (review B5).
-        ("index.html", "style.css", 16),
+        # 17: card titles wrap between words, not inside them (BUG-133).
+        ("index.html", "style.css", 17),
         ("index.html", "app.js", 29),
-        ("portal.html", "style.css", 16),
+        ("portal.html", "style.css", 17),
         ("portal.html", "portal.js", 6),
     ],
 )

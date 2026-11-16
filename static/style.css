@@ -562,9 +562,10 @@ textarea:focus-visible, .nav-link:focus-visible, summary:focus-visible {
   .table-cards td.cell-actions { order: 3; padding: var(--space-2) 0 0; }
   /* Ids fill the line rather than breaking at each hyphen. */
   .table-cards td code { font-size: var(--fs-md); word-break: break-all; hyphens: none; }
-  /* The card title (a client_id, a provider name) breaks like the ids: a
-     hyphen is a break opportunity, so overflow-wrap alone cut it there. */
-  .table-cards td.cell-title strong { word-break: break-all; hyphens: none; }
+  /* The card title (a client_id, a provider name, a label) is often several
+     words (BUG-133): it wraps between words and at hyphens, never inside a
+     word; only a word longer than the line is cut, so nothing overflows. */
+  .table-cards td.cell-title strong { word-break: normal; overflow-wrap: anywhere; hyphens: none; }
   .table-cards td .muted, .table-cards td .small { font-size: var(--fs-md); }
   .table-cards .btn-group { gap: var(--space-2); }
   .table-cards .btn { min-height: 44px; font-size: var(--fs-md); padding: var(--pad-control); }
