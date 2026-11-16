@@ -267,6 +267,8 @@ cat VERSION                               # <new-version>
 gw config --quiet
 gw config --images                        # plugboard:private-full-v<new-version>
 gw build gateway
+new_id="$(sudo docker image inspect --format '{{.Id}}' plugboard:private-full-v<new-version>)"
+echo "$new_id"                            # write it down: <new-image-id>
 ```
 
 `config --images` names the image this release's compose file starts by
@@ -275,20 +277,37 @@ plain `up -d` can never start the previous version. The build fails, on
 purpose, when a CLI cannot be installed or does not start (BUG-50): then go
 back to `<previous-ref>` ([if a step fails](#if-a-step-fails)).
 
-### 5. Check the CLI versions of the new image
+`<new-image-id>` (`sha256:...`) is the image this build produced. A tag can
+be moved by another build: the broken first image of 4.14.2 and the corrected
+one carried the same tag (BUG-117). Steps 5 and 6 check and start this ID, not
+the tag. If the shell was closed, set `new_id` again from what you wrote down.
 
-In a throwaway container of the new image, as the user `app`, without
-network, before switching:
+### 5. Check the CLI versions and the bwrap of the new image
+
+In throwaway containers of the new image (by its ID, `<new-image-id>`), as
+the user `app`, without network, before switching:
 
 ```bash
-sudo docker run --rm --network none --entrypoint sh \
-  plugboard:private-full-v<new-version> -ec \
+sudo docker run --rm --network none --entrypoint sh "$new_id" -ec \
   'id -u; gemini --version; claude --version; codex --version; gh --version; agy --version'
+# INC-4, BUG-117: no bwrap on the image's PATH (codex would take it)
+sudo docker run --rm --network none --entrypoint sh "$new_id" -c 'command -v bwrap'; echo "exit $?"
+# The gateway's own bwrap, for agy's cage, at its fixed path off PATH
+sudo docker run --rm --network none --entrypoint /usr/libexec/plugboard/bwrap "$new_id" --version
 ```
 
 Expected: `1000`, then `0.65.0`, `2.1.325 (Claude Code)`, `codex-cli 0.163.0`,
 the `gh version` lines and `1.4.4`: the versions pinned in the `Dockerfile`
 (the Compose file passes none). Another version or an error stops the gate.
+
+The `bwrap` check prints nothing, then `exit 1`: no `bwrap` on the image's
+`PATH`. A path printed (`/usr/bin/bwrap`), or `exit 0`, stops the gate: codex
+would use that `bwrap` instead of its own and every codex call would fail
+(INC-4, the first 4.14.2 image; BUG-117: the gate saw it only after the
+switch). The last command prints `bubblewrap` and its version; an error stops
+the gate too (agy would answer `503`). Remove such an image
+([below](#remove-an-image-that-failed-the-gate)) once you are back on
+`<previous-ref>`.
 
 ### 6. Switch to the new version
 
@@ -309,8 +328,13 @@ net=$(sudo docker network inspect plugboard-private_default \
   --format '{{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}{{end}}' 2>/dev/null || true)
 # A network of an earlier release (another subnet) is removed once
 [ -z "$net" ] || [ "$net" = "172.30.115.0/29 172.30.115.1" ] || gw down   # never -v
+# The tag still names the image checked at step 5 (BUG-117)
+[ "$(sudo docker image inspect --format '{{.Id}}' plugboard:private-full-v<new-version>)" = "$new_id" ] \
+  && echo "tag = checked image" || echo "STOP: the tag names another image"
 gw up -d --no-build gateway
 wait_healthy                              # plugboard:private-full-v<new-version> healthy
+[ "$(sudo docker inspect --format '{{.Image}}' "$(gw ps -q gateway)")" = "$new_id" ] \
+  && echo "running the checked image" || echo "STOP: not the checked image"
 sudo docker network inspect plugboard-private_default \
   --format '{{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}{{end}}'
 # Expected: 172.30.115.0/29 172.30.115.1
@@ -470,10 +494,33 @@ Before step 6 nothing was switched: `git checkout <previous-ref>` and
 | 3 | the backup, its checksum or its decryption fails | stop: no upgrade without a proven backup; restart the backup timer |
 | 4 | `config --images` names another image, or the build fails | `git checkout <previous-ref>`, restart the backup timer; report it |
 | 5 | a CLI version differs or does not start | `git checkout <previous-ref>`, restart the backup timer; the image is not the one the CI checked |
+| 5 | a `bwrap` is on the image's `PATH`, or the gateway's `bwrap` does not start | `git checkout <previous-ref>`, restart the backup timer; [remove the image](#remove-an-image-that-failed-the-gate) and report it (INC-4, BUG-117) |
+| 6 | `STOP`: the tag or the container is not on the image ID checked at step 5 | before `up`: do not switch, build and check again (steps 4 and 5); after `up`: go back (block above) |
 | 6, 7 | not `healthy`, or the smoke fails | go back (block above); keep the outputs |
 | 8 | the previous version fails its smoke | go forward again (**Forward**); a real way back would need the restore of rollback-release.md step 5: escalate before relying on it |
 | 9 | 1 % or more `5xx` on the client routes | go back (block above), then investigate with [rollback-release.md](rollback-release.md) |
 | 7, 9 | `mem` at or above the stop threshold, or `oom_kill` above 0 | go back (block above); report the figures |
+
+## Remove an image that failed the gate
+
+An image that failed step 5 (a `bwrap` on its `PATH`, as the first 4.14.2
+image) must not stay under a tag a later `up -d` could start. Removing it is
+the operator's gesture, by its ID, once the gateway runs another image. List
+the images and find the ones with a `bwrap` on the `PATH`:
+
+```bash
+sudo docker inspect --format '{{.Image}}' "$(gw ps -q gateway)"   # the running image: keep it
+sudo docker image ls --no-trunc plugboard
+for id in $(sudo docker image ls -q --no-trunc plugboard | sort -u); do
+  printf '%s ' "$id"; sudo docker run --rm --network none --entrypoint sh "$id" -c 'command -v bwrap || echo none'
+done
+sudo docker image rm <broken-image-id>
+```
+
+`<broken-image-id>` is an ID the loop prints with a path after it. Never
+remove the running image nor `plugboard:rollback-<running-version>`. When
+`image rm` answers that the image is referenced in several repositories,
+remove each of its tags by name (`sudo docker image rm <tag>`), then the ID.
 
 ## Escalation
 
