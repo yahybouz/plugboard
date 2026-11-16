@@ -392,15 +392,22 @@ def test_gitleaks_missing_fails_unless_skipped(repo, terms, tmp_path):
 # -- repository wiring ------------------------------------------------------
 
 
-def test_private_is_ignored_except_the_example():
+def test_private_is_ignored_except_the_example(tmp_path):
+    # The CI runs on an export of the commit, not a git checkout: the rules
+    # of the repository's .gitignore are checked in a scratch repository.
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text(
+        (ROOT / ".gitignore").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
     def ignored(path):
-        return (
-            subprocess.run(
-                ["git", "-C", str(ROOT), "check-ignore", "-q", "--no-index", path],
-                capture_output=True,
-            ).returncode
-            == 0
+        proc = subprocess.run(
+            ["git", "-C", str(tmp_path), "check-ignore", "-q", "--no-index", path],
+            capture_output=True,
+            text=True,
         )
+        assert proc.returncode in (0, 1), proc.stderr
+        return proc.returncode == 0
 
     assert ignored("private/scan-terms.txt")
     assert ignored("private/publish-identities.txt")
