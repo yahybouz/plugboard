@@ -1,6 +1,7 @@
 """What the operator and integrators read for 4.14.4 (release 4.14.4).
 
-The version is 4.14.4 in ``VERSION`` and ``plugboard.__version__``; the dated
+The version is 4.14.4 or a later release in ``VERSION`` and
+``plugboard.__version__`` (4.14.5 pins its own in its test); the dated
 CHANGELOG entry names every ticket of the release with its commit, says which
 API contract it publishes (3.0.1, a wording change from 3.0.0) and corrects
 the 4.14.2 note on the pid-1 check (BUG-114); the production runbook has a
@@ -62,9 +63,14 @@ def _switching() -> str:
     return _section(text, "Switching to 4.14.4")
 
 
-def test_the_version_is_4_14_4():
-    assert (ROOT / "VERSION").read_text(encoding="utf-8").strip() == "4.14.4"
-    assert plugboard.__version__ == "4.14.4"
+def _release_tuple(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+def test_the_version_is_4_14_4_or_later():
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    assert _release_tuple(version) >= (4, 14, 4)
+    assert plugboard.__version__ == version
 
 
 def test_the_entry_sits_under_unreleased():

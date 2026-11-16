@@ -259,6 +259,44 @@ provider. What the call does and does not do:
 - Not checked by these steps: a first real agy call with its settings
   read-only, to be made on the UAT before production at each agy release.
 
+## Switching to 4.14.5
+
+- Image `plugboard:private-full-v4.14.5`. The CLI versions do not change: the
+  [production gate](prod-gate.md) still expects `0.65.0`,
+  `2.1.325 (Claude Code)`, `codex-cli 0.163.0` and agy `1.4.4`, and still
+  checks the image ID and that no `bwrap` is on the PATH (BUG-117). agy's
+  cage and codex's sandbox do not change: `verify-agy-sandbox.py` and
+  `verify-codex-sandbox.py` must still print `"result": "pass"`.
+- PID 1 is checked by a script from now on (BUG-132): from a checkout of the
+  4.14.5 commit, `docker exec -i "$c" python - < deploy/check-pid1.py`, as in
+  [PID 1 of the container](#pid-1-of-the-container-tini). It reads the
+  binary of PID 1, not its name. Expected: `PID 1: /usr/bin/tini`, or
+  `PID 1: /sbin/docker-init` then `tini under it: pid <n>`, and `exit 0`;
+  the count of zombies stays `0`. A line `STOP: ...` and `exit 1`: go back,
+  except a binary it cannot read (the container's user may not read
+  `/proc/1/exe`): run it again with `docker exec -u 0 -i` before deciding.
+  This is the script's first run in the production container.
+- The shared Claude quota is watched from real calls (PLU-67), without any
+  probe: after the switch, read `GET /admin/claude-quota` once (a fresh TOTP
+  code, as for `/metrics` in step 9 of the [production gate](prod-gate.md)).
+  Before any Claude limit it answers `"last_limit_at": null` and
+  `"providers": {}`; `GET /metrics/prometheus` carries the `# TYPE` lines of
+  `plugboard_claude_limit_total` and
+  `plugboard_claude_limit_last_timestamp_seconds`, with no series yet. The
+  state is written to `data/claude_quota.json` at the first limit, inside
+  the data volume and its backup. The **Monitoring** page shows it under
+  **Claude quota** ([shared Claude quota](../guide/monitoring.md#shared-claude-quota)).
+- The internet check no longer quarantines a model for a `401`, a `403`, a
+  key error or a CLI that exited in error (BUG-127): it answers
+  `"status": "error"` and records nothing. A quarantine recorded before the
+  switch stays in `data/quarantined_models.json` until a successful call or
+  probe on that pair lifts it.
+- The SQLite stores and the audit database need nothing (BUG-128, BUG-131):
+  no migration, the existing files are kept as they are.
+- Not checked by these steps: a real Claude limit met through the gateway
+  (the forms of the message come from the code and its tests), and the
+  **Claude quota** block in a browser.
+
 ## PID 1 of the container: tini
 
 From 4.14.4 the image starts `tini` as PID 1 (BUG-113, BUG-123), whatever the
