@@ -61,6 +61,15 @@ def world(tmp_path):
     store.mkdir(parents=True)
     token = store / "antigravity-oauth-token"
     token.write_text(TOKEN)
+    # agy's settings in its store, as after its first runs (BUG-108), and
+    # its conversations folder.
+    (store / "settings.json").write_text("{}\n")
+    (store / "installation_id").write_text("00000000-test-install\n")
+    (store / "jetski_state.pbtxt").write_text("state: 1\n")
+    for name, inside in (("bin", "agentapi"), ("builtin", ".manifest")):
+        (store / name).mkdir()
+        (store / name / inside).write_text(f"{name}-content\n")
+    (store / "conversations").mkdir()
     # Written by agy at its first run (agy 1.4.4 cannot start without them),
     # a temporary file it left, and gemini's own files next to them.
     gemini = home / ".gemini"
@@ -255,6 +264,23 @@ def _assert_gemini_config_checked(report: dict, world) -> None:
     }
     assert report["mcp_servers"] == 0
     assert not [p for p in world["gemini"].rglob("*") if ".plugboard-verify-" in p.name]
+    _assert_store_settings_checked(report)
+
+
+_STORE_SETTINGS_DENIED = {
+    "settings.json": "EROFS",
+    "installation_id": "EROFS",
+    "jetski_state.pbtxt": "EROFS",
+    "bin": "EROFS",
+    "builtin": "EROFS",
+}
+
+
+def _assert_store_settings_checked(report: dict) -> None:
+    """BUG-108: agy's settings in its store cannot be changed; it can still
+    write its conversations."""
+    assert report["store_settings_writes_denied"] == _STORE_SETTINGS_DENIED
+    assert report["store_conversation_write"] == "written"
 
 
 _LEAKY_CAGE = """real = agy_cage.cage_argv
@@ -265,8 +291,13 @@ def leaky(binary, args, **kw):
     # must catch.
     argv = real(binary, args, **kw)
     gemini = kw["env"]["HOME"] + "/.gemini/"
+    store = gemini + "antigravity-cli/"
     for i, arg in enumerate(argv):
-        if arg == "--ro-bind" and argv[i + 1].startswith(gemini):
+        if (
+            arg == "--ro-bind"
+            and argv[i + 1].startswith(gemini)
+            and not argv[i + 1].startswith(store)
+        ):
             argv[i] = "--bind"
     return argv
 
@@ -295,6 +326,73 @@ def test_a_writable_agy_config_fails_the_check(world, real_bwrap):
     )
     assert _gemini_snapshot(world["gemini"]) == before
     _no_secret_in(proc)
+
+
+_WRITABLE_SETTINGS = """real = agy_cage.cage_argv
+
+
+def leaky(binary, args, **kw):
+    # agy's settings in its store left writable (as before 4.14.4): what
+    # the check must catch.
+    argv = real(binary, args, **kw)
+    store = kw["env"]["HOME"] + "/.gemini/antigravity-cli/"
+    out = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--ro-bind" and argv[i + 1].startswith(store):
+            i += 3
+            continue
+        out.append(argv[i])
+        i += 1
+    return out
+
+
+agy_cage.cage_argv = leaky
+"""
+
+
+def _store_snapshot(store: Path) -> dict:
+    return {
+        p.relative_to(store).as_posix(): None if p.is_dir() else p.read_bytes()
+        for p in sorted(store.rglob("*"))
+    }
+
+
+def test_writable_agy_settings_fail_the_check(world, real_bwrap):
+    """BUG-108, not vacuous: the cage without the read-only settings fails,
+    and the check changes nothing in the store."""
+    before = _store_snapshot(world["store"])
+    proc = _run(world, patch=_WRITABLE_SETTINGS)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    report = _report(proc)
+    assert report["result"] == "fail"
+    assert report["store_settings_writes_denied"] == {
+        "settings.json": "opened",
+        "installation_id": "opened",
+        "jetski_state.pbtxt": "opened",
+        "bin": "written",
+        "builtin": "written",
+    }
+    assert sorted(report["failures"]) == sorted(
+        f"agy's {name} not read-only in the cage ({state})"
+        for name, state in report["store_settings_writes_denied"].items()
+    )
+    assert _store_snapshot(world["store"]) == before
+    _no_secret_in(proc)
+
+
+def test_missing_agy_settings_are_reported_not_failed(world, real_bwrap):
+    """A store where agy never wrote a settings.json (the usual case): the
+    check says so and passes; nothing is created."""
+    (world["store"] / "settings.json").unlink()
+    proc = _run(world)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    report = _report(proc)
+    assert report["store_settings_writes_denied"] == {
+        **_STORE_SETTINGS_DENIED,
+        "settings.json": "absent",
+    }
+    assert not (world["store"] / "settings.json").exists()
 
 
 def test_agy_config_is_left_as_it_was(world, real_bwrap):
@@ -512,3 +610,12 @@ def test_the_check_passes_where_the_container_forbids_a_new_procfs(world):
     assert report["env"]["secret_names"] == []
     _assert_gemini_config_checked(report, world)
     _no_secret_in(proc)
+
+
+def test_the_store_is_left_as_it_was(world, real_bwrap):
+    """The check writes in agy's conversations folder and its store only
+    witnesses it removes."""
+    before = _store_snapshot(world["store"])
+    proc = _run(world)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert _store_snapshot(world["store"]) == before

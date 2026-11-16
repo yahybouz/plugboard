@@ -55,6 +55,15 @@ When ``config/`` or ``projects.json`` is missing (agy never run on this
 account), no cage is built and the check fails (exit 1, ``agy_setup``:
 ``missing``), saying to run agy once.
 
+agy's settings in its store (``agy_cage.STORE_READ_ONLY``: ``settings.json``,
+``installation_id``, ``jetski_state.pbtxt``, ``bin/``, ``builtin/``) are bound
+read-only over the writable store (BUG-108): the probe opens each file for
+writing (nothing created nor truncated) and creates a witness in each folder;
+each must fail with ``EROFS`` (``store_settings_writes_denied``), or be
+``absent`` (not in the store: not a failure). It also creates, then removes,
+a witness in ``conversations/`` (``store_conversation_write``: ``written``, or
+``absent`` when agy never made the folder).
+
 ``--app-root`` changes where the application's folders are looked for
 (default ``/app``); it exists for the test suite, which runs on a host
 without ``/app``.
@@ -234,6 +243,23 @@ out["gemini_config_writes"] = {
     "~/.gemini/projects.json": open_for_writing(projects),
     "~/.gemini/config/projects/": mkdir_state(os.path.join(config, "projects")),
 }
+# agy's settings in its store (BUG-108): read-only over the writable store,
+# each when it exists; its conversations folder stays writable.
+store_settings = {}
+for name in p["store_read_only"]:
+    path = os.path.join(store, name)
+    if not os.path.lexists(path):
+        store_settings[name] = "absent"
+    elif os.path.isdir(path):
+        store_settings[name] = write_state(path)
+    else:
+        store_settings[name] = open_for_writing(path)
+out["store_settings_writes"] = store_settings
+conversations = os.path.join(store, "conversations")
+out["store_conversation_write"] = (
+    write_state(conversations) if os.path.isdir(conversations) else "absent"
+)
+
 # How many MCP servers agy would use, never which: 0 when empty or not JSON.
 servers = 0
 try:
@@ -400,6 +426,7 @@ def main() -> None:
         "reads": reads + [canary],
         "witness": f"{WITNESS}{tag}.",
         "token_name": TOKEN_NAME,
+        "store_read_only": list(agy_cage.STORE_READ_ONLY),
         "secret_names": list(SECRET_NAMES),
         "secret_prefixes": list(SECRET_PREFIXES),
     }
@@ -538,6 +565,18 @@ def main() -> None:
             where.endswith("mcp_config.json") and state == "absent"
         ):
             failures.append(f"{where} not read-only in the cage ({state})")
+    # agy's settings in its store: never writable (absent: nothing to show);
+    # its conversations folder: writable (BUG-108).
+    report["store_settings_writes_denied"] = seen["store_settings_writes"]
+    for name, state in seen["store_settings_writes"].items():
+        if state not in ("EROFS", "absent"):
+            failures.append(f"agy's {name} not read-only in the cage ({state})")
+    report["store_conversation_write"] = seen["store_conversation_write"]
+    if seen["store_conversation_write"] not in ("written", "absent"):
+        failures.append(
+            "agy cannot write its conversations in the cage "
+            f"({seen['store_conversation_write']})"
+        )
     report["mcp_servers"] = seen["mcp_servers"]
     report["tmpdir_write"] = seen["tmpdir_write"]
     if seen["tmpdir_write"] != "pass":

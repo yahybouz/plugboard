@@ -1570,3 +1570,212 @@ async def test_agy_records_its_update_state_in_its_store(
     updater = setup["store"] / "updater"
     assert (updater / "update_status.json").read_text() == state
     assert (updater / "last_check.timestamp").exists()
+
+
+# ── agy's settings in its store are read-only (BUG-108) ─────────────────────
+#
+# The store stays writable (conversations, summaries, caches, logs, the
+# sign-in token agy refreshes), but what agy keeps there and never changes
+# at a call is shown read-only, each entry at its own path when it exists:
+# its settings (``settings.json``: permission rules), its identity
+# (``installation_id``, ``jetski_state.pbtxt``) and the programs and skills
+# it unpacks (``bin/``, ``builtin/``). The gateway creates none of them.
+
+_STORE_SETTINGS = {
+    "settings.json": "{}\n",
+    "installation_id": "00000000-test-install\n",
+    "jetski_state.pbtxt": "state: 1\n",
+}
+_STORE_FOLDERS = {"bin": "agentapi", "builtin": ".manifest"}
+
+
+def _store_settings(setup) -> dict:
+    """agy's settings in the test store, as after its first runs."""
+    store = setup["store"]
+    for name, content in _STORE_SETTINGS.items():
+        (store / name).write_text(content)
+    for name, inside in _STORE_FOLDERS.items():
+        (store / name).mkdir()
+        (store / name / inside).write_text(f"{name}-content\n")
+    return {name: str(store / name) for name in (*_STORE_SETTINGS, *_STORE_FOLDERS)}
+
+
+def test_the_read_only_entries_of_the_store_are_named():
+    assert agy_cage.STORE_READ_ONLY == (
+        "settings.json",
+        "installation_id",
+        "jetski_state.pbtxt",
+        "bin",
+        "builtin",
+    )
+    # The sign-in token stays writable: agy refreshes it.
+    assert "antigravity-oauth-token" not in agy_cage.STORE_READ_ONLY
+
+
+def test_cage_argv_shows_agy_its_settings_read_only(setup, fake_binary):
+    paths = _store_settings(setup)
+    argv, tmpdir = _argv(setup, str(fake_binary))
+    store = str(setup["store"])
+    token = os.path.join(store, "antigravity-oauth-token")
+
+    # Still writable: the store and the private TMPDIR only.
+    assert _pairs(argv, "--bind") == [(store, store), (tmpdir, tmpdir)]
+    i_store = argv.index("--bind")
+    i_remount = argv.index("--remount-ro")
+    expected = []
+    for name in agy_cage.STORE_READ_ONLY:
+        expected += ["--ro-bind", paths[name], paths[name]]
+    i_first = i_store + 3
+    # Right after the store, in this order, before the root is remounted.
+    assert argv[i_first : i_first + len(expected)] == expected
+    assert i_first + len(expected) < i_remount
+    # The token is never bound by itself (read-only or otherwise).
+    sep = argv.index("--")
+    assert token not in argv[:sep]
+
+
+def test_missing_settings_are_skipped_and_never_created(setup, fake_binary):
+    argv, _ = _argv(setup, str(fake_binary))
+    sep = argv.index("--")
+    for name in agy_cage.STORE_READ_ONLY:
+        path = str(setup["store"] / name)
+        assert path not in argv[:sep]
+        assert not os.path.lexists(path), "the gateway creates nothing"
+
+
+@pytest.mark.parametrize("name", list(_STORE_SETTINGS) + list(_STORE_FOLDERS))
+def test_a_setting_behind_a_symbolic_link_is_refused(
+    setup, fake_binary, tmp_path, name
+):
+    """bwrap would follow the link: whatever it names would be shown."""
+    _store_settings(setup)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    path = setup["store"] / name
+    shutil.move(str(path), str(elsewhere / name))
+    path.symlink_to(elsewhere / name)
+
+    with pytest.raises(agy_cage.CageUnavailable) as info:
+        _argv(setup, str(fake_binary))
+
+    assert str(info.value) == f"agy's store entry {name} goes through a symbolic link"
+    assert str(setup["home"]) not in str(info.value)
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("settings.json", "is not a regular file"),
+        ("installation_id", "is not a regular file"),
+        ("bin", "is not a directory"),
+        ("builtin", "is not a directory"),
+    ],
+)
+def test_a_setting_of_the_wrong_type_is_refused(setup, fake_binary, name, expected):
+    _store_settings(setup)
+    path = setup["store"] / name
+    if path.is_dir():
+        shutil.rmtree(path)
+        path.write_text("not a folder")
+    else:
+        path.unlink()
+        path.mkdir()
+    with pytest.raises(agy_cage.CageUnavailable) as info:
+        _argv(setup, str(fake_binary))
+    assert str(info.value) == f"agy's store entry {name} {expected}"
+
+
+def test_a_setting_with_another_hard_link_is_refused(setup, fake_binary):
+    """A second name of the same file, in the writable store, would change
+    it behind its read-only mount."""
+    _store_settings(setup)
+    os.link(setup["store"] / "settings.json", setup["store"] / "elsewhere.json")
+    with pytest.raises(agy_cage.CageUnavailable) as info:
+        _argv(setup, str(fake_binary))
+    assert str(info.value) == "agy's store entry settings.json has another hard link"
+
+
+def _settings_probe(store: Path) -> str:
+    """Shell run as agy: tries to change each setting in every way, and to
+    do what agy does at each call (conversation, token refresh)."""
+    checks = {
+        "append_settings": "echo x >> settings.json",
+        "replace_settings": "echo '{}' > new.json && mv -f new.json settings.json",
+        "remove_settings": "rm -f settings.json && test ! -e settings.json",
+        "link_settings": "ln settings.json settings.link",
+        "append_installation_id": "echo x >> installation_id",
+        "append_jetski_state": "echo x >> jetski_state.pbtxt",
+        "write_bin": "touch bin/agentapi.new",
+        "overwrite_bin": "echo x >> bin/agentapi",
+        "remove_builtin": "rm -rf builtin && test ! -e builtin",
+        "write_builtin": "touch builtin/.checksum",
+        "write_conversation": (
+            "mkdir -p conversations && echo c > conversations/c0ffee.db"
+            " && rm conversations/c0ffee.db"
+        ),
+        "write_summaries": "echo s > conversation_summaries.db",
+        "write_cache": "mkdir -p cache && echo l > cache/last_conversations.json",
+        "token_rewrite": (
+            "cp antigravity-oauth-token token.tmp && echo refreshed >> token.tmp"
+            " && mv token.tmp antigravity-oauth-token"
+        ),
+    }
+    lines = [f'cd "{store}"', "cat >/dev/null", "{"]
+    for name, cmd in checks.items():
+        lines.append(
+            f"if ( {cmd} ) >/dev/null 2>&1; then echo {name}=yes; else echo {name}=no; fi"
+        )
+    lines.append("} > report.part")
+    lines.append("mv report.part report.txt")
+    return "\n".join(lines) + "\n" + _answer("OK")
+
+
+async def test_agy_cannot_change_its_settings_in_the_real_cage(
+    setup, real_bwrap, shell_in_cage
+):
+    paths = _store_settings(setup)
+    before = {
+        name: (
+            Path(path).read_text()
+            if Path(path).is_file()
+            else sorted(p.name for p in Path(path).iterdir())
+        )
+        for name, path in paths.items()
+    }
+    _install(setup["bin"], "agy", _settings_probe(setup["store"]))
+
+    result = await cs.complete("agy", dict(_BODY))
+
+    assert _content(result) == "OK"
+    report = dict(
+        line.split("=", 1)
+        for line in (setup["store"] / "report.txt").read_text().splitlines()
+    )
+    assert report == {
+        "append_settings": "no",
+        "replace_settings": "no",
+        "remove_settings": "no",
+        "link_settings": "no",
+        "append_installation_id": "no",
+        "append_jetski_state": "no",
+        "write_bin": "no",
+        "overwrite_bin": "no",
+        "remove_builtin": "no",
+        "write_builtin": "no",
+        "write_conversation": "yes",
+        "write_summaries": "yes",
+        "write_cache": "yes",
+        "token_rewrite": "yes",
+    }
+    after = {
+        name: (
+            Path(path).read_text()
+            if Path(path).is_file()
+            else sorted(p.name for p in Path(path).iterdir())
+        )
+        for name, path in paths.items()
+    }
+    assert after == before
+    token = setup["store"] / "antigravity-oauth-token"
+    assert token.read_text() == "old-token\nrefreshed\n"
+    assert not (setup["store"] / "settings.link").exists()
