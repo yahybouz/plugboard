@@ -570,7 +570,9 @@ textarea:focus-visible, .nav-link:focus-visible, summary:focus-visible {
   .table-cards .btn-group { gap: var(--space-2); }
   .table-cards .btn { min-height: 44px; font-size: var(--fs-md); padding: var(--pad-control); }
   .table-cards input, .table-cards select { min-height: 44px; }
-  .topbar { flex-wrap: wrap; gap: var(--space-2) var(--space-3); }
+  /* The page bar wraps to two or three lines (Providers: 155 px, BUG-126):
+     it scrolls with the page; the phone bar above stays. */
+  .topbar { position: static; flex-wrap: wrap; gap: var(--space-2) var(--space-3); }
   .topbar-actions { flex-wrap: wrap; }
   .topbar-actions .btn { min-height: 44px; font-size: var(--fs-md); padding: var(--pad-control); }
 }
@@ -829,6 +831,13 @@ textarea.pg-input {
   background: var(--bg-secondary); color: var(--text); border: 1px solid var(--border-strong);
 }
 #live-panel[hidden] { display: none; }
+/* Phones (BUG-126): the corner pill sat over the cards. It moves into the
+   sticky phone bar (empty on the right, menu button on the left), as a 44 px
+   target, under the open menu, toasts and dialogs; its list opens below it. */
+@media (max-width: 640px) {
+  #live-pill { top: var(--space-2); bottom: auto; right: var(--space-4); min-height: 44px; z-index: 45; }
+  #live-panel { top: calc(44px + var(--space-2) * 3); bottom: auto; right: var(--space-4); z-index: 45; }
+}
 .live-title { font-weight: var(--fw-semibold); margin: var(--space-2) 0 var(--space-1); }
 .live-empty { opacity: 0.7; }
 .live-row { display: flex; gap: var(--space-2); flex-wrap: wrap; padding: var(--space-1) 0; }

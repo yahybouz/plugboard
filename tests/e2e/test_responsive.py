@@ -81,3 +81,46 @@ async def test_tables_read_as_cards_at_mobile_width(browser, e2e_server):
         assert box and box["height"] >= 44, box
     finally:
         await context.close()
+
+
+async def test_pill_and_page_bar_leave_the_cards_alone(browser, e2e_server):
+    """BUG-126: at 390 px the in-flight pill sits in the phone bar, a 44 px
+    target over nothing but the bar, and the Providers bar scrolls away."""
+    context = await browser.new_context(viewport=_MOBILE)
+    page = await context.new_page()
+    try:
+        await page.goto(
+            login_url(e2e_server), wait_until="domcontentloaded", timeout=20_000
+        )
+        await page.wait_for_selector("#app:not(.hidden)", timeout=15_000)
+        await page.evaluate("location.hash = 'providers'")
+        await page.wait_for_selector("#page-providers.active", timeout=10_000)
+        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+        report = await page.evaluate(
+            """() => {
+              const pill = document.getElementById('live-pill');
+              const p = pill.getBoundingClientRect();
+              const bar = document.querySelector('.mobile-bar').getBoundingClientRect();
+              pill.style.visibility = 'hidden';
+              const under = new Set();
+              for (let x = p.left + 1; x < p.right; x += 7)
+                for (let y = p.top + 1; y < p.bottom; y += 5) {
+                  const e = document.elementFromPoint(x, y);
+                  under.add(e && e.closest('.mobile-bar') ? 'bar' : (e ? e.tagName : ''));
+                }
+              pill.style.visibility = '';
+              const tb = document.querySelector('#page-providers .topbar');
+              return {
+                under: Array.from(under),
+                inBar: p.top >= bar.top && p.bottom <= bar.bottom,
+                height: p.height,
+                topbar: getComputedStyle(tb).position,
+              };
+            }"""
+        )
+        assert report["under"] == ["bar"], report
+        assert report["inBar"], report
+        assert report["height"] >= 44, report
+        assert report["topbar"] == "static", report
+    finally:
+        await context.close()

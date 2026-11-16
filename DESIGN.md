@@ -126,6 +126,10 @@ under its column title (`data-label`, `--fs-md`), then the actions as 44px butto
 fill the line instead of breaking at each hyphen; the card title wraps between words, never inside
 one. A new table goes through one of these helpers.
 
+Bars on a phone: below 640px the page bar (title and actions) scrolls with the page, and only the
+phone bar (menu button) stays on top. The in-flight pill sits on the right of the phone bar, a
+44px target, never over the content; above 640px it keeps its bottom-right corner.
+
 ## Radii and motion
 
 | Token | Value | Use |
