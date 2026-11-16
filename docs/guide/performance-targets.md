@@ -34,6 +34,15 @@ On a one-word answer the first word comes a few tenths of a second before the en
 live stream is the length of the answer, which grows with it. The CLI's start (3.2 to 3.8 s
 before its first event) is a fixed cost that no stream removes.
 
+What the gateway itself adds to agy's first word is measured without inference by
+[`scripts/bench_agy_first_token.py`](../../scripts/bench_agy_first_token.py) (BUG-106): the chat
+route in process around a fake agy, split into the time before agy is spawned, agy's own time to
+its first word and the relay to the client, with the store purge and the cage on or off. With the
+fake agy (16 November) the gateway adds 7 to 19 ms before the spawn and 2 to 5 ms of relay, with or
+without the purge, in 4.14.0, 4.14.1 and 4.14.4 alike; the cage adds 35 to 55 ms. Whether agy
+starts slower once the purge has removed its shared summaries is measured only with the real agy
+(`--real-agy`, run by the operator).
+
 ## Calls at the same time
 
 By design (the deployment compose files, D-43; not measured yet): a CLI provider runs one chat at a
