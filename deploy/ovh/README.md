@@ -149,4 +149,4 @@ The gateway's own network, `plugboard-private_default`, has a fixed subnet, `172
 
 ## Upgrades
 
-Move this host to a new release with the ordered commands of [the production gate](../../docs/runbooks/prod-gate.md): data check, backup and its check, build, CLI versions, smoke, rehearsed rollback, then 24 hours of observation. Going back is described in [the rollback runbook](../../docs/runbooks/rollback-release.md#4b-private-host-deployovh).
+The [production gate](../../docs/runbooks/prod-gate.md) now gives the commands of the production instance; this host's former commands are in the history of that file (see its section [former private host](../../docs/runbooks/prod-gate.md#former-private-host-deployovh)): data check, backup and its check, build, CLI versions, smoke, rehearsed rollback, then 24 hours of observation. Going back is described in [the rollback runbook](../../docs/runbooks/rollback-release.md#former-private-host-deployovh).

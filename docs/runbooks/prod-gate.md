@@ -1,9 +1,19 @@
-# Runbook: production gate (private host upgrade)
+# Runbook: production gate
 
-The ordered commands that move the private host (`deploy/ovh/`) to a new
-release, with a way back at every step: data check, backup and its check,
-build, CLI versions, smoke, a rehearsed rollback, then 24 hours of
+The ordered commands that move the production instance to a new release,
+with a way back at every step: data check, backup and its check, image
+checks, CLI versions, smoke, a rehearsed rollback, then 24 hours of
 observation. The operator runs every command; nothing here is automated.
+
+The instance in service is described in
+[production-instance.md](production-instance.md): Compose project
+`plugboard-private`, one Compose file per version under `/etc/plugboard`
+(`compose.v<version>.json`), image `plugboard:private-full-v<version>`, no
+published port, an existing Docker network. Its deployment files are not in
+the repository. Where a command or a fact could not be checked against the
+host, this runbook says so: **to be confirmed by the operator**. The former
+private host (`deploy/ovh/`) has its own section at the end:
+[former private host](#former-private-host-deployovh).
 
 The gate passes when the new version serves for 24 hours with **less than
 1 % of `5xx` answers** on the client routes, over at least 100 client
@@ -13,89 +23,113 @@ green smoke and a rollback rehearsed both ways.
 This is a planned procedure, not an incident runbook: its sections are the
 steps of the gate.
 
-The commands below are written for the former private host `deploy/ovh/`,
-which is end of life (see [deploy/ovh/README.md](../../deploy/ovh/README.md)).
-The production instance now runs on another private host whose deployment
-files are not in `deploy/`: keep the order and the criteria of the gate (data
-check, proven backup, CLI versions, smoke, rehearsed rollback, 24 hours of
-observation), not these paths and names.
-
 `ci` is the local CI tool of the UAT host (`python3 /srv/dev/.ci/outils/ci.py`,
 subcommands `etat`, `lancer`, `deployer`); `ci deployer` refuses a commit
 without a green local CI run. There is no remote CI pipeline.
 
 ## When to use
 
-Before every production upgrade of the private host. The UAT host must
-already run the same commit (`ci deployer`), with a green smoke and a
-rehearsed rollback ([rollback-release.md](rollback-release.md#rehearse-the-rollback)).
-Write down that commit: `ci deployer plugboard <sha> --etat` prints it as
+Before every production upgrade. The UAT host must already run the same
+commit (`ci deployer`), with a green smoke and a rehearsed rollback
+([rollback-release.md](rollback-release.md#rehearse-the-rollback)). Write
+down that commit: `ci deployer plugboard <sha> --etat` prints it as
 `sha_en_service`.
 
-Avoid 03:30 to 03:40 UTC: the daily backup timer (03:30 UTC plus up to 10
-minutes of random delay) stops and restarts the gateway then.
+Avoid 03:30 to 03:40 UTC: the nightly backup timer
+(`plugboard-backup.timer`, 03:30 UTC plus up to 10 minutes) stops the
+gateway for about two minutes then.
 
 ## Before you start
 
-- A shell on the host as the administrator account, with `sudo`, in
-  `/opt/plugboard`, kept open for the whole gate (the steps share shell
-  functions and variables). `git -C /opt/plugboard status` must work without
-  `sudo`; if the checkout belongs to root, prefix every `git` command with
-  `sudo`.
-- `/etc/plugboard/runtime.env` is readable by root only: every
-  `docker compose` command runs with `sudo`, and an image is passed with
-  `sudo env PLUGBOARD_IMAGE=...` (an `export` does not cross `sudo`).
+- A shell on the production host, kept open for the whole gate (the steps
+  share shell functions and variables). The commands below run Docker with
+  `sudo`; [production-instance.md](production-instance.md) writes them
+  without it. Which account runs Docker there, and whether `/etc/plugboard`
+  is readable by root only, is to be confirmed by the operator: drop `sudo`
+  where it is not needed.
+- `<checkout>`: a git checkout of the repository on the host, for the
+  scripts the gate runs (data check, smoke, sandbox checks, backup). It does
+  not drive the gateway: the Compose files are under `/etc/plugboard`. The
+  nightly backup runs `deploy/ovh/backup.sh`, which works from
+  `/opt/plugboard` (the script changes to that directory itself): which
+  checkout to use is to be confirmed by the operator.
 - The admin key and a fresh TOTP code for each admin call (admin MFA is
   enforced; a code is accepted once).
 - A **smoke key**: a client key created in the dashboard for the gate only,
   with a small monthly limit, whose `allowed_models` holds one chat model
   of a CLI subscription provider (`claude-code:`, `Codex:`,
-  `antigravity-via-agy-cli:`)
-  that `GET /v1/models` lists for it. Ollama is off in
-  `deploy/ovh/compose.yml` (`OLLAMA_ENABLED=false`, no embedding identity):
-  the key holds no `ollama:*` model, and the smoke's embeddings step is a
-  `SKIP`. Each smoke run sends two short chat calls on the subscription's
-  allowance (the structured one is refused before any call); the gate runs
-  three smokes.
-- The `age` identity of the backups, on the machine that keeps it.
+  `antigravity-via-agy-cli:`) that `GET /v1/models` lists for it. Ollama is
+  off in production (`OLLAMA_ENABLED=false`): the key holds no `ollama:*`
+  model, and the smoke's embeddings step is a `SKIP`. Each smoke run sends
+  two short chat calls on the subscription's allowance (the structured one
+  is refused before any call); the gate runs three smokes.
+- The `age` identity of the encrypted backups, on the machine that keeps
+  it (step 3).
 
-Placeholders: `<running-version>` is the version in service before the gate
-and `<running-image-name>` the name of its image (step 1), `<previous-ref>`
-the checkout before the gate (step 1), `<new-version>` the release being
-deployed (its `VERSION` file), `<model>` the chat model of the smoke key,
-`<uat-sha>` the commit in service on the UAT host.
+Placeholders: `<running-version>` is the version in service before the gate,
+`<running-image-name>` and `<running-image-id>` the name and the ID of its
+image (step 1), `<previous-ref>` the checkout before the gate (step 1),
+`<new-version>` the release being deployed (its `VERSION` file), `<model>`
+the chat model of the smoke key, `<uat-sha>` the commit in service on the UAT
+host and `<uat-image-id>` the ID of its image (step 0), `<gateway-url>` the
+address used for admin calls (see
+[production-instance.md](production-instance.md#add-claude-fable-52-to-the-claude-provider)).
+
+**No port is published**: the gateway is reached through the Docker
+network, not on the host's loopback. The gate's health checks and smokes
+therefore run inside the gateway container (`docker exec`), against its own
+port; the smoke key goes through standard input, never on a command line.
+Running the smoke from a throwaway container on the instance's Docker
+network also works; that network's name is to be confirmed by the operator.
 
 Define the shell helpers once:
 
 ```bash
-cd /opt/plugboard
-gw() { sudo docker compose -f deploy/ovh/compose.yml "$@"; }
+cd <checkout>
+# The Compose file of the version in service, and the one of the release
+gw_prev() { sudo docker compose -p plugboard-private -f /etc/plugboard/compose.v<running-version>.json "$@"; }
+gw() { sudo docker compose -p plugboard-private -f /etc/plugboard/compose.v<new-version>.json "$@"; }
+# Both name the same project: `ps`, `exec` and `logs` find the gateway in service.
 wait_healthy() {
   for _ in $(seq 60); do
-    state="$(sudo docker inspect --format '{{.Config.Image}} {{.State.Health.Status}}' "$(gw ps -q gateway)")"
+    state="$(sudo docker inspect --format '{{.Config.Image}} {{.State.Health.Status}}' "$(gw_prev ps -q gateway)")"
     case "$state" in *" healthy") echo "$state"; return 0 ;; esac
     sleep 5
   done
   echo "not healthy after 5 minutes: $state"; return 1
 }
-# Embeddings are skipped: no embedding model is declared while Ollama is off.
+# /health, from inside the gateway container
+health() {
+  sudo docker exec "$(gw_prev ps -q gateway)" python -c \
+    "import os, urllib.request; print(urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ.get('PORT', '8765'), timeout=5).read().decode())"
+}
+# The smoke of the release, run by the container's Python: the key on the
+# first line of standard input, the script after it. Embeddings are skipped:
+# no embedding model is declared while Ollama is off.
 smoke() {
-  python3 ~/plugboard-tools/smoke_consumers.py --url http://127.0.0.1:8765 \
-    --model <model> --expect-version "$1"
+  { printf '%s\n' "$PLUGBOARD_SMOKE_KEY"; cat ~/plugboard-tools/smoke_consumers.py; } \
+    | sudo docker exec -i "$(gw_prev ps -q gateway)" sh -c \
+      'IFS= read -r PLUGBOARD_SMOKE_KEY; export PLUGBOARD_SMOKE_KEY
+       exec python - --url "http://127.0.0.1:${PORT:-8765}" "$@"' smoke \
+      --model <model> --expect-version "$1"
 }
 # Memory of the gateway container (gateway and CLI processes), from its cgroup
 mem() {
-  gw exec -T gateway sh -c 'echo "peak $(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB, \
+  gw_prev exec -T gateway sh -c 'echo "peak $(( $(cat /sys/fs/cgroup/memory.peak) / 1048576 )) MiB, \
 now $(( $(cat /sys/fs/cgroup/memory.current) / 1048576 )) MiB, \
 $(grep oom_kill /sys/fs/cgroup/memory.events)"'
 }
 ```
 
+The smoke's own Python runs in the gateway container and counts in its
+memory while it runs.
+
 ## Memory stop threshold (D-43)
 
-`deploy/ovh/compose.yml` limits the gateway container to `mem_limit: 3g`
-(3072 MiB), CLI processes included. The gate **stops** when the memory peak
-of the container reaches **2457 MiB (80 % of the limit)**, when
+The production container is limited to 3 GiB (`3221225472` bytes, read at
+the switch to 4.14.0; step 1 reads it again), CLI processes included, as
+`mem_limit: 3g` in the repository's model. The gate **stops** when the
+memory peak of the container reaches **2457 MiB (80 % of the limit)**, when
 `oom_kill` is above 0, or when the container restarts during a measure: the
 remaining 20 % absorb the background jobs (prices, model lists) and a spike
 the bench did not produce. From 2150 MiB (70 %) up, go on but report the
@@ -124,6 +158,7 @@ container of that image, so its own memory is not counted.
 ```bash
 c=uat-plugboard-gateway-1
 img="$(docker inspect --format '{{.Config.Image}}' "$c")"
+docker inspect --format '{{.Image}}' "$c"   # write it down: <uat-image-id>
 docker inspect --format '{{.RestartCount}} {{.State.StartedAt}}' "$c"   # write both down
 # The release's CLI limit (1) applies, and the bench ships in the image
 docker exec "$c" sh -c 'echo "CLI limit: ${PLUGBOARD_CLI_PROVIDER_MAX_INFLIGHT:-1 (default)}"'
@@ -153,25 +188,31 @@ snapshot. A UAT gateway without a memory limit still gives the peak in MiB:
 the threshold is the same.
 
 
-### 1. Record what runs now and pause the daily backup
+### 1. Record what runs now and pause the nightly backup
 
 ```bash
-cd /opt/plugboard
-curl -s http://127.0.0.1:8765/health      # "version": <running-version>
-sudo docker inspect --format '{{.Config.Image}} {{.Image}} {{.State.Health.Status}}' "$(gw ps -q gateway)"
-# write down the first word: <running-image-name>
+cd <checkout>
+health                                    # "version": <running-version>
+sudo docker inspect --format '{{.Config.Image}} {{.Image}} {{.State.Health.Status}} {{.HostConfig.Memory}}' \
+  "$(gw_prev ps -q gateway)"
+# write down the first two words: <running-image-name> <running-image-id>
+# the last one is the memory limit in bytes: 3221225472 (3 GiB)
+gw_prev config --images                   # <running-image-name>: the file of the running version
 git rev-parse HEAD && git rev-parse --abbrev-ref HEAD   # write both down: <previous-ref>
 git status --short                        # must print nothing
 sudo systemctl stop plugboard-backup.timer
 ```
 
-Local changes would be left behind by the checkout of step 4: reconcile them
-with the release first.
+`gw_prev config --images` must print `<running-image-name>`: the way back
+(steps 8 and [if a step fails](#if-a-step-fails)) starts the image that file
+names. Another name means the gateway was not started from that file: stop
+and find which file it was. Local changes in `<checkout>` would be left
+behind by the checkout of step 4: reconcile them with the release first.
 
 ### 2. Fetch the release, check it, copy its tools
 
 ```bash
-cd /opt/plugboard
+cd <checkout>
 git fetch --tags origin
 git rev-parse "v<new-version>^{commit}"   # must equal <uat-sha>
 git log --oneline "v<new-version>..HEAD"  # must print nothing
@@ -182,11 +223,11 @@ git show v<new-version>:CHANGELOG.md | less
 ```
 
 `git log` lists the commits of this checkout that the release does not
-contain (deployment changes made on the host): they must be in the release
-before the gate. In the `CHANGELOG`, read every entry after
-`<running-version>`: a new or required setting goes into
-`/etc/plugboard/runtime.env` before step 6. The smoke and the data check come
-from the new release; older releases do not ship them.
+contain: they must be in the release before the gate. In the `CHANGELOG`,
+read every entry after `<running-version>`: a new or required setting goes
+into the configuration under `/etc/plugboard` (the Compose file of step 4)
+before step 6. The smoke and the data check come from the new release;
+older releases do not ship them.
 
 ### 3. Check the data, then back it up
 
@@ -195,8 +236,8 @@ the running image (by ID) as the user `app`; it prints file names,
 `key_id`s and rules, never a stored value.
 
 ```bash
-cd /opt/plugboard
-cid="$(gw ps -q gateway)"
+cd <checkout>
+cid="$(gw_prev ps -q gateway)"
 sudo docker run --rm --network none --user 1000:1000 --volumes-from "$cid:ro" \
   -v "$HOME/plugboard-tools/precheck_data.py:/precheck_data.py:ro" \
   --entrypoint python "$(sudo docker inspect --format '{{.Image}}' "$cid")" \
@@ -210,28 +251,44 @@ on. A key is fixed by revoking it and creating a new one with a correct
 handing the new key to its client. Run the check again until it prints
 `READY`. Read the `WARN` lines too (`--strict` makes them fail).
 
-Then take a cold backup (the gateway stops while the archive is written) and
-check it.
+Then take a cold backup (the gateway stops while the archive is written).
 This backup is mandatory: from 4.12.0 the first daily retention pass (04:00
 UTC) deletes old usage, audit, watchdog, monitoring and session rows for good
 (see [monitoring](../guide/monitoring.md)), and this archive is then the only
-copy of them.
+copy of them. How it has been taken before each switch of this instance:
+
+- 4.14.1 and 4.14.2: the encrypted backup script, run by hand as root:
+  `plugboard-<stamp>.tar.gz.age` under `/var/backups/plugboard/`, the same
+  script as the nightly timer.
+- 4.14.0: a plain archive of the data and the CLI home, by hand, under
+  `/var/backups/plugboard/` (`pre-4.14.0-<stamp>.tar.gz`): **not encrypted**,
+  readable by root only, with the keys, the CLI logins and agy conversations
+  in clear. Its command is not in the repository: to be confirmed by the
+  operator.
+
+The script stops the gateway, archives `app/data`, `home/app` and
+`/etc/plugboard/runtime.env`, encrypts the archive with `age` for the
+recipient in `/etc/plugboard/backup.recipient`, then starts the gateway
+again (about two minutes). It finds the gateway through the project name of
+`deploy/ovh/compose.yml`, `plugboard-private`, which is the instance's:
 
 ```bash
-cd /opt/plugboard
+cd <checkout>
 sudo bash deploy/ovh/backup.sh            # prints the archive path: write it down
 sudo sha256sum -c <archive-path>.sha256   # <archive-path>: OK
-wait_healthy && bash deploy/ovh/verify.sh # every line PASS
+wait_healthy && health                    # "version": <running-version>
 ```
 
-Data written between this backup and the switch of step 6 (usage of the
-build time) is not in the archive.
+Data written between this backup and the switch of step 6 is not in the
+archive.
 
-On the machine that keeps the `age` identity, pull the archive (the same
-variables as the scheduled copy; `PLUGBOARD_BACKUP_DIRECTORY` if it is not
-the default `~/.local/share/plugboard-backups`), keep a copy out of the
-rotated directory (the host keeps 7 archives, this copy 30), and prove it
-decrypts, without writing the plaintext anywhere:
+The gate asks for a **proven** backup: on the machine that keeps the `age`
+identity, pull the archive, keep a copy out of the rotated directory (the
+host keeps 7 archives), and prove it decrypts, without writing the plaintext
+anywhere. For this instance it has never been done: no archive has been
+decrypted nor restored (PLU-63). How the archives reach that machine
+(`deploy/ovh/sync-backups.sh` below, or another way) is to be confirmed by the
+operator.
 
 ```bash
 PLUGBOARD_BACKUP_SSH_TARGET=<user@host> PLUGBOARD_HOST_KEY_ALIAS=<host-key-alias> \
@@ -247,40 +304,66 @@ Three lines must come out (`app/data/`, `backup-config/`, `home/app/`): the
 data, the runtime configuration and the CLI logins. A failure here stops the
 gate: there is no way back without a backup.
 
-### 4. Keep the running image, then build the new one
+### 4. Keep the running image, then get the new one
 
-Give the running image a tag of its own, so the build cannot take its name:
+Give the running image a tag of its own, by its ID, so no later tag can take
+it away:
 
 ```bash
-cd /opt/plugboard
-sudo docker image tag "$(sudo docker inspect --format '{{.Image}}' "$(gw ps -q gateway)")" \
-  plugboard:rollback-<running-version>
+cd <checkout>
+sudo docker image tag <running-image-id> plugboard:rollback-<running-version>
 sudo docker image ls plugboard
 ```
 
-Build the release without switching yet (a failed build changes nothing):
+The release's image must be on the host as
+`plugboard:private-full-v<new-version>`. For 4.14.1 and 4.14.2 the image in
+service had the same ID as the UAT's; how the image reaches the host (a copy
+of the UAT's, or a build) is to be confirmed by the operator. A build from
+the checkout uses the `full` stage, as the repository's
+`deploy/ovh/compose.yml` does; a failed build changes nothing:
 
 ```bash
-cd /opt/plugboard
+cd <checkout>
 git checkout v<new-version>
 cat VERSION                               # <new-version>
-gw config --quiet
-gw config --images                        # plugboard:private-full-v<new-version>
-gw build gateway
-new_id="$(sudo docker image inspect --format '{{.Id}}' plugboard:private-full-v<new-version>)"
-echo "$new_id"                            # write it down: <new-image-id>
+sudo docker build --target full -t plugboard:private-full-v<new-version> .
 ```
 
-`config --images` names the image this release's compose file starts by
-default; it must be `plugboard:private-full-v<new-version>`, so that a later
-plain `up -d` can never start the previous version. The build fails, on
-purpose, when a CLI cannot be installed or does not start (BUG-50): then go
-back to `<previous-ref>` ([if a step fails](#if-a-step-fails)).
+The build fails, on purpose, when a CLI cannot be installed or does not
+start (BUG-50): then go back to `<previous-ref>`
+([if a step fails](#if-a-step-fails)).
 
-`<new-image-id>` (`sha256:...`) is the image this build produced. A tag can
-be moved by another build: the broken first image of 4.14.2 and the corrected
-one carried the same tag (BUG-117). Steps 5 and 6 check and start this ID, not
-the tag. If the shell was closed, set `new_id` again from what you wrote down.
+Then write `/etc/plugboard/compose.v<new-version>.json`: the file of the
+running version with the image `plugboard:private-full-v<new-version>` and
+the settings the `CHANGELOG` asks for. How the operator writes it is to be
+confirmed by the operator. Keep the file of the running version unchanged: it
+is the way back.
+
+```bash
+cd <checkout>
+gw config --quiet
+gw config --images                        # plugboard:private-full-v<new-version>
+gw config --format json | python3 -c 'import json, sys; s = json.load(sys.stdin)["services"]["gateway"]; print("ports:", s.get("ports") or "none"); print("networks:", sorted(s.get("networks") or {}))'
+gw_prev config --format json | python3 -c 'import json, sys; print("before:", sorted(json.load(sys.stdin)["services"]["gateway"].get("networks") or {}))'
+new_id="$(sudo docker image inspect --format '{{.Id}}' plugboard:private-full-v<new-version>)"
+echo "$new_id"                            # write it down: <new-image-id>
+[ "$new_id" = "<uat-image-id>" ] && echo "same image as the UAT" || echo "another image than the UAT's"
+```
+
+`config --images` must name `plugboard:private-full-v<new-version>`, so that
+the switch can never start the previous version. The new file must publish
+no port (`ports: none`) and keep the networks of the running version (the
+two `networks` lines equal): the instance reuses an existing network, and its
+client address chain (nginx, `FORWARDED_ALLOW_IPS`) is described in
+[production-instance.md](production-instance.md#client-address-and-rate-limit-bug-119).
+
+`<new-image-id>` (`sha256:...`) is the image the switch will start. A tag
+can be moved by another build: the broken first image of 4.14.2 and the
+corrected one carried the same tag (BUG-117). Steps 5 and 6 check and start
+this ID, not the tag. If the shell was closed, set `new_id` again from what
+you wrote down. `same image as the UAT` means the image the green CI and the
+UAT checked; another ID is a build of its own, which only the checks of
+step 5 vouch for: write it down with the results.
 
 ### 5. Check the CLI versions and the bwrap of the new image
 
@@ -311,23 +394,8 @@ the gate too (agy would answer `503`). Remove such an image
 
 ### 6. Switch to the new version
 
-From this release, `deploy/ovh/compose.yml` fixes the default network to
-`172.30.115.0/29` and trusts only its gateway, `172.30.115.1`, in
-`FORWARDED_ALLOW_IPS` (D-50): Tailscale Serve reaches the gateway from that
-address, and each tailnet client then gets its own rate limit and login
-lockout. A network created by an earlier release has another subnet: it is
-removed once, with the container, by `gw down` (never `-v`: the volumes and
-`plugboard-ollama` stay).
-
 ```bash
-cd /opt/plugboard
-# The fixed subnet must not overlap a host route (VPN, another bridge).
-# Expected: "free", or only the bridge of plugboard-private_default once fixed.
-python3 -c 'import ipaddress,json,subprocess;w=ipaddress.ip_network("172.30.115.0/29");r=json.loads(subprocess.check_output(["ip","-j","-4","route"]));print([(x["dst"],x.get("dev")) for x in r if x.get("dst") not in (None,"default","0.0.0.0/0") and w.overlaps(ipaddress.ip_network(x["dst"],strict=False))] or "free")'
-net=$(sudo docker network inspect plugboard-private_default \
-  --format '{{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}{{end}}' 2>/dev/null || true)
-# A network of an earlier release (another subnet) is removed once
-[ -z "$net" ] || [ "$net" = "172.30.115.0/29 172.30.115.1" ] || gw down   # never -v
+cd <checkout>
 # The tag still names the image checked at step 5 (BUG-117)
 [ "$(sudo docker image inspect --format '{{.Id}}' plugboard:private-full-v<new-version>)" = "$new_id" ] \
   && echo "tag = checked image" || echo "STOP: the tag names another image"
@@ -335,9 +403,9 @@ gw up -d --no-build gateway
 wait_healthy                              # plugboard:private-full-v<new-version> healthy
 [ "$(sudo docker inspect --format '{{.Image}}' "$(gw ps -q gateway)")" = "$new_id" ] \
   && echo "running the checked image" || echo "STOP: not the checked image"
-sudo docker network inspect plugboard-private_default \
-  --format '{{range .IPAM.Config}}{{.Subnet}} {{.Gateway}}{{end}}'
-# Expected: 172.30.115.0/29 172.30.115.1
+health                                    # "version": <new-version>
+gw exec -T gateway sh -c 'tr "\0" " " < /proc/1/cmdline; echo'
+# Expected from 4.14.4: /usr/bin/tini -- python run.py
 gw exec gateway sh -ec 'claude --version; codex --version; gemini --version; gh --version; agy --version'
 gw exec -T gateway python - < deploy/ovh/verify-agy-sandbox.py; echo "exit $?"
 # Expected: one JSON line with "result": "pass", then exit 0
@@ -345,30 +413,33 @@ gw exec -T gateway python - < deploy/ovh/verify-codex-sandbox.py; echo "exit $?"
 # Expected: one JSON line with "result": "pass", then exit 0
 ```
 
+The switch recreates the container of the same project on the same network;
+nothing is published. PID 1 and zombies are described in
+[production-instance.md](production-instance.md#pid-1-of-the-container-tini).
 The CLI versions command shows that the CLIs start in the running container
-with the `cli-home` volume; it does not prove their sign-ins. Check those with
-each CLI's own status command (see `deploy/ovh/README.md`, CLI homes). The
-last two commands check agy's cage and codex's sandbox without a model
-request. On exit `1` or `2` of the first, follow
-[agy cage](../../deploy/ovh/README.md#agy-cage) before going on. The second
-runs `codex sandbox` (never a prompt) with a chat call's isolation: it must
-read its own folder only and write nothing, under the AppArmor profile
-`plugboard-codex` in enforce mode (a host whose profile has another name
-passes it as `python - --apparmor <name>`); on exit `1` its cause is on the
-last line, and every codex call would fail or leak (INC-4): go back.
+with the CLI logins volume; it does not prove their sign-ins. Check those
+with each CLI's own status command. The last two commands check agy's cage
+and codex's sandbox without a model request. On exit `1` or `2` of the
+first, follow [agy cage](../../deploy/ovh/README.md#agy-cage) before going
+on. The second runs `codex sandbox` (never a prompt) with a chat call's
+isolation: it must read its own folder only and write nothing, under the
+AppArmor profile `plugboard-codex` in enforce mode (a host whose profile has
+another name passes it as `python - --apparmor <name>`; the profile's name on
+the production host is to be confirmed by the operator); on exit `1` its
+cause is on the last line, and every codex call would fail or leak (INC-4):
+go back.
 
 ### 7. Smoke the new version
 
 ```bash
 read -rs PLUGBOARD_SMOKE_KEY && export PLUGBOARD_SMOKE_KEY
 smoke <new-version>; echo "exit $?"       # 0, in less than 60 s
-bash deploy/ovh/verify.sh
 ```
 
 Every line must be `PASS`, except `SKIP embeddings` (no embedding model is
 declared while Ollama is off) and `SKIP structured` (a model served by CLI
-subscription routes only takes no `response_format`). A `FAIL`: go back now (step 8, **Back**), then stop
-the gate.
+subscription routes only takes no `response_format`). A `FAIL`: go back now
+(step 8, **Back**), then stop the gate.
 
 ```bash
 mem    # below the stop threshold, oom_kill 0
@@ -378,28 +449,42 @@ mem    # below the stop threshold, oom_kill 0
 
 Make no admin change (keys, providers, prices) during this step.
 
-**Back** to the kept image:
+**Back** to the previous image, by its ID, with the Compose file of the
+running version:
 
 ```bash
-cd /opt/plugboard
-sudo env PLUGBOARD_IMAGE=plugboard:rollback-<running-version> \
-  docker compose -f deploy/ovh/compose.yml up -d --no-build gateway
-wait_healthy && smoke <running-version>; echo "exit $?"
+cd <checkout>
+old_id=<running-image-id>
+img="$(gw_prev config --images)"          # <running-image-name>
+# That name must still be the image that ran before the gate
+[ "$(sudo docker image inspect --format '{{.Id}}' "$img")" = "$old_id" ] \
+  || sudo docker image tag "$old_id" "$img"
+gw_prev up -d --no-build gateway
+wait_healthy
+[ "$(sudo docker inspect --format '{{.Image}}' "$(gw_prev ps -q gateway)")" = "$old_id" ] \
+  && echo "running the previous image" || echo "STOP: not the previous image"
+smoke <running-version>; echo "exit $?"
 ```
 
-**Forward** to the new image (the default of this release's compose file):
+**Forward** to the checked image:
 
 ```bash
-cd /opt/plugboard
+cd <checkout>
+[ "$(sudo docker image inspect --format '{{.Id}}' plugboard:private-full-v<new-version>)" = "$new_id" ] \
+  && echo "tag = checked image" || echo "STOP: the tag names another image"
 gw up -d --no-build gateway
-wait_healthy && smoke <new-version>; echo "exit $?"
+wait_healthy
+[ "$(sudo docker inspect --format '{{.Image}}' "$(gw ps -q gateway)")" = "$new_id" ] \
+  && echo "running the checked image" || echo "STOP: not the checked image"
+smoke <new-version>; echo "exit $?"
 ```
 
-Both must exit `0`. If the previous version fails on data the new one wrote,
-note it: a real rollback would then need the restore of
+Both smokes must exit `0`, and both checks print `running the ...`. If the
+previous version fails on data the new one wrote, note it: a real rollback
+would then need the restore of
 [rollback-release.md, step 5](rollback-release.md#5-if-the-old-version-cannot-read-the-current-data).
 
-Then restart the daily backup. It stops and restarts the gateway every day
+Then restart the nightly backup. It stops and restarts the gateway every day
 between 03:30 and 03:40 UTC: the `/metrics` counters restart then, the access
 log goes on.
 
@@ -417,7 +502,7 @@ not on the command line):
 ```bash
 read -rs ADMIN_KEY
 printf 'Authorization: Bearer %s\nX-Plugboard-Admin-TOTP: %s\n' "$ADMIN_KEY" "<code>" \
-  | curl -s -H @- http://127.0.0.1:8765/metrics | python3 -m json.tool
+  | curl -s -H @- <gateway-url>/metrics | python3 -m json.tool
 ```
 
 `/metrics` counts provider calls and provider errors (`requests`,
@@ -426,7 +511,6 @@ answers of the access log, 24 hours after the last switch. Client routes are
 `/v1/...`, `/v2/...` and `/usage/...`:
 
 ```bash
-cd /opt/plugboard
 gw logs --timestamps --no-log-prefix --since 24h gateway \
   | awk -F'"' '
     NR == 1 { print "first log line: " substr($0, 1, 30) }
@@ -442,14 +526,17 @@ gw logs --timestamps --no-log-prefix --since 24h gateway \
 
 The gate passes when the `client routes` line shows less than `1.00 %` over
 at least 100 requests; with fewer, extend the observation. The first log line
-must be about 24 hours old: if it is younger, the log was rotated (3 files of
-10 MB) or the container recreated, and the window is shorter than it looks.
-Not counted here: an error inside a stream that already answered `200`, and
-an error served by the HTTPS proxy in front of the gateway.
+must be about 24 hours old: if it is younger, the log was rotated or the
+container recreated, and the window is shorter than it looks (the log
+rotation of the production Compose file is to be confirmed by the operator;
+the repository's model keeps 3 files of 10 MB). Not counted here: an error
+inside a stream that already answered `200`, and an error served by nginx or
+Tailscale in front of the gateway.
 
 At the end of the 24 hours, the memory of the container must still be below
 the [stop threshold](#memory-stop-threshold-d-43), with `oom_kill 0` (the
-peak counts from the last start of the container, the daily backup included):
+peak counts from the last start of the container, the nightly backup
+included):
 
 ```bash
 mem
@@ -462,50 +549,51 @@ unset PLUGBOARD_SMOKE_KEY ADMIN_KEY
 rm -f ~/plugboard-tools/precheck_data.py ~/plugboard-tools/smoke_consumers.py
 ```
 
-- Write down the results: versions, image IDs, `<previous-ref>`, archive
-  name, the memory lines of step 0 and of `mem`, the three smoke outputs, the
+- Write down the results: versions, image IDs (`<running-image-id>`,
+  `<new-image-id>`, `<uat-image-id>`), `<previous-ref>`, archive name, the
+  memory lines of step 0 and of `mem`, the three smoke outputs, the
   `/metrics` snapshots and the 5xx rate.
-- Keep `plugboard:rollback-<running-version>` on the host and the archive in
-  `~/plugboard-gate/` until the next release passes its own gate.
+- Keep `plugboard:rollback-<running-version>`,
+  `/etc/plugboard/compose.v<running-version>.json` and the archive until the
+  next release passes its own gate.
 - Revoke the smoke key in the dashboard if it will not be used again.
 
 ## If a step fails
 
-Going back to the running version, once step 6 has switched:
+Going back to the running version, once step 6 has switched: the previous
+image, by its ID, with the Compose file of the running version.
 
 ```bash
-cd /opt/plugboard
-# The new compose file honours PLUGBOARD_IMAGE: start the kept image with it
-sudo env PLUGBOARD_IMAGE=plugboard:rollback-<running-version> \
-  docker compose -f deploy/ovh/compose.yml up -d --no-build gateway
+cd <checkout>
+old_id=<running-image-id>
+img="$(gw_prev config --images)"
+[ "$(sudo docker image inspect --format '{{.Id}}' "$img")" = "$old_id" ] \
+  || sudo docker image tag "$old_id" "$img"
+gw_prev up -d --no-build gateway
 wait_healthy && smoke <running-version>
-# Then the previous checkout, whose compose file may name a fixed image:
-# that name must point to the kept image, for any later plain `up -d`
+[ "$(sudo docker inspect --format '{{.Image}}' "$(gw_prev ps -q gateway)")" = "$old_id" ] \
+  && echo "running the previous image" || echo "STOP: not the previous image"
 git checkout <previous-ref>
-sudo docker image tag plugboard:rollback-<running-version> <running-image-name>
 sudo systemctl start plugboard-backup.timer
 ```
 
-The fixed network (`172.30.115.0/29`) stays: the earlier version runs on it
-as is, without `FORWARDED_ALLOW_IPS`. If a later `up -d` from the previous
-checkout refuses that network, run `docker compose -f deploy/ovh/compose.yml
-down` (never `-v`) once, then `up -d`.
-
-Before step 6 nothing was switched: `git checkout <previous-ref>` and
+This changes the image, not the data: what the newer version wrote stays in
+place. Before step 6 nothing was switched: `git checkout <previous-ref>` and
 `sudo systemctl start plugboard-backup.timer` are enough.
 
 | Step | Failure | Do |
 |---|---|---|
 | 0 | memory at or above the stop threshold, `oom_kill` above 0, or a restart on the UAT host | stop before touching production; report the figures |
+| 1 | `gw_prev config --images` does not name the running image | stop: find the Compose file the gateway was started from; restart the backup timer |
 | 2 | the release is not the UAT commit, or the checkout has commits the release lacks | stop; restart the backup timer |
 | 3 | the data check is not `READY` | fix the keys, run it again; do not go on |
 | 3 | the backup, its checksum or its decryption fails | stop: no upgrade without a proven backup; restart the backup timer |
-| 4 | `config --images` names another image, or the build fails | `git checkout <previous-ref>`, restart the backup timer; report it |
+| 4 | the image cannot be obtained or built, `config --images` names another image, or the new file publishes a port or changes the networks | `git checkout <previous-ref>`, restart the backup timer; report it |
 | 5 | a CLI version differs or does not start | `git checkout <previous-ref>`, restart the backup timer; the image is not the one the CI checked |
 | 5 | a `bwrap` is on the image's `PATH`, or the gateway's `bwrap` does not start | `git checkout <previous-ref>`, restart the backup timer; [remove the image](#remove-an-image-that-failed-the-gate) and report it (INC-4, BUG-117) |
-| 6 | `STOP`: the tag or the container is not on the image ID checked at step 5 | before `up`: do not switch, build and check again (steps 4 and 5); after `up`: go back (block above) |
-| 6, 7 | not `healthy`, or the smoke fails | go back (block above); keep the outputs |
-| 8 | the previous version fails its smoke | go forward again (**Forward**); a real way back would need the restore of rollback-release.md step 5: escalate before relying on it |
+| 6 | `STOP`: the tag or the container is not on the image ID checked at step 5 | before `up`: do not switch, get and check the image again (steps 4 and 5); after `up`: go back (block above) |
+| 6, 7 | not `healthy`, PID 1 is not tini, a sandbox check fails, or the smoke fails | go back (block above); keep the outputs |
+| 8 | the previous version fails its smoke, or does not run `<running-image-id>` | go forward again (**Forward**); a real way back would need the restore of rollback-release.md step 5: escalate before relying on it |
 | 9 | 1 % or more `5xx` on the client routes | go back (block above), then investigate with [rollback-release.md](rollback-release.md) |
 | 7, 9 | `mem` at or above the stop threshold, or `oom_kill` above 0 | go back (block above); report the figures |
 
@@ -536,5 +624,19 @@ Hand over the step number, the command, its output (keys redacted) and the
 notes of step 10 to the deployment owner. A failure at step 8 or 9 is also
 reported as a bug of the release.
 
-See also: [rollback-release.md](rollback-release.md),
+## Former private host (deploy/ovh)
+
+The former private host is end of life: its gateway was stopped on
+14 November 2026 (see [deploy/ovh/README.md](../../deploy/ovh/README.md)).
+Up to 4.14.3 this runbook gave its commands: a checkout in `/opt/plugboard`
+driving `deploy/ovh/compose.yml`, a port published on `127.0.0.1:8765`, a
+network with a fixed subnet (`172.30.115.0/29`, D-50), the image chosen with
+`PLUGBOARD_IMAGE`, and the decryption check of its synchronised backups.
+Should that host serve again, take those commands from the history of this
+file (`git log -p -- docs/runbooks/prod-gate.md`, the version before PLU-66):
+the order and the criteria of the gate are the same, and so are the image
+checks of steps 4 to 6 (BUG-117).
+
+See also: [production-instance.md](production-instance.md),
+[rollback-release.md](rollback-release.md),
 [deploy/ovh/README.md](../../deploy/ovh/README.md).
