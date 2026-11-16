@@ -103,9 +103,13 @@ CMD ["python", "run.py"]
 
 # ── api: slim gateway image ──────────────────────────────────
 FROM base AS api
-# PLU-74: no pip in the runtime image (see the full target).
+# PLU-74: no pip in the runtime image; PLU-77: nor the wheel ensurepip would
+# install it from (see the full target).
 RUN python -m pip uninstall -y pip \
- && if python -m pip --version; then echo "pip is in the gateway environment (PLU-74)" >&2; exit 1; fi
+ && if python -m pip --version; then echo "pip is in the gateway environment (PLU-74)" >&2; exit 1; fi \
+ && bundled="$(python -c 'import ensurepip, os; print(os.path.join(os.path.dirname(ensurepip.__file__), "_bundled"))')" \
+ && rm -f "$bundled"/*.whl \
+ && if ls "$bundled"/*.whl; then echo "a pip wheel is left in $bundled (PLU-77)" >&2; exit 1; fi
 USER app
 
 # ── node: source of the Node.js runtime for the full image ───
@@ -218,8 +222,15 @@ RUN if /opt/venv-mcp/bin/python -m pip --version; then echo "pip is in /opt/venv
 # PLU-74: no pip in the runtime image. Nothing runs it once the image is built;
 # the base stage keeps it to install the lock, this target removes it after
 # its last use (the MCP install above) and fails if it is still there.
+# PLU-77: the pip wheel bundled for ensurepip (25.0.1, with known advisories)
+# goes too, from the folder the image's Python names; nothing at run time
+# calls ensurepip nor creates a venv with pip. The step fails if a wheel is
+# left (an `if`, not `!`: `set -e` ignores a command negated by `!`).
 RUN python -m pip uninstall -y pip \
- && if python -m pip --version; then echo "pip is in the gateway environment (PLU-74)" >&2; exit 1; fi
+ && if python -m pip --version; then echo "pip is in the gateway environment (PLU-74)" >&2; exit 1; fi \
+ && bundled="$(python -c 'import ensurepip, os; print(os.path.join(os.path.dirname(ensurepip.__file__), "_bundled"))')" \
+ && rm -f "$bundled"/*.whl \
+ && if ls "$bundled"/*.whl; then echo "a pip wheel is left in $bundled (PLU-77)" >&2; exit 1; fi
 
 # CLI version probes can create private state as root during the build.
 # Keep the persisted runtime HOME writable by the unprivileged app user.

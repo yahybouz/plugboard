@@ -628,3 +628,81 @@ def test_the_base_stage_keeps_pip_to_install_the_lock():
         r"(?m)^RUN pip install --require-hashes -r requirements\.lock$", base
     )
     assert "uninstall" not in base
+
+
+# ── PLU-77: no pip wheel left for ensurepip ─────────────────────────────────
+# python:3.12-slim keeps the pip that ensurepip installs
+# (``/usr/local/lib/python3.12/ensurepip/_bundled/pip-25.0.1-py3-none-any.whl``,
+# with known advisories) after pip itself is uninstalled (PLU-74). Nothing
+# at run time seeds pip (no ``ensurepip``, no ``python -m venv`` without
+# ``--without-pip``), so the runtime targets delete the wheel in the step that
+# removes pip, and the build fails if one is left. The folder is asked of the
+# image's own Python, so another Python base cannot make the check vacuous by
+# moving it.
+
+_NO_ENSUREPIP_WHEEL = (
+    "python -c 'import ensurepip, glob, os; w = glob.glob(os.path.join("
+    'os.path.dirname(ensurepip.__file__), "_bundled", "*.whl")); '
+    'print("wheels in ensurepip/_bundled:", len(w)); '
+    "raise SystemExit(1 if w else 0)'"
+)
+
+
+def _pip_removal(target: str) -> str:
+    (run,) = [
+        r
+        for r in _runs(_stage(target))
+        if re.search(_GATEWAY_PIP + " uninstall -y pip", r)
+    ]
+    return run
+
+
+@pytest.mark.parametrize("target", ["api", "full"])
+def test_the_runtime_image_drops_the_ensurepip_wheel(target):
+    run = _pip_removal(target)
+
+    # The folder comes from the image's Python, then its wheels are deleted
+    # and the step fails if one is left (an `if`, not `!`).
+    assert re.search(
+        r'bundled="\$\(python -c \'import ensurepip, os; print\(os\.path\.join\('
+        r'os\.path\.dirname\(ensurepip\.__file__\), "_bundled"\)\)\'\)"',
+        run,
+    ), run
+    removal = run.index('rm -f "$bundled"/*.whl')
+    guard = re.search(r'if ls "\$bundled"/\*\.whl; then .*exit 1; fi', run)
+    assert guard and guard.start() > removal, run
+    assert run.index("uninstall -y pip") < removal
+    assert _swallowed(run) == [], run
+    # Nothing afterwards seeds pip again.
+    runs = _runs(_stage(target))
+    for later in runs[runs.index(run) + 1 :]:
+        assert "ensurepip" not in later and "-m venv" not in later, later
+
+
+def test_the_ci_image_step_checks_the_ensurepip_wheel():
+    checks = _option_values(_image_step()["argv"], "--verifier")
+
+    assert _NO_ENSUREPIP_WHEEL in checks
+    words = shlex.split(_NO_ENSUREPIP_WHEEL)
+    assert words[:2] == ["python", "-c"] and len(words) == 3
+    compile(words[2], "<ensurepip check>", "exec")
+
+
+def test_nothing_at_run_time_seeds_pip():
+    """No ``ensurepip``, and no ``venv`` that would get pip from it."""
+    shipped = [ROOT / "run.py"]
+    for folder in ("plugboard", "scripts", "deploy"):
+        shipped += [p for p in (ROOT / folder).rglob("*") if p.is_file()]
+    seeds = re.compile(
+        r"ensurepip|-m\s+venv(?!\s+--without-pip)|venv\.(?:create|EnvBuilder)"
+    )
+    found = []
+    for path in shipped:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        found += [
+            f"{path.relative_to(ROOT)}: {m.group(0)}" for m in seeds.finditer(text)
+        ]
+    assert found == []

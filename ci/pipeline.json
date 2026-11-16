@@ -46,7 +46,7 @@
       "--require-hashes", "-r", "requirements-mcp.lock"], "timeout_seconds": 600},
     {"id": "pip-audit-decisions", "argv": ["{scratch}/venv/bin/pip-audit", "--strict", "--progress-spinner", "off", "--disable-pip",
       "--require-hashes", "-r", "requirements-decisions.lock"], "timeout_seconds": 600},
-    {"id": "docker-build", "description": "Image full non poussée, celle que déploient l'UAT et l'OVH (PLU-20) : utilisateur app + HEALTHCHECK /health, chaque CLI lancée dans l'image sans réseau (agy sur amd64), le bwrap de la passerelle à son chemin fixe et aucun bwrap sur le PATH (INC-4 : codex le préférerait au sien), aucun pip dans /opt/venv-mcp ni dans l'environnement de la passerelle (PLU-74), tini en PID 1 qui récupère un orphelin (BUG-113, BUG-123), puis retirée.",
+    {"id": "docker-build", "description": "Image full non poussée, celle que déploient l'UAT et l'OVH (PLU-20) : utilisateur app + HEALTHCHECK /health, chaque CLI lancée dans l'image sans réseau (agy sur amd64), le bwrap de la passerelle à son chemin fixe et aucun bwrap sur le PATH (INC-4 : codex le préférerait au sien), aucun pip dans /opt/venv-mcp ni dans l'environnement de la passerelle (PLU-74), aucune roue pip sous ensurepip/_bundled (PLU-77), tini en PID 1 qui récupère un orphelin (BUG-113, BUG-123), puis retirée.",
      "argv": ["{python}", "-B", "ci/ci_outils.py", "image-docker", "--nom", "plugboard", "--target", "full", "--user", "app",
       "--healthcheck", "health", "--verifier", "gemini --version", "--verifier", "claude --version",
       "--verifier", "codex --version", "--verifier", "gh --version", "--verifier-amd64", "agy --version",
@@ -54,6 +54,7 @@
       "--verifier", "sh -c 'if command -v bwrap; then exit 1; fi; echo no bwrap on PATH'",
       "--verifier", "sh -c 'if /opt/venv-mcp/bin/python -m pip --version; then exit 1; fi; echo no pip in /opt/venv-mcp'",
       "--verifier", "sh -c 'if python -m pip --version; then exit 1; fi; echo no pip in the gateway environment'",
+      "--verifier", "python -c 'import ensurepip, glob, os; w = glob.glob(os.path.join(os.path.dirname(ensurepip.__file__), \"_bundled\", \"*.whl\")); print(\"wheels in ensurepip/_bundled:\", len(w)); raise SystemExit(1 if w else 0)'",
       "--verifier", "sh -c 'pid1=$(cat /proc/1/comm); echo \"PID 1: $pid1\"; test \"$pid1\" = tini'",
       "--verifier", "python -c 'import glob, subprocess, time; subprocess.run([\"sh\", \"-c\", \"sleep 1 &\"], check=True); time.sleep(3); z = [p for p in glob.glob(\"/proc/[0-9]*/stat\") if open(p).read().rsplit(\")\", 1)[1].split()[0] == \"Z\"]; print(\"zombies:\", len(z)); raise SystemExit(1 if z else 0)'"],
      "timeout_seconds": 2400}
