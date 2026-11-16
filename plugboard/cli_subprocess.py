@@ -1992,6 +1992,49 @@ _DELTA_READERS: Dict[str, Callable[[bytes], str]] = {
 }
 
 
+# The words a CLI's streaming option is refused with, by an older version
+# (BUG-93). claude: commander's "error: unknown option '<flag>'" (read in the
+# claude 2.1.325 binary); agy: Go's flag package, `invalid value "stream-json"
+# for flag -output-format: ...` (read in the agy 1.5.8 binary; per agy's own
+# changelog, json and stream-json came together in 1.1.8). Neither seen in a
+# real run: a refusal is recognised only on one stderr line naming the
+# option, with an option-refusal word.
+_STREAM_OPTION = {"claude": "include-partial-messages", "agy": "stream-json"}
+_OPTION_REFUSED = (
+    "unknown option",
+    "unknown flag",
+    "unknown argument",
+    "unexpected argument",
+    "unrecognized",
+    "unrecognised",
+    "not defined",
+    "invalid value",
+    "invalid argument",
+    "invalid choice",
+    "invalid option",
+    "unsupported",
+    "not supported",
+)
+
+
+def _refused_streaming(
+    kind: str, returncode: Optional[int], stdout: bytes, stderr: bytes
+) -> bool:
+    """True when the CLI refused its streaming option before doing anything:
+    a non-zero exit, no JSON event on stdout (the run never started, nothing
+    was asked of the model) and a stderr line that names the option with an
+    option-refusal word."""
+    option = _STREAM_OPTION.get(kind)
+    if not option or returncode in (0, None):
+        return False
+    if _jsonl_events((stdout or b"").decode("utf-8", "replace")):
+        return False
+    for line in (stderr or b"").decode("utf-8", "replace").lower().splitlines():
+        if option in line and any(word in line for word in _OPTION_REFUSED):
+            return True
+    return False
+
+
 def can_stream(kind: str) -> bool:
     """True when ``complete(kind, ..., on_delta=...)`` reports text as it comes."""
     return kind in _DELTA_READERS
@@ -2069,7 +2112,8 @@ async def complete(
             (see ``can_stream``). The returned answer is then the text those
             pieces carried, or extends it: what was sent cannot be taken back,
             so the answer billed and replayed is the one the client got
-            (BUG-92).
+            (BUG-92). A CLI that refuses its streaming option before doing
+            anything is run once more without it, without callbacks (BUG-93).
 
     Returns:
         OpenAI-style response dict.
@@ -2248,6 +2292,20 @@ async def complete(
         failure = agy_cage.setup_failure(proc.returncode, stdout, stderr)
         if failure:
             raise agy_sandbox_error(failure, model)
+    if (
+        read_delta is not None
+        and not streamed
+        and _refused_streaming(kind, proc.returncode, stdout, stderr)
+    ):
+        # A CLI version without the streaming option (BUG-93): nothing was
+        # sent nor run, so the same request runs once more as a plain call,
+        # today's command line, and the caller replays its whole answer.
+        log.warning(
+            "CLI %r refused its streaming option; answered without streaming "
+            "(update the CLI to stream)",
+            backend.command,
+        )
+        return await complete(kind, body, timeout_s=max(deadline - elapsed, 1.0))
     stdout_text = (stdout or b"").decode("utf-8", "replace")
     if kind == "agy" and read_delta is not None:
         stdout_text = _agy_stream_to_json(stdout_text)

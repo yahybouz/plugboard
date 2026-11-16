@@ -257,3 +257,47 @@ async def test_the_billed_count_is_the_count_of_the_streamed_text(
     text = "".join(e["choices"][0]["delta"].get("content", "") for e in events)
     assert text == "Bonjour"
     assert events[-1]["usage"]["completion_tokens"] == count_tokens("Bonjour")
+
+
+async def test_a_cli_refusing_to_stream_is_replayed_and_billed_once(
+    only_cli, monkeypatch, tmp_path
+):
+    """claude refuses --include-partial-messages before any output: the same
+    request runs once more without it and the answer is replayed (BUG-93)."""
+    import stat
+
+    final = [
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": "Bonjour à vous"}]},
+        },
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": "Bonjour à vous",
+        },
+    ]
+    runs = tmp_path / "runs.txt"
+    script = tmp_path / "fakeclaude"
+    script.write_text(
+        "#!/bin/sh\n"
+        f"echo run >> {runs}\n"
+        "cat >/dev/null\n"
+        'for a in "$@"; do\n'
+        '  if [ "$a" = "--include-partial-messages" ]; then\n'
+        "    echo \"error: unknown option '--include-partial-messages'\" >&2\n"
+        "    exit 1\n"
+        "  fi\n"
+        "done\n" + "".join(f"printf '%s\\n' '{json.dumps(evt)}'\n" for evt in final)
+    )
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    monkeypatch.setattr(cli_subprocess, "_resolve_binary", lambda command: str(script))
+
+    chunks = [c async for c in router.forward_stream(_body(MODEL, stream=True))]
+    events = _events(chunks)
+    text = "".join(e["choices"][0]["delta"].get("content", "") for e in events)
+    assert text == "Bonjour à vous"
+    assert len(events) > 2  # replayed word by word, as for a CLI without streaming
+    assert sum(1 for e in events if e.get("usage")) == 1  # billed once
+    assert runs.read_text().count("run") == 2

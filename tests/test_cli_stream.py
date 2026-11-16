@@ -469,3 +469,126 @@ async def test_claude_streamed_text_kept_when_the_final_text_differs(fake_cli):
     result = await cli_subprocess.complete("claude", BODY, on_delta=seen.append)
     assert "".join(seen) == "\nBonjour"
     assert result["choices"][0]["message"]["content"] == "\nBonjour"
+
+
+# ── A CLI that refuses its streaming option (BUG-93) ────────────────────────
+# claude's option parser (commander, read in the claude 2.1.325 binary) says
+# "error: unknown option '<flag>'" on stderr and exits 1; agy parses its flags
+# with Go's flag package (`invalid value %q for flag -%s: %v`, read in the agy
+# 1.5.8 binary), exit 2. Neither refusal captured in a real run.
+
+CLAUDE_REFUSAL = "error: unknown option '--include-partial-messages'"
+AGY_REFUSAL = 'invalid value "stream-json" for flag -output-format: unknown format'
+
+
+@pytest.fixture
+def refusing_cli(monkeypatch, tmp_path, agy_without_cage):
+    """A CLI that refuses ``marker`` in its argv (``refusal`` on stderr, exit
+    ``code``, after writing ``before`` on stdout) and otherwise plays
+    ``lines``. Each run's argv is logged, one run per block."""
+
+    def install(marker, refusal, lines, *, code=1, before=()):
+        script = tmp_path / "fakecli"
+        runs = tmp_path / "runs.txt"
+        played = "".join(f"printf '%s\\n' '{ln}'\n" for ln in lines)
+        early = "".join(f"printf '%s\\n' '{ln}'\n" for ln in before)
+        quoted = refusal.replace("'", "'\\''")  # kept whole by sh
+        script.write_text(
+            "#!/bin/sh\n"
+            f"{{ printf '%s\\n' \"$@\"; echo ---; }} >> {runs}\n"
+            "cat >/dev/null\n"
+            'for a in "$@"; do\n'
+            f'  if [ "$a" = "{marker}" ]; then\n'
+            f"{early}"
+            f"    printf '%s\\n' '{quoted}' >&2\n"
+            f"    exit {code}\n"
+            "  fi\n"
+            "done\n"
+            f"{played}"
+        )
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        monkeypatch.setattr(
+            cli_subprocess, "_resolve_binary", lambda command: str(script)
+        )
+
+        def argvs() -> list[list[str]]:
+            blocks = runs.read_text().split("---\n")
+            return [b.splitlines() for b in blocks if b]
+
+        return argvs
+
+    return install
+
+
+async def test_claude_refusing_partial_messages_is_answered_without_streaming(
+    refusing_cli,
+):
+    argvs = refusing_cli("--include-partial-messages", CLAUDE_REFUSAL, FINAL)
+    plain = await cli_subprocess.complete("claude", BODY)
+    seen: list[str] = []
+
+    result = await cli_subprocess.complete("claude", BODY, on_delta=seen.append)
+
+    assert result["choices"][0]["message"]["content"] == "Bonjour"
+    assert seen == []  # nothing streamed: the router replays the whole answer
+    runs = argvs()
+    assert len(runs) == 3  # the plain call, the refused one, one retry
+    assert "--include-partial-messages" in runs[1]
+    assert runs[2] == runs[0]  # the retry is today's plain command line
+    assert plain["choices"][0]["message"]["content"] == "Bonjour"
+
+
+async def test_agy_refusing_stream_json_is_answered_in_json_mode(refusing_cli):
+    agy_body = {"model": "gemini-3.8-flash-low", "messages": BODY["messages"]}
+    argvs = refusing_cli(
+        "stream-json",
+        AGY_REFUSAL,
+        [json.dumps(json.loads(AGY_RESULT)["result"])],
+        code=2,
+    )
+    await cli_subprocess.complete("agy", agy_body)
+
+    result = await cli_subprocess.complete("agy", agy_body, on_delta=lambda t: None)
+
+    assert result["choices"][0]["message"]["content"] == "Bonjour !\n"
+    assert result["usage"]["total_tokens"] == 9
+    runs = argvs()
+    assert len(runs) == 3
+    assert runs[1][runs[1].index("--output-format") + 1] == "stream-json"
+    assert runs[2] == runs[0]
+
+
+async def test_no_retry_once_part_of_the_answer_was_sent(refusing_cli):
+    argvs = refusing_cli(
+        "--include-partial-messages", CLAUDE_REFUSAL, FINAL, before=[_delta("Bon")]
+    )
+    seen: list[str] = []
+    with pytest.raises(CliSubprocessError):
+        await cli_subprocess.complete("claude", BODY, on_delta=seen.append)
+    assert seen == ["Bon"]
+    assert len(argvs()) == 1
+
+
+async def test_no_retry_once_the_cli_started_its_run(refusing_cli):
+    init = json.dumps({"type": "system", "subtype": "init"})
+    argvs = refusing_cli(
+        "--include-partial-messages", CLAUDE_REFUSAL, FINAL, before=[init]
+    )
+    with pytest.raises(CliSubprocessError):
+        await cli_subprocess.complete("claude", BODY, on_delta=lambda t: None)
+    assert len(argvs()) == 1
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "error: unknown option '--some-other-flag'",
+        "Error: --include-partial-messages requires --print",
+        "API Error: 500 boom",
+    ],
+)
+async def test_other_failures_are_not_retried(refusing_cli, stderr):
+    argvs = refusing_cli("--include-partial-messages", stderr, FINAL)
+    with pytest.raises(CliSubprocessError):
+        await cli_subprocess.complete("claude", BODY, on_delta=lambda t: None)
+    assert len(argvs()) == 1
