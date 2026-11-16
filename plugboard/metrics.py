@@ -428,4 +428,12 @@ def format_prometheus() -> str:
             f'model="{_label(model)}"}} {stats.busy_refusals}'
         )
 
+    # PLU-67: the shared Claude quota, from real calls (data/claude_quota.json).
+    try:
+        from plugboard.claude_quota import prometheus_lines
+
+        lines.extend(prometheus_lines(_label))
+    except Exception:  # a scrape never fails for it
+        pass
+
     return "\n".join(lines) + "\n"

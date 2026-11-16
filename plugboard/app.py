@@ -4501,6 +4501,15 @@ async def clear_cache_endpoint(_: None = Depends(_require_admin)):
 # -- /admin/monitoring -------------------------------------------------------
 
 
+@app.get("/admin/claude-quota")
+async def admin_claude_quota(_: None = Depends(_require_admin)):
+    """The last Claude quota limit real calls met, and the count per provider
+    (PLU-67). Read from data/claude_quota.json: no provider is called."""
+    from plugboard import claude_quota
+
+    return await _asyncio.to_thread(claude_quota.snapshot)
+
+
 @app.get("/admin/monitoring")
 async def admin_monitoring(_: None = Depends(_require_admin)):
     """Full health check of all providers + metrics + uptime."""

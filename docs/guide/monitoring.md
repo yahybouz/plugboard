@@ -104,7 +104,7 @@ An unknown job ID answers `404`.
 | Endpoint | Format |
 |---|---|
 | `GET /metrics` | JSON: per provider, request count, error count, average latency, and under `models` the per-model measures below |
-| `GET /metrics/prometheus` | Prometheus text format: request totals, error totals and average latency per provider, an `up` gauge, the per-model histograms and counter below, and the total wait of each chat request |
+| `GET /metrics/prometheus` | Prometheus text format: request totals, error totals and average latency per provider, an `up` gauge, the per-model histograms and counter below, the total wait of each chat request, and the [Claude limits met](#shared-claude-quota) |
 | `GET /admin/monitoring` | Full health check of all providers with 24-hour and 7-day uptime computed from the stored snapshots; the check itself is not stored. `uptime_pct` is `null` when the period holds no snapshot |
 | `GET /admin/monitoring/history?provider_id=&limit=` | Availability snapshots (`data/monitoring.db`): one row per active provider every 5 minutes; a probe that does not answer within 30 seconds is stored as down |
 | `GET /admin/retention` | Retention settings in force (`settings`), the report of the last retention pass (`last_run`, `null` before the first pass): when it ran, rows deleted per store, errors; and `held` (`reason`, `since`) while the daily pass is held by its clock check, else `null` ([data retention](configuration.md#data-retention)) |
@@ -127,6 +127,32 @@ Each provider entry of `GET /metrics` gains a `models` object once one of its mo
 **Total wait per request** (`plugboard_request_wait_seconds`, histogram, Prometheus only, no labels): the seconds each chat request (`/v1/chat/completions`, `/v2/chat/completions`, `/v1/preflight`) spent waiting in all, for a slot of the global cap, for its session's turn and for providers' slots, recorded when the request ends (after the last byte of a stream); `0` for a request that never waited. Every request that passed the key check counts once, served, refused (`503 server_busy`, `session_busy` or `providers_busy`) or left by its client (`499`), so the buckets just above the wait budget (the longer of `PLUGBOARD_INFLIGHT_WAIT_S` and `PLUGBOARD_PROVIDER_WAIT_S`, 10 s by default) show the requests that waited it all. `GET /metrics` keeps one entry per provider and does not carry it.
 
 The time to first token and tokens per second are measured on streamed answers from HTTP providers: a non-streamed answer has no first token to time, and a CLI provider's stream is not measured here (`claude` and `agy` send theirs live, `codex` replays its complete answer; [`scripts/bench_latence.py`](../../scripts/bench_latence.py) times their first word). Labels are `provider` and `model` only, never a client or a key; a model the provider does not list (nor has as its default model) is labelled `(unlisted)`, so a name a client typed never becomes a label. At most 256 (provider, model) series are kept; past that, each provider's new models are counted under one `(other)` series of that provider.
+
+### Shared Claude quota
+
+When one Claude account serves several gateways (production, a test instance, development sessions), any of them can spend the quota the others need. Since 4.14.5 the gateway notes each time a real call meets a Claude limit (PLU-67): a claude CLI that answers a usage limit (`Claude AI usage limit reached`, `You've hit your limit`, `5-hour limit reached`, `You've reached your weekly limit`, or an API 429 it reports), or an Anthropic API provider (its preset, or a base URL on `anthropic.com`) that answers `429`. It sends nothing to find out: no probe, no extra call, so a gateway that serves no Claude call sees nothing.
+
+- `GET /admin/claude-quota` answers `last_limit_at`, `provider`, `model`, `source` (`cli` or `http`), `message` (the start of the error, at most 200 characters, keys masked), `resumes_at` (when the quota reopens, if the error said so: a `Retry-After`, a "try again at HH:MM", or the time after `usage limit reached|`; `null` otherwise, for instance "resets 3pm", which gives no time zone), and per provider the limits met (`count`) and the last one. All times are UTC. The **Monitoring** page shows the same under **Claude quota**.
+- The first limit of an episode (limits less than an hour apart, per provider) writes one `provider.quota_limit` entry in the [audit log](#admin-audit-log), actor `system`; a burst of calls writes no more.
+- `GET /metrics/prometheus` adds `plugboard_claude_limit_total` (counter, label `provider`) and `plugboard_claude_limit_last_timestamp_seconds` (gauge, Unix time of the last limit, label `provider`).
+- The state is kept in `data/claude_quota.json` and read again on each view, so it survives a restart and every worker shows the same; the counter does not restart from zero.
+
+An alert rule that fires when a Claude limit was met in the last 15 minutes:
+
+```yaml
+groups:
+  - name: plugboard-claude-quota
+    rules:
+      - alert: ClaudeQuotaLimitReached
+        expr: increase(plugboard_claude_limit_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Claude limit reached on {{ $labels.provider }}"
+          description: "See GET /admin/claude-quota for the time it reopens."
+```
+
+`time() - plugboard_claude_limit_last_timestamp_seconds < 3600` gives the same answer for the last hour, without a range.
 
 ### Load bench
 
@@ -211,7 +237,7 @@ The answer lists `entries` newest first, each with `at` (UTC), `provider`, `adde
 
 ## Admin audit log
 
-Admin actions are recorded in `data/audit.db`: logins (success, failure, lockout, MFA), auto-logins and suspicious auto-login refusals, key creation, revocation, rotation and deletion, provider creation, changes and deletion (including base URL changes and refused domains), OAuth connections, pricing refreshes, cache clears, circuit resets, watchdog actions, model refreshes, Ollama pulls and deletions, job runs, and MFA enrolment. Each entry has an `actor`: `admin` by default, `system` for an egress refusal found when a protected provider connects (`provider.egress_refused`) and for a provider whose stored key cannot be decrypted (`provider.secret_unreadable`), and `mcp` for the provider calls of the [MCP admin tools](mcp.md#admin-tools-stdio-only). These record `provider.create`, `provider.discover`, `provider.egress.rejected` and `provider.domain.rejected` as for the dashboard, plus their other refusals (`provider.create.refused`, `provider.discover.refused`) and previews (`provider.discover.preview`).
+Admin actions are recorded in `data/audit.db`: logins (success, failure, lockout, MFA), auto-logins and suspicious auto-login refusals, key creation, revocation, rotation and deletion, provider creation, changes and deletion (including base URL changes and refused domains), OAuth connections, pricing refreshes, cache clears, circuit resets, watchdog actions, model refreshes, Ollama pulls and deletions, job runs, and MFA enrolment. Each entry has an `actor`: `admin` by default, `system` for an egress refusal found when a protected provider connects (`provider.egress_refused`), for a provider whose stored key cannot be decrypted (`provider.secret_unreadable`) and for the first Claude limit of an episode (`provider.quota_limit`, see [Shared Claude quota](#shared-claude-quota)), and `mcp` for the provider calls of the [MCP admin tools](mcp.md#admin-tools-stdio-only). These record `provider.create`, `provider.discover`, `provider.egress.rejected` and `provider.domain.rejected` as for the dashboard, plus their other refusals (`provider.create.refused`, `provider.discover.refused`) and previews (`provider.discover.preview`).
 
 ```bash
 curl -s "http://localhost:8765/admin/audit?limit=20" -H "Authorization: Bearer $ADMIN_KEY"

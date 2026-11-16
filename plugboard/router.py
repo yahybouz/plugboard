@@ -41,6 +41,7 @@ from typing import (
 import aiohttp
 
 from plugboard import (
+    claude_quota,
     envcompat,
     metrics,
     netguard,
@@ -1501,6 +1502,7 @@ async def forward(
                         route_pauses.pause(
                             _circuit_key(provider, real_model), exc.retry_after
                         )
+                        claude_quota.note_limit(provider, real_model, exc)
                     try:
                         from plugboard.model_quarantine import (
                             is_account_unsupported_error,
@@ -1706,6 +1708,7 @@ async def forward(
                 route_pauses.pause(
                     _circuit_key(provider, real_model), last_err.retry_after
                 )
+                claude_quota.note_limit(provider, real_model, last_err)
 
             # The provider failed: count it against the route's circuit, unless
             # the request caused the error (400, 413, 422, a prompt too long...).
@@ -2092,6 +2095,7 @@ async def _stream_route(
             # quarantine's try (BUG-51).
             if isinstance(exc, CliSubprocessError) and exc.quota:
                 route_pauses.pause(circuit_key, exc.retry_after)
+                claude_quota.note_limit(provider, real_model, exc)
             # Before the first word nothing was sent: forward_stream hands over
             # to the next route, or the chat route answers the error, its CLI
             # details for the admin only (PLU-26). After it, the error ends the
@@ -2172,6 +2176,7 @@ async def _stream_route(
                     cb_failure(circuit_key, transient=is_transient(err))
                 if isinstance(err, ProviderQuotaError):
                     route_pauses.pause(circuit_key, err.retry_after)
+                    claude_quota.note_limit(provider, real_model, err)
                 raise err
             async for chunk in resp.content.iter_any():
                 if not streaming:

@@ -1301,6 +1301,7 @@ async function loadMonitoring() {
   const historyEl = document.getElementById("monitoring-history");
   summaryEl.innerHTML = ""; summaryEl.appendChild(skeleton(3));
   providersEl.innerHTML = ""; historyEl.innerHTML = "";
+  loadClaudeQuota();
 
   try {
     const res = await api("GET", "/admin/monitoring");
@@ -1370,6 +1371,40 @@ async function loadMonitoring() {
   } catch (err) {
     summaryEl.innerHTML = "";
     summaryEl.appendChild(h("div", { className: "alert alert-error" }, "Failed to load monitoring: " + err.message));
+  }
+}
+
+// PLU-67: the last Claude quota limit met by real calls (no probe).
+async function loadClaudeQuota() {
+  const el = document.getElementById("monitoring-claude-quota");
+  if (!el) return;
+  el.innerHTML = "";
+  try {
+    const res = await api("GET", "/admin/claude-quota");
+    const q = await res.json();
+    if (!q.last_limit_at) {
+      el.appendChild(emptyState("—", "No Claude limit reached so far."));
+      return;
+    }
+    const when = function (ts) { return ts ? ts.replace("T", " ").replace("Z", " UTC") : "—"; };
+    const rows = Object.keys(q.providers || {}).map(function (pid) {
+      const p = q.providers[pid] || {};
+      return h("tr", null,
+        h("td", null, h("code", null, pid)),
+        h("td", null, fmt(p.count || 0)),
+        h("td", null, when(p.last_limit_at)),
+      );
+    });
+    el.appendChild(h("div", { className: "alert alert-warning" },
+      "Last limit reached " + when(q.last_limit_at) + " on " + (q.provider || "—") +
+      (q.model ? " (" + q.model + ")" : "") +
+      (q.resumes_at ? ". Expected back " + when(q.resumes_at) + "." : ". Resume time not given."),
+      h("br"),
+      h("span", { className: "small" }, q.message || "")
+    ));
+    el.appendChild(table(["Provider", "Limits reached", "Last"], rows));
+  } catch (err) {
+    el.appendChild(h("div", { className: "alert alert-error" }, "Failed to load the Claude quota: " + err.message));
   }
 }
 
