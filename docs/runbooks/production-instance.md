@@ -224,6 +224,38 @@ provider. What the call does and does not do:
 - Not checked by these steps: a real answer from Claude Fable 5.2 through
   Claude Code 2.1.325.
 
+## Switching to 4.14.4
+
+- Image `plugboard:private-full-v4.14.4`. The CLI versions do not change: the
+  [production gate](prod-gate.md) still expects `0.65.0`,
+  `2.1.325 (Claude Code)`, `codex-cli 0.163.0` and agy `1.4.4`. Before the
+  start, the gate checks on the built image's ID that no `bwrap` is on the
+  PATH and that `/usr/libexec/plugboard/bwrap` answers, then that the tag and
+  the running container both name that ID (BUG-117).
+- The image starts `tini` as PID 1 (BUG-113, BUG-123). After the switch,
+  check as in [PID 1 of the container](#pid-1-of-the-container-tini):
+  `/proc/1/cmdline` reads `/usr/bin/tini -- python run.py`, and the count of
+  zombies is `0` (read it again after some agy and codex calls).
+- **A Compose file that sets `entrypoint:` for the gateway replaces tini**:
+  the gateway is PID 1 again and keeps every orphan as a zombie. None in the
+  repository does; check the production file before the switch
+  (`grep -n entrypoint /etc/plugboard/compose.v4.14.4.json` must print
+  nothing). `init: true` is harmless.
+- agy's cage, without a model request (as in [agy cage](#agy-cage)):
+  `verify-agy-sandbox.py` must print `"result": "pass"` with
+  `"probe_is_pid1": true`, now checked without `/proc` too (BUG-114), then
+  `exit 0`. It also checks that agy's settings are read-only in the cage
+  (BUG-108) and reports what the cage can reach under `"network"`, for
+  information (BUG-109). `~/.gemini/projects.json` is no longer required
+  (BUG-115).
+- codex's sandbox, without a prompt: `verify-codex-sandbox.py` (PLU-71), as
+  in step 6 of the [production gate](prod-gate.md), must print
+  `"result": "pass"`, then `exit 0`; on exit `1`, go back.
+- The image has no pip wheel left for `ensurepip` (PLU-77): `ensurepip` has
+  nothing to install in the container; nothing at run time calls it.
+- Not checked by these steps: a first real agy call with its settings
+  read-only, to be made on the UAT before production at each agy release.
+
 ## PID 1 of the container: tini
 
 From 4.14.4 the image starts `tini` as PID 1 (BUG-113, BUG-123), whatever the

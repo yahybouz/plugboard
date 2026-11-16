@@ -6,6 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.14.4] — 2026-11-16
+
+### Added
+
+- **codex's sandbox checked on the UAT too, and the image PATH pinned** (PLU-71, `cfed2be`): `deploy/ovh/verify-codex-sandbox.py`, which would have seen INC-4, also runs in the UAT container (`python - --apparmor plugboard-userns`); it prints one JSON line with `result` and exits `1` on a failure, and it only runs `codex sandbox` (never `codex exec`, never a prompt). The UAT acceptance (`deploy/uat/README.md`) and the production gate run it next to `verify-agy-sandbox.py`. The CI compares the executables on the built image's PATH with `ci/image-path-executables.txt`: a new one (such as the `bwrap` of INC-4) fails the CI until the list is updated in the same change.
+
+### Changed
+
+- **`rpm_limit` counts every model call; the reads stay under the per-key limit** (BUG-124, `b29df7c`): a key's `rpm_limit` takes one call for each of `/v1/chat/completions` (a cached answer included), `/v2/chat/completions`, each `/v1/preflight` ping, `/v1/embeddings` and `/v1/decisions`. The reads (`/v1/models`, `/v2/models`, the benchmarks lists, `/v1/models/{id}/info`, `/v1/me`, `/v1/me/keys`, `/usage/me`, `/v1/inflight`, `/v1/embeddings/models`, `/v1/decisions/models`, `/health*`) are not counted and stay under the global per-key `RATE_LIMIT` (BUG-119). `rpm_limit` bounds a client's inference: counting the reads would refuse with `429` the chat of an SDK that lists the models before each call, with no gain since the per-key limit already bounds them. No inference route was left out: the rule is documented and pinned by tests ([clients and keys](docs/guide/clients-and-keys.md)).
+
+- **The streamed text is the billed text** (BUG-92, `930cf6f`): with several `agent_response` steps from agy, or a non-empty thinking block from claude, the text streamed to the client and the billed answer could differ. The text sent to the client is now the text counted and billed, and the non-streamed answer of the same CLI output is the same. claude's thinking is no longer part of the answer unless there is no text at all, streamed or not: fewer estimated tokens where the thinking used to be shown. When the final text does not continue the text already sent, the answer returned and billed is what the client received.
+
+- **Runbooks describe the production instance in service** (PLU-66, `5b158dc`): the production gate and the rollback runbook give the commands of the running instance: Compose project `plugboard-private`, one Compose file per version under `/etc/plugboard`, no published port (`/health` and the smoke test through `docker exec`), the backup as it is taken before a switch, and the way back to the previous image checked by its ID. The former `deploy/ovh` host has its own section; what the repository cannot tell is marked "to be confirmed by the operator".
+
+- **What agy's cage can reach on the network, documented** (BUG-109, `8f462ea`): the cage shares the container's network, since agy needs the internet and `--unshare-net` would cut it. The providers guide and `plugboard/agy_cage.py` say what it reaches (the internet, the container's loopback and the gateway's port as any client, abstract Unix sockets) and why it is acceptable in the `deploy/` containers (every route that returns data needs a key, auto-login off, `FORWARDED_ALLOW_IPS` on the bridge only). `verify-agy-sandbox.py` reports it under `"network"`, for information, and fails when a Unix socket file is visible in the cage. The cage's command line is unchanged. **For the operator of a host install** (outside Docker): set `PLUGBOARD_LOCAL_AUTO_LOGIN=0` and keep `FORWARDED_ALLOW_IPS` to the proxy's address before turning the agy provider on ([providers](docs/guide/providers-and-subscriptions.md)).
+
+### Fixed
+
+- **tini reaps orphaned children in the gateway container** (BUG-113, BUG-123, `3ad6185`): the gateway was PID 1 of its container, so every orphan (codex's `bwrap`, `git`, a shell left by a CLI) stayed a zombie (68 in one hour on the UAT with 4.14.2). The image installs Debian's `tini` and starts it as its `ENTRYPOINT` (`["/usr/bin/tini", "--"]`, the `CMD` unchanged, no `-g`): it reaps the orphans and passes `SIGTERM` on to the gateway, which ends its CLIs' process groups itself. The build fails without `/usr/bin/tini`; the CI checks in the built image that PID 1 is tini and that an orphan is reaped. How codex, claude, gemini and agy are started does not change, pinned by `tests/test_cli_launch_unchanged.py` (gemini and agy added to it). **For the operator**: `init: true` in a Compose file only puts Docker's init in front of tini, harmless; a Compose file that sets `entrypoint:` would bypass tini (none in the repository: check the production file) ([production instance](docs/runbooks/production-instance.md#switching-to-4144)).
+
+- **The admin is readable on a phone** (BUG-125, `f1fe35e`): below 640 px every admin table (API keys, the three usage tables, providers, pricing and its auto-update, jobs, monitoring, the two Ollama tables, the overview, the two tables of the client portal) shows each row as a card: title and status on top, each value under its column name, then the actions as 44 px buttons. Ids wrap instead of being cut at a hyphen, and the page's main buttons (**+ New key**) are 44 px high. One mechanism for every table (a `data-label` per cell); table roles are kept for screen readers. The desktop layout does not change.
+
+- **A provider's 403 is not a lasting `forbidden_model`** (BUG-90, `2b0d406`): when the route a key may use fails, the provider's own `403` included, the client gets that failure, no longer `403 forbidden_model`, which now only means the key's refusal (streamed or not).
+
+- **A tool refused by agy is not a provider fault** (BUG-104, `2b6ec36`, note `a40d66b`): a tool request agy refuses in headless mode (`denied_actions`) no longer opens the circuit breaker, raises a `provider_down` alert, counts as an error in the metrics or quarantines the model. The client gets the same answer as before.
+
+- **A successful call lifts a quarantine; a timeout never sets one** (BUG-105, `27139a1`): a real successful call clears the quarantine, and the counted failures, of its provider and model pair. The internet check no longer quarantines a model on a timeout (`"status": "timeout"`, nothing recorded; the Playground shows it). Limit: a model already removed from a CLI provider's saved list is no longer routed, so no call can lift it (a probe or **Discover** can).
+
+- **A CLI that refuses its streaming option falls back to a plain call** (BUG-93, `d5c952b`): a claude or agy release that refuses its streaming option (non-zero exit, no JSON event, an unknown-option message), before anything was sent to the client, is called once more without streaming, with today's command line; the answer is replayed as SSE and billed once. No retry once a chunk has gone out.
+
+- **The client catalogue learns from real calls, not only probes** (PLU-55, `56ae6d9`): a client key's catalogue also hides a model whose last real call failed through the provider's fault less than 36 hours ago (the window of the probes; the more recent of the probe and the call decides), and a more recent successful call brings it back. No probe is added. The signal is kept in memory (a restart brings the model back); a quota `429` counts as a fault, as for the circuit breaker.
+
+- **Stale budget holds are purged** (BUG-84, `b596bed`): the daily retention pass settles the budget holds older than `HOLD_TTL_S` (`PLUGBOARD_BUDGET_HOLD_TTL_S`) at their estimate (`price_source` `hold-lapsed`), even when the key never calls again; a hold in progress is not touched. The retention audit line gains `budget_holds=<n>`.
+
+- **No lost audit entry when threads open a new audit database** (BUG-122, `28b3b8f`): several threads ran `PRAGMA journal_mode=WAL` on a new database before the busy timeout and one entry was lost to `database is locked`. The database is set up once per path, under a lock, and again if the file disappeared. Ends the intermittent failure of `tests/test_netguard.py::test_report_refusal_once_per_window`.
+
+- **`scripts/run_mcp.py` honours `PLUGBOARD_SKIP_DOTENV`** (BUG-91, `5f99fea`): it no longer reads `.env` when `PLUGBOARD_SKIP_DOTENV=1` (or the older `LLM_ENABLER_SKIP_DOTENV=1`), as the gateway.
+
+- **The agy sandbox check asserts pid 1 even without `/proc`** (BUG-114, `c6d2293`): `verify-agy-sandbox.py` always checks that its probe is pid 1 of the cage (`"probe_is_pid1": true`), with or without a `/proc`, and fails otherwise. **Correction of the 4.14.2 note** (BUG-86): that check only ran when the cage had its own `/proc`, so never in a container (UAT, production), where Docker forbids the cage a new procfs.
+
+- **`~/.gemini/projects.json` is optional in agy's cage** (BUG-115, `b2be908`): it is gemini-cli's project registry, not agy's (the agy 1.4.4 binary only names `cache/projects.json` inside its own store). It is mounted read-only when it exists (a regular file, reached through no symbolic link) and skipped otherwise; the cage no longer refuses agy on a server where gemini never ran. `~/.gemini/config` is still required, with a new message.
+
+### Security
+
+- **agy's settings are read-only inside its cage** (BUG-108, `c8d3fcd`): the whole store was bound writable, settings included. `settings.json`, `installation_id`, `jetski_state.pbtxt`, `bin/` and `builtin/` (`STORE_READ_ONLY`) are now bound read-only over the store, and the cage is refused when one is a symbolic link, of the wrong type, or a file with a second hard link. The sign-in token stays writable (refreshed by a rename), and so do the conversations, the summaries, `cache/`, `log/`, `mcp/` and `updater/`. `verify-agy-sandbox.py` checks both sides. Limits: a missing `settings.json` can be created by a call; the conversations of other calls in progress stay visible.
+
+- **A model's info page follows the key's model filter** (PLU-60, `e97f111`): another spelling of a model name (case, provider prefix, alias) got around the `allowed_models` filter of `/v1/models/{id}/info`, which compared the published ID. The page now resolves the name as the chat does (the routes the chat would try): a restricted key gets `403 forbidden_model` outside its list, whatever the spelling, and a model hidden from the client catalogue gets the unknown-model answer (`info_source: derived`). **For integrators**: an unrestricted client key also gets `derived` for a name no route serves.
+
+- **No bwrap on the image PATH, checked before the start** (BUG-117, `5048bf6`): the production gate records the ID of the built image, checks on that ID that no `bwrap` is on the PATH and that `/usr/libexec/plugboard/bwrap` answers, before the start; then that the tag names that ID before `up`, and that the running container does after (the broken 4.14.2 image carried the same tag as the fixed one). A section says how to remove an image that failed the gate (`docker image rm <id>`), a gesture left to the operator ([production gate](docs/runbooks/prod-gate.md)).
+
+- **No pip wheel left for `ensurepip`** (PLU-77, `79ff5c9`): the pip 25.0.1 wheel bundled with the image's Python is removed from the `api` and `full` targets after the last use of pip; the build and the CI fail if one is left. Nothing at run time calls `ensurepip`.
+
+- **`scripts/smoke_models.py` never sends the key across a redirect** (BUG-94, `69ad6fb`): it no longer follows a redirect, so the key does not go to another host; a `3xx` stops the script.
+
+**API contract**: this release publishes **3.0.1** (`docs/api/openapi.json`, `docs/api/mcp.json`; 4.14.3 published 3.0.0). The only change is the wording of `ClientInfo.rpm_limit`, which now says it counts the routes that call a model and not the reads (BUG-124); no field, status or meaning changes.
+
+**Not verified**: the 4.14.4 image built and checked by the CI (tini as PID 1, an orphan reaped, no pip wheel left, the list of executables on the PATH); a real agy call with its settings read-only and without `projects.json`; a real refusal of a streaming option by a CLI; a real agy stream with several `agent_response` steps; `verify-codex-sandbox.py --apparmor plugboard-userns` in the UAT container; the runbook commands (production gate, rollback) run against the production instance.
+
 ## [4.14.3] — 2026-11-15
 
 ### Added
