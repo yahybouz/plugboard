@@ -2281,20 +2281,27 @@ def _check_model_access(
     model_str: str,
     key_record: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Raise 403 unless the resolved effective identity is allowed."""
-    guard = _model_route_guard(client_id, key_record)
-    if guard is not None:
-        guard(*_route_for_guard(model_str))
+    """Raise 403 unless the key may use the model as chat would route it.
 
-
-def _route_for_guard(model_str: str) -> tuple:
-    """(provider, native model) a key's allowed_models is checked against.
-
-    A model of a disabled provider is checked as its real owner's (PLU-12):
-    resolve_provider_and_model would name another provider, the one the
-    request used to leak to (BUG-44).
+    Chat's own rule, as on the info page since PLU-60 (BUG-129): the first
+    route the model resolves to, then every route chat would try, in order
+    (router.chat_routes): refused when the key may use none of them before
+    the first it refuses. A name no route serves is left to the checks that
+    follow (provider_disabled, model_not_found).
     """
-    return disabled_route(model_str) or resolve_provider_and_model(model_str)
+    guard = _model_route_guard(client_id, key_record)
+    if guard is None:
+        return
+    # A model of a disabled provider is checked as its real owner's (PLU-12):
+    # resolve_provider_and_model would name another provider (BUG-44).
+    disabled = disabled_route(model_str)
+    guard(*(disabled or resolve_provider_and_model(model_str)))
+    if disabled is not None:
+        return
+    try:
+        chat_routes(model_str, guard)
+    except (ValueError, ModelNotServedError):
+        return
 
 
 def _model_route_guard(client_id, key_record=None):
