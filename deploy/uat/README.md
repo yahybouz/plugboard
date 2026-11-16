@@ -48,6 +48,19 @@ docker exec uat-plugboard-gateway-1 sh -c "grep -s '^State:[[:space:]]*Z' /proc/
 # Expected: 0 (zombies), again after some agy and codex calls
 ```
 
+## Sandbox checks after each deployment
+
+Two offline checks, run by a root operator from a checkout of the deployed commit; neither makes a model request. codex's sandbox (PLU-71), which would have shown INC-4 before any client did; the UAT confines the gateway with `plugboard-userns`, so the check is told that profile (without `--apparmor` it requires production's `plugboard-codex`, and its other checks are the same):
+
+```bash
+docker exec -i uat-plugboard-gateway-1 python - --apparmor plugboard-userns < deploy/ovh/verify-codex-sandbox.py; echo "exit $?"
+# Expected: one JSON line with "result": "pass" and "apparmor": "plugboard-userns (enforce)", then exit 0
+docker exec -i uat-plugboard-gateway-1 python - < deploy/ovh/verify-agy-sandbox.py; echo "exit $?"
+# Expected: one JSON line with "result": "pass", then exit 0
+```
+
+`verify-codex-sandbox.py` runs `codex sandbox` (never `codex exec`, never a prompt) with the isolation of a chat call: the probe must read its own folder, fail to read three files outside it, and fail to write. On exit `1`, the cause is on the last line; agy's check is described in [deploy/ovh](../ovh/README.md#agy-cage).
+
 ## CLI versions
 
 The provider CLI versions of the `full` image come from the `Dockerfile` only (the `ARG` lines of its `full` stage); see [Deployment, CLI versions](../../docs/guide/deployment.md#cli-versions). `deployer-entry.json` is the target state of the deployer's entry: its image carries no `build_args`. The live entry on the host must carry no `build_args` either; a root operator removes them there, otherwise the deployer would pass a second copy of the versions that overrides the `Dockerfile`.

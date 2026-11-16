@@ -10,7 +10,8 @@ Sous-commandes :
                  détruit les conteneurs (finally + SIGTERM).
   gitleaks       secrets : `gitleaks git` sur base..HEAD si dépôt Git, sinon `gitleaks dir`.
   image-docker   docker build d'une cible + contrôles (utilisateur, healthcheck, commandes
-                 lancées dans l'image sans réseau, ex. `claude --version`), image retirée.
+                 lancées dans l'image sans réseau, ex. `claude --version`, exécutables du
+                 PATH comparés à une liste versionnée), image retirée.
 
 Docker : DOCKER_HOST de l'appelant (env_passthrough) ; sur l'UAT, le Docker rootless d'agent.
 """
@@ -258,6 +259,8 @@ def cmd_image_docker(args) -> int:
         for cmd in commandes:
             if _verifier(tag, cmd, args.delai_verifier):
                 rc = 1
+        if args.executables_path and _comparer_path(tag, args.executables_path, args.delai_verifier):
+            rc = 1
         return rc
     finally:
         _run([DOCKER, "image", "rm", tag], capture_output=True)
@@ -288,6 +291,65 @@ def _verifier(tag: str, cmd: str, delai: float) -> int:
         print(f"ÉCHEC {cmd} (code {r.returncode}) : {detail}", file=sys.stderr)
         return 1
     print(f"OK {cmd} : {sortie[0] if sortie else '(sans sortie)'}")
+    return 0
+
+
+# Exécutables du PATH de l'image (PLU-71) : chaque fichier exécutable par
+# l'utilisateur de l'image dans chaque dossier de son PATH, sous le chemin réel
+# du dossier (/bin et /usr/bin, liés, ne comptent qu'une fois après tri).
+PATH_EXECUTABLES_SCRIPT = (
+    'IFS=:; for d in $PATH; do [ -d "$d" ] || continue; r=$(cd "$d" && pwd -P) || continue; '
+    'for f in "$d"/* "$d"/.[!.]*; do if [ -f "$f" ] && [ -x "$f" ]; then '
+    'printf \'%s/%s\\n\' "$r" "${f##*/}"; fi; done; done'
+)
+
+
+def _liste_attendue(chemin: str) -> list[str]:
+    """Lignes de la liste versionnée, sans commentaires ni lignes vides."""
+    with open(chemin, encoding="utf-8") as fh:
+        return [ligne.strip() for ligne in fh if ligne.strip() and not ligne.lstrip().startswith("#")]
+
+
+def _comparer_path(tag: str, chemin: str, delai: float) -> int:
+    """Compare les exécutables du PATH de l'image à `chemin` ; 0 si identiques.
+
+    Un exécutable nouveau sur le PATH (le bwrap d'INC-4) ou disparu fait
+    échouer l'étape tant que la liste n'est pas mise à jour dans le même
+    changement. Liste encore vide : la liste réelle est imprimée, l'étape échoue.
+    """
+    nom = f"ci-verif-{os.getpid()}-{_secrets.token_hex(3)}"
+    argv = [DOCKER, "run", "--rm", "--name", nom, "--label", f"ci.locale.image={tag}",
+            "--network", "none", tag, "sh", "-c", PATH_EXECUTABLES_SCRIPT]
+    try:
+        r = _run(argv, capture_output=True, text=True, timeout=delai)
+    except subprocess.TimeoutExpired:
+        _run([DOCKER, "rm", "-f", nom], capture_output=True)
+        print(f"ÉCHEC exécutables du PATH : pas de réponse en {delai:.0f} s", file=sys.stderr)
+        return 1
+    if r.returncode:
+        detail = (r.stderr or r.stdout or "").strip()[-400:]
+        print(f"ÉCHEC exécutables du PATH (code {r.returncode}) : {detail}", file=sys.stderr)
+        return 1
+    reels = sorted(set((r.stdout or "").split("\n")) - {""})
+    attendus = _liste_attendue(chemin)
+    if not attendus:
+        print(f"Exécutables du PATH de l'image ({len(reels)}) :")
+        for ligne in reels:
+            print(ligne)
+        print(f"ÉCHEC {chemin} ne liste encore aucun exécutable : relire la liste "
+              "ci-dessus, la copier dans ce fichier et la versionner.", file=sys.stderr)
+        return 1
+    nouveaux = sorted(set(reels) - set(attendus))
+    partis = sorted(set(attendus) - set(reels))
+    if nouveaux or partis:
+        print(f"ÉCHEC exécutables du PATH différents de {chemin} : mettre la liste à jour "
+              "dans le même changement (INC-4 : un bwrap sur le PATH).", file=sys.stderr)
+        for ligne in nouveaux:
+            print(f"+ {ligne}", file=sys.stderr)
+        for ligne in partis:
+            print(f"- {ligne}", file=sys.stderr)
+        return 1
+    print(f"OK PATH : {len(reels)} exécutables, comme {chemin}")
     return 0
 
 
@@ -322,10 +384,14 @@ def main() -> int:
                    help="comme --verifier, seulement si l'image est amd64 (répétable)")
     i.add_argument("--delai-verifier", type=float, default=120.0,
                    help="secondes accordées à chaque commande (défaut 120)")
+    i.add_argument("--executables-path",
+                   help="liste versionnée des exécutables du PATH de l'image (PLU-71)")
     a = p.parse_args()
     if a.cmd == "image-docker":
         if a.delai_verifier <= 0:
             i.error("--delai-verifier doit être positif")
+        if a.executables_path and not os.path.isfile(a.executables_path):
+            i.error(f"liste des exécutables du PATH introuvable : {a.executables_path}")
         for cmd in (a.verifier or []) + (a.verifier_amd64 or []):
             try:
                 mots = shlex.split(cmd)

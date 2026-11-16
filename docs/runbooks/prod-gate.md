@@ -341,13 +341,21 @@ sudo docker network inspect plugboard-private_default \
 gw exec gateway sh -ec 'claude --version; codex --version; gemini --version; gh --version; agy --version'
 gw exec -T gateway python - < deploy/ovh/verify-agy-sandbox.py; echo "exit $?"
 # Expected: one JSON line with "result": "pass", then exit 0
+gw exec -T gateway python - < deploy/ovh/verify-codex-sandbox.py; echo "exit $?"
+# Expected: one JSON line with "result": "pass", then exit 0
 ```
 
 The CLI versions command shows that the CLIs start in the running container
 with the `cli-home` volume; it does not prove their sign-ins. Check those with
 each CLI's own status command (see `deploy/ovh/README.md`, CLI homes). The
-last command checks agy's cage without a model request; on exit `1` or `2`,
-follow [agy cage](../../deploy/ovh/README.md#agy-cage) before going on.
+last two commands check agy's cage and codex's sandbox without a model
+request. On exit `1` or `2` of the first, follow
+[agy cage](../../deploy/ovh/README.md#agy-cage) before going on. The second
+runs `codex sandbox` (never a prompt) with a chat call's isolation: it must
+read its own folder only and write nothing, under the AppArmor profile
+`plugboard-codex` in enforce mode (a host whose profile has another name
+passes it as `python - --apparmor <name>`); on exit `1` its cause is on the
+last line, and every codex call would fail or leak (INC-4): go back.
 
 ### 7. Smoke the new version
 

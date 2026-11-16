@@ -1,0 +1,11 @@
+# Executables on the PATH of the `full` image, as its user `app` sees them
+# (PLU-71). The CI's docker-build step (ci/ci_outils.py image-docker
+# --executables-path) lists every executable file of each PATH directory,
+# under the directory's real path, and compares the list with this file: a
+# new executable on the PATH (INC-4: Debian's bwrap at /usr/bin/bwrap, which
+# codex took instead of its own) or one that is gone fails the CI until this
+# file is updated in the same change. Lines starting with `#` are comments.
+#
+# The list below is copied from the CI's output, never written by hand: while
+# it holds no entry, the step prints the image's real list and fails. Read it
+# (no bwrap, nothing unexpected), paste it under this header, commit.
