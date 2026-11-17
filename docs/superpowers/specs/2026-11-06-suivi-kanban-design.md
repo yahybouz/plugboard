@@ -10,8 +10,8 @@ approuver sous Superpowers ».
 
 ## Ce que YB a demandé
 
-- Une page à part pour consulter l'avancement, même pratique pour Plugboard,
-  Argos et Motorya (Volya a déjà un board généré).
+- Une page à part pour consulter l'avancement, même pratique pour Plugboard
+  et les autres projets suivis (l'un d'eux a déjà un board généré).
 - Pour Plugboard, plutôt un Kanban, avec des tickets à remonter.
 - Utiliser Superpowers pour Plugboard.
 
@@ -40,7 +40,7 @@ approuver sous Superpowers ».
    `/suivi` servie par l'application existante, derrière la même session admin.
    Tickets en SQLite `data/suivi.db`, API `/admin/suivi/*`. Les plans
    Superpowers et `TODOS.md` sont **importés** comme tickets (lecture seule de
-   la source, aucune modification). Les boards Argos/Motorya/Volya restent dans
+   la source, aucune modification). Les boards des autres projets restent dans
    leurs projets ; `/suivi` ne montre que Plugboard. Coût : M. Pas de seconde
    gestion de comptes.
 2. **Portail central quatre projets.** Une entrée unique pour les quatre
