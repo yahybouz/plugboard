@@ -14,6 +14,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
@@ -147,3 +149,57 @@ def test_the_full_stage_copies_gh_onto_the_path_and_starts_it():
 
 def test_the_dockerfile_says_when_to_go_back_to_apt():
     assert re.search(r"(?i)back to (?:the )?apt", _gh_stage())
+
+
+# Executables the ``gnupg`` package pulls onto the PATH (gnupg -> dirmngr,
+# gpg, gpg-agent, gpgconf, gpgsm; gpg-agent -> pinentry-curses, which also
+# provides the /usr/bin/pinentry alternative).
+GNUPG_EXECUTABLES = (
+    "/usr/bin/dirmngr",
+    "/usr/bin/dirmngr-client",
+    "/usr/bin/gpg",
+    "/usr/bin/gpg-agent",
+    "/usr/bin/gpg-connect-agent",
+    "/usr/bin/gpgconf",
+    "/usr/bin/gpgsm",
+    "/usr/bin/pinentry",
+    "/usr/bin/pinentry-curses",
+)
+
+
+def _path_list() -> set:
+    text = (ROOT / "ci" / "image-path-executables.txt").read_text(encoding="utf-8")
+    return {
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+
+
+def _full_apt_packages() -> set:
+    _, full = _stages()["full"]
+    packages = set()
+    for run in _runs(full):
+        if "apt-get install" in run:
+            words = run.split("apt-get install", 1)[1].split("&&", 1)[0].split()
+            packages |= {w for w in words if not w.startswith("-")}
+    return packages
+
+
+def test_the_path_list_expects_gh_where_the_dockerfile_copies_it():
+    # The CI compares the image's PATH with ci/image-path-executables.txt
+    # (PLU-71): moving gh without updating the list fails docker-build.
+    _, full = _stages()["full"]
+    dest = re.search(r"(?m)^COPY --from=gh \S+ (\S+)$", full)
+    assert dest, "no `COPY --from=gh` in the full stage"
+    listed = _path_list()
+    assert dest[1] in listed, f"{dest[1]} missing from ci/image-path-executables.txt"
+    others = {p for p in listed if p.rsplit("/", 1)[-1] == "gh" and p != dest[1]}
+    assert others == set(), f"gh still expected at {sorted(others)}"
+
+
+def test_the_path_list_has_no_gnupg_executable_without_gnupg():
+    if "gnupg" in _full_apt_packages():
+        pytest.skip("the full stage installs gnupg")
+    left = sorted(set(GNUPG_EXECUTABLES) & _path_list())
+    assert left == [], f"gnupg is no longer installed, yet the list expects {left}"

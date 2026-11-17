@@ -66,8 +66,6 @@
 /usr/bin/diff3
 /usr/bin/dir
 /usr/bin/dircolors
-/usr/bin/dirmngr
-/usr/bin/dirmngr-client
 /usr/bin/dirname
 /usr/bin/dmesg
 /usr/bin/dnsdomainname
@@ -102,18 +100,12 @@
 /usr/bin/getconf
 /usr/bin/getent
 /usr/bin/getopt
-/usr/bin/gh
 /usr/bin/git
 /usr/bin/git-receive-pack
 /usr/bin/git-shell
 /usr/bin/git-upload-archive
 /usr/bin/git-upload-pack
 /usr/bin/gpasswd
-/usr/bin/gpg
-/usr/bin/gpg-agent
-/usr/bin/gpg-connect-agent
-/usr/bin/gpgconf
-/usr/bin/gpgsm
 /usr/bin/grep
 /usr/bin/groups
 /usr/bin/gunzip
@@ -196,8 +188,6 @@
 /usr/bin/perlthanks
 /usr/bin/piconv
 /usr/bin/pidof
-/usr/bin/pinentry
-/usr/bin/pinentry-curses
 /usr/bin/pinky
 /usr/bin/pl2pm
 /usr/bin/pldd
@@ -330,6 +320,7 @@
 /usr/local/bin/dotenv
 /usr/local/bin/fastapi
 /usr/local/bin/gemini
+/usr/local/bin/gh
 /usr/local/bin/idle
 /usr/local/bin/idle3
 /usr/local/bin/idle3.12
