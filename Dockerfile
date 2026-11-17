@@ -12,7 +12,8 @@
 #   full  api + the MCP server's own virtualenv (/opt/venv-mcp) + the CLIs
 #         that the subprocess providers spawn
 #         (gemini, claude, codex via npm; agy from Google's signed release
-#         archive, SHA512-pinned; gh via its apt repository).
+#         archive, SHA512-pinned; gh built from its pinned release tag
+#         in the `gh` stage, see there why).
 #         It is the LAST stage, so a plain `docker build .` (and the
 #         Railway config, which names no target) still produces it.
 #           docker build --target full -t plugboard:full .
@@ -32,6 +33,9 @@ ARG PYTHON_IMAGE=python:3.12-slim
 # Node is copied from the official image instead of running a vendor
 # setup script through a shell (no `curl | bash`).
 ARG NODE_IMAGE=node:22-slim
+# Go toolchain of the `gh` stage: an exact release, at least the toolchain
+# gh's go.mod asks for.
+ARG GO_IMAGE=golang:1.27.4-trixie
 
 # ── base: Python runtime + application code ──────────────────
 FROM ${PYTHON_IMAGE} AS base
@@ -115,6 +119,39 @@ USER app
 # ── node: source of the Node.js runtime for the full image ───
 FROM ${NODE_IMAGE} AS node
 
+# ── gh: the GitHub CLI, built from its release sources ───────
+FROM ${GO_IMAGE} AS gh
+
+# SEC-VEILLE: plugboard/cli_auth.py runs `gh auth token` for the GitHub
+# Copilot and GitHub Models providers, so the image keeps gh. Its last
+# release (2.104.0) embeds golang.org/x/net v0.61.0 (CVE-2026-78661, HIGH,
+# fixed in v0.62.0) and no fixed gh is published yet. This stage builds that
+# release from its tag, checks the tag still names the expected commit,
+# raises x/net (a minor bump) and fails unless the binary embeds it and
+# still reports its release version. Temporary: go back to apt (the
+# cli.github.com repository) once a gh release ships the fixed x/net.
+ARG GH_VERSION=2.104.0
+ARG GH_COMMIT=3d5a9e355a837f2f5ee78d7484c118cc1342ad1a
+ARG GH_XNET_VERSION=0.62.0
+# The pinned image's toolchain only, never a download named by go.mod.
+ENV GOTOOLCHAIN=local
+RUN set -e; \
+    git clone --quiet --depth 1 --branch "v${GH_VERSION}" https://github.com/cli/cli.git /src/gh; \
+    test "$(git -C /src/gh rev-parse HEAD)" = "${GH_COMMIT}"; \
+    cd /src/gh; \
+    go get "golang.org/x/net@v${GH_XNET_VERSION}"; \
+    go mod tidy; \
+    go mod verify; \
+    build_date="$(git log -1 --format=%cs)"; \
+    CGO_ENABLED=0 go build -trimpath \
+        -ldflags "-X github.com/cli/cli/v2/internal/build.Version=${GH_VERSION} -X github.com/cli/cli/v2/internal/build.Date=${build_date}" \
+        -o /out/gh ./cmd/gh; \
+    go version -m /out/gh > /tmp/gh.buildinfo; \
+    awk -v want="v${GH_XNET_VERSION}" '$1 == "dep" && $2 == "golang.org/x/net" { found = ($3 == want) } END { exit !found }' /tmp/gh.buildinfo; \
+    /out/gh --version > /tmp/gh.version; \
+    grep -qxF "gh version ${GH_VERSION} (${build_date})" /tmp/gh.version; \
+    cat /tmp/gh.version
+
 # ── full: gateway + provider CLIs ────────────────────────────
 FROM base AS full
 
@@ -129,7 +166,7 @@ ARG CLAUDE_CODE_VERSION=2.1.325
 ARG CODEX_VERSION=0.163.0
 
 # - git: used by the CLIs and some npm post-install scripts
-# - curl, gnupg: fetch the GitHub CLI signing key (written to a file,
+# - curl: fetches the agy release archive (written to a file, checked,
 #   never piped to a shell)
 # - bubblewrap: the cage every agy launch runs in (BUG-86,
 #   plugboard/agy_cage.py); without bwrap, agy is not run at all. Its bwrap
@@ -138,19 +175,15 @@ ARG CODEX_VERSION=0.163.0
 #   Debian's cannot mount /proc in the container (every codex call failed,
 #   15/11). See the check after the CLIs below.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl git gnupg bubblewrap \
+ && apt-get install -y --no-install-recommends ca-certificates curl git bubblewrap \
  && install -d -m 0755 /usr/libexec/plugboard \
  && install -m 0755 -o root -g root /usr/bin/bwrap /usr/libexec/plugboard/bwrap \
  && rm /usr/bin/bwrap \
- && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-        -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
- && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
- && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-        > /etc/apt/sources.list.d/github-cli.list \
- && apt-get update \
- && apt-get install -y --no-install-recommends gh \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
+
+# GitHub CLI built by the `gh` stage (SEC-VEILLE), on the PATH.
+COPY --from=gh /out/gh /usr/local/bin/gh
 
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 COPY --from=node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
