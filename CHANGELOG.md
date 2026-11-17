@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.14.6] — 2026-11-17
+
+### Changed
+
+- **`.mailmap` shows the public identity for the former identities of the history** (D-61, `cf3b751`): the history is not rewritten (the owner's decision); `git log` and `git shortlog` show the public identity for the former author and committer addresses, all already present in the published `main` branch. One former identity is left out on purpose and still shows as it is: its address contains a private term that `ci/publish_check.py` refuses. `tests/test_mailmap.py` checks that every line maps to the public identity and, when the git history is there, that `git check-mailmap` resolves each listed address to it.
+
+### Fixed
+
+- **`ci/publish_check.py` reads every added line, whatever the form of the diff** (BUG-146, `6153cab`): an added line starting with `++` was taken for a `+++` file header and the rest of the file was skipped, and a quoted path (`+++ "b/..."`) left every line of its file unchecked. The diff is now read by its structure: a file header only between `diff --git` and the first `@@`, then the counts of each `@@` header, whatever the lines hold; quoted and escaped paths, renames, mode changes, symlinks and a missing final newline are read too. The diff options are frozen (`--no-color`, `--no-ext-diff`, `--no-textconv`, `--no-relative`, `--no-renames`, `--text`, fixed prefixes…), so neither a git setting nor an attribute changes what is read. A diff it cannot read stops the check with code `2`: a failure, never a pass.
+
+- **A published spec no longer names other projects** (PLU-81, BUG-138, `88bd506`): the kanban follow-up spec (`docs/superpowers/specs/2026-11-06-suivi-kanban-design.md`) describes the other projects followed neutrally, with the same meaning, so `ci/publish_check.py --tree` passes with the private terms.
+
+### Security
+
+- **gh built from the sources of its release tag with golang.org/x/net v0.62.0** (SEC-VEILLE, `9da4ba3`): the image scan reported CVE-2026-78661 (HIGH) in `golang.org/x/net` v0.61.0, embedded in gh 2.104.0 as published (its last release); no fixed gh is published. The gateway still needs gh (`gh auth token` for the GitHub Copilot and GitHub Models providers), so a new `gh` stage of the `Dockerfile` (`golang:1.27.4-trixie`, the image's own toolchain only) clones the `v2.104.0` tag, fails unless it names the expected commit, raises `golang.org/x/net` to v0.62.0 (a minor bump), builds gh with CGO off and fails unless the binary embeds v0.62.0 and still answers `gh version 2.104.0`. The full image copies it to `/usr/local/bin/gh` and no longer adds the gh apt repository, its key nor `gnupg`. Building the image now needs to reach `github.com` and `proxy.golang.org`. Temporary: back to the apt repository as soon as a gh release ships the fixed x/net. The other CLIs (gemini, claude, codex, agy) do not change.
+
+- **The Claude quota excerpt masks more forms of secret** (BUG-143, `12e3fdc`): the error excerpt of PLU-67 (`GET /admin/claude-quota`, the `provider.quota_limit` audit entry) masked only `sk-*` keys, `Authorization: Bearer` and JSON `api_key` fields. It now also masks an `x-api-key` (and `x-goog-api-key`, `api-key`) header, an `Authorization` value (Bearer, Basic or a bare value), as a header line or a JSON field, escaped or not, in any case; `token=`, `access_token=`, `api_key=`, `key=`, `client_secret=`, `password=` parameters; `sk-ant-…` keys anywhere, glued to a word or cut; and Google `AIza…` keys. Masking still runs before the excerpt is cut, and an excerpt saved before is masked again when `GET /admin/claude-quota` reads it. The gateway's log filter (`plugboard/log_redact.py`) masks these forms too.
+
+**API contract**: unchanged, still **3.0.1** (`docs/api/openapi.json`, `docs/api/mcp.json`; `scripts/export_contract.py --check` and `--mcp --check` up to date). `GET /admin/claude-quota` is an admin route, outside the contract; the shape of its answer does not change (BUG-143).
+
+**Not verified**: the real build of the image and its trivy scan (run by the local CI after this commit; the build fetches from `github.com` and `proxy.golang.org`); `gh auth token` in a real container of the new image; forms of secret the patterns do not cover (a value cut by a line break, URL-encoded or `\uXXXX` forms, `token: value` outside JSON); the audit entries already written by 4.14.5 are not rewritten, only the admin view of the last limit is masked again on read.
+
 ## [4.14.5] — 2026-11-16
 
 ### Added

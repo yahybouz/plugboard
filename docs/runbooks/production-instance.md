@@ -297,6 +297,31 @@ provider. What the call does and does not do:
   (the forms of the message come from the code and its tests), and the
   **Claude quota** block in a browser.
 
+## Switching to 4.14.6
+
+- Image `plugboard:private-full-v4.14.6`. The CLI versions do not change: the
+  [production gate](prod-gate.md) still expects `0.65.0`,
+  `2.1.325 (Claude Code)`, `codex-cli 0.163.0` and agy `1.4.4`, and still
+  checks the image ID and that no `bwrap` is on the PATH (BUG-117). agy's
+  cage and codex's sandbox do not change: `verify-agy-sandbox.py` and
+  `verify-codex-sandbox.py` must still print `"result": "pass"`.
+- gh keeps its version, 2.104.0, but is now built from the sources of its
+  release tag with `golang.org/x/net` v0.62.0 (SEC-VEILLE, CVE-2026-78661),
+  installed at `/usr/local/bin/gh` instead of the apt package. Building the
+  image needs to reach `github.com` and `proxy.golang.org`; a build that
+  cannot reach them fails in the `gh` stage, before any switch. In the CLI
+  check of the [production gate](prod-gate.md), `gh --version` must give
+  `gh version 2.104.0 (2026-11-12)` as its first line; another version, or
+  an error, stops the gate.
+- After the switch, `GET /health` answers `{"ok": true, "version": "4.14.6"}`.
+- The Claude quota state needs nothing (BUG-143): `data/claude_quota.json`
+  is kept as it is, and an excerpt saved by 4.14.5 is masked again when
+  `GET /admin/claude-quota` reads it. The audit entries already written are
+  not rewritten.
+- Not checked by these steps: `gh auth token` in a real container of the new
+  image (the GitHub Copilot and GitHub Models providers read their token
+  through it).
+
 ## PID 1 of the container: tini
 
 From 4.14.4 the image starts `tini` as PID 1 (BUG-113, BUG-123), whatever the

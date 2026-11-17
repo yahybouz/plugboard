@@ -1,7 +1,9 @@
 """What the operator and integrators read for 4.14.5 (release 4.14.5).
 
-The version is 4.14.5 in ``VERSION``, ``plugboard.__version__``, the compose
-image tag and the health examples; the dated CHANGELOG entry names every
+The version is 4.14.5 or a later release in ``VERSION`` and
+``plugboard.__version__``, and the compose image tag and the health examples
+name that version (4.14.6 pins its own in its test); the dated CHANGELOG
+entry names every
 ticket of the release with its commit on the release branch (never the
 commit of a work branch), says that the API contracts are unchanged (3.0.1),
 says that BUG-106 stays open, and lists what was not verified; the production
@@ -75,17 +77,27 @@ def _flat(text: str) -> str:
     return " ".join(text.split())
 
 
-def test_the_version_is_4_14_5():
-    assert (ROOT / "VERSION").read_text(encoding="utf-8").strip() == "4.14.5"
-    assert plugboard.__version__ == "4.14.5"
+def _release_tuple(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
 
 
-def test_the_compose_file_and_the_health_examples_name_4_14_5():
+def _current_version() -> str:
+    return (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+
+
+def test_the_version_is_4_14_5_or_later():
+    version = _current_version()
+    assert _release_tuple(version) >= (4, 14, 5)
+    assert plugboard.__version__ == version
+
+
+def test_the_compose_file_and_the_health_examples_name_the_current_version():
+    version = _current_version()
     compose = (ROOT / "deploy" / "ovh" / "compose.yml").read_text(encoding="utf-8")
-    assert "${PLUGBOARD_IMAGE:-plugboard:private-full-v4.14.5}" in compose
+    assert f"${{PLUGBOARD_IMAGE:-plugboard:private-full-v{version}}}" in compose
     monitoring = (ROOT / "docs" / "guide" / "monitoring.md").read_text(encoding="utf-8")
-    assert '{"ok": true, "version": "4.14.5"}' in monitoring
-    assert '{"ready": true, "version": "4.14.5"}' in monitoring
+    assert f'{{"ok": true, "version": "{version}"}}' in monitoring
+    assert f'{{"ready": true, "version": "{version}"}}' in monitoring
     assert '"version": "4.14.4"' not in monitoring
 
 
