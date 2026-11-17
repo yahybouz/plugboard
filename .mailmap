@@ -1,0 +1,9 @@
+# D-61: former commit identities are shown as the public one.
+# The history is not rewritten; git log, git shortlog and the forges
+# read this file. Format: <public identity> <former address>.
+Hermes UAT <hermes@uat.local> <hermes@localhost>
+Hermes UAT <hermes@uat.local> <hermes@uat>
+Hermes UAT <hermes@uat.local> <nova@192.168.11.111>
+Hermes UAT <hermes@uat.local> <nova@192.168.11.108>
+Hermes UAT <hermes@uat.local> <44364498+yahybouz@users.noreply.github.com>
+Hermes UAT <hermes@uat.local> <contributors@plugboard.invalid>
