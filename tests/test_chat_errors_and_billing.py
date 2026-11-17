@@ -24,6 +24,7 @@ from tests.factories import FAKE_COMPLETION, PROVIDER_A, PROVIDER_B
 ROOT = Path(__file__).resolve().parent.parent
 ADMIN = {"Authorization": "Bearer testkey"}
 SECRET = "[test-provider] 10.0.0.7:8443 token=sk-live-secret"
+SECRET_LOGGED = "[test-provider] 10.0.0.7:8443 token=***REDACTED***"
 CLI = {
     "id": "pbtest-cli",
     "name": "CLI test",
@@ -128,11 +129,13 @@ async def test_a_client_key_gets_a_generic_error_with_a_reference(
     assert "subprocess:claude" not in resp.text
     assert re.fullmatch(r"[0-9a-f]{8}", body["error_ref"])
     assert body["error_ref"] in body["detail"]
-    # The gateway log keeps the text, under the same reference.
+    # The gateway log keeps the text, under the same reference; the log
+    # filter masks the token in it (BUG-143).
     assert any(
-        body["error_ref"] in r.getMessage() and SECRET in r.getMessage()
+        body["error_ref"] in r.getMessage() and SECRET_LOGGED in r.getMessage()
         for r in caplog.records
     )
+    assert not any("sk-live-secret" in r.getMessage() for r in caplog.records)
     if status == 503:
         assert body["retry_after"] == 10 and resp.headers["Retry-After"] == "10"
 

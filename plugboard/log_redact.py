@@ -13,6 +13,10 @@ Covered patterns:
 - AWS access keys: AKIA* (20 chars)
 - Generic Bearer headers: "Authorization: Bearer <token>"
 - API keys in JSON: "api_key": "<value>", "key": "<value>"
+- Google API keys: AIza* (BUG-143)
+- Secret headers, header or JSON form, any case: x-api-key, x-goog-api-key,
+  api-key, Authorization (Bearer, Basic, bare value) (BUG-143)
+- Query and form parameters: token=, access_token=, api_key=, key=… (BUG-143)
 - UUIDs are NOT redacted (too noisy; they're rarely secret)
 - Email addresses are NOT redacted (needed for audit trails)
 
@@ -103,6 +107,46 @@ _PATTERNS = [
         "plugboard",
         re.compile(r"\bpb_[A-Za-z0-9]{32,}"),
         "pb_***REDACTED***",
+    ),
+    # BUG-143: Anthropic keys anywhere, even glued to a word ("id_sk-ant-…",
+    # where the \b of the "openai" pattern fails) or cut short upstream.
+    (
+        "anthropic_any",
+        re.compile(r"sk-ant-[A-Za-z0-9_-]{4,}"),
+        "sk-ant-***REDACTED***",
+    ),
+    # BUG-143: Google API keys (AIza + 35 characters), cut ones included.
+    (
+        "google_api_key",
+        re.compile(r"AIza[0-9A-Za-z_-]{6,}"),
+        "AIza***REDACTED***",
+    ),
+    # BUG-143: secret headers, as a header line or a JSON field, escaped JSON
+    # included, any case: x-api-key, x-goog-api-key, api-key and
+    # Authorization (Bearer, Basic, Token, Digest or a bare value). The
+    # scheme stays visible; a value already masked above is left alone.
+    (
+        "secret_header",
+        re.compile(
+            r"(?i)(\b(?:x-api-key|x-goog-api-key|api-key|proxy-authorization"
+            r"""|authorization)\\?["']?\s*[:=]\s*\\?["']?\s*)"""
+            r"(?!(?:(?:bearer|basic|token|digest)\s+)?[\w.-]*\*\*\*REDACTED)"
+            r"((?:bearer|basic|token|digest)\s+)?"
+            r"""[^\s"'\\,;&}]+"""
+        ),
+        lambda m: f"{m[1]}{m[2] or ''}***REDACTED***",
+    ),
+    # BUG-143: secrets in a query string or a form body: token=, access_token=,
+    # api_key=, key=, client_secret=… A value already masked is left alone.
+    (
+        "secret_param",
+        re.compile(
+            r"(?i)(?<![\w-])((?:access_|refresh_|id_|auth_)?token|api[_-]?key"
+            r"|key|client_secret|secret|password)="
+            r"(?![\w.-]*\*\*\*REDACTED)"
+            r"""[^\s&#"'\\,;<>]+"""
+        ),
+        r"\1=***REDACTED***",
     ),
 ]
 

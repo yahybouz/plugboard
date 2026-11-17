@@ -234,12 +234,14 @@ def snapshot() -> Dict[str, Any]:
     providers = state.get("providers")
     if not isinstance(providers, dict):
         providers = {}
+    message = last.get("message")
     return {
         "last_limit_at": last.get("at"),
         "provider": last.get("provider"),
         "model": last.get("model"),
         "source": last.get("source"),
-        "message": last.get("message"),
+        # Masked again on read: a file saved before BUG-143 may hold a secret.
+        "message": _excerpt(message) if isinstance(message, str) else None,
         "resumes_at": last.get("resumes_at"),
         "providers": {
             pid: {
