@@ -361,6 +361,291 @@ def test_on_the_base_itself_the_tree_is_scanned(repo, gitleaks, terms):
     _assert_term_hidden(out)
 
 
+# -- every form of diff (BUG-146) ---------------------------------------------
+# An added line is read from the hunk it belongs to, whatever it looks like:
+# no forbidden term may pass because a line or a file name resembles a header.
+
+
+def _check(repo, *extra, env_extra=None, terms=None):
+    return run(
+        repo,
+        "--base",
+        "main",
+        "--skip-gitleaks",
+        *extra,
+        env_extra=env_extra,
+        terms=terms,
+    )
+
+
+@pytest.mark.parametrize(
+    "lead",
+    [
+        "++",
+        "++ b/other.txt",
+        "+++ ",
+        "+++ b/other.txt",
+        "+++ /dev/null",
+        "--",
+        "---",
+        "--- a/other.txt",
+        "@@",
+        "@@ -1 +1 @@",
+        "diff --git a/x b/x",
+        "\\ No newline at end of file",
+        "index 0000000..1111111",
+    ],
+)
+def test_an_added_line_that_looks_like_a_header(repo, terms, lead):
+    """The line itself and every later added line of the file are read."""
+    sha = repo.commit({"doc.txt": f"ok\n{lead} {TERM}\n{lead}\nlater {TERM}\n"}, "docs")
+
+    code, out = _check(repo, terms=terms)
+
+    assert code == 1, out
+    assert sha[:12] in out
+    assert "fichier doc.txt, ligne 2" in out
+    assert "fichier doc.txt, ligne 4" in out
+    assert "2 constat(s)" in out
+    _assert_term_hidden(out)
+
+
+def test_a_removed_line_that_looks_like_a_header(repo, terms):
+    repo.commit({"doc.txt": "-- a/x\n++ b/y\nkeep\n"}, "base lines")
+    repo.commit({"doc.txt": f"keep\n{TERM}\n"}, "replace")
+
+    code, out = _check(repo, terms=terms)
+
+    assert code == 1, out
+    assert "fichier doc.txt, ligne 2" in out and "1 constat(s)" in out
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        'we"ird.txt',
+        "with space.txt",
+        "with\ttab.txt",
+        "back\\slash.txt",
+        "new\nline.txt",
+        "café-日本.txt",
+        "-- a/dash.txt",
+        "b/nested.txt",
+    ],
+)
+def test_a_file_name_git_quotes_or_escapes(repo, terms, name):
+    sha = repo.commit({name: f"one\n{TERM}\n"}, "docs")
+
+    code, out = _check(repo, terms=terms)
+
+    assert code == 1, out
+    assert sha[:12] in out
+    assert f"fichier {name}, ligne 2" in out
+    assert "1 constat(s)" in out
+    _assert_term_hidden(out)
+
+
+def test_a_rename_with_a_change(repo, terms):
+    repo.commit({"old.txt": "a\nb\nc\nd\ne\n"}, "base")
+    repo.git("mv", "old.txt", "new name.txt")
+    sha = repo.commit({"new name.txt": f"a\nb\n{TERM}\nc\nd\ne\n"}, "rename")
+
+    code, out = _check(repo, terms=terms)
+
+    assert code == 1, out
+    assert sha[:12] in out and "fichier new name.txt, ligne 3" in out
+    assert "1 constat(s)" in out
+
+
+def test_a_new_file_and_a_file_deleted_then_recreated(repo, terms):
+    repo.commit({"gone.txt": "safe\n"}, "add")
+    repo.git("rm", "-q", "gone.txt")
+    repo.git("commit", "-q", "-m", "delete")
+    again = repo.commit({"gone.txt": f"{TERM}\n"}, "recreate")
+    fresh = repo.commit({"fresh.txt": f"x\ny\n{TERM}\n"}, "new")
+
+    code, out = _check(repo, terms=terms)
+
+    assert code == 1, out
+    assert f"commit {again[:12]}, fichier gone.txt, ligne 1" in out
+    assert f"commit {fresh[:12]}, fichier fresh.txt, ligne 3" in out
+    assert "2 constat(s)" in out
+
+
+def test_a_file_of_the_base_deleted_then_recreated(repo, terms):
+    """Deleted on the base, recreated on the branch: the whole content is new."""
+    repo.git("checkout", "-q", "main")
+    repo.commit({"page.txt": "a\n"}, "add on main")
+    repo.git("checkout", "-q", "work")
+    repo.git("merge", "-q", "main")
+    repo.git("rm", "-q", "page.txt")
+    repo.git("commit", "-q", "-m", "delete")
+    sha = repo.commit({"page.txt": f"a\n{TERM}\n"}, "recreate")
+
+    code, out = _check(repo, terms=terms)
+
+    assert code == 1, out
+    assert f"commit {sha[:12]}, fichier page.txt, ligne 2" in out
+
+
+def test_a_mode_change(repo, terms):
+    repo.commit({"run.sh": "#!/bin/sh\necho ok\n"}, "script")
+    (repo.path / "run.sh").chmod(0o755)
+    repo.git("add", "run.sh")
+    repo.git("commit", "-q", "-m", "chmod only")
+    (repo.path / "run.sh").chmod(0o644)
+    sha = repo.commit({"run.sh": f"#!/bin/sh\necho ok\necho {TERM}\n"}, "chmod back")
+
+    code, out = _check(repo, terms=terms)
+
+    assert code == 1, out
+    assert f"commit {sha[:12]}, fichier run.sh, ligne 3" in out
+    assert "1 constat(s)" in out
+
+
+def test_a_file_turned_into_a_symlink_whose_target_has_a_term(repo, terms):
+    repo.commit({"link": "plain\n"}, "file")
+    (repo.path / "link").unlink()
+    (repo.path / "link").symlink_to(f"/opt/{TERM}")
+    repo.git("add", "link")
+    sha = repo.commit({}, "symlink")
+
+    code, out = _check(repo, terms=terms)
+
+    assert code == 1, out
+    assert f"commit {sha[:12]}, fichier link, ligne 1" in out
+
+
+def test_no_newline_at_end_of_file(repo, terms):
+    repo.commit({"tail.txt": "a\nb"}, "no final newline")
+    sha = repo.commit({"tail.txt": f"a\nb\nc {TERM}"}, "append")
+
+    code, out = _check(repo, terms=terms)
+
+    assert code == 1, out
+    assert f"commit {sha[:12]}, fichier tail.txt, ligne 3" in out
+    assert "1 constat(s)" in out
+
+
+def test_a_term_introduced_by_a_merge_resolution(repo, terms):
+    repo.commit({"conf.txt": "value\nend\n"}, "base value")
+    repo.git("checkout", "-q", "-b", "side")
+    repo.commit({"conf.txt": "side value\nend\n"}, "side")
+    repo.git("checkout", "-q", "work")
+    repo.commit({"conf.txt": "work value\nend\n"}, "work")
+    proc = subprocess.run(
+        ["git", "-C", str(repo.path), "merge", "-q", "side"],
+        capture_output=True,
+        env=_git_env(repo.home),
+    )
+    assert proc.returncode != 0  # conflict, resolved by hand
+    (repo.path / "conf.txt").write_text(f"{TERM} value\nend\n", encoding="utf-8")
+    repo.git("add", "conf.txt")
+    repo.git("commit", "-q", "--no-edit")
+    merge = repo.git("rev-parse", "HEAD")
+
+    code, out = _check(repo, terms=terms)
+
+    assert code == 1, out
+    assert f"commit {merge[:12]}, fichier conf.txt, ligne 1" in out
+    assert "1 constat(s)" in out
+
+
+def test_a_term_in_a_quoted_file_name_is_masked(repo, terms):
+    sha = repo.commit({f'odd "{TERM}".txt': f"x\n{TERM}\n"}, "docs")
+
+    code, out = _check(repo, terms=terms)
+
+    assert code == 1, out
+    assert f"commit {sha[:12]}, nom de fichier" in out
+    assert "(chemin masqué : il contient un terme), ligne 2" in out
+    _assert_term_hidden(out)
+
+
+def test_git_config_and_attributes_do_not_change_the_reading(repo, terms, tmp_path):
+    """A user or repository setting that changes git's output changes nothing."""
+    sub = repo.path / "sub"
+    sub.mkdir()
+    (sub / "keep.txt").write_text("x\n", encoding="utf-8")
+    hide = tmp_path / "hide.sh"
+    hide.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    hide.chmod(0o755)
+    repo.commit({"sub/keep.txt": "x\n"}, "sub")
+    files = {
+        ".gitattributes": "*.bin binary\n*.md -diff\n*.txt diff=hide\n",
+        "a.bin": f"{TERM}\n",
+        "b.md": f"title\n{TERM}\n",
+        "c.txt": f"x\ny\n{TERM}\n",
+        'café "q".cfg': f"{TERM}\n",
+    }
+    sha = repo.commit(files, "docs")
+    for key, value in (
+        ("core.quotePath", "true"),
+        ("color.ui", "always"),
+        ("color.diff", "always"),
+        ("diff.noprefix", "true"),
+        ("diff.mnemonicPrefix", "true"),
+        ("diff.relative", "true"),
+        ("diff.suppressBlankEmpty", "true"),
+        ("diff.renames", "copies"),
+        ("diff.external", str(hide)),
+        ("diff.hide.textconv", str(hide)),
+        ("diff.hide.command", str(hide)),
+        ("diff.submodule", "log"),
+        ("core.attributesFile", str(tmp_path / "none")),
+    ):
+        repo.git("config", key, value)
+
+    code, out = run(
+        repo,
+        "--base",
+        "main",
+        "--skip-gitleaks",
+        env_extra={
+            "GIT_DIFF_OPTS": "--unified=5",
+            "GIT_EXTERNAL_DIFF": str(hide),
+        },
+        terms=terms,
+    )
+    # Run from a sub-directory: diff.relative must not hide the rest of the tree.
+    in_sub = subprocess.run(
+        [sys.executable, str(SCRIPT), "--repo", str(sub), "--base", "main"]
+        + ["--skip-gitleaks", "--terms", str(terms)],
+        capture_output=True,
+        text=True,
+        env=_git_env(repo.home),
+        timeout=60,
+    )
+    out_sub = in_sub.stdout + in_sub.stderr
+
+    assert code == 1, out
+    for where in (
+        "fichier a.bin, ligne 1",
+        "fichier b.md, ligne 2",
+        "fichier c.txt, ligne 3",
+        'fichier café "q".cfg, ligne 1',
+    ):
+        assert f"commit {sha[:12]}, {where}" in out, where
+    assert "4 constat(s)" in out
+    assert in_sub.returncode == 1, out_sub
+    assert "4 constat(s)" in out_sub
+
+
+def test_line_numbers_follow_the_new_file_across_hunks(repo, terms):
+    old = "".join(f"l{i}\n" for i in range(1, 21))
+    repo.commit({"long.txt": old}, "base")
+    new = old.replace("l3\n", f"l3\n{TERM}\n").replace("l15\n", f"{TERM} 15\n")
+    new = new.replace("l20\n", f"l20\n++ {TERM}\n")
+    sha = repo.commit({"long.txt": new}, "edits")
+
+    code, out = _check(repo, terms=terms)
+
+    assert code == 1, out
+    for line in (4, 16, 22):
+        assert f"commit {sha[:12]}, fichier long.txt, ligne {line}" in out, line
+    assert "3 constat(s)" in out
+
+
 # -- gitleaks ---------------------------------------------------------------
 
 

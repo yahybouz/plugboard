@@ -187,37 +187,120 @@ def commit_fields(repo: Path, sha: str) -> dict:
     return {"author": (an, ae), "committer": (cn, ce), "message": body.rstrip("\n")}
 
 
+# Options figées : aucune configuration (couleur, préfixes, chemins relatifs,
+# pilote externe, textconv, attribut binary/-diff, renommages, sous-modules)
+# ne change la forme du diff lu. ``--text`` : un attribut ``binary`` ou
+# ``-diff`` ne masque pas un contenu.
+DIFF_OPTS = (
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-relative",
+    "--no-renames",
+    "--text",
+    "--submodule=short",
+    "--unified=0",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+)
+HUNK = re.compile(r"@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+C_ESCAPES = {
+    "a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92
+}  # fmt: skip
+
+
+def unquote_path(text: str) -> str:
+    """Chemin d'un en-tête ``---``/``+++`` : git l'entoure de guillemets avec
+    des échappements C (``"``, ``\\``, tabulation, contrôle) et ajoute une
+    tabulation finale quand il contient une espace (un chemin non entouré ne
+    contient jamais de tabulation : elle serait échappée)."""
+    if not text.startswith('"'):
+        return text.removesuffix("\t")
+    out, i = bytearray(), 1
+    while i < len(text) and text[i] != '"':
+        c = text[i]
+        if c != "\\":
+            out += c.encode("utf-8")
+            i += 1
+        elif text[i + 1 : i + 2] in C_ESCAPES:
+            out.append(C_ESCAPES[text[i + 1]])
+            i += 2
+        else:
+            try:
+                out.append(int(text[i + 1 : i + 4], 8) & 0xFF)
+            except ValueError:
+                raise Stop("diff illisible : chemin mal échappé") from None
+            i += 4
+    return out.decode("utf-8", errors="replace")
+
+
+def header_path(line: str, prefix: str) -> str | None:
+    raw = line[4:]
+    if raw == "/dev/null":
+        return None
+    raw = unquote_path(raw)
+    return raw[len(prefix) :] if raw.startswith(prefix) else raw
+
+
 def added_lines(repo: Path, sha: str):
     """(chemin, numéro de ligne, texte) des lignes ajoutées par le commit, et
-    les chemins touchés (premier parent ; arbre vide pour une racine)."""
+    les chemins touchés (premier parent ; arbre vide pour une racine).
+
+    Le diff est lu avec un état (BUG-146) : un en-tête de fichier n'est lu
+    qu'entre ``diff --git`` et le premier ``@@`` ; dans un bloc, les comptes de
+    l'en-tête ``@@`` disent combien de lignes lui appartiennent, quel que soit
+    leur contenu. Toute ligne inattendue arrête le contrôle (code 2) : rien ne
+    passe faute d'avoir été compris."""
     parent = git(repo, "rev-parse", "--verify", "-q", f"{sha}^1", check=False).strip()
     base = parent or EMPTY_TREE
-    names = git(repo, "diff", "--name-only", "--no-renames", "-z", base, sha)
+    names = git(repo, "diff", "--name-only", *DIFF_OPTS, "-z", base, sha)
     paths = [p for p in names.split("\x00") if p]
-    diff = git(
-        repo,
-        "diff",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
-        "--no-renames",
-        "--unified=0",
-        "--src-prefix=a/",
-        "--dst-prefix=b/",
-        base,
-        sha,
-    )
+    diff = git(repo, "diff", *DIFF_OPTS, base, sha)
     lines = []
-    path, n = None, 0
-    for line in diff.splitlines():
-        if line.startswith("+++ "):
-            path = line[6:] if line.startswith("+++ b/") else None
-        elif line.startswith("@@"):
-            m = re.match(r"@@ -\S+ \+(\d+)", line)
-            n = int(m.group(1)) if m else 0
-        elif line.startswith("+") and path is not None:
-            lines.append((path, n, line[1:]))
-            n += 1
+    path = old_path = None
+    old_left = new_left = n = 0
+    in_file = in_header = False
+    # Découpe sur "\n" seul : splitlines() couperait aussi sur \f, \v, \x1c…
+    rows = diff.split("\n")
+    if rows and rows[-1] == "":
+        rows.pop()
+    for row in rows:
+        if old_left or new_left:
+            tag, text = row[:1], row[1:]
+            if tag == "+":
+                lines.append((path or old_path or "(chemin illisible)", n, text))
+                n += 1
+                new_left -= 1
+            elif tag == "-":
+                old_left -= 1
+            elif tag in (" ", ""):  # contexte (vide : diff.suppressBlankEmpty)
+                n += 1
+                old_left -= 1
+                new_left -= 1
+            elif tag != "\\":
+                raise Stop(f"diff illisible (commit {sha[:12]}) : ligne de bloc")
+            if old_left < 0 or new_left < 0:
+                raise Stop(f"diff illisible (commit {sha[:12]}) : bloc trop long")
+        elif row.startswith("diff --git "):
+            path = old_path = None
+            in_file = in_header = True
+        elif row.startswith("@@"):
+            m = HUNK.match(row)
+            if not m or not in_file:
+                raise Stop(f"diff illisible (commit {sha[:12]}) : en-tête de bloc")
+            old_left = 1 if m.group(1) is None else int(m.group(1))
+            n = int(m.group(2))
+            new_left = 1 if m.group(3) is None else int(m.group(3))
+            in_header = False
+        elif in_header:
+            if row.startswith("--- "):
+                old_path = header_path(row, "a/")
+            elif row.startswith("+++ "):
+                path = header_path(row, "b/")
+        elif not row.startswith("\\"):
+            raise Stop(f"diff illisible (commit {sha[:12]}) : ligne hors bloc")
+    if old_left or new_left:
+        raise Stop(f"diff illisible (commit {sha[:12]}) : bloc tronqué")
     return paths, lines
 
 
