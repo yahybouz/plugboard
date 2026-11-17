@@ -19,14 +19,15 @@ import plugboard
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Ticket -> its commit on release/4.14.6.
+# Ticket -> its commits on release/4.14.6 (the review fixes of SEC-VEILLE
+# and BUG-143 came after the release commit).
 COMMITS = {
-    "SEC-VEILLE": "9da4ba3",
-    "BUG-143": "12e3fdc",
-    "BUG-146": "6153cab",
-    "PLU-81": "88bd506",
-    "BUG-138": "88bd506",
-    "D-61": "cf3b751",
+    "SEC-VEILLE": ("9da4ba3", "625d431"),
+    "BUG-143": ("12e3fdc", "4c7e5d1"),
+    "BUG-146": ("6153cab",),
+    "PLU-81": ("88bd506",),
+    "BUG-138": ("88bd506",),
+    "D-61": ("cf3b751",),
 }
 
 
@@ -76,14 +77,15 @@ def test_the_entry_sits_under_unreleased():
 
 def test_each_ticket_cites_its_release_commit():
     release = _release()
-    for ticket, sha in COMMITS.items():
+    for ticket, shas in COMMITS.items():
         lines = [
             line
             for line in release.splitlines()
             if re.search(rf"(?<![\w-]){re.escape(ticket)}(?![\w-])", line)
         ]
         assert lines, ticket
-        assert any(f"`{sha}`" in line for line in lines), ticket
+        for sha in shas:
+            assert any(f"`{sha}`" in line for line in lines), (ticket, sha)
 
 
 def test_the_gh_build_is_explained_and_temporary():
@@ -105,6 +107,8 @@ def test_the_gh_build_is_explained_and_temporary():
         "proxy.golang.org",
         "gnupg",
         "Temporary",
+        "ci/image-path-executables.txt",
+        "/usr/local/bin/gh",
     ):
         assert needle in flat, needle
 
@@ -123,6 +127,12 @@ def test_the_quota_excerpt_redaction_is_listed():
         "Authorization",
         "token=",
         "AIza",
+        'token="',
+        "ANTHROPIC_API_KEY=",
+        "GITHUB_TOKEN=",
+        "_PASSWORD=",
+        "sort_key=",
+        "100,000",
     ):
         assert needle in entry, needle
 
@@ -144,7 +154,13 @@ def test_the_release_says_what_was_not_verified():
     (note,) = [
         line for line in release.splitlines() if line.startswith("**Not verified**")
     ]
-    for needle in ("trivy", "gh auth token", "\\uXXXX", "4.14.5"):
+    for needle in (
+        "trivy",
+        "gh auth token",
+        "\\uXXXX",
+        "4.14.5",
+        "image-path-executables.txt",
+    ):
         assert needle in note, needle
 
 
