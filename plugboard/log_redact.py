@@ -14,9 +14,15 @@ Covered patterns:
 - Generic Bearer headers: "Authorization: Bearer <token>"
 - API keys in JSON: "api_key": "<value>", "key": "<value>"
 - Google API keys: AIza* (BUG-143)
-- Secret headers, header or JSON form, any case: x-api-key, x-goog-api-key,
-  api-key, Authorization (Bearer, Basic, bare value) (BUG-143)
-- Query and form parameters: token=, access_token=, api_key=, key=… (BUG-143)
+- Secret headers, header, JSON or ("name", "value") form, any case:
+  x-api-key, x-goog-api-key, api-key, Authorization (Bearer, Basic, bare
+  value) (BUG-143)
+- Query and form parameters: token=, access_token=, api_key=, key=…, their
+  quoted form (token="…", key='…') and environment variables
+  (ANTHROPIC_API_KEY=, GITHUB_TOKEN=, *_SECRET=, *_PASSWORD=) (BUG-143)
+- Every pattern runs in time near linear in the input (no nested or
+  adjacent unbounded repeats that can backtrack): redact() runs on every
+  log line
 - UUIDs are NOT redacted (too noisy; they're rarely secret)
 - Email addresses are NOT redacted (needed for audit trails)
 
@@ -121,32 +127,45 @@ _PATTERNS = [
         re.compile(r"AIza[0-9A-Za-z_-]{6,}"),
         "AIza***REDACTED***",
     ),
-    # BUG-143: secret headers, as a header line or a JSON field, escaped JSON
-    # included, any case: x-api-key, x-goog-api-key, api-key and
-    # Authorization (Bearer, Basic, Token, Digest or a bare value). The
-    # scheme stays visible; a value already masked above is left alone.
+    # BUG-143: secret headers, as a header line, a JSON field (escaped JSON
+    # included) or a ("name", "value") pair as httpx prints a header list,
+    # any case: x-api-key, x-goog-api-key, api-key and Authorization
+    # (Bearer, Basic, Token, Digest or a bare value). The scheme stays
+    # visible; a value already masked above is left alone. Every run of
+    # blanks is possessive (\s*+): with plain \s* on both sides of the
+    # separator, "authorization:" followed by n blanks took O(n²) time, and
+    # this runs on every log line.
     (
         "secret_header",
         re.compile(
             r"(?i)(\b(?:x-api-key|x-goog-api-key|api-key|proxy-authorization"
-            r"""|authorization)\\?["']?\s*[:=]\s*\\?["']?\s*)"""
-            r"(?!(?:(?:bearer|basic|token|digest)\s+)?[\w.-]*\*\*\*REDACTED)"
-            r"((?:bearer|basic|token|digest)\s+)?"
+            r"""|authorization)(?:\\?["']?\s*+[:=]|\\?["']\s*+,)"""
+            r"""\s*+\\?["']?\s*+)"""
+            r"(?!(?:(?:bearer|basic|token|digest)\s++)?[\w.-]*\*\*\*REDACTED)"
+            r"((?:bearer|basic|token|digest)\s++)?"
             r"""[^\s"'\\,;&}]+"""
         ),
         lambda m: f"{m[1]}{m[2] or ''}***REDACTED***",
     ),
-    # BUG-143: secrets in a query string or a form body: token=, access_token=,
-    # api_key=, key=, client_secret=… A value already masked is left alone.
+    # BUG-143: secrets after "=": a query string or a form body (token=,
+    # access_token=, api_key=, key=, client_secret=…), a Python repr or
+    # kwargs with a quoted value (token="…", key='…', escaped quotes too) and
+    # an environment variable (ANTHROPIC_API_KEY=, GITHUB_TOKEN=, *_SECRET=,
+    # *_PASSWORD=). The name starts a word, so monkey=, sort_key= and
+    # max_tokens= stay. The quotes stay; a value already masked is left
+    # alone. A quoted value runs to its closing quote, or to the end of the
+    # line when it was cut.
     (
         "secret_param",
         re.compile(
-            r"(?i)(?<![\w-])((?:access_|refresh_|id_|auth_)?token|api[_-]?key"
-            r"|key|client_secret|secret|password)="
-            r"(?![\w.-]*\*\*\*REDACTED)"
-            r"""[^\s&#"'\\,;<>]+"""
+            r"(?i)(?<![\w-])("
+            r"\w*_(?:api_?key|access_?key|private_?key|token|secret|password|passwd)"
+            r"|token|api[_-]?key|key|secret|password)="
+            r"""(?!\\?["']?[\w.-]*\*\*\*REDACTED)"""
+            r"""(?:(\\?")[^"\\\n]++(\\?")?|(\\?')[^'\\\n]++(\\?')?"""
+            r"""|[^\s&#"'\\,;<>]+)"""
         ),
-        r"\1=***REDACTED***",
+        lambda m: f"{m[1]}={m[2] or m[4] or ''}***REDACTED***{m[3] or m[5] or ''}",
     ),
 ]
 

@@ -87,6 +87,24 @@ CASES = [
     ("AIza in url", f"https://h.example/v1beta/models?key={GOOG}", GOOG_BODY),
     ("AIza in json", json.dumps({"error": {"key": GOOG}}), GOOG_BODY),
     ("AIza glued", f"k_{GOOG}", GOOG_BODY),
+    # Quoted values after `=` (Python repr, kwargs), escaped quotes, a value
+    # cut before its closing quote, a quoted value holding a space.
+    ("token= dquote", f'Client(token="{HEX}")', HEX),
+    ("key= squote", f"Client(key='{HEX}')", HEX),
+    ("api_key= dquote", f'api_key="{HEX}", timeout=30', HEX),
+    ("password= spaced", f"password='{TOK[:10]} {TOK[10:]}'", TOK[10:]),
+    ("token= escaped", f'{{\\"q\\": \\"token=\\"{HEX}\\"\\"}}', HEX),
+    ("token= unclosed", f'token="{HEX}', HEX),
+    # Environment-variable form: <PREFIX>_API_KEY, _TOKEN, _SECRET, _PASSWORD.
+    ("env ANTHROPIC_API_KEY", f"ANTHROPIC_API_KEY={HEX} claude -p", HEX),
+    ("env GITHUB_TOKEN", f"export GITHUB_TOKEN={TOK}", TOK),
+    ("env *_SECRET", f"APP_CLIENT_SECRET={HEX}", HEX),
+    ("env *_PASSWORD", f"DB_PASSWORD={TOK}\n", TOK),
+    ("env quoted", f'OPENAI_API_KEY="{HEX}"', HEX),
+    ("env lower", f"my_service_token={HEX}", HEX),
+    # A header list repr, as httpx prints it.
+    ("header tuple", f"headers=[('x-api-key', '{HEX}'), ('a', 'b')]", HEX),
+    ("header tuple dq", f'[("Authorization", "Bearer {TOK}")]', TOK),
 ]
 
 
@@ -108,10 +126,29 @@ def test_redact_masks_the_secret(text, secret):
         "max_tokens=1024 exceeds the limit",
         "monkey=1 turkey=2",
         "HTTP 429: rate_limit_error",
+        'sort_key="name" max_tokens="64" monkey=\'x\'',
+        "input_tokens=12 output_tokens=7 token_count=19",
+        "SORT_KEY=name MAX_TOKENS=1024 KEY_ID=7",
+        "key=\"\" token=''",
+        "Authorization, then retry",
     ],
 )
 def test_redact_keeps_harmless_text(text):
     assert redact(text) == text
+
+
+@pytest.mark.parametrize(
+    "text, kept",
+    [
+        (f'key="{GOOG}"', 'key="AIza***REDACTED***"'),
+        (f"ANTHROPIC_API_KEY='{ANT}'", "ANTHROPIC_API_KEY='sk-ant-***REDACTED***'"),
+        (f"token={HEX}", "token=***REDACTED***"),
+        (f'token="{HEX}" n=1', 'token="***REDACTED***" n=1'),
+    ],
+)
+def test_quoted_and_env_values_keep_their_shape(text, kept):
+    # The quotes and an already-masked provider prefix stay visible.
+    assert redact(text) == kept
 
 
 def test_the_provider_hint_survives():
