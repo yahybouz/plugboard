@@ -114,6 +114,13 @@ _PATTERNS = [
         re.compile(r"\bpb_[A-Za-z0-9]{32,}"),
         "pb_***REDACTED***",
     ),
+    # Personal dashboard keys (PB-AUTH-01): "pba_" + token_urlsafe(32). The
+    # 10-character display prefix is shorter and stays readable.
+    (
+        "plugboard",
+        re.compile(r"\bpba_[A-Za-z0-9_-]{32,}"),
+        "pba_***REDACTED***",
+    ),
     # BUG-143: Anthropic keys anywhere, even glued to a word ("id_sk-ant-…",
     # where the \b of the "openai" pattern fails) or cut short upstream.
     (
