@@ -171,6 +171,8 @@ body {
 }
 a { color: var(--accent); text-decoration: none; transition: color var(--transition); }
 a:hover { color: var(--accent-dark); }
+/* A plain link inside a sentence is underlined, so colour is not its only cue (WCAG 1.4.1). */
+p a:not([class]) { text-decoration: underline; text-underline-offset: 2px; }
 ::selection { background: var(--accent); color: var(--on-accent); }
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
