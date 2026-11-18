@@ -5,6 +5,8 @@ import json
 import os
 import re
 import stat
+import threading
+import time as _time
 
 import pytest
 
@@ -273,3 +275,42 @@ def test_a_replayed_code_is_logged_without_the_code(env, caplog):
     assert admin_people.verify_code(pid, code) == "refused"
     assert "replayed" in caplog.text and pid in caplog.text
     assert code not in caplog.text
+
+
+def test_a_code_of_one_person_never_verifies_for_another(env):
+    one, two = ph.new_person("person-one"), ph.new_person("person-two")
+    while ph.code_now(env, one) == ph.code_now(env, two):
+        ph.next_step(env)  # two random secrets can share a code at one step
+    other = two["person"]["id"]
+    assert admin_people.verify_code(other, ph.code_now(env, one)) == "refused"
+    assert admin_people.get(other)["last_step"] is None
+    assert admin_people.verify_code(other, ph.code_now(env, two)) == "confirmed"
+    assert (
+        admin_people.verify_code(one["person"]["id"], ph.code_now(env, one))
+        == "confirmed"
+    )
+
+
+def test_a_code_is_accepted_once_when_two_threads_check_it_together(env, monkeypatch):
+    made = ph.new_person()
+    pid, code = made["person"]["id"], ph.code_now(env, made)
+    real_load = admin_people._load
+
+    def slow_load():
+        loaded = real_load()
+        _time.sleep(0.05)  # widen the read-check-write window
+        return loaded
+
+    monkeypatch.setattr(admin_people, "_load", slow_load)
+    start, results = threading.Barrier(2), []
+
+    def check():
+        start.wait()
+        results.append(admin_people.verify_code(pid, code))
+
+    threads = [threading.Thread(target=check) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert sorted(results) == ["confirmed", "refused"]
