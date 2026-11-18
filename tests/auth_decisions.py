@@ -15,6 +15,17 @@ and ``admin_people.time`` are replaced, as the MFA tests do); sessions are
 signed and checked on the real clock, ``plugboard.app`` and the standard
 library modules it imports are never patched. The expired and future
 sessions are signed here, with the test admin key.
+
+Log lines are kept formatted, every generated value (keys, sessions, TOTP
+codes, the world's directory) replaced by a marker: a secret that reaches a
+log shows as a marker where 919f01f had none, and the guard fails.
+
+Not in the table: ``_should_audit_refusal``, ``_issue_local_login_token`` and
+``_prove_person_code(via="login")`` (tests/test_auth_auto_login.py and the
+personal key login tests cover them); a moved function that calls another
+directly instead of through ``core.`` only shows here when the callee is
+patched, the static ``LATE_BOUND`` check of tests/test_auth_core_split.py
+refuses the rest.
 """
 
 from __future__ import annotations
@@ -26,6 +37,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import tempfile
 import time
 import types
@@ -52,7 +64,8 @@ SESSION_COOKIE = "plugboard_admin_session"
 DEVICE_COOKIE = "plugboard_local_device"
 # Functions of plugboard.app, called with the case's request. "a+b" calls a
 # then b on the same request (the order of an admin route that changes MFA),
-# stopping at the first refusal.
+# stopping at the first refusal. "a[body]" calls a(request, code) with the
+# case's TOTP code taken off the header and passed as the request body's.
 FUNCTIONS = (
     "_key_scope",
     "_person_bearer_scope",
@@ -63,14 +76,31 @@ FUNCTIONS = (
     "_check_dashboard_auth",
     "_refuse_cross_site_session",
     "_require_mfa_step_up",
+    "_require_mfa_step_up[body]",
     "_require_admin+_require_mfa_step_up",
     "_auto_login_refusal",
     "_local_login_proof",
     "_should_use_secure_cookie",
 )
-# Worlds live in memory when the system offers it: the stores are written
-# with fsync, which makes a disk-backed run several times slower.
-_WORLD_DIR = "/dev/shm" if os.access("/dev/shm", os.W_OK) else None
+
+
+def _memory_dir():
+    """/dev/shm when writable with 64 MiB free at import, else None (disk).
+
+    The stores are written with fsync, which makes a disk-backed run several
+    times slower. A world weighs a few KiB and is removed when it closes; a
+    /dev/shm that fills up during the run fails the guard (ENOSPC), and a
+    killed process leaves its ``plu97-auth-*`` there until the next reboot.
+    """
+    try:
+        stat = os.statvfs("/dev/shm")
+    except OSError:
+        return None
+    free = stat.f_bavail * stat.f_frsize
+    return "/dev/shm" if os.access("/dev/shm", os.W_OK) and free >= 64 << 20 else None
+
+
+_WORLD_DIR = _memory_dir()
 # Browser headers of a dashboard opened from the address bar.
 NAV = (("sec-fetch-site", "none"), ("sec-fetch-mode", "navigate"))
 CROSS_SITE = (("sec-fetch-site", "cross-site"),)
@@ -92,7 +122,9 @@ class Case:
     totp: str = ""  # "" | "admin" | "admin_wrong" | "person" | "person_wrong"
     cookie: str = ""  # "" | "admin" | "admin_no_mfa" | "person" | "person_revoked"
     #                   | "person_rekeyed" | "forged" | "expired" | "future"
-    #                   | "unregistered" | "pre_enrollment"
+    #                   | "unregistered" | "pre_enrollment" | "malformed_no_dots"
+    #                   | "malformed_issued_at" | "malformed_empty_nonce"
+    #                   | "malformed_empty_signature"
     people: str = ""  # "" | "malformed" (hand-edited id) | "unreadable"
     #                   | "unavailable" (admin_people.check_code answers so)
     local: str = ""  # "" | "token" | "token_wrong" | "device" | "device_unknown"
@@ -259,6 +291,7 @@ CASES = (
     Case(
         "session_patch_cross_site", cookie="admin", method="PATCH", headers=CROSS_SITE
     ),
+    Case("session_put_cross_site", cookie="admin", method="PUT", headers=CROSS_SITE),
     Case(
         "session_post_origin_null",
         cookie="admin",
@@ -399,6 +432,109 @@ CASES = (
         repeat=2,
     ),
     Case("person_key_code_replayed", bearer="person", totp="person", repeat=2),
+    # Task 2 security review, findings 1 to 4, 7 and 9.
+    # One case per proxy header, written out (not read from _PROXY_HEADERS).
+    Case(
+        "auto_login_proxied_forwarded", headers=NAV + (("forwarded", "for=192.0.2.20"),)
+    ),
+    Case("auto_login_proxied_via", headers=NAV + (("via", "1.1 proxy.example"),)),
+    Case(
+        "auto_login_proxied_x_forwarded_host",
+        headers=NAV + (("x-forwarded-host", "localhost:8000"),),
+    ),
+    Case(
+        "auto_login_proxied_x_forwarded_proto",
+        headers=NAV + (("x-forwarded-proto", "https"),),
+    ),
+    Case(
+        "auto_login_proxied_x_forwarded_port",
+        headers=NAV + (("x-forwarded-port", "443"),),
+    ),
+    Case(
+        "auto_login_proxied_x_forwarded_server",
+        headers=NAV + (("x-forwarded-server", "proxy.example"),),
+    ),
+    Case(
+        "auto_login_proxied_x_original_forwarded_for",
+        headers=NAV + (("x-original-forwarded-for", "192.0.2.20"),),
+    ),
+    Case("auto_login_proxied_x_real_ip", headers=NAV + (("x-real-ip", "192.0.2.20"),)),
+    Case(
+        "auto_login_proxied_x_client_ip",
+        headers=NAV + (("x-client-ip", "192.0.2.20"),),
+    ),
+    Case(
+        "auto_login_proxied_x_cluster_client_ip",
+        headers=NAV + (("x-cluster-client-ip", "192.0.2.20"),),
+    ),
+    Case(
+        "auto_login_proxied_cf_connecting_ip",
+        headers=NAV + (("cf-connecting-ip", "192.0.2.20"),),
+    ),
+    Case(
+        "auto_login_proxied_true_client_ip",
+        headers=NAV + (("true-client-ip", "192.0.2.20"),),
+    ),
+    Case(
+        "auto_login_proxied_fly_client_ip",
+        headers=NAV + (("fly-client-ip", "192.0.2.20"),),
+    ),
+    Case(
+        "auto_login_proxied_fastly_client_ip",
+        headers=NAV + (("fastly-client-ip", "192.0.2.20"),),
+    ),
+    # Two refusal reasons at once: the first one checked is reported.
+    Case(
+        "auto_login_proxied_remote_peer",
+        headers=NAV + (("via", "1.1 proxy.example"),),
+        peer="192.0.2.10",
+    ),
+    Case(
+        "auto_login_off_no_admin_key",
+        headers=NAV,
+        auto_login="0",
+        keys="no_admin_key",
+    ),
+    Case(
+        "auto_login_logged_out_proxied",
+        headers=NAV + (("x-forwarded-for", "192.0.2.20"),),
+        query="logged_out=1",
+    ),
+    # Personal sessions and keys while admin MFA is required.
+    Case("mfa_required_person_session", mfa="required", cookie="person"),
+    Case(
+        "mfa_required_person_session_post_cross_site",
+        mfa="required",
+        cookie="person",
+        method="POST",
+        headers=CROSS_SITE,
+    ),
+    Case(
+        "mfa_required_person_key_good_code",
+        mfa="required",
+        bearer="person",
+        totp="person",
+    ),
+    # A missing code is answered before the lockout is read.
+    Case(
+        "mfa_admin_key_no_code_admin_locked",
+        mfa="required",
+        bearer="admin",
+        prelock=("admin",),
+    ),
+    Case(
+        "mfa_step_up_no_code_admin_locked",
+        mfa="required",
+        cookie="admin",
+        prelock=("admin",),
+    ),
+    Case("person_key_no_code_person_locked", bearer="person", prelock=("person",)),
+    Case("person_record_malformed_no_code", bearer="person", people="malformed"),
+    # Session cookies that do not have the token's shape.
+    Case("admin_session_malformed_no_dots", cookie="malformed_no_dots"),
+    Case("admin_session_malformed_issued_at", cookie="malformed_issued_at"),
+    Case("admin_session_malformed_empty_nonce", cookie="malformed_empty_nonce"),
+    Case("admin_session_malformed_empty_signature", cookie="malformed_empty_signature"),
 )
 
 
@@ -418,14 +554,16 @@ LOGGERS = (
 
 
 class _LogRecorder(logging.Handler):
-    """[logger, level, unformatted message] of each line."""
+    """[logger, level, unformatted message, formatted message] of each line."""
 
     def __init__(self) -> None:
         super().__init__(level=logging.DEBUG)
         self.lines: list = []
 
     def emit(self, record: logging.LogRecord) -> None:
-        self.lines.append([record.name, record.levelname, str(record.msg)])
+        self.lines.append(
+            [record.name, record.levelname, str(record.msg), record.getMessage()]
+        )
 
 
 @contextlib.contextmanager
@@ -537,6 +675,10 @@ def _credentials(case: Case, env, mp, tmp: Path) -> dict:
             markers[value] = marker
         return value
 
+    mark(str(tmp), "<world>")
+    mark(ADMIN_KEY, "<admin-key>")
+    mark(API_KEY, "<api-key>")
+
     # Client keys: one active, one revoked; the unknown one is in no store.
     active = apikeys.create_key(client_id="client-a", label="decisions")
     revoked = apikeys.create_key(client_id="client-revoked", label="decisions")
@@ -628,7 +770,14 @@ def _credentials(case: Case, env, mp, tmp: Path) -> dict:
         made["cookie"] = _sign(issued_at, nonce)
     elif case.cookie == "unregistered":
         made["cookie"] = _sign(now, "unregistered-session-nonce-decisions")
-    if made.get("cookie"):
+    elif case.cookie.startswith("malformed_"):
+        made["cookie"] = {  # synthetic, none of them a signed token
+            "malformed_no_dots": "malformed-session-decisions",
+            "malformed_issued_at": "soon.malformed-nonce.0123abcd",
+            "malformed_empty_nonce": f"{now}..0123abcd",
+            "malformed_empty_signature": f"{now}.malformed-nonce.",
+        }[case.cookie]
+    if made.get("cookie") and not case.cookie.startswith("malformed_"):
         mark(made["cookie"], "<session>")
         mark(made["cookie"].split(".")[1], "<session-nonce>")
 
@@ -697,20 +846,27 @@ def _credentials(case: Case, env, mp, tmp: Path) -> dict:
     if case.local in ("device", "device_unknown"):
         device = made["local_device"] if case.local == "device" else UNKNOWN_DEVICE
         cookies.append(f"{DEVICE_COOKIE}={device}")
+    # TOTP codes are six digits: replaced only where they stand alone.
+    code_values = {codes["admin"], codes["person"], totp} - {""}
+    if codes["admin"]:
+        code_values.add(people_helpers.wrong(codes["admin"]))
+    if codes["person"]:
+        code_values.add(people_helpers.wrong(codes["person"]))
     return {
         "authorization": authorization,
         "totp": totp,
         "cookie": "; ".join(cookies),
         "query": query,
         "markers": markers,
+        "codes": sorted(code_values),
     }
 
 
-def _request(case: Case, credentials: dict) -> Request:
+def _request(case: Case, credentials: dict, *, totp_header: bool = True) -> Request:
     headers = [("host", case.host)]
     if credentials["authorization"]:
         headers.append(("authorization", credentials["authorization"]))
-    if credentials["totp"]:
+    if credentials["totp"] and totp_header:
         headers.append((TOTP_HEADER, credentials["totp"]))
     if credentials["cookie"]:
         headers.append(("cookie", credentials["cookie"]))
@@ -735,14 +891,19 @@ def _request(case: Case, credentials: dict) -> Request:
     )
 
 
-def _decide(app_module, name: str, request) -> list:
+def _decide(app_module, name: str, request, body_code: str = "") -> list:
     from plugboard import audit as audit_mod
 
     holder = audit_mod.begin_request()
     try:
         value = None
         for part in name.split("+"):
-            value = getattr(app_module, part)(request)
+            if part.endswith("[body]"):
+                value = getattr(app_module, part.removesuffix("[body]"))(
+                    request, body_code
+                )
+            else:
+                value = getattr(app_module, part)(request)
     except HTTPException as exc:
         outcome = ["http", exc.status_code, exc.detail]
     except Exception as exc:  # recorded: a new crash is a changed decision
@@ -774,8 +935,10 @@ def run_case(case: Case) -> dict:
     for name in FUNCTIONS:
         with _world(case) as (app_module, credentials, audit, logs):
             calls = []
+            body = name.endswith("[body]")
             for _ in range(case.repeat):
-                outcome = _decide(app_module, name, _request(case, credentials))
+                request = _request(case, credentials, totp_header=not body)
+                outcome = _decide(app_module, name, request, credentials["totp"])
                 calls.append(
                     {
                         "outcome": outcome,
@@ -801,6 +964,8 @@ def _normalize(value, credentials: dict):
     markers = credentials["markers"]
     for raw in sorted(markers, key=len, reverse=True):
         text = text.replace(raw, markers[raw])
+    for code in credentials["codes"]:
+        text = re.sub(rf"(?<![0-9]){code}(?![0-9])", "<totp>", text)
     leaked = [m for raw, m in markers.items() if raw in text]
     assert not leaked, f"generated values left in the table: {leaked}"
     return json.loads(text)

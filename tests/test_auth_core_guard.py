@@ -3,7 +3,9 @@ dependencies on every route, by name and by object; no name gone from
 plugboard.app; the same plugboard modules loaded at import, in the same order
 as 919f01f; the same authentication decisions (tests/auth_decisions.py)."""
 
+import ast
 import json
+from pathlib import Path
 
 from tests import auth_core_snapshot, auth_decisions
 
@@ -67,3 +69,56 @@ def test_auth_decisions_are_unchanged():
     )
     assert changed == []
     assert actual == expected
+
+
+# hmac.compare_digest sites of the auth core, wherever it lives: plugboard/app.py
+# before the move, plugboard/auth_core/ after it. No decision shows a
+# comparison that leaks timing, so the sites are frozen here.
+COMPARE_DIGEST_SITES = {"_is_admin_key": 1, "_admin_session_nonce": 1}
+COMPARED_SECRETS = {"token", "effective_admin", "signature", "expected_signature"}
+
+
+def _auth_core_sources() -> list:
+    plugboard_dir = Path(auth_decisions.ROOT) / "plugboard"
+    files = [plugboard_dir / "app.py"]
+    files += sorted((plugboard_dir / "auth_core").glob("**/*.py"))
+    return [ast.parse(f.read_text(encoding="utf-8"), filename=str(f)) for f in files]
+
+
+def _is_compare_digest(node) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "compare_digest"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "hmac"
+    )
+
+
+def test_secrets_are_compared_in_constant_time():
+    """The admin key and the session signature are compared with
+    hmac.compare_digest, never ``==`` or ``!=``, in app.py and auth_core/
+    together (PLU-97 security review, finding 6)."""
+    trees = _auth_core_sources()
+    total = sum(1 for t in trees for n in ast.walk(t) if _is_compare_digest(n))
+    assert total == sum(COMPARE_DIGEST_SITES.values())
+    found = {}
+    for tree in trees:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name in COMPARE_DIGEST_SITES:
+                assert node.name not in found, f"{node.name} defined twice"
+                calls = [n for n in ast.walk(node) if _is_compare_digest(n)]
+                plain = [
+                    ast.unparse(n)
+                    for n in ast.walk(node)
+                    if isinstance(n, ast.Compare)
+                    and any(isinstance(op, (ast.Eq, ast.NotEq)) for op in n.ops)
+                    and {
+                        x.id
+                        for x in [n.left, *n.comparators]
+                        if isinstance(x, ast.Name)
+                    }
+                    & COMPARED_SECRETS
+                ]
+                found[node.name] = (len(calls), plain)
+    assert found == {name: (count, []) for name, count in COMPARE_DIGEST_SITES.items()}
