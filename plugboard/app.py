@@ -83,6 +83,7 @@ from plugboard import admin_sessions
 from plugboard import audit as _audit_mod
 from plugboard import envcompat
 from plugboard import netguard
+from plugboard import trace_context as _trace
 from plugboard import billing as _billing
 from plugboard import usage as _usage
 
@@ -1019,6 +1020,14 @@ class _RequestIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         rid = uuid.uuid4().hex[:16]
         token = _request_id_var.set(rid)
+        # The caller's W3C trace context (PLU-107): kept only when valid, an
+        # invalid header is ignored, never answered with a 4xx nor logged.
+        trace_token = _trace.current.set(
+            _trace.from_headers(
+                request.headers.getlist("traceparent"),
+                request.headers.getlist("tracestate"),
+            )
+        )
         # This request's own principal holder (PB-AUTH-01): the admin
         # authentication fills it, every audit entry of the request reads it.
         # A streamed body still sees it after this function returns.
@@ -1034,6 +1043,7 @@ class _RequestIdMiddleware(BaseHTTPMiddleware):
             return response
         finally:
             _audit_mod.end_request(principal_token)
+            _trace.current.reset(trace_token)
             _request_id_var.reset(token)
 
 

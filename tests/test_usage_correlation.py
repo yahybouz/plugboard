@@ -9,6 +9,7 @@ in ``usage.db`` without trusting the caller's own count.
 from __future__ import annotations
 
 import sqlite3
+import uuid
 
 import pytest
 from aioresponses import aioresponses
@@ -32,6 +33,11 @@ _OLD_TABLE = """CREATE TABLE usage_entries (
     completion_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,
     pricing_month TEXT NOT NULL, cost_usd REAL NOT NULL,
     price_key TEXT NOT NULL DEFAULT '', price_source TEXT NOT NULL DEFAULT '')"""
+
+
+def _messages():
+    """A prompt of its own: a cached answer would not be billed."""
+    return [{"role": "user", "content": f"Hi {uuid.uuid4().hex}"}]
 
 
 @pytest.fixture
@@ -119,7 +125,7 @@ async def test_a_chat_call_is_recorded_with_its_x_request_id(client, usage_db):
         resp = await client.post(
             "/v1/chat/completions",
             headers=AUTH,
-            json={"model": _MODEL, "messages": [{"role": "user", "content": "Hi"}]},
+            json={"model": _MODEL, "messages": _messages()},
         )
     assert resp.status_code == 200
     rid = resp.headers["X-Request-ID"]
@@ -145,7 +151,7 @@ async def test_a_streamed_chat_call_is_recorded_with_its_x_request_id(
         headers=AUTH,
         json={
             "model": _MODEL,
-            "messages": [{"role": "user", "content": "Hi"}],
+            "messages": _messages(),
             "stream": True,
         },
     )
