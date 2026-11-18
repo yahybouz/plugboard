@@ -303,6 +303,9 @@ def verify_code(person_id: str, code: str) -> str:
     replayed or older than the last accepted step, person revoked or absent,
     store unreadable, secret not encrypted or not decryptable, or the store
     could not be written. The step is recorded before the answer.
+
+    A shortcut kept for the tests: the server calls ``check_code``, which
+    tells a fault of the server from a wrong code.
     """
     outcome = check_code(person_id, code)
     return "refused" if outcome == "unavailable" else outcome
@@ -334,13 +337,15 @@ def check_code(person_id: str, code: str) -> str:
         except SecretUnreadable:
             log.error("Personal TOTP secret of %s cannot be decrypted", person_id)
             return "unavailable"
-        step = admin_mfa.matching_step(secret, code, at=time.time())
-        if step is None:
-            return "refused"
+        # The state is checked before the code, so a malformed record answers
+        # the same whether the code is right or wrong.
         last = record.get("last_step")
         if last is not None and (isinstance(last, bool) or not isinstance(last, int)):
             log.error("Personal TOTP state of %s is malformed", person_id)
             return "unavailable"
+        step = admin_mfa.matching_step(secret, code, at=time.time())
+        if step is None:
+            return "refused"
         if last is not None and step <= last:
             log.warning(
                 "Personal TOTP code replayed (time-step already used) for %s",

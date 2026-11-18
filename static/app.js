@@ -74,13 +74,28 @@ const appEl = document.getElementById("app");
 // Same rules as the /login page: a personal key (pba_) always takes a code
 // from its own authenticator, ADMIN_KEY one when admin MFA is required. The
 // code goes in the JSON body only, never in the URL.
+let adminCodeAsked = false;  // the server asked a code for a key that is not pba_
 function showLoginCode() {
   document.getElementById("login-code-group").classList.remove("hidden");
   loginCode.required = true;
 }
+function hideLoginCode() {
+  document.getElementById("login-code-group").classList.add("hidden");
+  loginCode.required = false;
+  loginCode.value = "";
+}
 function loginCodeShown() {
   return !document.getElementById("login-code-group").classList.contains("hidden");
 }
+// The field shows for a personal key, or once the server asked ADMIN_KEY for
+// a code; otherwise it hides again and is no longer required.
+function syncLoginCode(key) {
+  if (key.startsWith("pba_")) showLoginCode();
+  else if (!adminCodeAsked) hideLoginCode();
+}
+document.getElementById("login-key").addEventListener("input", function (e) {
+  syncLoginCode(e.target.value.trim());
+});
 
 async function tryLogin(key, code) {
   const body = { key: key };
@@ -109,7 +124,7 @@ loginForm.addEventListener("submit", async function (e) {
   loginError.classList.add("hidden");
   const key = document.getElementById("login-key").value.trim();
   if (!key) return;
-  if (key.startsWith("pba_")) showLoginCode();
+  syncLoginCode(key);
   const code = loginCodeShown() ? loginCode.value.trim() : "";
   if (loginCodeShown() && !code) { loginCode.focus(); return; }
   const result = await tryLogin(key, code);
@@ -118,6 +133,7 @@ loginForm.addEventListener("submit", async function (e) {
     showApp();
     return;
   }
+  if (result.mfaRequired && !key.startsWith("pba_")) adminCodeAsked = true;
   if (result.mfaRequired && !code) {
     showLoginCode();
     loginCode.focus();

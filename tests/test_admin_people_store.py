@@ -269,6 +269,20 @@ def test_a_malformed_last_step_refuses_codes(env, last):
     )
 
 
+@pytest.mark.parametrize("last", ["5", True, 1.5])
+def test_a_malformed_last_step_does_not_tell_a_right_code_from_a_wrong_one(env, last):
+    made = ph.new_person()
+    pid, right = made["person"]["id"], ph.code_now(env, made)
+    window = _codes_in_window(env, made)
+    wrong = next(c for c in (f"{n:06d}" for n in range(1_000_000)) if c not in window)
+    data = json.loads(env.store.read_text())
+    data["people"][0]["last_step"] = last
+    env.store.write_text(json.dumps(data))
+    assert admin_people.check_code(pid, wrong) == "unavailable"
+    assert admin_people.check_code(pid, right) == "unavailable"
+    assert admin_people.get(pid)["last_step"] == last
+
+
 def test_a_replayed_code_is_logged_without_the_code(env, caplog):
     made = ph.new_person()
     pid, code = made["person"]["id"], ph.code_now(env, made)

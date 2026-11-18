@@ -1,15 +1,16 @@
 /* People (PB-AUTH-01): personal dashboard keys, one per person, each with its
  * own authenticator secret.
  *
- * Data: GET and POST /admin/people, DELETE /admin/people/{id} (admin session).
+ * Data: GET and POST /admin/people, DELETE /admin/people/{id}
+ * (any admin: session or key).
  * A new key, its secret and its otpauth URI are shown once, as text, and
  * stay on the page until "I have stored them" or until the page is left
  * (pagehide): a tab change keeps them, so a key that lands while another tab
  * is open is still there when its tab comes back. No other key can be created
  * while they are shown. They never go to Web Storage, the URL or the console.
  * Names are only ever written as text, through h() or textContent, never as
- * HTML; each one sits
- * next to its key prefix and its status, so two look-alike names stay apart.
+ * HTML; each one sits next to its key prefix and its status, so two
+ * look-alike names stay apart.
  * Uses the helpers of app.js: api, h, table, toast, confirmAction,
  * emptyState, skeleton, _errorDetail.
  */

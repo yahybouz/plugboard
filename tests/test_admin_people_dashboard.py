@@ -93,3 +93,34 @@ def test_the_login_screen_names_personal_keys():
 
     assert "Enter your admin key or your personal key" in _LOGIN_HTML_TEMPLATE
     assert 'placeholder="Admin or personal key"' in _LOGIN_HTML_TEMPLATE
+
+
+def test_the_relogin_code_field_hides_again_for_a_key_that_needs_none():
+    app_js = (STATIC / "app.js").read_text()
+    hide = re.search(r"function hideLoginCode\(\) \{(.*?)\n\}", app_js, re.S)
+    assert hide, "the code field can be hidden again"
+    assert 'classList.add("hidden")' in hide.group(1)
+    assert "loginCode.required = false" in hide.group(1)
+    sync = re.search(r"function syncLoginCode\(key\) \{(.*?)\n\}", app_js, re.S)
+    assert sync and 'key.startsWith("pba_")' in sync.group(1)
+    # Hidden only while the server has not asked ADMIN_KEY for a code.
+    assert "if (!adminCodeAsked) hideLoginCode()" in sync.group(1)
+    assert re.search(
+        r"result\.mfaRequired && !key\.startsWith\(\"pba_\"\)\) adminCodeAsked = true",
+        app_js,
+    )
+    login = app_js[
+        app_js.index('loginForm.addEventListener("submit"') : app_js.index(
+            "function showApp"
+        )
+    ]
+    assert "syncLoginCode(key);" in login
+    assert 'getElementById("login-key").addEventListener("input"' in app_js
+
+
+def test_the_people_js_header_names_every_admin():
+    head = (STATIC / "people.js").read_text().split("*/", 1)[0]
+    assert "(any admin: session or key)" in head and "(admin session)" not in head
+    lines = [line.removeprefix(" * ").rstrip() for line in head.splitlines()]
+    # No line of the header is cut short in the middle of a sentence.
+    assert "HTML; each one sits" not in lines

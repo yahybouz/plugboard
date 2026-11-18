@@ -4127,7 +4127,9 @@ async def health_ready(request: Request):
     The body is ``ready`` and ``version``; ``checks`` (generic states: which
     check failed, the client auth posture) is added for a valid key only
     (PLU-75): an active client key, the admin key (no TOTP: a read of
-    generic states) or an admin session. A wrong, forged or revoked key is
+    generic states) or an admin session, a person's session included; a
+    bare personal key (``pba_``), even with its code, gets no checks
+    (PB-AUTH-01). A wrong, forged or revoked key is
     not refused here: it gets the same body as no key. With both API_KEY and
     ADMIN_KEY empty every route is open (loopback only), so are the checks.
     """
