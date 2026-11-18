@@ -273,11 +273,9 @@ def test_reexported_handlers_are_the_registered_endpoints():
 
 
 def test_admin_route_modules_are_designed_ones():
-    """Some module is found, and only modules of the design (the last move
-    tightens this to equality)."""
+    """Exactly the modules of the design are found: none missing, none extra."""
     found = {m.__name__.rsplit(".", 1)[1] for m in _admin_route_modules()}
-    assert found
-    assert sorted(found - EXPECTED_MODULES) == []
+    assert sorted(found) == sorted(EXPECTED_MODULES)
 
 
 async def test_reexported_probe_reads_the_module_that_registered_it(monkeypatch):
