@@ -10,6 +10,7 @@ is never written to a log or an answer.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
 
@@ -305,3 +306,70 @@ async def test_the_initial_discovery_holds_no_request_or_trace_id(monkeypatch):
         await asyncio.sleep(0)
 
     assert seen == [("-", None)]
+
+
+# ── JSON log lines of a real request ─────────────────────────────────────────
+
+
+class _JsonLines(logging.Handler):
+    """Formats each record with the gateway's JSON formatter as it is
+    emitted, in the context of the code that logs it."""
+
+    def __init__(self):
+        from plugboard.logging_config import _JsonFormatter
+
+        super().__init__(logging.INFO)
+        self.setFormatter(_JsonFormatter())
+        self.lines = []
+
+    def emit(self, record):
+        self.lines.append(self.format(record))
+
+
+@pytest.fixture
+def json_lines():
+    handler = _JsonLines()
+    root = logging.getLogger()
+    level = root.level
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    try:
+        yield handler.lines
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(level)
+
+
+def _lines_of(lines, resp):
+    """The JSON lines the request wrote, by its X-Request-ID."""
+    rid = resp.headers["X-Request-ID"]
+    return [e for e in (json.loads(line) for line in lines) if e["request_id"] == rid]
+
+
+@pytest.mark.asyncio
+async def test_the_json_lines_of_a_traced_request_carry_its_trace(
+    client, usage_db, json_lines
+):
+    """PLU-108 end to end: a real request with a valid traceparent goes
+    through the middleware, and the gateway's own log lines (routing, answer)
+    carry the trace id and the caller's span id."""
+    resp = await _chat(client, {"traceparent": _VALID})
+
+    assert resp.status_code == 200
+    mine = _lines_of(json_lines, resp)
+    assert {e["logger"] for e in mine} >= {"plugboard.router", "plugboard.app"}
+    assert all((e["trace_id"], e["span_id"]) == (_TRACE, _SPAN) for e in mine)
+
+
+@pytest.mark.asyncio
+async def test_the_json_lines_of_an_invalid_traceparent_carry_no_trace_and_no_value(
+    client, usage_db, json_lines
+):
+    bad = f'00-{_TRACE}-{_SPAN}-01 {_MARK}","trace_id":"{_MARK}'
+    resp = await _chat(client, {"traceparent": bad})
+
+    assert resp.status_code == 200
+    mine = _lines_of(json_lines, resp)
+    assert mine
+    assert all("trace_id" not in e and "span_id" not in e for e in mine)
+    assert not any(_MARK in line for line in json_lines)
