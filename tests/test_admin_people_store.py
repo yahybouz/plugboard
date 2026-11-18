@@ -10,7 +10,7 @@ import time as _time
 
 import pytest
 
-from plugboard import admin_people, admin_sessions
+from plugboard import admin_mfa, admin_people, admin_sessions
 from plugboard.storage import StoreUnreadableError
 from tests import people_helpers as ph
 
@@ -278,10 +278,20 @@ def test_a_replayed_code_is_logged_without_the_code(env, caplog):
     assert code not in caplog.text
 
 
+def _codes_in_window(env, made: dict) -> set:
+    """Every code ``matching_step`` accepts for ``made`` now (±window steps)."""
+    return {
+        admin_mfa._generate_code(
+            made["totp_secret"], at=env.clock.t + shift * admin_mfa._PERIOD
+        )
+        for shift in range(-admin_mfa._WINDOW, admin_mfa._WINDOW + 1)
+    }
+
+
 def test_a_code_of_one_person_never_verifies_for_another(env):
     one, two = ph.new_person("person-one"), ph.new_person("person-two")
-    while ph.code_now(env, one) == ph.code_now(env, two):
-        ph.next_step(env)  # two random secrets can share a code at one step
+    while ph.code_now(env, one) in _codes_in_window(env, two):
+        ph.next_step(env)  # two random secrets can share a code in the window
     other = two["person"]["id"]
     assert admin_people.verify_code(other, ph.code_now(env, one)) == "refused"
     assert admin_people.get(other)["last_step"] is None
@@ -314,6 +324,7 @@ def test_a_code_is_accepted_once_when_two_threads_check_it_together(env, monkeyp
         thread.start()
     for thread in threads:
         thread.join(timeout=10)
+        assert not thread.is_alive()
     assert sorted(results) == ["confirmed", "refused"]
 
 
@@ -408,6 +419,7 @@ def test_a_revocation_and_a_code_check_at_once_lose_neither(env, monkeypatch):
         thread.start()
     for thread in threads:
         thread.join(timeout=10)
+        assert not thread.is_alive()
     record = admin_people.get(pid)
     assert record["revoked_at"]
     if outcome["code"] != "refused":
