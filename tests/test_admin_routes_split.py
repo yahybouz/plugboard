@@ -4,6 +4,7 @@ import ast
 import importlib
 import inspect
 import pkgutil
+import sys
 from pathlib import Path
 
 from fastapi.routing import APIRoute
@@ -137,6 +138,25 @@ READ_SURFACE = frozenset(
 )
 
 
+# The modules of the design (one per contiguous block of admin routes): the
+# invariants above must not pass on an empty package.
+EXPECTED_MODULES = frozenset(
+    {
+        "auth",
+        "direct_providers",
+        "jobs",
+        "keys",
+        "model_probes",
+        "monitoring",
+        "oauth",
+        "ollama",
+        "pricing",
+        "providers",
+        "usage",
+    }
+)
+
+
 def _app_module():
     return importlib.import_module(APP_MODULE)
 
@@ -250,3 +270,56 @@ def test_reexported_handlers_are_the_registered_endpoints():
     }
     for name in sorted((PATCH_POINTS | READ_SURFACE) & endpoints.keys()):
         assert getattr(app_module, name) is endpoints[name], name
+
+
+def test_admin_route_modules_are_designed_ones():
+    """Some module is found, and only modules of the design (the last move
+    tightens this to equality)."""
+    found = {m.__name__.rsplit(".", 1)[1] for m in _admin_route_modules()}
+    assert found
+    assert sorted(found - EXPECTED_MODULES) == []
+
+
+async def test_reexported_probe_reads_the_module_that_registered_it(monkeypatch):
+    """After plugboard.app is imported again (E-25 does it), the first module's
+    bulk probe still reads the first module's patch points (PLU-36)."""
+    import plugboard
+
+    first = importlib.import_module("plugboard.app")
+    monkeypatch.setitem(sys.modules, "plugboard.app", first)  # restored at teardown
+    monkeypatch.setattr(plugboard, "app", first)
+    del sys.modules["plugboard.app"]
+    second = importlib.import_module("plugboard.app")
+    assert second is not first
+
+    probed = []
+
+    async def _list_models():
+        return [
+            {
+                "id": "anthropic-direct:claude-haiku-5-5",
+                "owned_by": "anthropic-direct",
+                "provider": "anthropic-direct",
+            }
+        ]
+
+    async def _probe(body, _=None):
+        probed.append(body["model_id"])
+        return {"model_id": body["model_id"], "internet_access": False, "status": "ok"}
+
+    monkeypatch.setattr(first, "list_models", _list_models)
+    monkeypatch.setattr(
+        first,
+        "load_providers",
+        lambda: [
+            {
+                "id": "anthropic-direct",
+                "name": "Anthropic Direct",
+                "base_url": "https://api.anthropic.com",
+                "provider_type": "cloud",
+            }
+        ],
+    )
+    monkeypatch.setattr(first, "check_model_internet_access", _probe)
+    await first.check_all_models_internet_access({}, _=None)
+    assert probed == ["anthropic-direct:claude-haiku-5-5"]
