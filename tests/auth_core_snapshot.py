@@ -1,8 +1,8 @@
 """Snapshot of what moving the auth core out of app.py must not change (PLU-97).
 
 The dependencies of every route (by qualified name), the names plugboard.app
-exposes and the order in which a cold import loads the plugboard modules are
-frozen in ``tests/fixtures/auth_core_snapshot.json`` and compared by
+exposes, the values of the moved constants and the order in which a cold
+import loads the plugboard modules are frozen in ``tests/fixtures/auth_core_snapshot.json`` and compared by
 ``tests/test_auth_core_guard.py``. The fixture is written once on the code
 before the move, with ``python -m tests.auth_core_snapshot``. The route table,
 the admin OpenAPI document and the sorted import effects stay frozen by the
@@ -26,6 +26,21 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests" / "fixtures" / "auth_core_snapshot.json"
 # Packages whose modules register code on the app: not import effects.
 REGISTERING = ("plugboard.admin_routes", "plugboard.chat_path", "plugboard.auth_core")
+# The constants the move carries out of app.py (upper-case names of MOVED in
+# tests/test_auth_core_split.py): their values are frozen, not only their names.
+MOVED_CONSTANTS = (
+    "_ADMIN_KEY_PRINCIPAL",
+    "_ADMIN_SCOPE",
+    "_ADMIN_TOTP_HEADER",
+    "_CROSS_SITE_REFUSED",
+    "_FLAG_OFF",
+    "_FLAG_ON",
+    "_LOCAL_NAVIGATION_SITES",
+    "_LOOPBACK_HOSTS",
+    "_PROXY_HEADERS",
+    "_STATE_CHANGING_METHODS",
+    "_SUSPICIOUS_REFUSALS",
+)
 
 _PROBE = f"""
 import json
@@ -89,6 +104,28 @@ def app_surface() -> list:
     )
 
 
+def _stable(value) -> str:
+    """repr() that does not depend on hashing order: sets are sorted. Only
+    scalars, and tuples or sets of scalars, have one."""
+    scalars = (str, int, float, bool)
+    if isinstance(value, scalars):
+        return repr(value)
+    if isinstance(value, (tuple, set, frozenset)) and all(
+        isinstance(item, scalars) for item in value
+    ):
+        if isinstance(value, tuple):
+            return repr(value)
+        return f"{type(value).__name__}({sorted(value)!r})"
+    raise TypeError(f"no stable form for {type(value).__name__}")
+
+
+def moved_constants() -> dict:
+    """{name: stable repr} of every moved constant, read on plugboard.app."""
+    import plugboard.app as app_module
+
+    return {name: _stable(getattr(app_module, name)) for name in MOVED_CONSTANTS}
+
+
 def import_order() -> list:
     """The plugboard modules a cold import loads, in completion order (the
     order in which each module finishes loading, as ``sys.modules`` keeps it)."""
@@ -126,6 +163,7 @@ def main() -> None:
         "dependency_calls": dependency_calls(app),
         "app_surface": app_surface(),
         "import_order": import_order(),
+        "moved_constants": moved_constants(),
     }
     FIXTURE.write_text(
         json.dumps(snapshot, indent=1, sort_keys=True, ensure_ascii=False) + "\n",

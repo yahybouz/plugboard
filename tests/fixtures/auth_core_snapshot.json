@@ -1073,5 +1073,18 @@
   "plugboard.log_redact",
   "plugboard.cache_common",
   "plugboard.app"
- ]
+ ],
+ "moved_constants": {
+  "_ADMIN_KEY_PRINCIPAL": "'admin-key'",
+  "_ADMIN_SCOPE": "'key:admin'",
+  "_ADMIN_TOTP_HEADER": "'X-Plugboard-Admin-TOTP'",
+  "_CROSS_SITE_REFUSED": "'Cross-site request refused'",
+  "_FLAG_OFF": "set(['0', 'false', 'no', 'off'])",
+  "_FLAG_ON": "set(['1', 'on', 'true', 'yes'])",
+  "_LOCAL_NAVIGATION_SITES": "set(['none', 'same-origin'])",
+  "_LOOPBACK_HOSTS": "set(['127.0.0.1', '::1', 'localhost'])",
+  "_PROXY_HEADERS": "('forwarded', 'via', 'x-forwarded-for', 'x-forwarded-host', 'x-forwarded-proto', 'x-forwarded-port', 'x-forwarded-server', 'x-original-forwarded-for', 'x-real-ip', 'x-client-ip', 'x-cluster-client-ip', 'cf-connecting-ip', 'true-client-ip', 'fly-client-ip', 'fastly-client-ip')",
+  "_STATE_CHANGING_METHODS": "frozenset(['DELETE', 'PATCH', 'POST', 'PUT'])",
+  "_SUSPICIOUS_REFUSALS": "set(['bad_token', 'non_loopback_peer', 'proxied'])"
+ }
 }

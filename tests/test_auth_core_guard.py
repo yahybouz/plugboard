@@ -43,6 +43,13 @@ def test_no_name_left_plugboard_app():
     assert gone == []
 
 
+def test_moved_constant_values_are_unchanged():
+    """The values of the moved constants, not only their names: a proxy
+    header, a loopback host or a state-changing method lost or added in the
+    copy is a change of behaviour (security review I3)."""
+    assert auth_core_snapshot.moved_constants() == _expected("moved_constants")
+
+
 def test_import_order_is_unchanged():
     assert auth_core_snapshot.import_order() == _expected("import_order")
 
