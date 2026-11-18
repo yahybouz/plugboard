@@ -76,21 +76,25 @@ def _now() -> str:
 
 
 def _load() -> tuple[list[dict], bool]:
-    """(people, readable): a missing file is readable and empty."""
+    """(people, readable): a missing file is readable and empty.
+
+    Anything else than ``{"people": [<object>, ...]}`` is unreadable: the
+    store fails closed and is never rewritten over what it could not parse.
+    """
     path = _path()
-    if not path.exists():
-        return [], True
     try:
+        if not path.exists():
+            return [], True
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         # The type only: a decoding error can quote the file's bytes.
         log.error("Failed to read %s: %s", path, type(exc).__name__)
         return [], False
     people = data.get("people") if isinstance(data, dict) else None
-    if not isinstance(people, list):
+    if not isinstance(people, list) or not all(isinstance(p, dict) for p in people):
         log.error("Failed to read %s: not a list of people", path)
         return [], False
-    return [p for p in people if isinstance(p, dict)], True
+    return people, True
 
 
 def _save(people: list[dict]) -> None:

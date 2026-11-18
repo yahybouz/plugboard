@@ -87,3 +87,66 @@ def test_an_unreadable_store_refuses_create_and_list(env, content, caplog):
         admin_people.create("person-one", created_by="admin-key")
     assert env.store.read_text() == content
     assert "not json" not in caplog.text
+
+
+WITNESS = "witness-5c1e9a0b"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{}",
+        '{"people": [1]}',
+        '{"people": [{"id": "ap_000000000000"}, "' + WITNESS + '"]}',
+        '{"' + WITNESS + '": ',
+        '"' + WITNESS + '"',
+    ],
+)
+def test_a_malformed_store_fails_closed_without_quoting_it(env, content, caplog):
+    env.store.write_text(content)
+    with pytest.raises(admin_people.PeopleStoreUnreadable):
+        admin_people.list_people()
+    with pytest.raises(admin_people.PeopleStoreUnreadable):
+        admin_people.create("person-one", created_by="admin-key")
+    assert env.store.read_text() == content
+    assert any(r.levelname == "ERROR" for r in caplog.records)
+    assert WITNESS not in caplog.text
+
+
+def test_a_store_that_is_not_utf8_is_unreadable(env, caplog):
+    raw = b"\xff\xfe" + WITNESS.encode() + b"\x80"
+    env.store.write_bytes(raw)
+    with pytest.raises(admin_people.PeopleStoreUnreadable):
+        admin_people.list_people()
+    with pytest.raises(admin_people.PeopleStoreUnreadable):
+        admin_people.create("person-one", created_by="admin-key")
+    assert env.store.read_bytes() == raw
+    assert WITNESS not in caplog.text
+
+
+def test_a_directory_in_place_of_the_store_is_unreadable(env):
+    env.store.mkdir()
+    with pytest.raises(admin_people.PeopleStoreUnreadable):
+        admin_people.list_people()
+    with pytest.raises(admin_people.PeopleStoreUnreadable):
+        admin_people.create("person-one", created_by="admin-key")
+    assert env.store.is_dir()
+
+
+class _UnreachablePath:
+    """A store path whose parent cannot be searched: every look raises."""
+
+    def exists(self):
+        raise PermissionError(13, "Permission denied")
+
+    def read_text(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+
+def test_a_store_that_cannot_be_reached_is_unreadable(env, monkeypatch, caplog):
+    monkeypatch.setattr(admin_people, "_path", lambda: _UnreachablePath())
+    with pytest.raises(admin_people.PeopleStoreUnreadable):
+        admin_people.list_people()
+    with pytest.raises(admin_people.PeopleStoreUnreadable):
+        admin_people.create("person-one", created_by="admin-key")
+    assert "PermissionError" in caplog.text
