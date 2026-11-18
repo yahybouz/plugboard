@@ -1730,23 +1730,35 @@ def _person_request_auth(request: Request, token: str) -> str:
     is always required, even where global admin MFA is not; wrong codes lock
     that person only (``key:admin:<id>``). An unknown or revoked key, or an
     unreadable people store, is "denied" and counts nothing. The admin key's MFA proof
-    (``admin_mfa_verified``) is never set here."""
+    (``admin_mfa_verified``) is never set here. Without ``ADMIN_KEY`` a
+    personal key opens nothing; a fault of the store (unreadable, not
+    writable, malformed record) refuses without counting a wrong code."""
+    if not _effective_admin_key():
+        return "denied"
     person = admin_people.find_by_key(token)
     if person is None:
+        return "denied"
+    person_id = person.get("id")
+    if not isinstance(person_id, str) or not admin_people.ID_PATTERN.fullmatch(
+        person_id
+    ):
+        log.error("auth rejected reason=person_record_malformed")
         return "denied"
     code = request.headers.get(_ADMIN_TOTP_HEADER, "").strip()
     if not code:
         return "mfa_required"
     from plugboard.ratelimit import check_auth_rate_limit, record_auth_failure
 
-    person_id = person["id"]
     principal = _person_principal(person)
     name = str(person.get("name", ""))
     scope = _person_scope(person_id)
     client_ip = _client_address(request)
     if not check_auth_rate_limit(scope):
         return "locked"
-    outcome = admin_people.verify_code(person_id, code)
+    outcome = admin_people.check_code(person_id, code)
+    if outcome == "unavailable":
+        log.error("auth rejected reason=person_store_unavailable")
+        return "denied"
     if outcome == "refused":
         locked = record_auth_failure(scope)
         _audit(

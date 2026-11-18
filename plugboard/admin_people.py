@@ -223,31 +223,43 @@ def verify_code(person_id: str, code: str) -> str:
     store unreadable, secret not encrypted or not decryptable, or the store
     could not be written. The step is recorded before the answer.
     """
+    outcome = check_code(person_id, code)
+    return "refused" if outcome == "unavailable" else outcome
+
+
+def check_code(person_id: str, code: str) -> str:
+    """``verify_code``, telling a fault of the server from a wrong code.
+
+    ``"unavailable"`` when the store is unreadable or cannot be written, or
+    the person's secret or state is malformed: no code could be checked, so
+    the caller must refuse without counting a wrong code. Every other answer
+    is the one of ``verify_code``.
+    """
     if not isinstance(person_id, str) or not ID_PATTERN.fullmatch(person_id):
         return "refused"
     with _LOCK:
         people, readable = _load()
         if not readable:
-            return "refused"
+            return "unavailable"
         record = next((p for p in people if p.get("id") == person_id), None)
         if record is None or record.get("revoked_at"):
             return "refused"
         stored = record.get("totp_secret_enc")
         if not isinstance(stored, str) or not stored.startswith("enc:"):
             log.error("Personal TOTP secret of %s is not encrypted", person_id)
-            return "refused"
+            return "unavailable"
         try:
             secret = _decrypt_token(stored)
         except SecretUnreadable:
             log.error("Personal TOTP secret of %s cannot be decrypted", person_id)
-            return "refused"
+            return "unavailable"
         step = admin_mfa.matching_step(secret, code, at=time.time())
         if step is None:
             return "refused"
         last = record.get("last_step")
         if last is not None and (isinstance(last, bool) or not isinstance(last, int)):
             log.error("Personal TOTP state of %s is malformed", person_id)
-            return "refused"
+            return "unavailable"
         if last is not None and step <= last:
             log.warning(
                 "Personal TOTP code replayed (time-step already used) for %s",
@@ -269,7 +281,7 @@ def verify_code(person_id: str, code: str) -> str:
                 person_id,
                 type(exc).__name__,
             )
-            return "refused"
+            return "unavailable"
     return outcome
 
 
