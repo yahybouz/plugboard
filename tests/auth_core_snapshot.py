@@ -90,7 +90,8 @@ def app_surface() -> list:
 
 
 def import_order() -> list:
-    """The plugboard modules a cold import loads, in load order."""
+    """The plugboard modules a cold import loads, in completion order (the
+    order in which each module finishes loading, as ``sys.modules`` keeps it)."""
     with tempfile.TemporaryDirectory(prefix="plu97-import-") as tmp:
         env = {
             "PATH": os.environ.get("PATH", ""),

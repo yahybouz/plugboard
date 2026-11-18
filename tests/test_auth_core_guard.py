@@ -1,11 +1,11 @@
 """Moving the auth core out of app.py changes nothing (PLU-97): the same
 dependencies on every route, by name and by object; no name gone from
 plugboard.app; the same plugboard modules loaded at import, in the same order
-as 919f01f."""
+as 919f01f; the same authentication decisions (tests/auth_decisions.py)."""
 
 import json
 
-from tests import auth_core_snapshot
+from tests import auth_core_snapshot, auth_decisions
 
 KNOWN_DEPENDENCIES = {"_require_admin", "_resolve_client"}
 
@@ -45,3 +45,18 @@ def test_no_name_left_plugboard_app():
 
 def test_import_order_is_unchanged():
     assert auth_core_snapshot.import_order() == _expected("import_order")
+
+
+def test_auth_decisions_are_unchanged():
+    """The same answer, principal, MFA proof, key id, audit entries, log lines
+    and lockout counters as 919f01f for every case of the matrix (PLU-97)."""
+    expected = json.loads(auth_decisions.FIXTURE.read_text(encoding="utf-8"))
+    actual = auth_decisions.run_all()
+    changed = sorted(
+        f"{case}/{name}"
+        for case, by_function in expected.items()
+        for name, calls in by_function.items()
+        if actual.get(case, {}).get(name) != calls
+    )
+    assert changed == []
+    assert actual == expected
