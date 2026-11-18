@@ -1,0 +1,4690 @@
+{
+ "client_contract": {
+  "components": {
+   "schemas": {
+    "AssistantMessage": {
+     "additionalProperties": true,
+     "properties": {
+      "content": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Content"
+      },
+      "reasoning": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Reasoning text, for models that expose it.",
+       "title": "Reasoning"
+      },
+      "role": {
+       "default": "assistant",
+       "title": "Role",
+       "type": "string"
+      },
+      "tool_calls": {
+       "anyOf": [
+        {
+         "items": {
+          "additionalProperties": true,
+          "type": "object"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Tool Calls"
+      }
+     },
+     "title": "AssistantMessage",
+     "type": "object"
+    },
+    "Billing": {
+     "description": "What the call cost, as recorded against the caller's key.",
+     "properties": {
+      "completion_tokens": {
+       "title": "Completion Tokens",
+       "type": "integer"
+      },
+      "cost_usd": {
+       "title": "Cost Usd",
+       "type": "number"
+      },
+      "model": {
+       "description": "Model id that served the call, after fallback.",
+       "title": "Model",
+       "type": "string"
+      },
+      "price_key": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Admin keys only: the pricing-grid entry that priced the call.",
+       "title": "Price Key"
+      },
+      "pricing_month": {
+       "examples": [
+        "2026_10"
+       ],
+       "title": "Pricing Month",
+       "type": "string"
+      },
+      "prompt_tokens": {
+       "title": "Prompt Tokens",
+       "type": "integer"
+      },
+      "total_tokens": {
+       "title": "Total Tokens",
+       "type": "integer"
+      }
+     },
+     "required": [
+      "prompt_tokens",
+      "completion_tokens",
+      "total_tokens",
+      "cost_usd",
+      "model",
+      "pricing_month"
+     ],
+     "title": "Billing",
+     "type": "object"
+    },
+    "ChatChoice": {
+     "additionalProperties": true,
+     "properties": {
+      "finish_reason": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Finish Reason"
+      },
+      "index": {
+       "title": "Index",
+       "type": "integer"
+      },
+      "message": {
+       "$ref": "#/components/schemas/AssistantMessage"
+      }
+     },
+     "required": [
+      "index",
+      "message"
+     ],
+     "title": "ChatChoice",
+     "type": "object"
+    },
+    "ChatCompletion": {
+     "additionalProperties": true,
+     "properties": {
+      "billing": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/Billing"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Present when the call was billed to a key."
+      },
+      "choices": {
+       "items": {
+        "$ref": "#/components/schemas/ChatChoice"
+       },
+       "title": "Choices",
+       "type": "array"
+      },
+      "created": {
+       "title": "Created",
+       "type": "integer"
+      },
+      "id": {
+       "title": "Id",
+       "type": "string"
+      },
+      "model": {
+       "title": "Model",
+       "type": "string"
+      },
+      "object": {
+       "default": "chat.completion",
+       "title": "Object",
+       "type": "string"
+      },
+      "usage": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/TokenUsage"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null
+      }
+     },
+     "required": [
+      "id",
+      "created",
+      "model",
+      "choices"
+     ],
+     "title": "ChatCompletion",
+     "type": "object"
+    },
+    "ChatCompletionChunk": {
+     "additionalProperties": true,
+     "description": "One `data:` event of a streamed completion (SSE).\n\nThe stream ends with `data: [DONE]`. A chunk carrying `usage` (and\n`cost_usd` when the gateway computed it) always comes before `[DONE]`.\nA stream the provider breaks off after its first chunk ends instead with\n`data: {\"error\": {\"message\", \"type\": \"server_error\", \"code\":\n\"stream_interrupted\"}}`, then `data: [DONE]`.",
+     "properties": {
+      "choices": {
+       "items": {
+        "$ref": "#/components/schemas/ChunkChoice"
+       },
+       "title": "Choices",
+       "type": "array"
+      },
+      "created": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Created"
+      },
+      "id": {
+       "title": "Id",
+       "type": "string"
+      },
+      "model": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Model"
+      },
+      "object": {
+       "default": "chat.completion.chunk",
+       "title": "Object",
+       "type": "string"
+      },
+      "usage": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/StreamUsage"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null
+      }
+     },
+     "required": [
+      "id",
+      "choices"
+     ],
+     "title": "ChatCompletionChunk",
+     "type": "object"
+    },
+    "ChatCompletionRequest": {
+     "additionalProperties": true,
+     "description": "OpenAI ``POST /v1/chat/completions`` body, plus two Plugboard fields.",
+     "properties": {
+      "cache": {
+       "default": true,
+       "description": "Plugboard: false bypasses the response cache for this call.",
+       "title": "Cache",
+       "type": "boolean"
+      },
+      "max_completion_tokens": {
+       "anyOf": [
+        {
+         "maximum": 262144,
+         "minimum": 1,
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "A whole number from 1 to 262144, else 400 invalid_request.",
+       "title": "Max Completion Tokens"
+      },
+      "max_tokens": {
+       "anyOf": [
+        {
+         "maximum": 262144,
+         "minimum": 1,
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Renamed to max_completion_tokens for OpenAI o-series models. A whole number from 1 to 262144, else 400 invalid_request.",
+       "title": "Max Tokens"
+      },
+      "messages": {
+       "items": {
+        "$ref": "#/components/schemas/ChatMessage"
+       },
+       "minItems": 1,
+       "title": "Messages",
+       "type": "array"
+      },
+      "model": {
+       "description": "`provider:model` (see GET /v1/models), or a bare model id, which is routed to the first active provider that serves it.",
+       "examples": [
+        "anthropic-direct:claude-sonnet-5-5"
+       ],
+       "title": "Model",
+       "type": "string"
+      },
+      "response_format": {
+       "anyOf": [
+        {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "OpenAI structured output (json_object, json_schema). A CLI subscription route (subprocess provider) serves type text only: any other gets 400 unsupported_on_cli, unless another provider of the same model serves the request.",
+       "title": "Response Format"
+      },
+      "session_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Plugboard: the gateway keeps the conversation and prepends it, so only the new turn is sent. Same as the X-LLM-Session-ID header.",
+       "title": "Session Id"
+      },
+      "stop": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Stop"
+      },
+      "stream": {
+       "default": false,
+       "description": "true answers with text/event-stream (SSE).",
+       "title": "Stream",
+       "type": "boolean"
+      },
+      "temperature": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Removed before forwarding for models that reject sampling parameters (Claude Opus 4.7 and later, Sonnet 5+, Haiku 5+).",
+       "title": "Temperature"
+      },
+      "tool_choice": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "OpenAI tool choice. A CLI subscription route (subprocess provider) does not serve a value other than none or auto: 400 unsupported_on_cli, unless another provider of the same model serves the request.",
+       "title": "Tool Choice"
+      },
+      "tools": {
+       "anyOf": [
+        {
+         "items": {
+          "additionalProperties": true,
+          "type": "object"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "OpenAI tool definitions. A CLI subscription route (subprocess provider) does not serve them: a non-empty list gets 400 unsupported_on_cli, unless another provider of the same model serves the request.",
+       "title": "Tools"
+      },
+      "top_p": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Top P"
+      }
+     },
+     "required": [
+      "model",
+      "messages"
+     ],
+     "title": "ChatCompletionRequest",
+     "type": "object"
+    },
+    "ChatMessage": {
+     "additionalProperties": true,
+     "properties": {
+      "content": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "items": {
+          "additionalProperties": true,
+          "type": "object"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Text, or OpenAI content parts (text, image_url, input_audio...). A CLI subscription route (subprocess provider) serves text parts only: any other part gets 400 unsupported_on_cli, unless another provider of the same model serves the request.",
+       "title": "Content"
+      },
+      "role": {
+       "description": "An OpenAI role: system, developer, user, assistant, tool or function. Any other is refused (400 invalid_request).",
+       "enum": [
+        "system",
+        "developer",
+        "user",
+        "assistant",
+        "tool",
+        "function"
+       ],
+       "title": "Role",
+       "type": "string"
+      }
+     },
+     "required": [
+      "role"
+     ],
+     "title": "ChatMessage",
+     "type": "object"
+    },
+    "ChoiceQuestion": {
+     "additionalProperties": false,
+     "properties": {
+      "criteria": {
+       "additionalProperties": {
+        "anyOf": [
+         {
+          "type": "string"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "maxProperties": 16,
+       "minProperties": 2,
+       "title": "Criteria",
+       "type": "object"
+      },
+      "instructions": {
+       "title": "Instructions",
+       "type": "string"
+      },
+      "type": {
+       "const": "choice",
+       "title": "Type",
+       "type": "string"
+      }
+     },
+     "required": [
+      "type",
+      "instructions",
+      "criteria"
+     ],
+     "title": "ChoiceQuestion",
+     "type": "object"
+    },
+    "ChunkChoice": {
+     "additionalProperties": true,
+     "properties": {
+      "delta": {
+       "additionalProperties": true,
+       "title": "Delta",
+       "type": "object"
+      },
+      "finish_reason": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Finish Reason"
+      },
+      "index": {
+       "title": "Index",
+       "type": "integer"
+      }
+     },
+     "required": [
+      "index",
+      "delta"
+     ],
+     "title": "ChunkChoice",
+     "type": "object"
+    },
+    "ClientInfo": {
+     "additionalProperties": true,
+     "description": "Who the key belongs to, its limits and this month's spend.\n\nEvery field but `client_id` is absent for an unauthenticated call.",
+     "properties": {
+      "allowed_models": {
+       "anyOf": [
+        {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Empty = every model.",
+       "title": "Allowed Models"
+      },
+      "client_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Client Id"
+      },
+      "current_month": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Current Month"
+      },
+      "key_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Key Id"
+      },
+      "monthly_limit_usd": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "0 = none.",
+       "title": "Monthly Limit Usd"
+      },
+      "org_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Org Id"
+      },
+      "remaining_usd": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "null when the key has no monthly limit.",
+       "title": "Remaining Usd"
+      },
+      "rpm_limit": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Calls per minute to the routes that call a model (chat, preflight pings, embeddings, decisions); the reads are not counted. 0 = none.",
+       "title": "Rpm Limit"
+      },
+      "usage": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/UsageSummary"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null
+      }
+     },
+     "required": [
+      "client_id"
+     ],
+     "title": "ClientInfo",
+     "type": "object"
+    },
+    "ClientKey": {
+     "properties": {
+      "created_at": {
+       "title": "Created At",
+       "type": "string"
+      },
+      "is_active": {
+       "title": "Is Active",
+       "type": "boolean"
+      },
+      "key_display": {
+       "description": "Prefix of the key followed by ***.",
+       "title": "Key Display",
+       "type": "string"
+      },
+      "key_id": {
+       "title": "Key Id",
+       "type": "string"
+      },
+      "label": {
+       "title": "Label",
+       "type": "string"
+      }
+     },
+     "required": [
+      "key_id",
+      "key_display",
+      "label",
+      "is_active",
+      "created_at"
+     ],
+     "title": "ClientKey",
+     "type": "object"
+    },
+    "ClientUsage": {
+     "properties": {
+      "client_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Client Id"
+      },
+      "entries": {
+       "items": {
+        "$ref": "#/components/schemas/UsageEntry"
+       },
+       "title": "Entries",
+       "type": "array"
+      },
+      "month": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "examples": [
+        "2026_10"
+       ],
+       "title": "Month"
+      },
+      "summary": {
+       "$ref": "#/components/schemas/UsageSummary"
+      }
+     },
+     "required": [
+      "entries",
+      "summary"
+     ],
+     "title": "ClientUsage",
+     "type": "object"
+    },
+    "DecisionBilled": {
+     "description": "Cost recorded against the key. `billed`: Jev from the reported input\ntokens, or Laya (free, 0); `estimated`: Jev usage missing or invalid, billed\nat the 64,000-token default context.",
+     "properties": {
+      "cost_usd": {
+       "maximum": 100,
+       "minimum": 0,
+       "title": "Cost Usd",
+       "type": "number"
+      },
+      "status": {
+       "enum": [
+        "billed",
+        "estimated"
+       ],
+       "title": "Status",
+       "type": "string"
+      }
+     },
+     "required": [
+      "status",
+      "cost_usd"
+     ],
+     "title": "DecisionBilled",
+     "type": "object"
+    },
+    "DecisionChoiceAnswer": {
+     "properties": {
+      "choice": {
+       "title": "Choice",
+       "type": "string"
+      },
+      "confidence": {
+       "maximum": 1,
+       "minimum": 0,
+       "title": "Confidence",
+       "type": "number"
+      },
+      "probabilities": {
+       "additionalProperties": {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       "title": "Probabilities",
+       "type": "object"
+      },
+      "type": {
+       "const": "choice",
+       "title": "Type",
+       "type": "string"
+      }
+     },
+     "required": [
+      "type",
+      "choice",
+      "confidence",
+      "probabilities"
+     ],
+     "title": "DecisionChoiceAnswer",
+     "type": "object"
+    },
+    "DecisionModelEntry": {
+     "properties": {
+      "available": {
+       "title": "Available",
+       "type": "boolean"
+      },
+      "confidence_semantics": {
+       "title": "Confidence Semantics",
+       "type": "string"
+      },
+      "id": {
+       "enum": [
+        "jev",
+        "laya",
+        "laya-multilingual"
+       ],
+       "title": "Id",
+       "type": "string"
+      },
+      "languages": {
+       "items": {
+        "type": "string"
+       },
+       "title": "Languages",
+       "type": "array"
+      },
+      "limitations": {
+       "items": {
+        "type": "string"
+       },
+       "title": "Limitations",
+       "type": "array"
+      },
+      "limits": {
+       "additionalProperties": true,
+       "description": "Effective engine limits: timeout_seconds is the local worker budget (30 seconds, including startup/hash/load); api_timeout_seconds is the separate 45-second API envelope. Laya head_tokens and question_branch_tokens share a total head budget of 192 (English) or 256 (multilingual) from pinned configs. instruction_tokens is null: instructions share that head with options and separators, and their remaining budget is checked per request.",
+       "title": "Limits",
+       "type": "object"
+      },
+      "pricing": {
+       "$ref": "#/components/schemas/DecisionPricing"
+      },
+      "primitives": {
+       "items": {
+        "enum": [
+         "choice",
+         "noul",
+         "score"
+        ],
+        "type": "string"
+       },
+       "title": "Primitives",
+       "type": "array"
+      },
+      "provider": {
+       "title": "Provider",
+       "type": "string"
+      },
+      "revision": {
+       "title": "Revision",
+       "type": "string"
+      },
+      "unavailable_reason": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "Unavailable Reason"
+      }
+     },
+     "required": [
+      "id",
+      "provider",
+      "revision",
+      "available",
+      "unavailable_reason",
+      "languages",
+      "primitives",
+      "limits",
+      "pricing",
+      "confidence_semantics",
+      "limitations"
+     ],
+     "title": "DecisionModelEntry",
+     "type": "object"
+    },
+    "DecisionModelList": {
+     "properties": {
+      "data": {
+       "items": {
+        "$ref": "#/components/schemas/DecisionModelEntry"
+       },
+       "title": "Data",
+       "type": "array"
+      },
+      "object": {
+       "const": "list",
+       "default": "list",
+       "title": "Object",
+       "type": "string"
+      }
+     },
+     "required": [
+      "data"
+     ],
+     "title": "DecisionModelList",
+     "type": "object"
+    },
+    "DecisionNoulAnswer": {
+     "properties": {
+      "noul": {
+       "maximum": 1,
+       "minimum": 0,
+       "title": "Noul",
+       "type": "number"
+      },
+      "type": {
+       "const": "noul",
+       "title": "Type",
+       "type": "string"
+      }
+     },
+     "required": [
+      "type",
+      "noul"
+     ],
+     "title": "DecisionNoulAnswer",
+     "type": "object"
+    },
+    "DecisionPricing": {
+     "description": "Price per million tokens; Jev: official input price, output free; Laya: 0.",
+     "properties": {
+      "input_usd_per_mtok": {
+       "minimum": 0,
+       "title": "Input Usd Per Mtok",
+       "type": "number"
+      },
+      "output_usd_per_mtok": {
+       "minimum": 0,
+       "title": "Output Usd Per Mtok",
+       "type": "number"
+      },
+      "unit": {
+       "const": "token",
+       "title": "Unit",
+       "type": "string"
+      }
+     },
+     "required": [
+      "input_usd_per_mtok",
+      "output_usd_per_mtok",
+      "unit"
+     ],
+     "title": "DecisionPricing",
+     "type": "object"
+    },
+    "DecisionRequest": {
+     "additionalProperties": false,
+     "properties": {
+      "model": {
+       "enum": [
+        "jev",
+        "laya",
+        "laya-multilingual"
+       ],
+       "title": "Model",
+       "type": "string"
+      },
+      "questions": {
+       "maxProperties": 8,
+       "minProperties": 1,
+       "patternProperties": {
+        "^[A-Za-z0-9_-]+$": {
+         "discriminator": {
+          "mapping": {
+           "choice": "#/components/schemas/ChoiceQuestion",
+           "noul": "#/components/schemas/NoulQuestion",
+           "score": "#/components/schemas/ScoreQuestion"
+          },
+          "propertyName": "type"
+         },
+         "oneOf": [
+          {
+           "$ref": "#/components/schemas/ChoiceQuestion"
+          },
+          {
+           "$ref": "#/components/schemas/NoulQuestion"
+          },
+          {
+           "$ref": "#/components/schemas/ScoreQuestion"
+          }
+         ]
+        }
+       },
+       "propertyNames": {
+        "maxLength": 64,
+        "minLength": 1
+       },
+       "title": "Questions",
+       "type": "object"
+      },
+      "state": {
+       "title": "State",
+       "type": "string"
+      }
+     },
+     "required": [
+      "model",
+      "state",
+      "questions"
+     ],
+     "title": "DecisionRequest",
+     "type": "object"
+    },
+    "DecisionResponse": {
+     "description": "Answers retain engine-specific confidence; a cost is null only when unrecorded.",
+     "properties": {
+      "answers": {
+       "additionalProperties": {
+        "discriminator": {
+         "mapping": {
+          "choice": "#/components/schemas/DecisionChoiceAnswer",
+          "noul": "#/components/schemas/DecisionNoulAnswer",
+          "score": "#/components/schemas/DecisionScoreAnswer"
+         },
+         "propertyName": "type"
+        },
+        "oneOf": [
+         {
+          "$ref": "#/components/schemas/DecisionChoiceAnswer"
+         },
+         {
+          "$ref": "#/components/schemas/DecisionNoulAnswer"
+         },
+         {
+          "$ref": "#/components/schemas/DecisionScoreAnswer"
+         }
+        ]
+       },
+       "title": "Answers",
+       "type": "object"
+      },
+      "billing": {
+       "discriminator": {
+        "mapping": {
+         "billed": "#/components/schemas/DecisionBilled",
+         "estimated": "#/components/schemas/DecisionBilled",
+         "unrecorded": "#/components/schemas/DecisionUnrecorded"
+        },
+        "propertyName": "status"
+       },
+       "oneOf": [
+        {
+         "$ref": "#/components/schemas/DecisionBilled"
+        },
+        {
+         "$ref": "#/components/schemas/DecisionUnrecorded"
+        }
+       ],
+       "title": "Billing"
+      },
+      "model": {
+       "enum": [
+        "jev",
+        "laya",
+        "laya-multilingual"
+       ],
+       "title": "Model",
+       "type": "string"
+      }
+     },
+     "required": [
+      "model",
+      "answers",
+      "billing"
+     ],
+     "title": "DecisionResponse",
+     "type": "object"
+    },
+    "DecisionScoreAnswer": {
+     "properties": {
+      "confidence": {
+       "maximum": 1,
+       "minimum": 0,
+       "title": "Confidence",
+       "type": "number"
+      },
+      "legend": {
+       "additionalProperties": {
+        "type": "string"
+       },
+       "title": "Legend",
+       "type": "object"
+      },
+      "probabilities": {
+       "additionalProperties": {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       "title": "Probabilities",
+       "type": "object"
+      },
+      "score": {
+       "maximum": 15,
+       "minimum": 0,
+       "title": "Score",
+       "type": "number"
+      },
+      "type": {
+       "const": "score",
+       "title": "Type",
+       "type": "string"
+      }
+     },
+     "required": [
+      "type",
+      "score",
+      "confidence",
+      "probabilities",
+      "legend"
+     ],
+     "title": "DecisionScoreAnswer",
+     "type": "object"
+    },
+    "DecisionUnrecorded": {
+     "description": "The engine answered but the usage ledger could not record the call.",
+     "properties": {
+      "cost_usd": {
+       "title": "Cost Usd",
+       "type": "null"
+      },
+      "status": {
+       "const": "unrecorded",
+       "title": "Status",
+       "type": "string"
+      }
+     },
+     "required": [
+      "status",
+      "cost_usd"
+     ],
+     "title": "DecisionUnrecorded",
+     "type": "object"
+    },
+    "EmbeddingItem": {
+     "properties": {
+      "embedding": {
+       "anyOf": [
+        {
+         "items": {
+          "type": "number"
+         },
+         "type": "array"
+        },
+        {
+         "type": "string"
+        }
+       ],
+       "description": "Floats, or base64 little-endian float32 with encoding_format=base64.",
+       "title": "Embedding"
+      },
+      "index": {
+       "minimum": 0,
+       "title": "Index",
+       "type": "integer"
+      },
+      "object": {
+       "const": "embedding",
+       "default": "embedding",
+       "title": "Object",
+       "type": "string"
+      }
+     },
+     "required": [
+      "index",
+      "embedding"
+     ],
+     "title": "EmbeddingItem",
+     "type": "object"
+    },
+    "EmbeddingList": {
+     "properties": {
+      "data": {
+       "items": {
+        "$ref": "#/components/schemas/EmbeddingItem"
+       },
+       "title": "Data",
+       "type": "array"
+      },
+      "model": {
+       "description": "The exact identity requested.",
+       "title": "Model",
+       "type": "string"
+      },
+      "object": {
+       "const": "list",
+       "default": "list",
+       "title": "Object",
+       "type": "string"
+      },
+      "plugboard": {
+       "$ref": "#/components/schemas/EmbeddingServed"
+      },
+      "usage": {
+       "$ref": "#/components/schemas/EmbeddingUsage"
+      }
+     },
+     "required": [
+      "data",
+      "model",
+      "usage",
+      "plugboard"
+     ],
+     "title": "EmbeddingList",
+     "type": "object"
+    },
+    "EmbeddingModel": {
+     "properties": {
+      "available": {
+       "description": "The route resolves (registered, active, loopback engine); no probe.",
+       "title": "Available",
+       "type": "boolean"
+      },
+      "dimensions": {
+       "anyOf": [
+        {
+         "minimum": 1,
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Known once a call was served since the restart.",
+       "title": "Dimensions"
+      },
+      "id": {
+       "description": "Exact identity to send as `model`.",
+       "title": "Id",
+       "type": "string"
+      },
+      "provider_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Provider Id"
+      }
+     },
+     "required": [
+      "id",
+      "available"
+     ],
+     "title": "EmbeddingModel",
+     "type": "object"
+    },
+    "EmbeddingModelList": {
+     "properties": {
+      "data": {
+       "items": {
+        "$ref": "#/components/schemas/EmbeddingModel"
+       },
+       "title": "Data",
+       "type": "array"
+      },
+      "object": {
+       "const": "list",
+       "default": "list",
+       "title": "Object",
+       "type": "string"
+      }
+     },
+     "required": [
+      "data"
+     ],
+     "title": "EmbeddingModelList",
+     "type": "object"
+    },
+    "EmbeddingRequest": {
+     "additionalProperties": false,
+     "properties": {
+      "dimensions": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Dimensions"
+      },
+      "encoding_format": {
+       "default": "float",
+       "enum": [
+        "float",
+        "base64"
+       ],
+       "title": "Encoding Format",
+       "type": "string"
+      },
+      "input": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        }
+       ],
+       "title": "Input"
+      },
+      "model": {
+       "maxLength": 256,
+       "minLength": 1,
+       "title": "Model",
+       "type": "string"
+      },
+      "user": {
+       "anyOf": [
+        {
+         "maxLength": 256,
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "User"
+      }
+     },
+     "required": [
+      "model",
+      "input"
+     ],
+     "title": "EmbeddingRequest",
+     "type": "object"
+    },
+    "EmbeddingServed": {
+     "description": "What served the call: the registered local engine and the model digest\nit reported (Ollama /api/tags), so a caller can pin the model of an index.",
+     "properties": {
+      "cost_usd": {
+       "description": "0: local engine.",
+       "minimum": 0,
+       "title": "Cost Usd",
+       "type": "number"
+      },
+      "digest": {
+       "title": "Digest",
+       "type": "string"
+      },
+      "dimensions": {
+       "minimum": 1,
+       "title": "Dimensions",
+       "type": "integer"
+      },
+      "native_model": {
+       "title": "Native Model",
+       "type": "string"
+      },
+      "provider_id": {
+       "title": "Provider Id",
+       "type": "string"
+      },
+      "usage_recorded": {
+       "title": "Usage Recorded",
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "provider_id",
+      "native_model",
+      "digest",
+      "dimensions",
+      "cost_usd",
+      "usage_recorded"
+     ],
+     "title": "EmbeddingServed",
+     "type": "object"
+    },
+    "EmbeddingUsage": {
+     "properties": {
+      "prompt_tokens": {
+       "minimum": 0,
+       "title": "Prompt Tokens",
+       "type": "integer"
+      },
+      "total_tokens": {
+       "minimum": 0,
+       "title": "Total Tokens",
+       "type": "integer"
+      }
+     },
+     "required": [
+      "prompt_tokens",
+      "total_tokens"
+     ],
+     "title": "EmbeddingUsage",
+     "type": "object"
+    },
+    "ErrorResponse": {
+     "additionalProperties": true,
+     "description": "FastAPI's error body. Upstream timeouts (503) add `retry_after` and a\nRetry-After header, as does an exhausted provider quota (429) when the\nprovider gave a delay; a failing CLI provider (502) adds its exit details\nfor the admin only. A chat model no provider knows (404) adds `code` and\n`hint`. A chat whose candidate providers all stayed at their concurrency\ncap, or had too many requests already waiting (503), adds `code`\nproviders_busy, `retry_after` and Retry-After; one\nthe global chat cap kept waiting for a slot (503) adds `code`\nserver_busy, `retry_after` and Retry-After; one whose session's previous\nturn was still being answered when its wait ended, or with too many turns\nalready waiting (503), adds `code`\nsession_busy, `retry_after` and Retry-After. A\nchat model of a provider the admin turned off (503) adds `code`\nprovider_disabled and `hint`, without Retry-After. A key with a monthly\nbudget, while usage cannot be recorded (503), gets `code`\nusage_unavailable, `retry_after` and Retry-After. A chat request only\nCLI subscription routes could serve, asking for what they cannot serve\n(400), adds `code` unsupported_on_cli, `unsupported` (the refused fields)\nand `hint`. A prompt a CLI subscription route finds too long (400) adds\n`code` context_length_exceeded, `error_ref`, `provider_name` and\n`model_id`. A model a CLI subscription route's account plan does not serve\n(400) adds `code` model_not_supported_by_subscription, `hint`,\n`error_ref`, `provider_name` and `model_id`. A chat the provider failed\n(400 rejected request, 401 or 403 provider credentials, 502, a 503\ntimeout) adds `error_ref`; a client key's `detail` is then a sentence\nwritten by the gateway, never the provider's or the exception's text.",
+     "properties": {
+      "code": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Stable reason for programs, when the route gives one: invalid_request (chat, 400; messages, a role or an output cap no provider can answer), unsupported_on_cli (chat, 400), context_length_exceeded (chat, 400), model_not_supported_by_subscription (chat, 400), model_not_found (chat, 404), providers_busy (chat, 503), server_busy (chat and preflight, 503; also a preflight item's error), session_busy (chat, 503), provider_disabled (chat, 503), provider_timeout (chat, 503; a provider gave no answer in time), provider_sandbox_unavailable (chat, 503; the agy provider's sandbox could not start, so agy was not run), quota_exhausted (chat, 429; the provider's subscription or API quota is exhausted), forbidden_model (chat, 403; the key may not use the model), usage_unavailable (a key with a monthly budget while usage cannot be recorded: chat, preflight, embeddings and decisions, 503).",
+       "title": "Code"
+      },
+      "detail": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "items": {},
+         "type": "array"
+        },
+        {
+         "additionalProperties": true,
+         "type": "object"
+        }
+       ],
+       "title": "Detail"
+      },
+      "error_ref": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Reference of the gateway log entry that holds the error's own text (search the log for ref=<error_ref>).",
+       "title": "Error Ref"
+      },
+      "hint": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "What to do next, when the gateway knows.",
+       "title": "Hint"
+      },
+      "retry_after": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Retry After"
+      },
+      "unsupported": {
+       "anyOf": [
+        {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "With code unsupported_on_cli: the request fields a CLI subscription route cannot serve (tools, tool_choice, functions, function_call, response_format, content:<part type>).",
+       "title": "Unsupported"
+      }
+     },
+     "required": [
+      "detail"
+     ],
+     "title": "ErrorResponse",
+     "type": "object"
+    },
+    "Health": {
+     "description": "Liveness: always 200 while the process answers. The provider list is\non the admin `GET /providers`, the auth posture on `GET /health/ready`.",
+     "properties": {
+      "ok": {
+       "title": "Ok",
+       "type": "boolean"
+      },
+      "version": {
+       "title": "Version",
+       "type": "string"
+      }
+     },
+     "required": [
+      "ok",
+      "version"
+     ],
+     "title": "Health",
+     "type": "object"
+    },
+    "InflightCall": {
+     "additionalProperties": true,
+     "description": "One chat call: running, or finished (then `outcome` is set).",
+     "properties": {
+      "elapsed_s": {
+       "title": "Elapsed S",
+       "type": "number"
+      },
+      "id": {
+       "description": "The call's X-Request-ID.",
+       "title": "Id",
+       "type": "string"
+      },
+      "model": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Model"
+      },
+      "outcome": {
+       "anyOf": [
+        {
+         "enum": [
+          "ok",
+          "error",
+          "unknown"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Finished calls only.",
+       "title": "Outcome"
+      },
+      "phase": {
+       "description": "waiting_slot, running, waiting_provider, cli_queue, cli_running, cli_parse, or done once finished.",
+       "title": "Phase",
+       "type": "string"
+      },
+      "phase_elapsed_s": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Time in the current phase; running calls only.",
+       "title": "Phase Elapsed S"
+      },
+      "slow": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "True after 60 s. A slow call is still running, not broken.",
+       "title": "Slow"
+      },
+      "status": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "HTTP status of the answer; null while it runs.",
+       "title": "Status"
+      },
+      "surface": {
+       "enum": [
+        "api",
+        "playground",
+        "mcp"
+       ],
+       "title": "Surface",
+       "type": "string"
+      }
+     },
+     "required": [
+      "id",
+      "surface",
+      "phase",
+      "elapsed_s"
+     ],
+     "title": "InflightCall",
+     "type": "object"
+    },
+    "InflightResponse": {
+     "description": "The calling key's chat calls running now and its last results.",
+     "properties": {
+      "active": {
+       "items": {
+        "$ref": "#/components/schemas/InflightCall"
+       },
+       "title": "Active",
+       "type": "array"
+      },
+      "active_count": {
+       "title": "Active Count",
+       "type": "integer"
+      },
+      "recent": {
+       "description": "At most 20, newest first.",
+       "items": {
+        "$ref": "#/components/schemas/InflightCall"
+       },
+       "title": "Recent",
+       "type": "array"
+      },
+      "server_time": {
+       "title": "Server Time",
+       "type": "number"
+      }
+     },
+     "required": [
+      "active_count",
+      "active",
+      "recent",
+      "server_time"
+     ],
+     "title": "InflightResponse",
+     "type": "object"
+    },
+    "ModelEntry": {
+     "additionalProperties": true,
+     "properties": {
+      "account_compatible": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Whether the calling key may use this model.",
+       "title": "Account Compatible"
+      },
+      "connected": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "true only for a successful connectivity observation; false for failed (client keys do not see a failure less than 36 hours old), quarantined or unknown connectivity. last_probed_at is null when never probed.",
+       "title": "Connected"
+      },
+      "display_name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Display Name"
+      },
+      "family": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Family"
+      },
+      "id": {
+       "description": "Pass it as `model` to the chat endpoint.",
+       "title": "Id",
+       "type": "string"
+      },
+      "internet_access": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Internet Access"
+      },
+      "last_probed_at": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Last Probed At"
+      },
+      "object": {
+       "default": "model",
+       "title": "Object",
+       "type": "string"
+      },
+      "owned_by": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Provider id.",
+       "title": "Owned By"
+      },
+      "variant": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Variant"
+      }
+     },
+     "required": [
+      "id"
+     ],
+     "title": "ModelEntry",
+     "type": "object"
+    },
+    "ModelInfo": {
+     "additionalProperties": true,
+     "properties": {
+      "benchmarks": {
+       "additionalProperties": true,
+       "default": {},
+       "title": "Benchmarks",
+       "type": "object"
+      },
+      "best_for": {
+       "default": [],
+       "items": {
+        "type": "string"
+       },
+       "title": "Best For",
+       "type": "array"
+      },
+      "capabilities": {
+       "default": [],
+       "items": {
+        "type": "string"
+       },
+       "title": "Capabilities",
+       "type": "array"
+      },
+      "context_window": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Context Window"
+      },
+      "cost_tier": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Cost Tier"
+      },
+      "description": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Description"
+      },
+      "family": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Family"
+      },
+      "info_source": {
+       "title": "Info Source",
+       "type": "string"
+      },
+      "matched_from": {
+       "title": "Matched From",
+       "type": "string"
+      },
+      "max_output_tokens": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Max Output Tokens"
+      },
+      "model_key": {
+       "description": "Profile entry the model id matched.",
+       "title": "Model Key",
+       "type": "string"
+      },
+      "provider": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Provider"
+      },
+      "release_date": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Release Date"
+      },
+      "tier": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Tier"
+      }
+     },
+     "required": [
+      "model_key",
+      "matched_from",
+      "info_source"
+     ],
+     "title": "ModelInfo",
+     "type": "object"
+    },
+    "ModelList": {
+     "properties": {
+      "data": {
+       "items": {
+        "$ref": "#/components/schemas/ModelEntry"
+       },
+       "title": "Data",
+       "type": "array"
+      },
+      "object": {
+       "const": "list",
+       "default": "list",
+       "title": "Object",
+       "type": "string"
+      }
+     },
+     "required": [
+      "data"
+     ],
+     "title": "ModelList",
+     "type": "object"
+    },
+    "ModelListV2": {
+     "properties": {
+      "api_version": {
+       "const": "2",
+       "default": "2",
+       "title": "Api Version",
+       "type": "string"
+      },
+      "data": {
+       "items": {
+        "$ref": "#/components/schemas/ModelEntry"
+       },
+       "title": "Data",
+       "type": "array"
+      },
+      "object": {
+       "const": "list",
+       "default": "list",
+       "title": "Object",
+       "type": "string"
+      }
+     },
+     "required": [
+      "data"
+     ],
+     "title": "ModelListV2",
+     "type": "object"
+    },
+    "ModelProfile": {
+     "additionalProperties": true,
+     "description": "Static knowledge about a model: capabilities, benchmarks, cost tier.",
+     "properties": {
+      "benchmarks": {
+       "additionalProperties": true,
+       "default": {},
+       "title": "Benchmarks",
+       "type": "object"
+      },
+      "best_for": {
+       "default": [],
+       "items": {
+        "type": "string"
+       },
+       "title": "Best For",
+       "type": "array"
+      },
+      "capabilities": {
+       "default": [],
+       "items": {
+        "type": "string"
+       },
+       "title": "Capabilities",
+       "type": "array"
+      },
+      "context_window": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Context Window"
+      },
+      "cost_tier": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Cost Tier"
+      },
+      "description": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Description"
+      },
+      "family": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Family"
+      },
+      "max_output_tokens": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Max Output Tokens"
+      },
+      "provider": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Provider"
+      },
+      "release_date": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Release Date"
+      },
+      "tier": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Tier"
+      }
+     },
+     "title": "ModelProfile",
+     "type": "object"
+    },
+    "ModelProfileList": {
+     "properties": {
+      "data": {
+       "items": {
+        "$ref": "#/components/schemas/ModelWithProfile"
+       },
+       "title": "Data",
+       "type": "array"
+      },
+      "object": {
+       "const": "list",
+       "default": "list",
+       "title": "Object",
+       "type": "string"
+      }
+     },
+     "required": [
+      "data"
+     ],
+     "title": "ModelProfileList",
+     "type": "object"
+    },
+    "ModelProfileListV2": {
+     "properties": {
+      "api_version": {
+       "const": "2",
+       "default": "2",
+       "title": "Api Version",
+       "type": "string"
+      },
+      "data": {
+       "items": {
+        "$ref": "#/components/schemas/ModelWithProfile"
+       },
+       "title": "Data",
+       "type": "array"
+      },
+      "object": {
+       "const": "list",
+       "default": "list",
+       "title": "Object",
+       "type": "string"
+      }
+     },
+     "required": [
+      "data"
+     ],
+     "title": "ModelProfileListV2",
+     "type": "object"
+    },
+    "ModelWithProfile": {
+     "additionalProperties": true,
+     "properties": {
+      "account_compatible": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Whether the calling key may use this model.",
+       "title": "Account Compatible"
+      },
+      "connected": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "true only for a successful connectivity observation; false for failed (client keys do not see a failure less than 36 hours old), quarantined or unknown connectivity. last_probed_at is null when never probed.",
+       "title": "Connected"
+      },
+      "display_name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Display Name"
+      },
+      "family": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Family"
+      },
+      "id": {
+       "description": "Pass it as `model` to the chat endpoint.",
+       "title": "Id",
+       "type": "string"
+      },
+      "info": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/ModelProfile"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null
+      },
+      "internet_access": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Internet Access"
+      },
+      "last_probed_at": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Last Probed At"
+      },
+      "object": {
+       "default": "model",
+       "title": "Object",
+       "type": "string"
+      },
+      "owned_by": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Provider id.",
+       "title": "Owned By"
+      },
+      "variant": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Variant"
+      }
+     },
+     "required": [
+      "id"
+     ],
+     "title": "ModelWithProfile",
+     "type": "object"
+    },
+    "NoulQuestion": {
+     "additionalProperties": false,
+     "properties": {
+      "instructions": {
+       "title": "Instructions",
+       "type": "string"
+      },
+      "type": {
+       "const": "noul",
+       "title": "Type",
+       "type": "string"
+      }
+     },
+     "required": [
+      "type",
+      "instructions"
+     ],
+     "title": "NoulQuestion",
+     "type": "object"
+    },
+    "PreflightItem": {
+     "properties": {
+      "model": {
+       "title": "Model",
+       "type": "string"
+      },
+      "provider": {
+       "title": "Provider",
+       "type": "string"
+      }
+     },
+     "required": [
+      "provider",
+      "model"
+     ],
+     "title": "PreflightItem",
+     "type": "object"
+    },
+    "PreflightRequest": {
+     "properties": {
+      "items": {
+       "description": "At most 10 pairs; each ping counts as one chat call (rpm, budget).",
+       "items": {
+        "$ref": "#/components/schemas/PreflightItem"
+       },
+       "maxItems": 10,
+       "title": "Items",
+       "type": "array"
+      }
+     },
+     "required": [
+      "items"
+     ],
+     "title": "PreflightRequest",
+     "type": "object"
+    },
+    "PreflightResponse": {
+     "properties": {
+      "results": {
+       "items": {
+        "$ref": "#/components/schemas/PreflightResult"
+       },
+       "title": "Results",
+       "type": "array"
+      }
+     },
+     "required": [
+      "results"
+     ],
+     "title": "PreflightResponse",
+     "type": "object"
+    },
+    "PreflightResult": {
+     "properties": {
+      "error": {
+       "anyOf": [
+        {
+         "enum": [
+          "unknown_model",
+          "forbidden_model",
+          "model_not_found",
+          "budget_exceeded",
+          "price_unavailable",
+          "rate_limited",
+          "upstream_error",
+          "providers_busy",
+          "provider_disabled",
+          "server_busy"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Why the pair failed (closed code, never the provider's text): the model does not resolve, is not allowed for the key, no provider knows it (the chat routes' 404 model_not_found; not pinged), the monthly budget is spent, the key has a budget and the model no known price, the key's rpm limit is reached, the provider failed, the provider stayed at its concurrency cap (nothing was called), or the model belongs to a provider the admin turned off (the chat routes' 503 provider_disabled; nothing was called), or the global cap of concurrent chat requests stayed full when the pair's turn came (the chat routes' 503 server_busy; not pinged, or its provider's slot given back).",
+       "title": "Error"
+      },
+      "latency_ms": {
+       "title": "Latency Ms",
+       "type": "integer"
+      },
+      "model": {
+       "title": "Model",
+       "type": "string"
+      },
+      "ok": {
+       "title": "Ok",
+       "type": "boolean"
+      },
+      "provider": {
+       "title": "Provider",
+       "type": "string"
+      }
+     },
+     "required": [
+      "provider",
+      "model",
+      "ok",
+      "latency_ms"
+     ],
+     "title": "PreflightResult",
+     "type": "object"
+    },
+    "Ready": {
+     "description": "Readiness: `ready` is false when `usage_db` is not `ok`, `cli` is\n`fail` or `auth` is `fail`; `ollama` and `background` never block. The\nroute needs no key and its status code (200 or 503) is the answer; without\na valid key the body is `ready` and `version` only (since contract 3.0.0,\nPLU-75).",
+     "properties": {
+      "checks": {
+       "anyOf": [
+        {
+         "additionalProperties": {
+          "type": "string"
+         },
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Present only with a valid key (an active client key, the admin key or an admin session); absent without a key or with a wrong one. usage_db: ok|fail; cli: ok|fail|none; auth: ok|dev|fail; ollama: ok|unreachable|unknown|not_configured; background: ok|degraded.",
+       "title": "Checks"
+      },
+      "ready": {
+       "title": "Ready",
+       "type": "boolean"
+      },
+      "version": {
+       "title": "Version",
+       "type": "string"
+      }
+     },
+     "required": [
+      "ready",
+      "version"
+     ],
+     "title": "Ready",
+     "type": "object"
+    },
+    "ScoreQuestion": {
+     "additionalProperties": false,
+     "properties": {
+      "criteria": {
+       "items": {
+        "type": "string"
+       },
+       "maxItems": 16,
+       "minItems": 2,
+       "title": "Criteria",
+       "type": "array"
+      },
+      "instructions": {
+       "title": "Instructions",
+       "type": "string"
+      },
+      "type": {
+       "const": "score",
+       "title": "Type",
+       "type": "string"
+      }
+     },
+     "required": [
+      "type",
+      "instructions",
+      "criteria"
+     ],
+     "title": "ScoreQuestion",
+     "type": "object"
+    },
+    "StreamUsage": {
+     "additionalProperties": true,
+     "properties": {
+      "completion_tokens": {
+       "title": "Completion Tokens",
+       "type": "integer"
+      },
+      "cost_usd": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Added when the gateway injects the usage chunk.",
+       "title": "Cost Usd"
+      },
+      "prompt_tokens": {
+       "title": "Prompt Tokens",
+       "type": "integer"
+      },
+      "total_tokens": {
+       "title": "Total Tokens",
+       "type": "integer"
+      }
+     },
+     "required": [
+      "prompt_tokens",
+      "completion_tokens",
+      "total_tokens"
+     ],
+     "title": "StreamUsage",
+     "type": "object"
+    },
+    "TokenUsage": {
+     "additionalProperties": true,
+     "properties": {
+      "completion_tokens": {
+       "title": "Completion Tokens",
+       "type": "integer"
+      },
+      "prompt_tokens": {
+       "title": "Prompt Tokens",
+       "type": "integer"
+      },
+      "total_tokens": {
+       "title": "Total Tokens",
+       "type": "integer"
+      }
+     },
+     "required": [
+      "prompt_tokens",
+      "completion_tokens",
+      "total_tokens"
+     ],
+     "title": "TokenUsage",
+     "type": "object"
+    },
+    "UsageEntry": {
+     "additionalProperties": true,
+     "properties": {
+      "completion_tokens": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Completion Tokens"
+      },
+      "cost_usd": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Cost Usd"
+      },
+      "model": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Model"
+      },
+      "prompt_tokens": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Prompt Tokens"
+      }
+     },
+     "title": "UsageEntry",
+     "type": "object"
+    },
+    "UsageSummary": {
+     "additionalProperties": true,
+     "properties": {
+      "by_model": {
+       "additionalProperties": true,
+       "default": {},
+       "title": "By Model",
+       "type": "object"
+      },
+      "total_completion_tokens": {
+       "default": 0,
+       "title": "Total Completion Tokens",
+       "type": "integer"
+      },
+      "total_cost_usd": {
+       "default": 0.0,
+       "title": "Total Cost Usd",
+       "type": "number"
+      },
+      "total_entries": {
+       "default": 0,
+       "title": "Total Entries",
+       "type": "integer"
+      },
+      "total_prompt_tokens": {
+       "default": 0,
+       "title": "Total Prompt Tokens",
+       "type": "integer"
+      },
+      "total_tokens": {
+       "default": 0,
+       "title": "Total Tokens",
+       "type": "integer"
+      }
+     },
+     "title": "UsageSummary",
+     "type": "object"
+    }
+   },
+   "securitySchemes": {
+    "bearer": {
+     "description": "A client key (pb_...) or the instance API_KEY.",
+     "scheme": "bearer",
+     "type": "http"
+    }
+   }
+  },
+  "info": {
+   "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md.",
+   "title": "Plugboard client API",
+   "version": "3.0.1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+   "/health": {
+    "get": {
+     "operationId": "get_health",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/Health"
+         }
+        }
+       },
+       "description": "OK"
+      }
+     },
+     "security": [],
+     "summary": "Liveness"
+    }
+   },
+   "/health/ready": {
+    "get": {
+     "operationId": "get_health_ready",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/Ready"
+         }
+        }
+       },
+       "description": "OK"
+      },
+      "503": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/Ready"
+         }
+        }
+       },
+       "description": "Not ready: same body, `ready` is false."
+      }
+     },
+     "security": [],
+     "summary": "Readiness: whether this instance can serve requests"
+    }
+   },
+   "/usage/me": {
+    "get": {
+     "operationId": "get_usage_me",
+     "parameters": [
+      {
+       "description": "YYYY_MM; the current month when omitted.",
+       "in": "query",
+       "name": "month",
+       "required": false,
+       "schema": {
+        "type": "string"
+       }
+      }
+     ],
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ClientUsage"
+         }
+        }
+       },
+       "description": "OK"
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Missing or invalid API key."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Rate limit or monthly spending limit exceeded."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "The calling client's usage entries for a month"
+    }
+   },
+   "/v1/chat/completions": {
+    "post": {
+     "operationId": "post_v1_chat_completions",
+     "requestBody": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ChatCompletionRequest"
+        }
+       }
+      },
+      "required": true
+     },
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ChatCompletion"
+         }
+        },
+        "text/event-stream": {
+         "schema": {
+          "description": "When stream is true: `data: <ChatCompletionChunk>` events, then `data: [DONE]`. The usage chunk comes before [DONE]. A stream the provider breaks off after its first chunk ends with `data: {\"error\": {..., \"code\": \"stream_interrupted\"}}`, then `data: [DONE]`.",
+          "type": "string"
+         }
+        }
+       },
+       "description": "OK",
+       "headers": {
+        "X-Cache": {
+         "description": "HIT, MISS or SEMANTIC-HIT-<layer>.",
+         "schema": {
+          "type": "string"
+         }
+        },
+        "X-Completion-Tokens": {
+         "description": "Completion tokens billed (non-streamed answers).",
+         "schema": {
+          "type": "string"
+         }
+        },
+        "X-Cost-USD": {
+         "description": "Cost of the call, when billed (non-streamed answers).",
+         "schema": {
+          "type": "string"
+         }
+        },
+        "X-Prompt-Tokens": {
+         "description": "Prompt tokens billed (non-streamed answers).",
+         "schema": {
+          "type": "string"
+         }
+        },
+        "X-Request-ID": {
+         "description": "Correlation id, also written to the gateway logs.",
+         "schema": {
+          "type": "string"
+         }
+        }
+       }
+      },
+      "400": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Invalid request; nothing was billed. code unsupported_on_cli: only CLI subscription routes (subprocess providers) serve the model and the request asks for what they cannot serve: tools, a tool_choice other than none or auto, functions, a function_call other than none or auto, a response_format other than text, or a content part other than text; unsupported lists them, hint says what to send; nothing was called. code context_length_exceeded: a CLI subscription route found the prompt too long for the model's context; no other provider was tried. code model_not_supported_by_subscription: the account plan a CLI subscription route is signed in with does not serve the model (codex with a ChatGPT account); hint says what to do, no other provider was tried. code invalid_request (BUG-121): messages missing or invalid, a message role other than system, developer, user, assistant, tool or function (detail names it, cut to 40 characters), or a max_tokens or max_completion_tokens that is not a whole number from 1 to 262144 (detail names the field); for every caller, the admin key included, before the budget hold; nothing was called. Without code: a body that is not valid JSON or not a JSON object, a model that is not a string or is removed, a session_id that is a list or an object, a decision model (use /v1/decisions), or a request an HTTP provider rejected (context too long, parameters; error_ref): after the other candidates were tried, whether the request asked for a stream or not (PLU-26), or at once when the stream had already begun."
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Missing or invalid API key; or the provider's own credentials could not be used (a CLI login expired, an OAuth token refused) on the last provider tried: error_ref, nothing was called on that provider."
+      },
+      "402": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "The key has a monthly budget and the model no known price; nothing was called."
+      },
+      "403": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "The key may not use this model (code forbidden_model); or the provider's own credentials could not be used on the last provider tried (a Copilot licence missing, for example): error_ref, nothing was called on that provider."
+      },
+      "404": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "No provider knows the model: no provider ID prefixes it, no provider lists it, and every active provider has a model list. Or the model ID selects CLI subscription routes only (claude, codex, gemini, agy) and none serves it: the name starts with - or holds a space, a line break or a control character, or, for a route that lists models, is not in its catalogue (listed models, default model, family aliases, the CLI's own aliases); for every caller, the admin key included, and the detail is generic. code is model_not_found, hint says what to send; nothing was called."
+      },
+      "413": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Request body larger than MAX_BODY_BYTES (10 MB by default)."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Rate limit or monthly spending limit exceeded, or this call's estimated cost does not fit in what the budget has left once the calls in progress are counted (nothing was called), or the quota of the last provider tried is exhausted (code quota_exhausted; retry_after and Retry-After when it gives a delay)."
+      },
+      "502": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "The provider failed or answered with an error."
+      },
+      "503": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Provider timeout (code provider_timeout, retry_after), the agy provider's sandbox unable to start, agy not run (code provider_sandbox_unavailable, no Retry-After), the global cap of concurrent chat requests full for the whole wait (code server_busy, Retry-After 5), the previous turn of the request's session still answered when its wait ended, or too many of its turns already waiting (code session_busy, Retry-After 5), every candidate provider at its concurrency cap, or with too many requests already waiting for it (code providers_busy, Retry-After 5), or the model belongs to a provider the admin turned off (code provider_disabled, hint, no Retry-After), or the key has a monthly budget and usage cannot be recorded (code usage_unavailable, Retry-After 30); nothing was called."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "Create a chat completion (OpenAI-compatible)"
+    }
+   },
+   "/v1/decisions": {
+    "post": {
+     "operationId": "post_v1_decisions",
+     "requestBody": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/DecisionRequest"
+        }
+       }
+      },
+      "required": true
+     },
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/DecisionResponse"
+         }
+        }
+       },
+       "description": "OK"
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Missing or invalid API key."
+      },
+      "403": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "The client key may not use this decision engine."
+      },
+      "413": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Decision request exceeds the byte limit."
+      },
+      "422": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Invalid typed question or unsupported engine capability."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Key already has a decision in flight, queue full or wait over, a key limit exceeded, or TypeSafe's quota or rate limit exhausted (Retry-After when TypeSafe gives it)."
+      },
+      "502": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Invalid response from the decision engine."
+      },
+      "503": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Decision engine unavailable, or usage cannot be recorded for a key with a monthly budget (code usage_unavailable when the usage cannot be read)."
+      },
+      "504": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Decision engine timed out."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "Answer named typed questions (never chat)"
+    }
+   },
+   "/v1/decisions/models": {
+    "get": {
+     "operationId": "get_v1_decisions_models",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/DecisionModelList"
+         }
+        }
+       },
+       "description": "OK"
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Missing or invalid API key."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Rate limit or monthly spending limit exceeded."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "List decision engines, availability and capabilities"
+    }
+   },
+   "/v1/embeddings": {
+    "post": {
+     "operationId": "post_v1_embeddings",
+     "requestBody": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/EmbeddingRequest"
+        }
+       }
+      },
+      "required": true
+     },
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/EmbeddingList"
+         }
+        }
+       },
+       "description": "OK"
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "A client API key is required; the admin key is refused."
+      },
+      "403": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "The client key may not use this model."
+      },
+      "404": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Model not listed in PLUGBOARD_EMBEDDING_MODELS, owner not registered, or model not installed on the engine."
+      },
+      "413": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Embedding request exceeds the byte limit."
+      },
+      "422": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Invalid request, input out of bounds, or input the engine refused (never truncated)."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Rate limit or monthly spending limit exceeded."
+      },
+      "502": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Engine error or invalid vectors (count, dimension, values)."
+      },
+      "503": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Provider inactive, not a loopback local engine, or engine unreachable; or usage cannot be read and the key has a monthly budget (code usage_unavailable)."
+      },
+      "504": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Engine timed out."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "Embed texts with a local engine (OpenAI-compatible, never chat)"
+    }
+   },
+   "/v1/embeddings/models": {
+    "get": {
+     "operationId": "get_v1_embeddings_models",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/EmbeddingModelList"
+         }
+        }
+       },
+       "description": "OK"
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "A client API key is required; the admin key is refused."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Rate limit or monthly spending limit exceeded."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "List the embedding identities this key may use"
+    }
+   },
+   "/v1/inflight": {
+    "get": {
+     "operationId": "get_v1_inflight",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/InflightResponse"
+         }
+        }
+       },
+       "description": "OK"
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Missing or invalid API key."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Rate limit or monthly spending limit exceeded."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "The calling key's chat calls running now, with their phase, and the last results"
+    }
+   },
+   "/v1/me": {
+    "get": {
+     "operationId": "get_v1_me",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ClientInfo"
+         }
+        }
+       },
+       "description": "OK"
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Missing or invalid API key."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Rate limit or monthly spending limit exceeded."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "The calling key: limits and this month's usage"
+    }
+   },
+   "/v1/me/keys": {
+    "get": {
+     "operationId": "get_v1_me_keys",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "items": {
+           "$ref": "#/components/schemas/ClientKey"
+          },
+          "type": "array"
+         }
+        }
+       },
+       "description": "OK"
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Missing or invalid API key."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Rate limit or monthly spending limit exceeded."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "The calling client's keys (masked)"
+    }
+   },
+   "/v1/models": {
+    "get": {
+     "operationId": "get_v1_models",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ModelList"
+         }
+        }
+       },
+       "description": "OK"
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Missing or invalid API key."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Rate limit or monthly spending limit exceeded."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "List the models the gateway serves"
+    }
+   },
+   "/v1/models/benchmarks": {
+    "get": {
+     "operationId": "get_v1_models_benchmarks",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ModelProfileList"
+         }
+        }
+       },
+       "description": "OK"
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Missing or invalid API key."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Rate limit or monthly spending limit exceeded."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "List the models with their profile"
+    }
+   },
+   "/v1/models/{model_id}/info": {
+    "get": {
+     "operationId": "get_v1_models_model_id_info",
+     "parameters": [
+      {
+       "description": "May contain slashes and colons.",
+       "in": "path",
+       "name": "model_id",
+       "required": true,
+       "schema": {
+        "type": "string"
+       }
+      }
+     ],
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ModelInfo"
+         }
+        }
+       },
+       "description": "OK"
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Missing or invalid API key."
+      },
+      "403": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "The key may not use this model (code forbidden_model)."
+      },
+      "404": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "No profile for this model."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Rate limit or monthly spending limit exceeded."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "Profile of one model"
+    }
+   },
+   "/v1/openapi.json": {
+    "get": {
+     "operationId": "get_v1_openapi_json",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "type": "object"
+         }
+        }
+       },
+       "description": "OK"
+      }
+     },
+     "security": [],
+     "summary": "This contract (OpenAPI 3.1)"
+    }
+   },
+   "/v1/preflight": {
+    "post": {
+     "operationId": "post_v1_preflight",
+     "requestBody": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/PreflightRequest"
+        }
+       }
+      },
+      "required": true
+     },
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/PreflightResponse"
+         }
+        }
+       },
+       "description": "OK"
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Missing or invalid API key."
+      },
+      "422": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "More than 10 items, or an invalid item."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Rate limit or monthly spending limit exceeded."
+      },
+      "503": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "The global cap of concurrent chat requests stayed full for the whole wait (code server_busy, Retry-After 5), or the key has a monthly budget and usage cannot be read (code usage_unavailable, Retry-After 30)."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "Check that provider/model pairs answer"
+    }
+   },
+   "/v2/chat/completions": {
+    "post": {
+     "operationId": "post_v2_chat_completions",
+     "requestBody": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/ChatCompletionRequest"
+        }
+       }
+      },
+      "required": true
+     },
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ChatCompletion"
+         }
+        },
+        "text/event-stream": {
+         "schema": {
+          "description": "When stream is true: `data: <ChatCompletionChunk>` events, then `data: [DONE]`. The usage chunk comes before [DONE]. A stream the provider breaks off after its first chunk ends with `data: {\"error\": {..., \"code\": \"stream_interrupted\"}}`, then `data: [DONE]`.",
+          "type": "string"
+         }
+        }
+       },
+       "description": "OK",
+       "headers": {
+        "X-Cache": {
+         "description": "HIT, MISS or SEMANTIC-HIT-<layer>.",
+         "schema": {
+          "type": "string"
+         }
+        },
+        "X-Completion-Tokens": {
+         "description": "Completion tokens billed (non-streamed answers).",
+         "schema": {
+          "type": "string"
+         }
+        },
+        "X-Cost-USD": {
+         "description": "Cost of the call, when billed (non-streamed answers).",
+         "schema": {
+          "type": "string"
+         }
+        },
+        "X-Prompt-Tokens": {
+         "description": "Prompt tokens billed (non-streamed answers).",
+         "schema": {
+          "type": "string"
+         }
+        },
+        "X-Request-ID": {
+         "description": "Correlation id, also written to the gateway logs.",
+         "schema": {
+          "type": "string"
+         }
+        }
+       }
+      },
+      "400": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Invalid request; nothing was billed. code unsupported_on_cli: only CLI subscription routes (subprocess providers) serve the model and the request asks for what they cannot serve: tools, a tool_choice other than none or auto, functions, a function_call other than none or auto, a response_format other than text, or a content part other than text; unsupported lists them, hint says what to send; nothing was called. code context_length_exceeded: a CLI subscription route found the prompt too long for the model's context; no other provider was tried. code model_not_supported_by_subscription: the account plan a CLI subscription route is signed in with does not serve the model (codex with a ChatGPT account); hint says what to do, no other provider was tried. code invalid_request (BUG-121): messages missing or invalid, a message role other than system, developer, user, assistant, tool or function (detail names it, cut to 40 characters), or a max_tokens or max_completion_tokens that is not a whole number from 1 to 262144 (detail names the field); for every caller, the admin key included, before the budget hold; nothing was called. Without code: a body that is not valid JSON or not a JSON object, a model that is not a string or is removed, a session_id that is a list or an object, a decision model (use /v1/decisions), or a request an HTTP provider rejected (context too long, parameters; error_ref): after the other candidates were tried, whether the request asked for a stream or not (PLU-26), or at once when the stream had already begun."
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Missing or invalid API key; or the provider's own credentials could not be used (a CLI login expired, an OAuth token refused) on the last provider tried: error_ref, nothing was called on that provider."
+      },
+      "402": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "The key has a monthly budget and the model no known price; nothing was called."
+      },
+      "403": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "The key may not use this model (code forbidden_model); or the provider's own credentials could not be used on the last provider tried (a Copilot licence missing, for example): error_ref, nothing was called on that provider."
+      },
+      "404": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "No provider knows the model: no provider ID prefixes it, no provider lists it, and every active provider has a model list. Or the model ID selects CLI subscription routes only (claude, codex, gemini, agy) and none serves it: the name starts with - or holds a space, a line break or a control character, or, for a route that lists models, is not in its catalogue (listed models, default model, family aliases, the CLI's own aliases); for every caller, the admin key included, and the detail is generic. code is model_not_found, hint says what to send; nothing was called."
+      },
+      "413": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Request body larger than MAX_BODY_BYTES (10 MB by default)."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Rate limit or monthly spending limit exceeded, or this call's estimated cost does not fit in what the budget has left once the calls in progress are counted (nothing was called), or the quota of the last provider tried is exhausted (code quota_exhausted; retry_after and Retry-After when it gives a delay)."
+      },
+      "502": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "The provider failed or answered with an error."
+      },
+      "503": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Provider timeout (code provider_timeout, retry_after), the agy provider's sandbox unable to start, agy not run (code provider_sandbox_unavailable, no Retry-After), the global cap of concurrent chat requests full for the whole wait (code server_busy, Retry-After 5), the previous turn of the request's session still answered when its wait ended, or too many of its turns already waiting (code session_busy, Retry-After 5), every candidate provider at its concurrency cap, or with too many requests already waiting for it (code providers_busy, Retry-After 5), or the model belongs to a provider the admin turned off (code provider_disabled, hint, no Retry-After), or the key has a monthly budget and usage cannot be recorded (code usage_unavailable, Retry-After 30); nothing was called."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "Same as v1, with the X-API-Version: 2 header"
+    }
+   },
+   "/v2/models": {
+    "get": {
+     "operationId": "get_v2_models",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ModelListV2"
+         }
+        }
+       },
+       "description": "OK"
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Missing or invalid API key."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Rate limit or monthly spending limit exceeded."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "Same as v1, with api_version"
+    }
+   },
+   "/v2/models/benchmarks": {
+    "get": {
+     "operationId": "get_v2_models_benchmarks",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ModelProfileListV2"
+         }
+        }
+       },
+       "description": "OK"
+      },
+      "401": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Missing or invalid API key."
+      },
+      "429": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/ErrorResponse"
+         }
+        }
+       },
+       "description": "Rate limit or monthly spending limit exceeded."
+      }
+     },
+     "security": [
+      {
+       "bearer": []
+      }
+     ],
+     "summary": "Same as v1, with api_version"
+    }
+   }
+  },
+  "servers": [
+   {
+    "description": "Local install",
+    "url": "http://localhost:8765"
+   }
+  ]
+ },
+ "client_routes": [
+  [
+   0,
+   {
+    "include_context": {
+     "dependencies": [],
+     "deprecated": null,
+     "include_in_schema": true,
+     "prefix": "",
+     "tags": []
+    },
+    "kind": "included_router",
+    "routes": [
+     {
+      "coroutine": true,
+      "dependencies": [
+       [
+        "plugboard.decision_api.require_decision_key",
+        []
+       ]
+      ],
+      "deprecated": null,
+      "description": "",
+      "include_in_schema": true,
+      "kind": "api",
+      "methods": [
+       "GET"
+      ],
+      "name": "list_decision_models",
+      "operation_id": null,
+      "params": [],
+      "path": "/v1/decisions/models",
+      "response_class": "JSONResponse",
+      "response_model": null,
+      "status_code": null,
+      "summary": null,
+      "tags": [
+       "decisions"
+      ],
+      "unique_id": "list_decision_models_v1_decisions_models_get"
+     },
+     {
+      "coroutine": true,
+      "dependencies": [
+       [
+        "plugboard.decision_api.require_decision_key",
+        []
+       ]
+      ],
+      "deprecated": null,
+      "description": "",
+      "include_in_schema": true,
+      "kind": "api",
+      "methods": [
+       "POST"
+      ],
+      "name": "decide",
+      "operation_id": null,
+      "params": [
+       [
+        "body",
+        "body",
+        "body",
+        true,
+        "DecisionRequest"
+       ]
+      ],
+      "path": "/v1/decisions",
+      "response_class": "JSONResponse",
+      "response_model": null,
+      "status_code": null,
+      "summary": null,
+      "tags": [
+       "decisions"
+      ],
+      "unique_id": "decide_v1_decisions_post"
+     }
+    ]
+   }
+  ],
+  [
+   1,
+   {
+    "include_context": {
+     "dependencies": [],
+     "deprecated": null,
+     "include_in_schema": true,
+     "prefix": "",
+     "tags": []
+    },
+    "kind": "included_router",
+    "routes": [
+     {
+      "coroutine": true,
+      "dependencies": [
+       [
+        "plugboard.embeddings_api.require_embedding_key",
+        []
+       ]
+      ],
+      "deprecated": null,
+      "description": "",
+      "include_in_schema": true,
+      "kind": "api",
+      "methods": [
+       "POST"
+      ],
+      "name": "create_embeddings",
+      "operation_id": null,
+      "params": [
+       [
+        "body",
+        "body",
+        "body",
+        true,
+        "EmbeddingRequest"
+       ]
+      ],
+      "path": "/v1/embeddings",
+      "response_class": "JSONResponse",
+      "response_model": null,
+      "status_code": null,
+      "summary": null,
+      "tags": [
+       "embeddings"
+      ],
+      "unique_id": "create_embeddings_v1_embeddings_post"
+     },
+     {
+      "coroutine": true,
+      "dependencies": [
+       [
+        "plugboard.embeddings_api.require_embedding_key",
+        []
+       ]
+      ],
+      "deprecated": null,
+      "description": "Identities listed in PLUGBOARD_EMBEDDING_MODELS this key may use.\n\nUnregistered owners and identities the key may not use are left out.\n``available`` says whether the route resolves (owner registered, active,\nloopback local engine); it does not probe the engine. ``dimensions`` is\nknown once a call was served since the last restart, else null.",
+      "include_in_schema": true,
+      "kind": "api",
+      "methods": [
+       "GET"
+      ],
+      "name": "list_embedding_models",
+      "operation_id": null,
+      "params": [],
+      "path": "/v1/embeddings/models",
+      "response_class": "JSONResponse",
+      "response_model": null,
+      "status_code": null,
+      "summary": null,
+      "tags": [
+       "embeddings"
+      ],
+      "unique_id": "list_embedding_models_v1_embeddings_models_get"
+     }
+    ]
+   }
+  ],
+  [
+   2,
+   {
+    "coroutine": true,
+    "dependencies": [
+     [
+      "plugboard.app._resolve_client",
+      []
+     ],
+     [
+      "plugboard.app._refuse_anonymous_chat",
+      [
+       [
+        "plugboard.app._resolve_client",
+        []
+       ]
+      ]
+     ],
+     [
+      "plugboard.app._inflight_chat_dep",
+      []
+     ],
+     [
+      "plugboard.app._session_turn_dep",
+      []
+     ],
+     [
+      "plugboard.app._resolve_client",
+      []
+     ]
+    ],
+    "deprecated": null,
+    "description": "",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "POST"
+    ],
+    "name": "chat_completions",
+    "operation_id": null,
+    "params": [],
+    "path": "/v1/chat/completions",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "chat_completions_v1_chat_completions_post"
+   }
+  ],
+  [
+   3,
+   {
+    "coroutine": true,
+    "dependencies": [
+     [
+      "plugboard.app._resolve_client",
+      []
+     ]
+    ],
+    "deprecated": null,
+    "description": "",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "GET"
+    ],
+    "name": "models",
+    "operation_id": null,
+    "params": [],
+    "path": "/v1/models",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "models_v1_models_get"
+   }
+  ],
+  [
+   4,
+   {
+    "coroutine": true,
+    "dependencies": [
+     [
+      "plugboard.app._resolve_client",
+      []
+     ],
+     [
+      "plugboard.app._inflight_chat_dep",
+      []
+     ],
+     [
+      "plugboard.app._resolve_client",
+      []
+     ]
+    ],
+    "deprecated": null,
+    "description": "Smoke-test a batch of provider+model pairs before a long benchmark.\n\nEach ping goes through the chat admission checks (allowed_models, budget,\na provider that is not turned off, a model some provider knows, known\nprice, rpm) and is billed like a chat call. The batch holds one slot of\nthe global cap, given back while a ping waits for a full provider and\ntaken back right before a provider is called (BUG-77, PLU-51): a pair it\ncannot ping for want of a slot answers ``server_busy``. Errors are closed codes, never the\nprovider's text.",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "POST"
+    ],
+    "name": "preflight",
+    "operation_id": null,
+    "params": [
+     [
+      "body",
+      "body",
+      "body",
+      true,
+      "_PreflightRequest"
+     ]
+    ],
+    "path": "/v1/preflight",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "preflight_v1_preflight_post"
+   }
+  ],
+  [
+   5,
+   {
+    "coroutine": true,
+    "dependencies": [
+     [
+      "plugboard.app._resolve_client",
+      []
+     ]
+    ],
+    "deprecated": null,
+    "description": "List all models enriched with benchmarks, capabilities, and metadata.",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "GET"
+    ],
+    "name": "models_with_benchmarks",
+    "operation_id": null,
+    "params": [],
+    "path": "/v1/models/benchmarks",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "models_with_benchmarks_v1_models_benchmarks_get"
+   }
+  ],
+  [
+   6,
+   {
+    "coroutine": true,
+    "dependencies": [
+     [
+      "plugboard.app._resolve_client",
+      []
+     ]
+    ],
+    "deprecated": null,
+    "description": "Get detailed info for a specific model: benchmarks, capabilities, best_for.",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "GET"
+    ],
+    "name": "model_info",
+    "operation_id": null,
+    "params": [
+     [
+      "path",
+      "model_id",
+      "model_id",
+      true,
+      "str"
+     ]
+    ],
+    "path": "/v1/models/{model_id:path}/info",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "model_info_v1_models__model_id__info_get"
+   }
+  ],
+  [
+   7,
+   {
+    "coroutine": true,
+    "dependencies": [
+     [
+      "plugboard.app._resolve_client",
+      []
+     ],
+     [
+      "plugboard.app._refuse_anonymous_chat",
+      [
+       [
+        "plugboard.app._resolve_client",
+        []
+       ]
+      ]
+     ],
+     [
+      "plugboard.app._inflight_chat_dep",
+      []
+     ],
+     [
+      "plugboard.app._session_turn_dep",
+      []
+     ],
+     [
+      "plugboard.app._resolve_client",
+      []
+     ]
+    ],
+    "deprecated": null,
+    "description": "",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "POST"
+    ],
+    "name": "chat_completions_v2",
+    "operation_id": null,
+    "params": [],
+    "path": "/v2/chat/completions",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "chat_completions_v2_v2_chat_completions_post"
+   }
+  ],
+  [
+   8,
+   {
+    "coroutine": true,
+    "dependencies": [
+     [
+      "plugboard.app._resolve_client",
+      []
+     ]
+    ],
+    "deprecated": null,
+    "description": "",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "GET"
+    ],
+    "name": "models_v2",
+    "operation_id": null,
+    "params": [],
+    "path": "/v2/models",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "models_v2_v2_models_get"
+   }
+  ],
+  [
+   9,
+   {
+    "coroutine": true,
+    "dependencies": [
+     [
+      "plugboard.app._resolve_client",
+      []
+     ]
+    ],
+    "deprecated": null,
+    "description": "",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "GET"
+    ],
+    "name": "models_benchmarks_v2",
+    "operation_id": null,
+    "params": [],
+    "path": "/v2/models/benchmarks",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "models_benchmarks_v2_v2_models_benchmarks_get"
+   }
+  ],
+  [
+   10,
+   {
+    "coroutine": true,
+    "dependencies": [],
+    "deprecated": null,
+    "description": "Liveness (PLU-31): always 200 while the process answers. Public, so it\nshows the status and the version only and reads no file; the provider\nlist is on the admin `GET /providers`, the auth posture on\n`GET /health/ready`.",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "GET"
+    ],
+    "name": "health",
+    "operation_id": null,
+    "params": [],
+    "path": "/health",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "health_health_get"
+   }
+  ],
+  [
+   11,
+   {
+    "coroutine": true,
+    "dependencies": [],
+    "deprecated": null,
+    "description": "Readiness (PLU-31): 200 when this instance can serve requests, 503\notherwise. Public: a load balancer reads the status code with no key.\n\nThe body is ``ready`` and ``version``; ``checks`` (generic states: which\ncheck failed, the client auth posture) is added for a valid key only\n(PLU-75): an active client key, the admin key (no TOTP: a read of\ngeneric states) or an admin session, a person's session included; a\nbare personal key (``pba_``), even with its code, gets no checks\n(PB-AUTH-01). A wrong, forged or revoked key is\nnot refused here: it gets the same body as no key. With both API_KEY and\nADMIN_KEY empty every route is open (loopback only), so are the checks.",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "GET"
+    ],
+    "name": "health_ready",
+    "operation_id": null,
+    "params": [],
+    "path": "/health/ready",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "health_ready_health_ready_get"
+   }
+  ],
+  [
+   12,
+   {
+    "coroutine": true,
+    "dependencies": [
+     [
+      "plugboard.app._require_admin",
+      []
+     ]
+    ],
+    "deprecated": null,
+    "description": "Detailed health check — probes every active provider.\n\nUses the same probe as the dashboard Ping (health_probe.probe_provider):\nCLI providers are checked through their binary, local servers through\nthe URL they really serve, and the provider's credentials are sent.",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "GET"
+    ],
+    "name": "health_detailed",
+    "operation_id": null,
+    "params": [],
+    "path": "/health/detailed",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "health_detailed_health_detailed_get"
+   }
+  ],
+  [
+   13,
+   {
+    "coroutine": true,
+    "dependencies": [
+     [
+      "plugboard.app._resolve_client",
+      []
+     ]
+    ],
+    "deprecated": null,
+    "description": "Chat calls in flight and the last results (PLU-13).\n\nThe admin sees every call with its provider; a client key sees its own\ncalls only, without routing details.",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "GET"
+    ],
+    "name": "inflight_me",
+    "operation_id": null,
+    "params": [],
+    "path": "/v1/inflight",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "inflight_me_v1_inflight_get"
+   }
+  ],
+  [
+   14,
+   {
+    "coroutine": true,
+    "dependencies": [
+     [
+      "plugboard.app._require_admin",
+      []
+     ]
+    ],
+    "deprecated": null,
+    "description": "Every chat call in flight and the last results, with routing details.",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "GET"
+    ],
+    "name": "inflight_admin",
+    "operation_id": null,
+    "params": [],
+    "path": "/admin/inflight",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "inflight_admin_admin_inflight_get"
+   }
+  ],
+  [
+   15,
+   {
+    "coroutine": true,
+    "dependencies": [
+     [
+      "plugboard.app._resolve_client",
+      []
+     ]
+    ],
+    "deprecated": null,
+    "description": "",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "GET"
+    ],
+    "name": "usage_me",
+    "operation_id": null,
+    "params": [
+     [
+      "query",
+      "month",
+      "month",
+      false,
+      "typing.Optional[str]"
+     ]
+    ],
+    "path": "/usage/me",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "usage_me_usage_me_get"
+   }
+  ],
+  [
+   16,
+   {
+    "coroutine": true,
+    "dependencies": [
+     [
+      "plugboard.app._resolve_client",
+      []
+     ]
+    ],
+    "deprecated": null,
+    "description": "",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "GET"
+    ],
+    "name": "client_info",
+    "operation_id": null,
+    "params": [],
+    "path": "/v1/me",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "client_info_v1_me_get"
+   }
+  ],
+  [
+   17,
+   {
+    "coroutine": true,
+    "dependencies": [
+     [
+      "plugboard.app._resolve_client",
+      []
+     ]
+    ],
+    "deprecated": null,
+    "description": "List the calling client's own keys (masked).",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "GET"
+    ],
+    "name": "client_keys",
+    "operation_id": null,
+    "params": [],
+    "path": "/v1/me/keys",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "client_keys_v1_me_keys_get"
+   }
+  ],
+  [
+   102,
+   {
+    "coroutine": true,
+    "dependencies": [],
+    "deprecated": null,
+    "description": "",
+    "include_in_schema": true,
+    "kind": "api",
+    "methods": [
+     "GET"
+    ],
+    "name": "client_api_contract",
+    "operation_id": null,
+    "params": [],
+    "path": "/v1/openapi.json",
+    "response_class": "JSONResponse",
+    "response_model": null,
+    "status_code": null,
+    "summary": null,
+    "tags": [],
+    "unique_id": "client_api_contract_v1_openapi_json_get"
+   }
+  ]
+ ],
+ "exception_handlers": [
+  [
+   "starlette.exceptions.HTTPException",
+   "fastapi.exception_handlers.http_exception_handler"
+  ],
+  [
+   "fastapi.exceptions.RequestValidationError",
+   "fastapi.exception_handlers.request_validation_exception_handler"
+  ],
+  [
+   "fastapi.exceptions.WebSocketRequestValidationError",
+   "fastapi.exception_handlers.websocket_request_validation_exception_handler"
+  ],
+  [
+   "builtins.ValueError",
+   "plugboard.app._value_error_handler"
+  ],
+  [
+   "plugboard.app._BusyRefusal",
+   "plugboard.app._busy_refusal_handler"
+  ],
+  [
+   "plugboard.app._UsageUnavailable",
+   "plugboard.app._usage_unavailable_handler"
+  ],
+  [
+   "plugboard.app._ModelNotAllowed",
+   "plugboard.app._model_not_allowed_handler"
+  ],
+  [
+   "plugboard.app._InvalidChatRequest",
+   "plugboard.app._invalid_chat_request_handler"
+  ]
+ ],
+ "middleware": [
+  [
+   "starlette.middleware.cors.CORSMiddleware",
+   [
+    [],
+    {
+     "allow_headers": [
+      "*"
+     ],
+     "allow_methods": [
+      "*"
+     ],
+     "allow_origins": []
+    }
+   ]
+  ],
+  [
+   "plugboard.app._RateLimitMiddleware",
+   [
+    [],
+    {}
+   ]
+  ],
+  [
+   "plugboard.app._RequestIdMiddleware",
+   [
+    [],
+    {}
+   ]
+  ],
+  [
+   "plugboard.app._BodySizeLimitMiddleware",
+   [
+    [],
+    {}
+   ]
+  ],
+  [
+   "plugboard.app._SecurityHeadersMiddleware",
+   [
+    [],
+    {}
+   ]
+  ],
+  [
+   "plugboard.app._KeylessLoopbackOnlyMiddleware",
+   [
+    [],
+    {}
+   ]
+  ]
+ ]
+}

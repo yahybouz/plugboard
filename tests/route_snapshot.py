@@ -39,7 +39,7 @@ effects = {
     "modules": sorted(
         name
         for name in sys.modules
-        if name.startswith("plugboard") and not name.startswith("plugboard.admin_routes")
+        if name.startswith("plugboard") and not name.startswith(("plugboard.admin_routes", "plugboard.chat_path"))
     ),
     "data_files": sorted(
         p.relative_to(data).as_posix() for p in data.rglob("*") if p.is_file()
