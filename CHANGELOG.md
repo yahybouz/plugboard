@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **The audit log names who acted** (PB-AUTH-01): two columns, `principal` (`admin-key`, `person:<id>`, or empty for an entry written before, by the system or without a proven admin) and `principal_name`, on every entry written while serving an admin request, including the sessions a key opened. New actions: `admin.person.created`, `admin.person.confirmed`, `admin.person.revoked`, `auth.person.mfa_failed`, and `admin.mfa.person_refused`. An older `audit.db` gains the columns, empty, when it is opened.
 
+### Changed
+
+- **Admin routes moved out of `app.py`** (PLU-36): one module per area under `plugboard/admin_routes/`; routes, answers and the admin OpenAPI document are unchanged.
+
 ### Security
 
 - **A personal key always needs its own TOTP code** (PB-AUTH-01): on every instance, even where `ADMIN_KEY` needs none, and a code is accepted once. Wrong codes lock that person's key only (5 in a minute, 15 minutes), never `ADMIN_KEY` nor another person. A revoked key, and the sessions it opened, are refused at once; an unreadable store refuses every personal key and never answers `500`.

@@ -57,7 +57,8 @@ Streaming requests to HTTP providers are proxied chunk by chunk and billed at th
 | Module | Responsibility |
 |---|---|
 | `__init__.py` | Package version; loads `.env` (unless `PLUGBOARD_SKIP_DOTENV=1`) and applies `envcompat` before any module reads its settings |
-| `app.py` | HTTP API, authentication, limits, caching and billing glue, admin endpoints, dashboard and login pages |
+| `app.py` | HTTP API, authentication, limits, caching and billing glue, dashboard and login pages ; registers the admin routes |
+| `admin_routes/` | Admin endpoints, one module per area (model probes, monitoring, providers, OAuth, direct providers, Ollama, keys, jobs, pricing, usage, sign-in and MFA), each declared on the app by `register(app, core)` |
 | `router.py` | Model resolution, forwarding, retries, fallback, model listing and discovery |
 | `provider_admission.py`, `request_wait.py`, `session_turns.py`, `route_pauses.py` | Per-provider cap on requests in flight and the wait for a slot; one wait budget per chat request; one turn at a time per client session; a route that answered `429` is tried last for a while |
 | `live_requests.py` | In-memory list of the chat requests in flight and the last finished ones, with their phase (`/v1/inflight`, `/admin/inflight`) |
@@ -97,6 +98,17 @@ Streaming requests to HTTP providers are proxied chunk by chunk and billed at th
 | `suivi.py`, `suivi_api.py`, `suivi_import.py` | Ticket board store (`suivi.db`) and its status rules; its admin API (`/admin/suivi/*`, page `/suivi`); import from Superpowers plans and specs and `TODOS.md` |
 | `mcp_server.py` | MCP server and update registry (separate process, started by `scripts/run_mcp.py`) |
 | `static/` | Dashboard and client portal (plain HTML, CSS and JavaScript) |
+
+### Route table guard
+
+`tests/test_admin_routes_guard.py` compares the app with `tests/fixtures/admin_routes_snapshot.json`: the route table (paths, methods, dependencies, parameters, include context of the routers), the admin OpenAPI document and the effects of a cold import of `plugboard.app` (logs, loaded modules, data files). Any change to a route fails it, on purpose, and so does a new `plugboard` module loaded when the app is imported. When you add, remove or change a route (or such a module) deliberately, regenerate the fixture from the repository root, then review its diff and commit it with the change:
+
+```bash
+.venv/bin/python -m tests.route_snapshot
+git diff tests/fixtures/admin_routes_snapshot.json
+```
+
+The diff must show only the change you meant. Never regenerate it to silence a failure you cannot explain: that failure is what the guard is for.
 
 ## State
 

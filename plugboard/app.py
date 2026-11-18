@@ -31,6 +31,8 @@ Endpoints:
   DELETE /admin/usage/{month}               -- delete a month's usage data (admin)
   GET    /admin/usage/{month}/{client_id}   -- usage for one client (admin)
 
+Admin routes are declared by `plugboard/admin_routes/` (one module per area, registered in place by `register(app, core)`, PLU-36).
+
 Authentication:
   ADMIN_KEY env var (required) -- required for admin endpoints.
   Client API keys stored in data/api_keys.json -- required for /v1/* endpoints.
