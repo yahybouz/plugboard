@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from plugboard import envcompat
+from plugboard import trace_context as _trace
 
 _request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 
@@ -57,6 +58,12 @@ class _JsonFormatter(logging.Formatter):
             "request_id": _request_id_var.get(),
             "msg": record.getMessage(),
         }
+        # PLU-108: the caller's validated trace context, when the request has
+        # one (span_id is the caller's span, the W3C parent-id).
+        trace = _trace.current.get()
+        if trace is not None:
+            entry["trace_id"] = trace.trace_id
+            entry["span_id"] = trace.span_id
         if record.exc_info:
             entry["exc"] = self.formatException(record.exc_info)
         return json.dumps(entry, ensure_ascii=False)
