@@ -85,12 +85,32 @@ def _params(dependant) -> list:
     return out
 
 
+def _include_context(route) -> dict:
+    """What an include_router() call adds to every route of the router.
+
+    Kept outside the inner routes: a dependency added at inclusion changes
+    neither the inner route table nor the OpenAPI document.
+    """
+    ctx = route.include_context
+    return {
+        "prefix": ctx.prefix,
+        "tags": list(ctx.tags),
+        "dependencies": [
+            [_call_name(d.dependency), list(getattr(d, "scopes", None) or [])]
+            for d in ctx.dependencies
+        ],
+        "deprecated": ctx.deprecated,
+        "include_in_schema": ctx.include_in_schema,
+    }
+
+
 def _route(route) -> dict:
     if not isinstance(route, APIRoute):
         inner = getattr(route, "original_router", None)
         if inner is not None:
             return {
                 "kind": "included_router",
+                "include_context": _include_context(route),
                 "routes": [_route(r) for r in inner.routes],
             }
         return {"kind": type(route).__name__, "path": getattr(route, "path", None)}
