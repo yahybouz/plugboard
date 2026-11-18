@@ -3,6 +3,21 @@ Audit trail — logs every admin action to SQLite.
 
 Database: data/audit.db
 Table: audit_log
+
+``actor`` says which channel acted (``admin``, ``mcp``, ``system``).
+``principal`` names the admin credential behind an entry (PB-AUTH-01):
+``admin-key`` for ``ADMIN_KEY``, ``person:<id>`` for a personal key, with
+the person's name in ``principal_name``. An empty ``principal`` means no
+admin credential was known: an entry written outside an admin request, or
+one written before these columns existed (an older database gains them,
+empty, when it is opened).
+
+The principal travels with the request: ``begin_request`` puts an empty
+holder in a context variable, the authentication fills it
+(``set_principal``, also from a worker thread, which shares the holder),
+and ``log_action`` reads it. A background task started while serving an
+admin request copies that context, so its later entries name the person
+who started it.
 """
 
 from __future__ import annotations
@@ -13,6 +28,7 @@ import secrets
 import sqlite3
 import threading
 import time
+from contextvars import ContextVar, Token
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -32,9 +48,17 @@ CREATE TABLE IF NOT EXISTS audit_log (
     target_type TEXT NOT NULL DEFAULT '',
     target_id   TEXT NOT NULL DEFAULT '',
     details     TEXT NOT NULL DEFAULT '',
-    ip          TEXT NOT NULL DEFAULT ''
+    ip          TEXT NOT NULL DEFAULT '',
+    principal       TEXT NOT NULL DEFAULT '',
+    principal_name  TEXT NOT NULL DEFAULT ''
 );
 """
+
+# Columns added after the first release: an older database gains them on open.
+_ADDED_COLUMNS = (
+    ("principal", "TEXT NOT NULL DEFAULT ''"),
+    ("principal_name", "TEXT NOT NULL DEFAULT ''"),
+)
 
 _CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);",
@@ -51,8 +75,52 @@ def _get_conn() -> sqlite3.Connection:
 
 def _set_up(conn: sqlite3.Connection) -> None:
     conn.execute(_CREATE_TABLE)
+    present = {row[1] for row in conn.execute("PRAGMA table_info(audit_log)")}
+    for name, decl in _ADDED_COLUMNS:
+        if name in present:
+            continue
+        try:
+            conn.execute(f"ALTER TABLE audit_log ADD COLUMN {name} {decl}")
+        except sqlite3.OperationalError as exc:
+            # Another process migrated the same database meanwhile.
+            if "duplicate column" not in str(exc).lower():
+                raise
     for idx in _CREATE_INDEXES:
         conn.execute(idx)
+
+
+# The admin principal of the request being served: a mutable holder, so that
+# a worker thread (which runs in a copy of the context) fills the same one.
+_principal_var: ContextVar[Optional[Dict[str, str]]] = ContextVar(
+    "audit_principal", default=None
+)
+
+
+def begin_request() -> Token:
+    """Open an empty principal holder for the request being served."""
+    return _principal_var.set({})
+
+
+def end_request(token: Token) -> None:
+    """Forget the request's principal holder."""
+    _principal_var.reset(token)
+
+
+def set_principal(principal: str, name: str = "") -> None:
+    """Name the admin credential of the current request; outside one, do nothing."""
+    holder = _principal_var.get()
+    if holder is None:
+        return
+    holder["principal"] = principal
+    holder["name"] = name
+
+
+def current_principal() -> Tuple[str, str]:
+    """``(principal, name)`` of the current request, ``("", "")`` if none."""
+    holder = _principal_var.get()
+    if not holder:
+        return ("", "")
+    return (holder.get("principal", ""), holder.get("name", ""))
 
 
 def log_action(
@@ -62,8 +130,20 @@ def log_action(
     target_id: str = "",
     details: str = "",
     ip: str = "",
+    principal: Optional[str] = None,
+    principal_name: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Record an admin action. Returns the audit entry."""
+    """Record an admin action. Returns the audit entry.
+
+    ``principal`` defaults to the current request's (``current_principal``);
+    given without ``principal_name``, the name is empty.
+    """
+    if principal is None:
+        principal, current_name = current_principal()
+        if principal_name is None:
+            principal_name = current_name
+    if principal_name is None:
+        principal_name = ""
     entry = {
         "id": secrets.token_hex(8),
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
@@ -73,6 +153,8 @@ def log_action(
         "target_id": target_id,
         "details": details,
         "ip": ip,
+        "principal": principal,
+        "principal_name": principal_name,
     }
     with _write_lock:
         deadline = time.monotonic() + _WRITE_DEADLINE_S
@@ -98,8 +180,10 @@ _RETRY_PAUSE_S = 0.01
 _write_lock = threading.Lock()
 
 _INSERT = """INSERT OR IGNORE INTO audit_log
-    (id, ts, action, actor, target_type, target_id, details, ip)
-    VALUES (:id, :ts, :action, :actor, :target_type, :target_id, :details, :ip)"""
+    (id, ts, action, actor, target_type, target_id, details, ip,
+     principal, principal_name)
+    VALUES (:id, :ts, :action, :actor, :target_type, :target_id, :details, :ip,
+            :principal, :principal_name)"""
 _FILE_GONE_ERRORS = ("disk i/o error", "readonly database")
 
 
