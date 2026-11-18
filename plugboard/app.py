@@ -85,9 +85,7 @@ from plugboard.audit import log_action as _audit
 from plugboard.apikeys import (
     KEY_PREFIXES,  # ARCH-DEBT-029
     get_key_record,
-    get_keys_by_client,
     load_keys,
-    mask_key,
 )
 from plugboard.config import (
     dotenv_permission_warning,
@@ -132,6 +130,7 @@ from plugboard.router import (
     served_by as _served_by,  # noqa: F401  (patch point read through core, PLU-95)
 )
 from plugboard.chat_path import (
+    account as _cp_account,
     billing as _cp_billing,
     catalogue as _cp_catalogue,
     completions as _cp_completions,
@@ -1975,105 +1974,8 @@ async def health_detailed(_: None = Depends(_require_admin)):
     }
 
 
-# -- /usage/me ---------------------------------------------------------------
-
-
-@app.get("/v1/inflight")
-async def inflight_me(client_id: Optional[str] = Depends(_resolve_client)):
-    """Chat calls in flight and the last results (PLU-13).
-
-    The admin sees every call with its provider; a client key sees its own
-    calls only, without routing details.
-    """
-    if client_id is None:
-        raise HTTPException(401, "Authentication required")
-    return _live.snapshot(client_id=client_id, admin=client_id == "admin")
-
-
-@app.get("/admin/inflight", dependencies=[Depends(_require_admin)])
-async def inflight_admin():
-    """Every chat call in flight and the last results, with routing details."""
-    return _live.snapshot(admin=True)
-
-
-@app.get("/usage/me")
-async def usage_me(
-    month: Optional[str] = None,
-    client_id: Optional[str] = Depends(_resolve_client),
-):
-    if client_id is None:
-        return {"entries": [], "summary": {}}
-    m = month or _billing.current_pricing_month()
-    # Which grid entry priced a call reveals provider routing: admin only.
-    entries = [
-        {k: v for k, v in e.items() if k not in ("price_key", "price_source")}
-        for e in _usage.get_usage_by_client(m, client_id)
-    ]
-    return {
-        "month": m,
-        "client_id": client_id,
-        "entries": entries,
-        "summary": _usage.summarize_usage(entries),
-    }
-
-
-# -- /v1/me -----------------------------------------------------------------
-
-
-@app.get("/v1/me")
-async def client_info(
-    request: Request, client_id: Optional[str] = Depends(_resolve_client)
-):
-    if not client_id:
-        return {"client_id": None}
-    info: Dict[str, Any] = {"client_id": client_id}
-    key_record = _get_request_key_record(request)
-    if key_record:
-        info["key_id"] = key_record.get("key_id", "")
-        info["monthly_limit_usd"] = key_record.get("monthly_limit_usd", 0)
-        info["allowed_models"] = key_record.get("allowed_models", [])
-        info["rpm_limit"] = key_record.get("rpm_limit", 0)
-        info["org_id"] = key_record.get("org_id", "")
-    else:
-        for k in load_keys():
-            if k.get("client_id") == client_id:
-                info["monthly_limit_usd"] = k.get("monthly_limit_usd", 0)
-                info["allowed_models"] = k.get("allowed_models", [])
-                info["rpm_limit"] = k.get("rpm_limit", 0)
-                info["org_id"] = k.get("org_id", "")
-                break
-
-    month = _billing.current_pricing_month()
-    key_id = info.get("key_id", "")
-    if key_id:
-        summary = _usage.summarize_usage_by_key(month, key_id)
-    else:
-        summary = _usage.summarize_usage_by_client(month, client_id)
-    info["current_month"] = month
-    info["usage"] = summary
-    limit = info.get("monthly_limit_usd", 0)
-    info["remaining_usd"] = (
-        max(0, limit - summary["total_cost_usd"]) if limit and limit > 0 else None
-    )
-    return info
-
-
-@app.get("/v1/me/keys")
-async def client_keys(client_id: Optional[str] = Depends(_resolve_client)):
-    """List the calling client's own keys (masked)."""
-    if not client_id:
-        return []
-    keys = get_keys_by_client(client_id)
-    return [
-        {
-            "key_id": k["key_id"],
-            "key_display": mask_key(k.get("key_prefix", "")),
-            "label": k.get("label", ""),
-            "is_active": k.get("is_active", True),
-            "created_at": k.get("created_at", ""),
-        }
-        for k in keys
-    ]
+# -- /v1/inflight, /admin/inflight, /usage/me, /v1/me: chat_path/account.py --
+_cp_account.register(app, _THIS_MODULE)
 
 
 # -- /metrics ----------------------------------------------------------------
