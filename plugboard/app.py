@@ -125,6 +125,7 @@ from plugboard.admin_routes import oauth as _admin_oauth
 from plugboard.admin_routes import direct_providers as _admin_direct_providers
 from plugboard.admin_routes import ollama as _admin_ollama
 from plugboard.admin_routes import keys as _admin_keys
+from plugboard.admin_routes import jobs as _admin_jobs
 from plugboard.suivi_api import build_router as build_suivi_router
 from plugboard.legacy_connectors import (
     REMOVED_CONNECTOR_ERROR,
@@ -4446,45 +4447,8 @@ _default_rpm_limit = _keys._default_rpm_limit
 _default_monthly_limit_usd = _keys._default_monthly_limit_usd
 
 
-# -- Admin: Jobs / Crons -----------------------------------------------------
-
-
-@app.get("/admin/jobs")
-async def list_jobs(_: None = Depends(_require_admin)):
-    """Background jobs (price refresh, model refresh, watchdog) and their state."""
-    from plugboard.jobs import get_jobs_status
-
-    return get_jobs_status(app.state)
-
-
-@app.get("/admin/jobs/{job_id}/log")
-async def job_log(job_id: str, lines: int = 50, _: None = Depends(_require_admin)):
-    """Last result of a background job."""
-    from plugboard.jobs import get_job_log
-
-    result = get_job_log(job_id, lines=lines, app_state=app.state)
-    if "error" in result:
-        raise HTTPException(404, result["error"])
-    return result
-
-
-@app.post("/admin/jobs/{job_id}/run")
-async def run_job_endpoint(job_id: str, _: None = Depends(_require_admin)):
-    """Start a background job now; it runs on its own and the call returns at once."""
-    from plugboard.jobs import run_job
-
-    result = await run_job(job_id, app.state)
-    # run_job returns a bare {"error": ...} (no "status") ONLY for genuine
-    # not-found cases (unknown job id / missing script) -> 404. Every other
-    # outcome (success / error / timeout / continuous) carries a "status" and is
-    # returned as 200 so the dashboard can render the real message instead of a
-    # generic 404 (which the frontend used to display as "undefined — Output").
-    if "status" not in result and "error" in result:
-        raise HTTPException(404, result["error"])
-    _audit(
-        "job.run", target_type="job", target_id=job_id, details=result.get("status", "")
-    )
-    return result
+# -- /admin/jobs: admin_routes/jobs.py
+_admin_jobs.register(app, _THIS_MODULE)
 
 
 # -- Admin: Pricing management -----------------------------------------------
