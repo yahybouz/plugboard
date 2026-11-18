@@ -29,6 +29,27 @@ import pytest
 ADMIN_AUTH = {"Authorization": "Bearer adminkey"}
 
 
+@pytest.fixture(autouse=True)
+def _restore_reloaded_modules():
+    """Put back the modules this file reloads, as they were before the test.
+
+    ``importlib.reload`` runs a module again in its own namespace: a reloaded
+    ``plugboard.config`` holds a new ``SecretUnreadable`` class, a new key and
+    the test's data paths, and the functions other modules imported from it
+    (``admin_people``'s ``_decrypt_token``) then raise that new class, which
+    their ``except SecretUnreadable`` no longer catches. Restoring the
+    namespace hands later tests the objects every other module still holds.
+    """
+    from plugboard import admin_mfa, config
+
+    saved = {mod: dict(vars(mod)) for mod in (config, admin_mfa)}
+    yield
+    for mod, namespace in saved.items():
+        current = vars(mod)
+        current.clear()
+        current.update(namespace)
+
+
 # ── XSS on /oauth/callback ──────────────────────────────────────────────────
 
 
