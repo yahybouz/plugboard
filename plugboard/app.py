@@ -138,6 +138,7 @@ from plugboard.chat_path import (
     limits as _cp_limits,
     responses as _cp_responses,
     streaming as _cp_streaming,
+    v2 as _cp_v2,
 )
 
 setup_logging()
@@ -1904,45 +1905,9 @@ models = _catalogue_ns.models
 _models_for_key = _catalogue_ns._models_for_key
 
 
-# -- /v2/ aliases (API versioning) -------------------------------------------
-# v2 endpoints are identical to v1 for now. The version header allows
-# clients to opt-in to future breaking changes.
-
-
-@app.post(
-    "/v2/chat/completions",
-    # The key first (PLU-15): see _inflight_chat_dep.
-    dependencies=[
-        Depends(_resolve_client),
-        Depends(_refuse_anonymous_chat),
-        Depends(_inflight_chat_dep),
-        Depends(_session_turn_dep),
-    ],
-)
-async def chat_completions_v2(
-    request: Request, client_id: Optional[str] = Depends(_resolve_client)
-):
-    resp = await chat_completions(request, client_id)
-    resp.headers["X-API-Version"] = "2"
-    return resp
-
-
-@app.get("/v2/models")
-async def models_v2(
-    request: Request, client_id: Optional[str] = Depends(_resolve_client)
-):
-    items = await _models_for_key(request, client_id)
-    return {"object": "list", "data": items, "api_version": "2"}
-
-
-@app.get("/v2/models/benchmarks")
-async def models_benchmarks_v2(
-    request: Request, client_id: Optional[str] = Depends(_resolve_client)
-):
-    from plugboard.benchmarks import enrich_models_list
-
-    items = await _models_for_key(request, client_id)
-    return {"object": "list", "data": enrich_models_list(items), "api_version": "2"}
+# -- /v2 aliases: chat_path/v2.py ----------------------------------------------
+_v2_ns = _cp_v2.register(app, _THIS_MODULE)
+models_v2 = _v2_ns.models_v2
 
 
 # -- /health -----------------------------------------------------------------
