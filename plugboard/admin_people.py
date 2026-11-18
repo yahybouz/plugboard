@@ -18,16 +18,19 @@ decoding error can quote the file's bytes).
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import re
 import secrets
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 from plugboard import admin_mfa
-from plugboard.config import _encrypt_token
+from plugboard.config import SecretUnreadable, _decrypt_token, _encrypt_token
 from plugboard.storage import atomic_write_json, data_dir
 
 log = logging.getLogger(__name__)
@@ -173,3 +176,98 @@ def list_people() -> list[dict]:
     if not readable:
         raise PeopleStoreUnreadable("admin_people.json is unreadable")
     return [public_view(p) for p in people]
+
+
+def _hash_bytes(record: dict) -> bytes:
+    stored = record.get("key_hash")
+    return stored.encode("utf-8") if isinstance(stored, str) else b""
+
+
+def find_by_key(raw_key: str) -> Optional[dict]:
+    """The live record whose ``key_hash`` matches ``raw_key``, else ``None``.
+
+    Every record is compared in constant time, with no early exit; a revoked
+    record never matches and an unreadable store matches nothing.
+    """
+    if not isinstance(raw_key, str) or not raw_key.startswith(KEY_PREFIX):
+        return None
+    people, readable = _load()
+    if not readable:
+        return None
+    digest = hashlib.sha256(raw_key.encode("utf-8")).hexdigest().encode("ascii")
+    found = None
+    for person in people:
+        if hmac.compare_digest(_hash_bytes(person), digest) and found is None:
+            found = person
+    if found is None or found.get("revoked_at"):
+        return None
+    return found
+
+
+def get(person_id: str) -> Optional[dict]:
+    """The stored record (revoked included), or ``None`` (absent, bad id, unreadable)."""
+    if not isinstance(person_id, str) or not ID_PATTERN.fullmatch(person_id):
+        return None
+    people, readable = _load()
+    if not readable:
+        return None
+    return next((p for p in people if p.get("id") == person_id), None)
+
+
+def verify_code(person_id: str, code: str) -> str:
+    """Check ``code`` against that person's own secret, once.
+
+    ``"confirmed"`` for the first accepted code (the key turns active),
+    ``"ok"`` for a later one, ``"refused"`` otherwise: malformed, wrong,
+    replayed or older than the last accepted step, person revoked or absent,
+    store unreadable, secret not encrypted or not decryptable, or the store
+    could not be written. The step is recorded before the answer.
+    """
+    if not isinstance(person_id, str) or not ID_PATTERN.fullmatch(person_id):
+        return "refused"
+    with _LOCK:
+        people, readable = _load()
+        if not readable:
+            return "refused"
+        record = next((p for p in people if p.get("id") == person_id), None)
+        if record is None or record.get("revoked_at"):
+            return "refused"
+        stored = record.get("totp_secret_enc")
+        if not isinstance(stored, str) or not stored.startswith("enc:"):
+            log.error("Personal TOTP secret of %s is not encrypted", person_id)
+            return "refused"
+        try:
+            secret = _decrypt_token(stored)
+        except SecretUnreadable:
+            log.error("Personal TOTP secret of %s cannot be decrypted", person_id)
+            return "refused"
+        step = admin_mfa.matching_step(secret, code, at=time.time())
+        if step is None:
+            return "refused"
+        last = record.get("last_step")
+        if last is not None and (isinstance(last, bool) or not isinstance(last, int)):
+            log.error("Personal TOTP state of %s is malformed", person_id)
+            return "refused"
+        if last is not None and step <= last:
+            log.warning(
+                "Personal TOTP code replayed (time-step already used) for %s",
+                person_id,
+            )
+            return "refused"
+        now = _now()
+        outcome = "ok" if record.get("totp_confirmed") else "confirmed"
+        record["last_step"] = step
+        record["last_used_at"] = now
+        if outcome == "confirmed":
+            record["totp_confirmed"] = True
+            record["confirmed_at"] = now
+        try:
+            _save(people)
+        except Exception as exc:
+            log.error(
+                "Failed to record the TOTP step of %s: %s",
+                person_id,
+                type(exc).__name__,
+            )
+            return "refused"
+    return outcome

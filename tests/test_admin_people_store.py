@@ -150,3 +150,126 @@ def test_a_store_that_cannot_be_reached_is_unreadable(env, monkeypatch, caplog):
     with pytest.raises(admin_people.PeopleStoreUnreadable):
         admin_people.create("person-one", created_by="admin-key")
     assert "PermissionError" in caplog.text
+
+
+def test_find_by_key_returns_the_live_record_only(env):
+    made = ph.new_person()
+    assert admin_people.find_by_key(made["key"])["id"] == made["person"]["id"]
+    assert admin_people.find_by_key(made["key"] + "x") is None
+    assert admin_people.find_by_key("adminkey") is None
+
+
+def test_the_first_code_confirms_then_each_code_is_single_use(env):
+    made = ph.new_person()
+    pid, first = made["person"]["id"], ph.code_now(env, made)
+    assert admin_people.verify_code(pid, first) == "confirmed"
+    view = admin_people.list_people()[0]
+    assert view["status"] == "active" and view["confirmed_at"] and view["last_used_at"]
+    assert admin_people.verify_code(pid, first) == "refused"
+    ph.next_step(env)
+    assert admin_people.verify_code(pid, ph.code_now(env, made)) == "ok"
+
+
+def test_an_older_code_is_refused_after_a_newer_one(env):
+    made = ph.new_person()
+    pid, older = made["person"]["id"], ph.code_now(env, made)
+    ph.next_step(env)
+    assert admin_people.verify_code(pid, ph.code_now(env, made)) == "confirmed"
+    assert admin_people.verify_code(pid, older) == "refused"
+
+
+@pytest.mark.parametrize("bad", ["", "12345", "abcdef"])
+def test_a_wrong_or_malformed_code_is_refused(env, bad):
+    made = ph.new_person()
+    pid = made["person"]["id"]
+    assert admin_people.verify_code(pid, bad) == "refused"
+    assert admin_people.verify_code(pid, ph.wrong(ph.code_now(env, made))) == "refused"
+    assert admin_people.list_people()[0]["status"] == "pending"
+
+
+def test_each_person_has_their_own_replay_state(env):
+    one, two = ph.new_person("person-one"), ph.new_person("person-two")
+    assert (
+        admin_people.verify_code(one["person"]["id"], ph.code_now(env, one))
+        == "confirmed"
+    )
+    assert (
+        admin_people.verify_code(two["person"]["id"], ph.code_now(env, two))
+        == "confirmed"
+    )
+
+
+def test_an_unreadable_store_refuses_keys_and_codes(env):
+    made = ph.new_person()
+    pid = made["person"]["id"]
+    env.store.write_text("{not json")
+    assert admin_people.find_by_key(made["key"]) is None
+    assert admin_people.get(pid) is None
+    assert admin_people.verify_code(pid, ph.code_now(env, made)) == "refused"
+
+
+@pytest.mark.parametrize("stored", ["enc:not-a-fernet-token", "JBSWY3DPEHPK3PXP"])
+def test_a_secret_that_cannot_be_decrypted_refuses_codes(env, stored):
+    made = ph.new_person()
+    data = json.loads(env.store.read_text())
+    data["people"][0]["totp_secret_enc"] = stored
+    env.store.write_text(json.dumps(data))
+    assert (
+        admin_people.verify_code(made["person"]["id"], ph.code_now(env, made))
+        == "refused"
+    )
+
+
+def test_a_revoked_record_is_kept_by_get_but_never_matches(env):
+    made = ph.new_person()
+    pid = made["person"]["id"]
+    data = json.loads(env.store.read_text())
+    data["people"][0]["revoked_at"] = "2026-01-01T00:00:00+00:00"
+    env.store.write_text(json.dumps(data))
+    assert admin_people.find_by_key(made["key"]) is None
+    assert admin_people.get(pid)["revoked_at"]
+    assert admin_people.verify_code(pid, ph.code_now(env, made)) == "refused"
+
+
+@pytest.mark.parametrize("bad_id", ["", "ap_000000000000x", "../ap_000000000000", 7])
+def test_an_id_outside_the_pattern_is_refused(env, bad_id):
+    made = ph.new_person()
+    data = json.loads(env.store.read_text())
+    data["people"][0]["id"] = bad_id  # even a record stored under it is not reached
+    env.store.write_text(json.dumps(data))
+    assert admin_people.get(bad_id) is None
+    assert admin_people.verify_code(bad_id, ph.code_now(env, made)) == "refused"
+
+
+def test_a_code_is_refused_when_its_step_cannot_be_recorded(env, monkeypatch, caplog):
+    made = ph.new_person()
+    pid, code = made["person"]["id"], ph.code_now(env, made)
+
+    def fail(people):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(admin_people, "_save", fail)
+    assert admin_people.verify_code(pid, code) == "refused"
+    assert "OSError" in caplog.text and code not in caplog.text
+    assert admin_people.list_people()[0]["status"] == "pending"
+
+
+@pytest.mark.parametrize("last", ["5", True, 1.5])
+def test_a_malformed_last_step_refuses_codes(env, last):
+    made = ph.new_person()
+    data = json.loads(env.store.read_text())
+    data["people"][0]["last_step"] = last
+    env.store.write_text(json.dumps(data))
+    assert (
+        admin_people.verify_code(made["person"]["id"], ph.code_now(env, made))
+        == "refused"
+    )
+
+
+def test_a_replayed_code_is_logged_without_the_code(env, caplog):
+    made = ph.new_person()
+    pid, code = made["person"]["id"], ph.code_now(env, made)
+    assert admin_people.verify_code(pid, code) == "confirmed"
+    assert admin_people.verify_code(pid, code) == "refused"
+    assert "replayed" in caplog.text and pid in caplog.text
+    assert code not in caplog.text
