@@ -1278,7 +1278,10 @@ def _key_scope(request: Request) -> str:
 
     ``key:admin`` for the admin key or an admin session, ``key:<key_id>`` for
     a client key the auth dependency accepts, "" otherwise (no key, a wrong,
-    forged or revoked key). Never raises and logs no refusal (BUG-119).
+    forged or revoked key). Never raises and logs no refusal (BUG-119). A
+    session opened with a personal key is ``key:admin:<id>``, that person's
+    own scope; a bare personal key is not counted here (it shows no checks
+    without its code), see ``_person_bearer_scope``.
 
     Same checks as ``_resolve_client``, in its order, with no file read in
     the common case: the admin key is a constant-time comparison; a client
@@ -1297,9 +1300,39 @@ def _key_scope(request: Request) -> str:
         key_id = str(rec.get("key_id") or "") if rec else ""
         return f"key:{key_id}" if key_id else ""
     session = request.cookies.get(_ADMIN_COOKIE_NAME, "")
-    if _admin_session_nonce(session) and _is_admin_session(session):
+    if not _admin_session_nonce(session):
+        return ""
+    found = _admin_session_principal(session)
+    if found is None:
+        return ""
+    principal = found[0]
+    if principal == _ADMIN_KEY_PRINCIPAL:
         return _ADMIN_SCOPE
-    return ""
+    return _person_scope(principal.removeprefix("person:"))
+
+
+def _person_bearer_scope(request: Request) -> str:
+    """``key:admin:<id>`` for a live personal key in the bearer, else "".
+
+    Its code is not checked: the scope only counts the request in that
+    person's bucket of the global limit. A revoked or unknown ``pba_`` key,
+    an unreadable store or a hand-edited record is "" (the address counts
+    it). Never raises and logs no refusal (BUG-119).
+    """
+    token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if (
+        not token.startswith(admin_people.KEY_PREFIX)
+        or not _effective_admin_key()
+        or _is_admin_key(token)
+    ):
+        return ""
+    person = admin_people.find_by_key(token)
+    person_id = person.get("id") if person else None
+    if not isinstance(person_id, str) or not admin_people.ID_PATTERN.fullmatch(
+        person_id
+    ):
+        return ""
+    return _person_scope(person_id)
 
 
 def _rate_limit_scope(request: Request) -> str:
@@ -1308,9 +1341,13 @@ def _rate_limit_scope(request: Request) -> str:
     The valid key it carries (``_key_scope``), the client address otherwise:
     a wrong, forged or revoked key never leaves the address counter. Behind a
     proxy every client has the proxy's address unless it is trusted, so the
-    address counter only holds the calls without a valid key.
+    address counter only holds the calls without a valid key. A live personal
+    key, or a session it opened, counts in that person's own bucket
+    (``key:admin:<id>``).
     """
-    return _key_scope(request) or _address_scope(request)
+    return (
+        _key_scope(request) or _person_bearer_scope(request) or _address_scope(request)
+    )
 
 
 class _RateLimitMiddleware(BaseHTTPMiddleware):
