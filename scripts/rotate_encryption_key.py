@@ -9,9 +9,9 @@ Stop Plugboard first: a running server keeps the old key in memory.
 ``--generate`` creates the key file (mode 0600) when it does not exist yet;
 the key itself is never printed. The current key is the one the server uses
 (ENCRYPTION_KEY from the environment or .env, else data/.encryption_key).
-Provider tokens, OAuth credentials and the admin MFA secret are re-encrypted
-after a backup in data/backups/rekey-<time>/; nothing is written if one of
-them cannot be read. A completed rotation also signs out every dashboard
+Provider tokens, OAuth credentials, the admin MFA secret and the personal
+TOTP secrets (data/admin_people.json) are re-encrypted after a backup in
+data/backups/rekey-<time>/; nothing is written if one of them cannot be read. A completed rotation also signs out every dashboard
 session and forgets the browsers remembered for local auto-login. Then:
 
 - ENCRYPTION_KEY set: put the content of the key file in ENCRYPTION_KEY

@@ -4,7 +4,8 @@ Secrets encrypted at rest with the install's key:
 
 - ``providers.json``: each provider's ``bearer_token``;
 - ``credentials.db``: ``oauth_credentials.access_token`` and ``refresh_token``;
-- ``admin_mfa.json``: ``secret_enc``.
+- ``admin_mfa.json``: ``secret_enc``;
+- ``admin_people.json``: each person's ``totp_secret_enc`` (PB-AUTH-01).
 
 The rotation is all or nothing: every value is decrypted with the old key
 first, and nothing is written when one of them cannot be read. Before
@@ -42,6 +43,7 @@ _PREFIX = "enc:"
 PROVIDERS = "providers.json"
 CREDENTIALS = "credentials.db"
 ADMIN_MFA = "admin_mfa.json"
+ADMIN_PEOPLE = "admin_people.json"
 KEY_FILE = ".encryption_key"
 
 
@@ -106,6 +108,23 @@ def _read_json(path: Path, report: RekeyReport) -> Optional[Dict[str, Any]]:
         report.unreadable.append(f"{path.name} (not readable JSON)")
         return None
     if not isinstance(data, dict):
+        report.damaged.append(f"{path.name} (unexpected content)")
+        report.unreadable.append(f"{path.name} (unexpected content)")
+        return None
+    return data
+
+
+def _read_people(path: Path, report: RekeyReport) -> Optional[Dict[str, Any]]:
+    """``{"people": [<object>, ...]}``, or None; anything else is damaged.
+
+    The store refuses every personal key on such a file: the rotation refuses
+    too rather than leave a personal secret on the old key.
+    """
+    data = _read_json(path, report)
+    if data is None:
+        return None
+    people = data.get("people")
+    if not isinstance(people, list) or not all(isinstance(p, dict) for p in people):
         report.damaged.append(f"{path.name} (unexpected content)")
         report.unreadable.append(f"{path.name} (unexpected content)")
         return None
@@ -197,6 +216,15 @@ def rotate(
         if mfa is not None and "secret_enc" in mfa:
             mfa["secret_enc"] = convert(mfa["secret_enc"], f"{ADMIN_MFA}: secret")
 
+        people = _read_people(data / ADMIN_PEOPLE, report)
+        if people is not None:
+            for person in people["people"]:
+                if "totp_secret_enc" in person:
+                    where = f"{ADMIN_PEOPLE}: person {person.get('id', '?')}"
+                    person["totp_secret_enc"] = convert(
+                        person["totp_secret_enc"], where
+                    )
+
         credentials = _read_credentials(data / CREDENTIALS, report)
         for row in credentials:
             for column in ("access_token", "refresh_token"):
@@ -208,7 +236,9 @@ def rotate(
         if not (report.rotated or report.encrypted_plain):
             return report  # every value already uses the new key
 
-        report.backup_dir = _backup(data, [PROVIDERS, ADMIN_MFA, CREDENTIALS, KEY_FILE])
+        report.backup_dir = _backup(
+            data, [PROVIDERS, ADMIN_MFA, ADMIN_PEOPLE, CREDENTIALS, KEY_FILE]
+        )
         if credentials:
             conn = sqlite3.connect(str(data / CREDENTIALS))
             try:
@@ -227,6 +257,8 @@ def rotate(
             atomic_write_json(data / PROVIDERS, providers, mode=0o600)
         if mfa is not None:
             atomic_write_json(data / ADMIN_MFA, mfa, mode=0o600)
+        if people is not None:
+            atomic_write_json(data / ADMIN_PEOPLE, people, mode=0o600)
         report.written = True
     log.info(
         "Encryption key rotated: %d values re-encrypted, %d plain values "
