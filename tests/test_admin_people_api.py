@@ -256,3 +256,84 @@ async def test_the_audit_names_the_caller_never_the_key(admin_client, env):
     text = json.dumps([created, revoked])
     for secret in (made["key"], made["totp_secret"], body["key"], body["totp_secret"]):
         assert secret not in text
+
+
+# -- Hardening: the audit entry of a creation, names that look alike ----------
+
+_AUDIT_DOWN = "The audit log cannot be written: see the server log"
+
+
+def _audit_down(*_args, **_kwargs):
+    import sqlite3
+
+    raise sqlite3.OperationalError("disk I/O error")
+
+
+async def test_a_creation_that_cannot_be_audited_is_undone_and_answers_503(
+    admin_client, env, monkeypatch
+):
+    with monkeypatch.context() as m:
+        m.setattr(audit, "log_action", _audit_down)
+        r = await _create(admin_client)
+    assert r.status_code == 503 and r.json() == {"detail": _AUDIT_DOWN}
+    assert "pba_" not in r.text and "otpauth" not in r.text
+    listed = (await admin_client.get("/admin/people", headers=ph.ADMIN)).json()
+    assert [(p["status"], p["revoked_by"]) for p in listed["people"]] == [
+        ("revoked", "admin-key")
+    ]
+    assert not audit.get_audit_log(action="admin.person.created")
+    again = await _create(admin_client)
+    assert again.status_code == 201
+
+
+async def test_a_failed_undo_still_answers_503_never_the_key(
+    admin_client, env, monkeypatch
+):
+    from plugboard import admin_people
+
+    def _revoke_down(*_args, **_kwargs):
+        raise OSError(28, "No space left on device")
+
+    with monkeypatch.context() as m:
+        m.setattr(audit, "log_action", _audit_down)
+        m.setattr(admin_people, "revoke", _revoke_down)
+        r = await _create(admin_client)
+    assert r.status_code == 503 and r.json() == {"detail": _AUDIT_DOWN}
+    assert "pba_" not in r.text and "otpauth" not in r.text
+
+
+@pytest.mark.parametrize(
+    "first,second",
+    [
+        ("person-one", "ｐｅｒｓｏｎ-ｏｎｅ"),
+        ("file-one", "ﬁle-one"),
+        ("PERSON-Ⅰ", "person-i"),
+    ],
+    ids=["full-width", "ligature", "roman-numeral"],
+)
+async def test_names_that_only_differ_by_compatibility_forms_collide(
+    admin_client, env, first, second
+):
+    assert (await _create(admin_client, first)).status_code == 201
+    r = await _create(admin_client, second)
+    assert r.status_code == 409
+    assert r.json()["detail"] == "A live personal key already has this name"
+
+
+async def test_revoking_needs_an_admin(admin_client, env):
+    pid = ph.new_person()["person"]["id"]
+    admin_client.cookies.clear()
+    assert (await admin_client.delete(f"/admin/people/{pid}")).status_code == 401
+    listed = (await admin_client.get("/admin/people", headers=ph.ADMIN)).json()
+    assert [p["status"] for p in listed["people"]] == ["pending"]
+
+
+async def test_without_admin_key_revoking_answers_503(admin_client, env, monkeypatch):
+    pid = ph.new_person()["person"]["id"]
+    monkeypatch.setattr("plugboard.app._ADMIN_KEY", "")
+    admin_client.cookies.clear()
+    r = await admin_client.delete(f"/admin/people/{pid}", headers=ph.ADMIN)
+    assert r.status_code == 503
+    from plugboard import admin_people
+
+    assert admin_people.get(pid)["revoked_at"] is None

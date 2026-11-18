@@ -25,6 +25,7 @@ import re
 import secrets
 import threading
 import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -126,6 +127,15 @@ def _clean_name(name: str) -> str:
     return cleaned
 
 
+def _fold(name: str) -> str:
+    """The form two names are compared in: NFKC, then casefold.
+
+    Full-width and compatibility forms collide with their plain form; the
+    outer NFKC keeps the folded text in normal form too.
+    """
+    return unicodedata.normalize("NFKC", unicodedata.normalize("NFKC", name).casefold())
+
+
 def create(name: str, *, created_by: str) -> dict:
     """Create a pending personal key; the raw key and secret are returned once."""
     name = _clean_name(name)
@@ -133,9 +143,9 @@ def create(name: str, *, created_by: str) -> dict:
         people, readable = _load()
         if not readable:
             raise PeopleStoreUnreadable("admin_people.json is unreadable")
-        folded = name.casefold()
+        folded = _fold(name)
         if any(
-            p.get("revoked_at") is None and str(p.get("name", "")).casefold() == folded
+            p.get("revoked_at") is None and _fold(str(p.get("name", ""))) == folded
             for p in people
         ):
             raise PersonError("name_taken", _NAME_TAKEN)
