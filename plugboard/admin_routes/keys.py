@@ -16,7 +16,7 @@ from types import ModuleType, SimpleNamespace
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, StrictBool, field_validator
 
 from plugboard import envcompat
 from plugboard.apikeys import (
@@ -52,6 +52,8 @@ class KeyCreate(BaseModel):
     ] = None
     rpm_limit: Optional[int] = None  # calls to a model per minute (BUG-124)
     org_id: str = ""  # organisation (empty = no org)
+    # ADR-039: tools emulated on CLI routes, a JSON boolean only.
+    allow_cli_tools: StrictBool = False
 
     @field_validator("client_id")
     @classmethod
@@ -180,6 +182,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
             rpm_limit=rpm,
             org_id=body.org_id,
             allowed_decision_models=body.allowed_decision_models,
+            allow_cli_tools=body.allow_cli_tools,
         )
         core._audit(
             "key.create",

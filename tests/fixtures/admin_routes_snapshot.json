@@ -282,6 +282,11 @@
     },
     "KeyCreate": {
      "properties": {
+      "allow_cli_tools": {
+       "default": false,
+       "title": "Allow Cli Tools",
+       "type": "boolean"
+      },
       "allowed_decision_models": {
        "anyOf": [
         {
