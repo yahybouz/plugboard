@@ -133,6 +133,7 @@ from plugboard.ratelimit import (
 )
 from plugboard.decision_api import router as decision_router
 from plugboard.embeddings_api import router as embeddings_router
+from plugboard.admin_people_api import build_router as build_people_router
 from plugboard.suivi_api import build_router as build_suivi_router
 from plugboard.legacy_connectors import (
     REMOVED_CONNECTOR_ERROR,
@@ -8110,6 +8111,9 @@ def _safe_next(raw: str) -> str:
 # -- /suivi: Kanban of Plugboard tickets (admin only) -------------------------
 
 app.include_router(build_suivi_router(_require_admin))
+app.include_router(
+    build_people_router(_require_admin, lambda: bool(_effective_admin_key()))
+)
 
 
 @app.get("/suivi", include_in_schema=False)
