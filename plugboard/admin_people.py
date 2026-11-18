@@ -122,10 +122,35 @@ def public_view(record: dict) -> dict:
 
 # Characters that print as nothing, or hide what follows them: format,
 # control, private-use and surrogate code points, line and paragraph
-# separators, variation selectors, the combining grapheme joiner, the Hangul
-# fillers and the braille blank. Two names would otherwise look the same.
+# separators, every Default_Ignorable_Code_Point, and the braille blank.
+# Two names would otherwise look the same.
 _INVISIBLE_CATEGORIES = frozenset({"Cf", "Cc", "Co", "Cs", "Zl", "Zp"})
-_INVISIBLE_POINTS = frozenset({0x034F, 0x115F, 0x1160, 0x2800, 0x3164, 0xFFA0})
+# Default_Ignorable_Code_Point, as listed in Unicode's
+# DerivedCoreProperties.txt (checked against Unicode 15.0); ``unicodedata``
+# does not expose it. It holds the soft hyphen, the combining grapheme
+# joiner, the Hangul fillers, the Khmer inherent vowels, the Mongolian free
+# variation selectors and vowel separator, the zero width and bidi controls,
+# the variation selectors, the tags and the reserved points kept ignorable.
+_DEFAULT_IGNORABLE = (
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),
+    (0x061C, 0x061C),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x206F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+_BRAILLE_BLANK = 0x2800
 _COMBINING = frozenset({"Mn", "Me"})
 
 
@@ -133,9 +158,19 @@ def _invisible(char: str) -> bool:
     point = ord(char)
     return (
         unicodedata.category(char) in _INVISIBLE_CATEGORIES
-        or point in _INVISIBLE_POINTS
-        or 0xFE00 <= point <= 0xFE0F
-        or 0xE0100 <= point <= 0xE01EF
+        or point == _BRAILLE_BLANK
+        or any(low <= point <= high for low, high in _DEFAULT_IGNORABLE)
+    )
+
+
+def _mark_without_base(name: str) -> bool:
+    """A combining mark that opens the name or sits on a space prints alone.
+
+    Every other invisible base is refused on its own (``_invisible``).
+    """
+    return any(
+        unicodedata.category(char) in _COMBINING and (i == 0 or name[i - 1] == " ")
+        for i, char in enumerate(name)
     )
 
 
@@ -143,7 +178,7 @@ def _clean_name(name: str) -> str:
     """The trimmed name, or ``invalid_name``.
 
     Refused: an empty or too long name, a non-printable or invisible
-    character, a combining mark with no letter before it, two spaces in a
+    character, a combining mark at the start or on a space, two spaces in a
     row. Outer spaces are trimmed, never stored.
     """
     cleaned = name.strip() if isinstance(name, str) else ""
@@ -151,8 +186,7 @@ def _clean_name(name: str) -> str:
         not 1 <= len(cleaned) <= NAME_MAX
         or not cleaned.isprintable()
         or any(_invisible(char) for char in cleaned)
-        or unicodedata.category(cleaned[0]) in _COMBINING
-        or cleaned != cleaned.strip(" ")
+        or _mark_without_base(cleaned)
         or "  " in cleaned
     ):
         raise PersonError("invalid_name", _INVALID_NAME)

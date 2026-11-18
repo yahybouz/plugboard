@@ -1,13 +1,14 @@
 """ENCRYPTION_KEY rotation re-encrypts the personal TOTP secrets (PB-AUTH-01)."""
 
 import json
+import logging
 import os
 import stat
 
 import pytest
 from cryptography.fernet import Fernet
 
-from plugboard import secrets_rekey
+from plugboard import admin_mfa, secrets_rekey
 from tests.test_secrets_rekey import (
     NEW,
     OLD,
@@ -73,11 +74,27 @@ def _snapshot(data):
     }
 
 
-def test_the_report_never_quotes_the_secret(tmp_path):
+@pytest.mark.parametrize("readable", [True, False])
+def test_the_report_never_quotes_the_secret(tmp_path, caplog, readable):
+    # A unique witness, on a completed rotation and on a refused one: neither
+    # the report, nor the log, nor the script's output ever shows it.
+    witness = admin_mfa.generate_secret()
     data = tmp_path / "data"
-    _seed(data, _enc(Fernet.generate_key().decode(), "JBSWY3DPEHPK3PXP"))
-    report = secrets_rekey.rotate(data, OLD, NEW)
-    assert "JBSWY3DPEHPK3PXP" not in repr(report)
+    key = OLD if readable else Fernet.generate_key().decode()
+    _seed(data, _enc(key, witness))
+    with caplog.at_level(logging.DEBUG):
+        report = secrets_rekey.rotate(data, OLD, NEW)
+    assert report.ok is readable and report.written is readable
+    assert witness not in repr(report) and witness not in caplog.text
+
+    cli = tmp_path / "cli"
+    _seed(cli / "data", _enc(key, witness))
+    (cli / "data" / ".encryption_key").write_text(OLD)
+    run = _run_cli(cli, "--new-key-file", str(cli / "new.key"), "--generate")
+    assert run.returncode == (0 if readable else 1), run.stderr
+    assert witness not in run.stdout and witness not in run.stderr
+    if not readable:
+        assert f"admin_people.json: person {PID}" in run.stderr
 
 
 def test_a_dry_run_writes_nothing(tmp_path):

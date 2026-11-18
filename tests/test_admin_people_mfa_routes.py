@@ -133,3 +133,19 @@ async def test_admin_key_on_the_mfa_routes_writes_no_person_refusal(admin_client
     r = await admin_client.post("/admin/mfa/begin", headers=ph.ADMIN)
     assert r.status_code == 200
     assert not audit.get_audit_log(action="admin.mfa.person_refused")
+
+
+async def test_the_person_refusal_takes_the_client_address_like_the_others(
+    admin_client, env, monkeypatch
+):
+    from plugboard import app as app_module
+
+    made = ph.new_person()
+    monkeypatch.setattr(app_module, "_client_address", lambda request: "198.51.100.7")
+    admin_client.cookies.clear()
+    r = await admin_client.post(
+        "/admin/mfa/begin", headers=ph.bearer(made, ph.code_now(env, made))
+    )
+    assert r.status_code == 403
+    (entry,) = audit.get_audit_log(action="admin.mfa.person_refused")
+    assert entry["ip"] == "198.51.100.7"

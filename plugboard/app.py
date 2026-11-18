@@ -7974,7 +7974,7 @@ def _refuse_person_principal(request: Request) -> None:
             target_type="admin",
             target_id="admin",
             details=f"{request.method} {request.url.path}",
-            ip=request.client.host if request.client else "",
+            ip=_client_address(request),
             principal=principal,
             principal_name=getattr(request.state, "admin_principal_name", ""),
         )

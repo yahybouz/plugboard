@@ -44,6 +44,24 @@ INVISIBLE = {
     # A combining mark (Mn, Me) that opens the name has nothing to sit on.
     "mn-at-start": chr(0x0301) + "person",
     "me-at-start": chr(0x20DD) + "person",
+    # Default_Ignorable code points that are combining marks (Mn): the
+    # Mongolian free variation selectors and the Khmer inherent vowels.
+    "mongolian-fvs-1": "person" + chr(0x180B),
+    "mongolian-fvs-2": "person" + chr(0x180C),
+    "mongolian-fvs-3": "person" + chr(0x180D),
+    "mongolian-fvs-4": "person" + chr(0x180F),
+    "khmer-inherent-aq": "person" + chr(0x17B4),
+    "khmer-inherent-aa": "person" + chr(0x17B5),
+    # The rest of the Default_Ignorable list (format or unassigned points).
+    "arabic-letter-mark": "person" + chr(0x061C),
+    "mongolian-vowel-separator": "person" + chr(0x180E),
+    "reserved-2065": "person" + chr(0x2065),
+    "reserved-fff0": "person" + chr(0xFFF0),
+    "shorthand-format": "person" + chr(0x1BCA0),
+    "musical-begin-beam": "person" + chr(0x1D173),
+    # A combining mark whose base is a space, so prints on nothing.
+    "mn-after-space": "person " + chr(0x0301) + "one",
+    "me-after-space": "person " + chr(0x20DD) + "one",
     # Spaces: two in a row inside the name.
     "two-spaces": "person  one",
     "three-spaces": "person   one",

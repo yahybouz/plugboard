@@ -11,8 +11,9 @@ the key itself is never printed. The current key is the one the server uses
 (ENCRYPTION_KEY from the environment or .env, else data/.encryption_key).
 Provider tokens, OAuth credentials, the admin MFA secret and the personal
 TOTP secrets (data/admin_people.json) are re-encrypted after a backup in
-data/backups/rekey-<time>/; nothing is written if one of them cannot be read. A completed rotation also signs out every dashboard
-session and forgets the browsers remembered for local auto-login. Then:
+data/backups/rekey-<time>/; nothing is written if one of them cannot be read.
+A completed rotation also signs out every dashboard session and forgets the
+browsers remembered for local auto-login. Then:
 
 - ENCRYPTION_KEY set: put the content of the key file in ENCRYPTION_KEY
   (.env or secret manager) and start Plugboard;

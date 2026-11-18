@@ -40,6 +40,14 @@ def test_the_otpauth_secret_is_masked():
         '{{"key": "{key}"}}',
         "Bearer {key}, retry",
         "({key})",
+        # Glued to a word character, so no word boundary before "pba_".
+        "id_{key}",
+        "x{key}",
+        # URL-encoded separators end with a word character too.
+        "Bearer%20{key}",
+        "GET /x?auth=Bearer%20{key}",
+        "%22{key}%22",
+        "key%3D{key}",
     ],
 )
 def test_a_personal_key_is_masked_wherever_it_sits(template):
@@ -51,6 +59,18 @@ def test_a_personal_key_is_masked_wherever_it_sits(template):
     ):
         out = redact(template.format(key=key))
         assert key not in out and key[4:] not in out
+
+
+@pytest.mark.parametrize("length", [8, 12, 26, 31])
+def test_a_cut_personal_key_is_masked(length):
+    cut = "pba_" + secrets.token_urlsafe(32)[:length]
+    out = redact(f"upstream said: {cut}")
+    assert cut not in out and "pba_***REDACTED***" in out
+
+
+@pytest.mark.parametrize("word", ["pbar", "pba_x", "pba_abc", "pba_abcdefg", "pbar_x"])
+def test_ordinary_words_are_left_alone(word):
+    assert redact(f"see {word} here") == f"see {word} here"
 
 
 def test_the_display_prefix_stays_readable():
@@ -77,6 +97,11 @@ HOSTILE = {
     "pba_ then dashes": "'pba_' + '-' * n",
     "pba_ short runs": "('pba_' + 'a' * 31 + ' ') * (n // 36)",
     "pba_ glued": "'xpba_' * (n // 5)",
+    "id_pba_ repeated": "'id_pba_' * (n // 7)",
+    "encoded quote pba_ repeated": "'%22pba_' * (n // 7)",
+    "pba_ runs of 7": "('pba_' + 'a' * 7 + ' ') * (n // 12)",
+    "pba_ then mixed": "'pba_' + 'a-_' * (n // 3)",
+    "pba_ in a long word": "'a' * n + 'pba_'",
 }
 
 

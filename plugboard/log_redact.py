@@ -114,11 +114,14 @@ _PATTERNS = [
         re.compile(r"\bpb_[A-Za-z0-9]{32,}"),
         "pb_***REDACTED***",
     ),
-    # Personal dashboard keys (PB-AUTH-01): "pba_" + token_urlsafe(32). The
-    # 10-character display prefix is shorter and stays readable.
+    # Personal dashboard keys (PB-AUTH-01): "pba_" + token_urlsafe(32). No
+    # \b: a key glued to a word character ("id_pba_…") or behind a separator
+    # encoded in a URL ("%20pba_…", "%3Dpba_…") is masked too, and so is a
+    # key cut short from 8 characters on. The 10-character display prefix
+    # ("pba_" + 6) stays readable. Possessive: no backtracking.
     (
         "plugboard",
-        re.compile(r"\bpba_[A-Za-z0-9_-]{32,}"),
+        re.compile(r"pba_[A-Za-z0-9_-]{8,}+"),
         "pba_***REDACTED***",
     ),
     # BUG-143: Anthropic keys anywhere, even glued to a word ("id_sk-ant-…",
