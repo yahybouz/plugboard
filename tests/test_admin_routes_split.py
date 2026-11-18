@@ -323,3 +323,25 @@ async def test_reexported_probe_reads_the_module_that_registered_it(monkeypatch)
     monkeypatch.setattr(first, "check_model_internet_access", _probe)
     await first.check_all_models_internet_access({}, _=None)
     assert probed == ["anthropic-direct:claude-haiku-5-5"]
+
+
+async def test_refresh_stamp_is_written_on_the_app_module(monkeypatch):
+    """The refresh cooldown reads and writes _LAST_REFRESH_AT on plugboard.app
+    (PLU-36): a second refresh within the cooldown answers 429."""
+    app_module = importlib.import_module("plugboard.app")
+    import plugboard.model_availability as availability
+
+    async def _probes():
+        return {"last_run_at": "now", "models": {"m": {}}}
+
+    monkeypatch.setattr(availability, "run_connectivity_probes", _probes)
+    monkeypatch.setattr(app_module, "_LAST_REFRESH_AT", 0.0)
+    monkeypatch.setattr(app_module, "_MODEL_REFRESH_COOLDOWN_S", 60.0)
+    monkeypatch.setattr(app_module, "_audit", lambda *a, **k: None)
+    monkeypatch.setattr(app_module, "invalidate_models_cache", lambda: None)
+
+    first = await app_module.admin_models_refresh(_=None)
+    assert first["model_count"] == 1
+    assert app_module._LAST_REFRESH_AT > 0
+    second = await app_module.admin_models_refresh(_=None)
+    assert second.status_code == 429
