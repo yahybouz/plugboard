@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-18-plu-97-auth-core-design.md` (fait foi : R2 étendue, R11-bis, R13, R14, tableau des points de patch, questions Q1–Q4). R1–R9 : `docs/superpowers/specs/2026-11-18-plu-36-admin-routes-design.md` ; R10–R12 : `docs/superpowers/specs/2026-11-18-plu-95-chat-path-design.md`.
 
-**Décisions :** à prendre (Q1–Q4). Le plan suit les recommandations ; les variantes « Q1 = non » et « Q3 = non » sont indiquées aux tâches concernées. Q2 = B ou C demanderait un autre plan.
+**Décisions :** D-71, prise le 2026-11-18 : Q1 = sonde (une ligne de `tests/route_snapshot.py`), Q2 = A, Q3 = table de décisions écrite et figée d'abord, Q4 = hors lot (PLU-98). Le plan suit donc les recommandations ; les variantes « Q1 = non » et « Q3 = non » indiquées aux tâches concernées sont caduques. La matrice de la tâche 2 (≈ 50 cas × 10 fonctions) est l'estimation de départ : la table figée, élargie par les rulings n° 1 à 12 du préflight, compte 158 cas × 14 fonctions.
 
 ## Global Constraints
 

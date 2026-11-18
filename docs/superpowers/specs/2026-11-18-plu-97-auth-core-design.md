@@ -1,7 +1,8 @@
 # Sortir le cœur d'authentification de `app.py` (PLU-97) — conception
 
-Date : 2026-11-18. Ticket : PLU-97. Décision du propriétaire : à prendre (questions Q1 à Q4
-en fin de document).
+Date : 2026-11-18. Ticket : PLU-97. Décision du propriétaire : D-71, prise le 2026-11-18
+(questions Q1 à Q4 en fin de document) : Q1 = sonde (une ligne de `tests/route_snapshot.py`),
+Q2 = A, Q3 = table de décisions écrite et figée d'abord, Q4 = hors lot (PLU-98).
 Base : `main` à `919f01f`, branche `refactor/plu-97-auth-core`. Modèles suivis : PLU-36
 (`docs/superpowers/specs/2026-11-18-plu-36-admin-routes-design.md`, D-67) et PLU-95
 (`docs/superpowers/specs/2026-11-18-plu-95-chat-path-design.md`, D-69), y compris ce que
@@ -111,10 +112,11 @@ exactement là où il atterrit aujourd'hui, au prix de quelques lignes de plus.
    `PATCH_POINTS` (`tests/test_admin_routes_split.py`), 253 sites, 85 fichiers (méthode :
    `setattr`/`delattr`/`patch.object` sur un alias du module, chaînes `"plugboard.app.X"`,
    affectations d'attribut ; PLU-95 comptait 319 sites avec une autre méthode, même
-   ensemble de noms). **Neuf sont lus par le code à déplacer : 66 sites, 33 fichiers**
-   (tableau plus bas ; chiffres corrigés en tâche 7, la première version disait 34 sites,
-   22 fichiers). Quatre partent avec le code (`_client_address`, `_is_admin_key`,
-   `_is_admin_session`, `_admin_request_auth`) ; cinq restent dans `app.py`.
+   ensemble de noms). **Neuf sont lus par le code à déplacer : 67 sites, 33 fichiers**
+   (tableau plus bas ; chiffres corrigés en tâche 7 puis en revue finale, la première
+   version disait 34 sites, 22 fichiers). Quatre partent avec le code (`_client_address`,
+   `_is_admin_key`, `_is_admin_session`, `_admin_request_auth`) ; cinq restent dans
+   `app.py`.
 4. **Liaison tardive aujourd'hui** : dans `app.py`, chaque appel d'une fonction
    d'authentification à une autre est une lecture des globales de `plugboard.app` au moment
    de l'appel. Un patch de `plugboard.app._is_admin_session` atteint donc
@@ -254,9 +256,18 @@ R1 à R9 (PLU-36) et R10 à R12 (PLU-95) s'appliquent, avec ces précisions :
     (`admin_people.check_code`…) l'atteint, comme avant.
 
   Aucun test ne patche aujourd'hui ces noms sur `plugboard.app` (vérifié en tâche 7). Les
-  ensembles mutables (`_LOOPBACK_HOSTS`, `_FLAG_ON`, `_FLAG_OFF`, `_PROXY_HEADERS`…)
-  deviennent communs à deux imports d'`app.py` : ils ne doivent jamais être modifiés à
-  l'exécution (l'invariant refuse toute méthode qui les change en place). De même, les
+  constantes deviennent communes à deux imports d'`app.py` ; cinq sont des ensembles
+  mutables (`_LOOPBACK_HOSTS`, `_FLAG_ON`, `_FLAG_OFF`, `_LOCAL_NAVIGATION_SITES`,
+  `_SUSPICIOUS_REFUSALS` ; `_PROXY_HEADERS` est un tuple, `_STATE_CHANGING_METHODS` un
+  `frozenset`). Elles ne doivent jamais être modifiées à l'exécution. L'invariant
+  (`tests/test_auth_core_split.py`) refuse, sur le nom même d'une constante déplacée ou de
+  `KEY_PREFIXES`, l'appel d'une méthode de mutation (`add`, `update`, `discard`…), une
+  affectation ou une suppression par indice (`X[…] = …`) et une affectation augmentée
+  (`X |= …`). Des formes indirectes restent hors de portée de l'AST : un alias local
+  (`hosts = _LOOPBACK_HOSTS; hosts.add(…)`), un appel dunder (`_LOOPBACK_HOSTS.__ior__(…)`),
+  `getattr`, `x.__dict__[…]` ou `<module>.sys.modules[…]`. Aucune n'est écrite dans le
+  paquet ; elles sont suivies au board (PLU-99, « Garde AST du cœur d'authentification :
+  6 contournements improbables encore acceptés »). De même, les
   fonctions de niveau module de `scopes` (`_person_principal`, `_person_scope`,
   `_set_principal`) — et les autres fonctions pures de niveau module du paquet — sont
   partagées entre deux imports de l'app : elles ne gardent aucun état et ne lisent rien
@@ -274,11 +285,11 @@ R1 à R9 (PLU-36) et R10 à R12 (PLU-95) s'appliquent, avec ces précisions :
   `plugboard.app` garde ainsi exactement les mêmes noms qu'avant. Aucun ré-export
   provisoire.
 
-### Points de patch lus par le code déplacé (9 noms, 66 sites, 33 fichiers)
+### Points de patch lus par le code déplacé (9 noms, 67 sites, 33 fichiers)
 
 | Nom | Sites / fichiers | Lu par | Traitement |
 |---|---|---|---|
-| `_ADMIN_KEY` | 49 / 27 | `sessions` (`_effective_admin_key`) | Reste ; `core.` |
+| `_ADMIN_KEY` | 50 / 27 | `sessions` (`_effective_admin_key`) | Reste ; `core.` |
 | `_audit` (import) | 4 / 4 | `admin` (`_admin_request_auth`, `_prove_person_code`, `_require_mfa_step_up`) | Import gardé ; `core.` |
 | `get_key_record` (import) | 3 / 3 | `scopes` (`_key_scope`) | Import gardé (encore lu par `_resolve_client`) ; `core.` |
 | `_REFUSAL_AUDIT_WINDOW_S` | 2 / 1 | `auto_login` (`_should_audit_refusal`) | Reste ; `core.` |
@@ -303,7 +314,10 @@ autres sont `test_admin_people_api`, `test_audit_e2e`, `test_readiness_visibilit
 Tous font partie de chaque passe ciblée. Méthode du décompte (tâche 7, sur les tests de
 `919f01f`) : `setattr`/`delattr`/`patch.object` sur un alias de `plugboard.app` (import,
 `import_module`, `sys.modules`, ou module réimporté par une fixture), chaînes
-`"plugboard.app.X"` et affectations d'attribut.
+`"plugboard.app.X"` et affectations d'attribut. Recompté en revue finale : `_ADMIN_KEY`
+compte 36 chaînes `"plugboard.app._ADMIN_KEY"` et 14 `setattr` sur un alias de
+`plugboard.app`, soit 50 sites ; les 7 `setattr` sur `mcp_server` et les 5 sur
+`decision_api` (`get_key_record`) visent d'autres modules et ne sont pas comptés.
 
 ### Câblage et ordre
 
@@ -335,7 +349,7 @@ Tous font partie de chaque passe ciblée. Méthode du décompte (tâche 7, sur l
   `plugboard` chargés par un import à froid, hors `admin_routes*`, `chat_path*`,
   `auth_core*`.
 - **Décisions** (`tests/auth_decisions.py`, `tests/fixtures/auth_decisions.json`, comparé
-  par le même fichier de garde) : une matrice d'≈ 50 requêtes synthétiques (sans clé, clé
+  par le même fichier de garde) : une matrice de requêtes synthétiques (sans clé, clé
   admin avec ou sans TOTP, mauvais code jusqu'au verrouillage, clé client valide, révoquée
   ou inconnue, clé personnelle avec ou sans code, révoquée, session valide, falsifiée,
   expirée, d'avant la MFA, ouverte par une personne puis révoquée, POST inter-sites,
@@ -344,7 +358,13 @@ Tous font partie de chaque passe ciblée. Méthode du décompte (tâche 7, sur l
   `_person_bearer_scope`, `_rate_limit_scope`, `_refuse_cross_site_session`,
   `_auto_login_refusal`, `_require_mfa_step_up` : résultat (identifiant, code HTTP,
   `detail`, principal), actions d'audit écrites. Valeurs normalisées : aucun secret, aucun
-  identifiant aléatoire dans le gabarit.
+  identifiant aléatoire dans le gabarit. Cette matrice est l'estimation de la conception
+  (≈ 50 cas × 10 fonctions) ; la table figée en tâche 2, élargie par les rulings n° 1 à 12
+  du préflight, compte **158 cas × 14 fonctions** : les 10 ci-dessus, plus
+  `_require_mfa_step_up[body]`, l'enchaînement `_require_admin+_require_mfa_step_up` sur
+  la même requête, `_local_login_proof` et `_should_use_secure_cookie`. Chaque résultat
+  joint aussi les arguments d'audit normalisés, les compteurs (`_auth_buckets`,
+  `_lockouts`) et les lignes du logger `plugboard.app`.
 - **Invariants** (`tests/test_auth_core_split.py`) : ceux de `test_chat_path_split.py`
   appliqués au paquet (aucun point de patch lié au niveau module, aucun import de
   `plugboard.app` ni import relatif, `register(app, core)`, logger de `plugboard.app`,
