@@ -129,6 +129,7 @@ async def test_second_key_waits_fairly_instead_of_immediate_rejection(
 
 @pytest.mark.parametrize("operation", ["list_decision_models", "decide"])
 def test_sync_sdk_refuses_redirect_and_keeps_bearer_on_origin(monkeypatch, operation):
+    monkeypatch.syspath_prepend(str(ROOT / "sdk/python"))
     import plugboard_sdk.client as sdk
 
     seen = []
