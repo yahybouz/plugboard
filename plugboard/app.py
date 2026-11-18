@@ -7315,9 +7315,9 @@ button:hover{background:#1d4ed8}
 <div class="box">
 <div class="logo">E</div>
 <h2>Plugboard</h2>
-<p class="sub">Enter your admin key to continue</p>
+<p class="sub">Enter your admin key or your personal key</p>
 <form id="f">
-<input type="password" id="k" placeholder="Admin Key" autofocus>
+<input type="password" id="k" placeholder="Admin or personal key" autofocus>
 <input type="text" id="m" placeholder="MFA code (6 digits)" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" style="display:none">
 <div class="err" id="e"></div>
 <button type="submit" id="b">Sign in</button>

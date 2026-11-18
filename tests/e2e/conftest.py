@@ -33,10 +33,11 @@ import pytest_asyncio
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _RUN_PY = _PROJECT_ROOT / "run.py"
 
-# The 9 dashboard tabs (data-tab / #page-<tab>) in nav order.
+# The dashboard tabs the e2e suite walks (data-tab / #page-<tab>), in nav order.
 DASHBOARD_TABS: List[str] = [
     "overview",
     "keys",
+    "people",
     "usage",
     "providers",
     "pricing",

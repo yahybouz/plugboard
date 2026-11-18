@@ -25,6 +25,7 @@
     <symbol id="i-activity" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M3 12h4l2.5-6 5 12 2.5-6h4"/></symbol>
     <symbol id="i-clock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></g></symbol>
     <symbol id="i-history" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12a8 8 0 1 0 2.3-5.6"/><path d="M4 4v4h4"/><path d="M12 8v4l2.5 1.5"/></g></symbol>
+    <symbol id="i-people" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="9" cy="8.5" r="3.5"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9.5" r="2.5"/><path d="M16.5 14.2c2.6.2 4.5 2.6 4.5 5.8"/></g></symbol>
     <symbol id="i-theme" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="8.5"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor"/></g></symbol>
   </defs>
 </svg>
@@ -68,6 +69,9 @@
       <div class="nav-section">Management</div>
       <a href="#keys" class="nav-link" data-tab="keys">
         <span class="nav-icon" aria-hidden="true"><svg><use href="#i-key"/></svg></span> API keys
+      </a>
+      <a href="#people" class="nav-link" data-tab="people">
+        <span class="nav-icon" aria-hidden="true"><svg><use href="#i-people"/></svg></span> People
       </a>
       <a href="#usage" class="nav-link" data-tab="usage">
         <span class="nav-icon" aria-hidden="true"><svg><use href="#i-usage"/></svg></span> Usage &amp; billing
@@ -193,6 +197,51 @@
           </div>
         </div>
         <div id="keys-table-container"></div>
+      </div>
+    </section>
+
+    <!-- People: personal dashboard keys (PB-AUTH-01) -->
+    <section id="page-people" class="page">
+      <div class="topbar">
+        <h2>People</h2>
+        <div class="topbar-actions">
+          <button class="btn btn-primary btn-sm" id="btn-create-person" type="button">+ New person</button>
+        </div>
+      </div>
+      <div class="content">
+        <p class="muted small mb-3">Each person signs in to this dashboard with their own key and a code from their own authenticator app. Revoking a key ends that person's sessions at once.</p>
+        <div id="new-person-alert" class="alert alert-success hidden" role="status">
+          <div>
+            <strong>Key created.</strong> Copy the key and the secret now — they will not be shown again. Hand them to the person privately: they add the secret (or the URI) to their authenticator app, then sign in with the key and a code.
+            <div class="key-display">
+              <span class="small">Key</span>
+              <code id="new-person-key"></code>
+              <button class="btn btn-sm" type="button" data-copy="new-person-key" aria-label="Copy the key">Copy</button>
+            </div>
+            <div class="key-display">
+              <span class="small">Secret</span>
+              <code id="new-person-secret"></code>
+              <button class="btn btn-sm" type="button" data-copy="new-person-secret" aria-label="Copy the secret">Copy</button>
+            </div>
+            <div class="key-display">
+              <span class="small">URI</span>
+              <code id="new-person-uri"></code>
+              <button class="btn btn-sm" type="button" data-copy="new-person-uri" aria-label="Copy the URI">Copy</button>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-primary btn-sm" id="btn-person-copied" type="button">I have stored them</button>
+            </div>
+          </div>
+        </div>
+        <div id="create-person-form" class="card form-card hidden">
+          <div class="card-header"><span class="card-title">Create a personal key</span></div>
+          <div class="form-group"><label for="person-name">Name</label><input type="text" id="person-name" placeholder="e.g. Operations lead" maxlength="64" autocomplete="off" required></div>
+          <div class="form-actions">
+            <button class="btn btn-primary" id="btn-submit-person" type="button">Create key</button>
+            <button class="btn btn-ghost" id="btn-cancel-person" type="button">Cancel</button>
+          </div>
+        </div>
+        <div id="people-table-container"></div>
       </div>
     </section>
 
@@ -536,9 +585,10 @@
 </div>
 
 <div class="toast-container" id="toast-container"></div>
-<script src="/dashboard/app.js?v=29"></script>
+<script src="/dashboard/app.js?v=30"></script>
 <script src="/dashboard/auto_update.js?v=7"></script>
 <script src="/dashboard/catalog_history.js?v=2"></script>
+<script src="/dashboard/people.js?v=1"></script>
 <script src="/dashboard/live_requests.js?v=4"></script>
 <script type="module" src="/dashboard/live3d.js?v=5"></script>
 </body>

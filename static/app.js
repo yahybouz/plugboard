@@ -148,7 +148,7 @@ if (mobileBtn) {
 
 // ── Tab / Sidebar routing ───────────────────────────────────────────────────
 
-const TAB_LOADERS = { overview: loadOverview, keys: loadKeys, usage: loadUsage, providers: loadProviders, pricing: loadPricing, monitoring: loadMonitoring, "catalog-history": loadCatalogHistory, jobs: loadJobs, ollama: loadOllama, playground: loadPlayground };
+const TAB_LOADERS = { overview: loadOverview, keys: loadKeys, people: loadPeople, usage: loadUsage, providers: loadProviders, pricing: loadPricing, monitoring: loadMonitoring, "catalog-history": loadCatalogHistory, jobs: loadJobs, ollama: loadOllama, playground: loadPlayground };
 const navLinks = document.querySelectorAll(".nav-link");
 const pages = document.querySelectorAll(".page");
 
@@ -1286,6 +1286,11 @@ function loadPricing() {
 // The Catalog history page lives in catalog_history.js (PB-PROV-02).
 function loadCatalogHistory() {
   if (typeof window.loadCatalogHistoryPage === "function") return window.loadCatalogHistoryPage();
+}
+
+// The People page (personal dashboard keys) lives in people.js (PB-AUTH-01).
+function loadPeople() {
+  if (typeof window.loadPeoplePage === "function") return window.loadPeoplePage();
 }
 
 // ── Monitoring ──────────────────────────────────────────────────────────────
