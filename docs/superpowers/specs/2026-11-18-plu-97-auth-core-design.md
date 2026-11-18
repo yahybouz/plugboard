@@ -111,8 +111,9 @@ exactement là où il atterrit aujourd'hui, au prix de quelques lignes de plus.
    `PATCH_POINTS` (`tests/test_admin_routes_split.py`), 253 sites, 85 fichiers (méthode :
    `setattr`/`delattr`/`patch.object` sur un alias du module, chaînes `"plugboard.app.X"`,
    affectations d'attribut ; PLU-95 comptait 319 sites avec une autre méthode, même
-   ensemble de noms). **Neuf sont lus par le code à déplacer : 34 sites, 22 fichiers**
-   (tableau plus bas). Quatre partent avec le code (`_client_address`, `_is_admin_key`,
+   ensemble de noms). **Neuf sont lus par le code à déplacer : 66 sites, 33 fichiers**
+   (tableau plus bas ; chiffres corrigés en tâche 7, la première version disait 34 sites,
+   22 fichiers). Quatre partent avec le code (`_client_address`, `_is_admin_key`,
    `_is_admin_session`, `_admin_request_auth`) ; cinq restent dans `app.py`.
 4. **Liaison tardive aujourd'hui** : dans `app.py`, chaque appel d'une fonction
    d'authentification à une autre est une lecture des globales de `plugboard.app` au moment
@@ -120,7 +121,7 @@ exactement là où il atterrit aujourd'hui, au prix de quelques lignes de plus.
    `_resolve_client`, `_refuse_cross_site_session`, `_key_scope`… Exemples réels :
    `_client_address` patché (`test_admin_people_mfa_routes.py`) doit atteindre
    `_prove_person_code` ; `_admin_request_auth` patché (`test_audit_principal.py`) doit
-   atteindre `_require_admin` ; `_ADMIN_KEY` patché (14 fichiers) doit atteindre
+   atteindre `_require_admin` ; `_ADMIN_KEY` patché (27 fichiers) doit atteindre
    `_effective_admin_key` par toute la chaîne.
 5. **Surface lue** : les tests lisent sur `plugboard.app` sept noms qui partent
    (`_auto_login_mode`, `_bind_host`, `_create_admin_session_token`, `_host_header_name`,
@@ -146,7 +147,7 @@ exactement là où il atterrit aujourd'hui, au prix de quelques lignes de plus.
    (`tests/test_audit_e2e.py`, E-25) : un seul exemplaire, comme aujourd'hui.
 7. **Aucune instruction `global`** dans le code à déplacer ; `_auto_login_mode` modifie
    `_warned_auto_login_values` en place. Lectures d'environnement à l'appel seulement
-   (`_bind_host`, `_auto_login_mode`). Imports locaux : `admin_mfa` (×4),
+   (`_bind_host`, `_auto_login_mode`). Imports locaux : `admin_mfa` (×5),
    `plugboard.ratelimit` (×3), `local_login` (×2), `urllib.parse` (×1).
 8. **Effets d'import** : deux lignes de journal, `auth.mode=…` (l. 295) puis
    `auth.auto_login mode=… local_install=…` (l. 2412), qui appelle `_auto_login_mode()` et
@@ -212,7 +213,7 @@ Aucun module ne déclare de route : ils suivent quand même `register(app, core)
 | `_should_audit_refusal`, `_auto_login_mode`, `_auto_login_refusal`, `_issue_local_login_token` | `auto_login` | `register()` | Lisent l'état ou les constantes restés dans `app.py` |
 | `_API_KEY`, `_ADMIN_KEY`, `_DEV_MODE`, `_ADMIN_COOKIE_NAME`, `_ADMIN_SESSION_MAX_AGE`, `_COOKIE_SECURE_MODE`, `AUTH_MODE` | `app.py` | — | Configuration lue à l'import, points de patch (R2) |
 | `_REFUSAL_AUDIT_WINDOW_S`, `_REFUSAL_AUDIT_MAX_KEYS`, `_refusal_audit_seen`, `_warned_auto_login_values` | `app.py` | — | Points de patch et état mutable (R2) |
-| `log.info("auth.auto_login …")` | `app.py` | — | Effet d'import, après le câblage d'`auto_login` |
+| `log.info("auth.auto_login …")` | `app.py` | — | Effet d'import, émis par `app.py` après le câblage d'`auto_login` |
 | `_get_request_key_record`, `_apply_key_record`, `_resolve_client`, `_require_admin`, `_check_dashboard_auth`, `_refuse_anonymous_chat` | `app.py` | — | Dépendances et leur voisinage (Q2) |
 
 ### Règles de déplacement
@@ -234,6 +235,32 @@ R1 à R9 (PLU-36) et R10 à R12 (PLU-95) s'appliquent, avec ces précisions :
   lecture des globales de `plugboard.app` ; la garder telle quelle préserve tout patch,
   présent ou futur, et lie chaque import d'`app.py` à lui-même (constat 4).
   Vérifié par un test d'invariants (liste `LATE_BOUND`, plan, tâche 1).
+- **Exception R13 assumée** (préflight n° 14, écrite en tâche 7) : sont lus directement,
+  sans `core.`, et un patch de leur nom sur `plugboard.app` n'atteint donc plus le code
+  déplacé :
+  - les constantes du paquet (`_ADMIN_SCOPE`, `_ADMIN_KEY_PRINCIPAL`,
+    `_ADMIN_TOTP_HEADER`, `_STATE_CHANGING_METHODS`, `_CROSS_SITE_REFUSED`,
+    `_LOOPBACK_HOSTS`, `_FLAG_ON`, `_FLAG_OFF`, `_PROXY_HEADERS`,
+    `_LOCAL_NAVIGATION_SITES`, `_SUSPICIOUS_REFUSALS`) et `KEY_PREFIXES` (importé de
+    `plugboard.apikeys`). Avant le déplacement, un patch de
+    `plugboard.app._ADMIN_SCOPE` atteignait `_key_scope` et `_admin_request_auth` ;
+    `admin_routes/auth.py`, lui, les lit toujours par `core.` ;
+  - les modules `plugboard.audit` (`_audit_mod`, dans `scopes`), `plugboard.admin_people`
+    (dans `scopes`, `sessions` et `admin`) et `plugboard.admin_sessions` (dans
+    `sessions`), importés par chaque module du paquet (P4) : un patch de
+    `plugboard.app._audit_mod`, `plugboard.app.admin_people` ou
+    `plugboard.app.admin_sessions` n'atteindrait plus ce code (relevé par les relectures
+    des tâches 3 à 5). Un patch d'un attribut **de ces modules**
+    (`admin_people.check_code`…) l'atteint, comme avant.
+
+  Aucun test ne patche aujourd'hui ces noms sur `plugboard.app` (vérifié en tâche 7). Les
+  ensembles mutables (`_LOOPBACK_HOSTS`, `_FLAG_ON`, `_FLAG_OFF`, `_PROXY_HEADERS`…)
+  deviennent communs à deux imports d'`app.py` : ils ne doivent jamais être modifiés à
+  l'exécution (l'invariant refuse toute méthode qui les change en place). De même, les
+  fonctions de niveau module de `scopes` (`_person_principal`, `_person_scope`,
+  `_set_principal`) — et les autres fonctions pures de niveau module du paquet — sont
+  partagées entre deux imports de l'app : elles ne gardent aucun état et ne lisent rien
+  de `plugboard.app`, ce qui rend ce partage sans effet.
 - **R11-bis — Imports de tête** : aucun import de tête d'`app.py` qui charge un module
   `plugboard` n'est retiré, même devenu inutile (`admin_people`, `admin_sessions`) ; il
   reste avec `# noqa: F401  (import order kept, PLU-97)`. Les imports de la bibliothèque
@@ -247,11 +274,11 @@ R1 à R9 (PLU-36) et R10 à R12 (PLU-95) s'appliquent, avec ces précisions :
   `plugboard.app` garde ainsi exactement les mêmes noms qu'avant. Aucun ré-export
   provisoire.
 
-### Points de patch lus par le code déplacé (9 noms, 34 sites, 22 fichiers)
+### Points de patch lus par le code déplacé (9 noms, 66 sites, 33 fichiers)
 
 | Nom | Sites / fichiers | Lu par | Traitement |
 |---|---|---|---|
-| `_ADMIN_KEY` | 17 / 15 | `sessions` (`_effective_admin_key`) | Reste ; `core.` |
+| `_ADMIN_KEY` | 49 / 27 | `sessions` (`_effective_admin_key`) | Reste ; `core.` |
 | `_audit` (import) | 4 / 4 | `admin` (`_admin_request_auth`, `_prove_person_code`, `_require_mfa_step_up`) | Import gardé ; `core.` |
 | `get_key_record` (import) | 3 / 3 | `scopes` (`_key_scope`) | Import gardé (encore lu par `_resolve_client`) ; `core.` |
 | `_REFUSAL_AUDIT_WINDOW_S` | 2 / 1 | `auto_login` (`_should_audit_refusal`) | Reste ; `core.` |
@@ -268,7 +295,15 @@ Fichiers : `test_admin_csrf_same_site`, `test_admin_people_auth`, `test_admin_pe
 `test_login_mobile_sol`, `test_model_not_found`, `test_ollama_off_by_config`,
 `test_ollama_switch`, `test_ollama_switch_e2e`, `test_openclaw_spec_parent`,
 `test_plu72_existing_claude_provider`, `test_ratelimit_identity`, `test_resolve_client`,
-`test_spec_v7_residuals_parent`. Ils font partie de chaque passe ciblée.
+`test_spec_v7_residuals_parent` (les 22 de la première version), plus `test_api`,
+`test_e2e_full_coverage`, `test_e2e_functional`, `test_live_requests` et
+`test_stream_interrupted_billing` (préflight, n° 13) : les 27 de `PATCHERS`. Les six
+autres sont `test_admin_people_api`, `test_audit_e2e`, `test_readiness_visibility`,
+`test_security_hardening`, `test_security_tnr` (dans `AUTH_TESTS`) et `conftest.py`.
+Tous font partie de chaque passe ciblée. Méthode du décompte (tâche 7, sur les tests de
+`919f01f`) : `setattr`/`delattr`/`patch.object` sur un alias de `plugboard.app` (import,
+`import_module`, `sys.modules`, ou module réimporté par une fixture), chaînes
+`"plugboard.app.X"` et affectations d'attribut.
 
 ### Câblage et ordre
 
@@ -281,8 +316,10 @@ Fichiers : `test_admin_csrf_same_site`, `test_admin_people_auth`, `test_admin_pe
 - Place de chaque `register()` : `scopes` à la l. 1040 (après `_RequestIdMiddleware`, avant
   `_RateLimitMiddleware`, qui lit `_rate_limit_scope` à l'appel) ; `sessions` sous le titre
   « -- Auth » (l. 1242) ; `admin` entre `_resolve_client` et `_require_admin` ;
-  `auto_login` à la place de son bloc, après `root()`, suivi de l'état resté et de la ligne
-  de journal d'import. `_THIS_MODULE` (l. 659) existe avant le premier.
+  `auto_login` à la place de son bloc, après `root()` : l'état resté **au-dessus** du
+  câblage (il existe avant toute fermeture ; ordre du plan, préflight n° 15), puis le
+  câblage, puis la ligne de journal d'import. Rien n'est appelé entre l'état et le
+  câblage : aucun effet observable. `_THIS_MODULE` (l. 659) existe avant le premier.
 - Aucune route ajoutée, retirée ni déplacée ; aucun gestionnaire d'exception ; aucun
   middleware touché. `_require_admin` et `_resolve_client` restent définis avant tout
   `Depends` qui les lit (inchangé).
@@ -337,8 +374,8 @@ câblage et de ré-exports + ≈ 3 d'imports ; fourchette 1 880–1 980).
 
 | Risque | Parade |
 |---|---|
-| Une décision d'authentification change (accès accordé ou refusé autrement) | Table de décisions figée (tâche 2) ; 64 fichiers de tests d'authentification à chaque passe ; relecture Opus de chaque tâche |
-| Un appel interne devenu direct : un patch n'atteint plus un appelant | R13 ; test `LATE_BOUND` ; les 22 fichiers qui patchent ces noms à chaque passe |
+| Une décision d'authentification change (accès accordé ou refusé autrement) | Table de décisions figée (tâche 2) ; 68 fichiers de tests d'authentification à chaque passe (4 gardes, 22 + 42 du plan ; 73 avec les 5 ajoutés à `PATCHERS`) ; relecture Opus de chaque tâche |
+| Un appel interne devenu direct : un patch n'atteint plus un appelant | R13 ; test `LATE_BOUND` ; les 33 fichiers qui patchent ces noms à chaque passe |
 | Une fermeture liée au mauvais module après réimportation | `register(app, core)` ; quatre tests de caractérisation ; `test_audit_e2e.py` dans chaque passe |
 | État dupliqué ou partagé (refus audités, valeurs signalées) | R2 : l'état reste dans `app.py`, lu par `core.` ; test `_should_audit_refusal` après réimportation |
 | Une dépendance change de nom ou d'objet | Elles ne bougent pas ; garde PLU-36 ; test d'identité de la nouvelle garde |
@@ -380,7 +417,7 @@ sécurité). À la fin, une seule validation complète (quatre blocs Python para
   Sinon : coquilles de délégation (B, ≈ 1 810 lignes, gardes inchangées, une pile d'appel
   de plus) ; ou les déplacer et régénérer les deux gabarits (C, déconseillé).
 - **Q3 — Table de décisions d'authentification (tâche 2).** Recommandé : oui, écrite et
-  figée avant tout déplacement. Sinon : s'en remettre à la suite existante (≈ 64 fichiers
+  figée avant tout déplacement. Sinon : s'en remettre à la suite existante (≈ 68 fichiers
   d'authentification), qui ne compare pas des sorties figées.
 - **Q4 — Contrôles de démarrage** (≈ 200 lignes). Recommandé : hors PLU-97, ticket à part
   (fonctions pures dans un module, appels laissés dans `app.py` à leur place). Sinon :

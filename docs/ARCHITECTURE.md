@@ -12,9 +12,12 @@ Plugboard is a single FastAPI process. It sits between client applications and L
 │  middleware: security headers · body size limit · request ID ·      │
 │              per-IP rate limit                                      │
 │                                                                     │
-│  app.py        auth (client keys, admin key/session, auto-login)    │
-│                chat admission (concurrency cap, session turn) ·     │
-│                health · dashboard pages                             │
+│  app.py        auth dependencies (client key, admin key/session) ·  │
+│                middlewares · chat admission (concurrency cap,       │
+│                session turn) · health · dashboard pages             │
+│                                                                     │
+│  auth_core/    admin key and sessions · personal keys and MFA ·     │
+│                limit scopes · local auto-login                      │
 │                                                                     │
 │  chat_path/    budget / allowed-models / RPM checks · cache lookup  │
 │                billing · usage recording · /v1/models · /v2 aliases │
@@ -62,7 +65,8 @@ Streaming requests to HTTP providers are proxied chunk by chunk and billed at th
 | Module | Responsibility |
 |---|---|
 | `__init__.py` | Package version; loads `.env` (unless `PLUGBOARD_SKIP_DOTENV=1`) and applies `envcompat` before any module reads its settings |
-| `app.py` | Authentication, middlewares, chat admission (concurrency cap, session turn), health, contract and dashboard pages; registers the admin routes and the chat path |
+| `app.py` | Authentication dependencies (`_resolve_client`, `_require_admin`), middlewares, chat admission (concurrency cap, session turn), health, contract and dashboard pages; registers the admin routes, the chat path and the auth core |
+| `auth_core/` | Authentication core behind those dependencies, one module per subject (audit principal and limit scopes, admin key and sessions with the cross-site refusal, admin and personal-key request authentication with MFA step-up, local auto-login), each declared by `register(app, core)` |
 | `admin_routes/` | Admin endpoints, one module per area (model probes, monitoring, providers, OAuth, direct providers, Ollama, keys, jobs, pricing, usage, sign-in and MFA), each declared on the app by `register(app, core)` |
 | `chat_path/` | Chat path, one module per subject (client hang-up and SSE, answers and errors, spending and model access checks, billing, chat completions, model catalogue and preflight, `/v2` aliases, client account), each declared on the app by `register(app, core)` |
 | `router.py` | Model resolution, forwarding, retries, fallback, model listing and discovery |
@@ -107,7 +111,7 @@ Streaming requests to HTTP providers are proxied chunk by chunk and billed at th
 
 ### Route table guard
 
-`tests/test_admin_routes_guard.py` compares the app with `tests/fixtures/admin_routes_snapshot.json`: the route table (paths, methods, dependencies, parameters, include context of the routers), the admin OpenAPI document and the effects of a cold import of `plugboard.app` (logs, loaded modules, data files). Any change to a route fails it, on purpose, and so does a new `plugboard` module loaded when the app is imported (the modules of `plugboard/admin_routes/` and `plugboard/chat_path/` do not count among these import effects). When you add, remove or change a route (or such a module) deliberately, regenerate the fixture from the repository root, then review its diff and commit it with the change:
+`tests/test_admin_routes_guard.py` compares the app with `tests/fixtures/admin_routes_snapshot.json`: the route table (paths, methods, dependencies, parameters, include context of the routers), the admin OpenAPI document and the effects of a cold import of `plugboard.app` (logs, loaded modules, data files). Any change to a route fails it, on purpose, and so does a new `plugboard` module loaded when the app is imported (the modules of `plugboard/admin_routes/`, `plugboard/chat_path/` and `plugboard/auth_core/` do not count among these import effects). When you add, remove or change a route (or such a module) deliberately, regenerate the fixture from the repository root, then review its diff and commit it with the change:
 
 ```bash
 .venv/bin/python -m tests.route_snapshot
@@ -121,6 +125,14 @@ The diff must show only the change you meant. Never regenerate it to silence a f
 ```bash
 .venv/bin/python -m tests.chat_path_snapshot
 git diff tests/fixtures/chat_path_snapshot.json
+```
+
+`tests/test_auth_core_guard.py` compares the app with `tests/fixtures/auth_core_snapshot.json` and `tests/fixtures/auth_decisions.json`: the dependencies of each route, by name and by object, the surface of `plugboard.app` (no name may disappear), the order in which a cold import loads the `plugboard` modules, and a table of authentication decisions (admin key, sessions, personal keys, MFA, cross-site refusal, local auto-login, with their audit entries, counters and logs). The same rule applies: regenerate one only for a change you meant, then review its diff and commit it with the change:
+
+```bash
+.venv/bin/python -m tests.auth_core_snapshot
+.venv/bin/python -m tests.auth_decisions
+git diff tests/fixtures/auth_core_snapshot.json tests/fixtures/auth_decisions.json
 ```
 
 ## State

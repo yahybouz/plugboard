@@ -221,9 +221,9 @@ def test_auth_core_code_logs_under_the_app_logger():
 
 
 def test_auth_core_modules_are_designed_ones():
-    """Only modules of the design are found; all of them once the move is done."""
+    """Exactly the modules of the design: none missing, none extra."""
     found = {_short_name(module) for module in _auth_core_modules()}
-    assert found <= EXPECTED_MODULES
+    assert sorted(found) == sorted(EXPECTED_MODULES)
 
 
 def test_auth_core_reads_app_names_only_through_core():
@@ -503,15 +503,17 @@ def _import_findings(tree: ast.Module, short: str, functions: frozenset) -> tupl
                 root = alias.name.split(".")[0]
                 if root == "plugboard" or root in FORBIDDEN_MODULES:
                     found.append((node.lineno, f"import {alias.name}"))
+                # Only a plain ``import os``: an alias, or a submodule (os.path
+                # holds ``os`` again), would read the environment past the
+                # os.environ rule (task 1 re-review, minor b).
+                elif root == "os" and (alias.name != "os" or alias.asname):
+                    found.append((node.lineno, f"import {alias.name} aliases os"))
         elif isinstance(node, ast.ImportFrom) and node.module:
             root = node.module.split(".")[0]
             if root in FORBIDDEN_MODULES or any(a.name == "*" for a in node.names):
                 found.append((node.lineno, f"from {node.module} import"))
-            if node.module == "os" and any(
-                a.name in {"environ", "environb", "getenv", "getenvb"}
-                for a in node.names
-            ):
-                found.append((node.lineno, "from os import environ/getenv"))
+            if root == "os":
+                found.append((node.lineno, f"from {node.module} import aliases os"))
             if root != "plugboard":
                 continue
             for alias in node.names:
@@ -530,6 +532,35 @@ def _import_findings(tree: ast.Module, short: str, functions: frozenset) -> tupl
     return found, aliases
 
 
+def _is_immutable_literal(node: ast.AST) -> bool:
+    """A constant, a negative number, or a tuple of such: nothing a call can
+    fill in place."""
+    if isinstance(node, ast.Constant):
+        return True
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        return isinstance(node.operand, ast.Constant)
+    if isinstance(node, ast.Tuple):
+        return all(_is_immutable_literal(item) for item in node.elts)
+    return False
+
+
+def _default_findings(tree: ast.Module) -> list:
+    """A default value is evaluated once, when the function is defined: a
+    dict, list, set, call or name there would keep a value from one call to
+    the next, a memo the first call fills (task 1 re-review, minor a)."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        name = getattr(node, "name", "lambda")
+        kw_defaults = [d for d in node.args.kw_defaults if d is not None]
+        defaults = node.args.defaults + kw_defaults
+        for default in defaults:
+            if not _is_immutable_literal(default):
+                found.append((default.lineno, f"default of {name} is not a literal"))
+    return found
+
+
 def _early_binding_findings(
     tree: ast.Module, short: str, functions: frozenset, strings: frozenset
 ) -> list:
@@ -542,7 +573,7 @@ def _early_binding_findings(
     }
     found = _module_level_findings(tree, short)
     import_hits, aliases = _import_findings(tree, short, functions)
-    found += import_hits
+    found += import_hits + _default_findings(tree)
     frozen = {n for module in MOVED for n in _constants(module)} | {"KEY_PREFIXES"}
     for node in ast.walk(tree):
         if (
@@ -558,6 +589,10 @@ def _early_binding_findings(
                 found.append((node.lineno, "core used other than core.<name>"))
             elif not _runs_at_call_time(attr, parents):
                 found.append((node.lineno, f"core.{attr.attr} read before call time"))
+        elif isinstance(node, ast.Name) and node.id == "os":
+            attr = parents.get(node)
+            if not (isinstance(attr, ast.Attribute) and attr.value is node):
+                found.append((node.lineno, "os used other than os.<name>"))
         elif isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES:
             found.append((node.lineno, node.id))
         elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
@@ -814,6 +849,49 @@ _EARLY_BINDINGS = {
             "from plugboard.auth_core.scopes import _ADMIN_SCOPE\n",
             "from .scopes import _ADMIN_SCOPE\n",
         )
+    ],
+    # Task 1 re-review, minor a: a default evaluated once keeps a memo.
+    "mutable_default_memo": [
+        (
+            "    def _effective_admin_key() -> str:\n" + _ADMIN_KEY_READ,
+            "    def _effective_admin_key(_m={}) -> str:\n"
+            '        return _m.setdefault("k", core._ADMIN_KEY)\n',
+        )
+    ],
+    "default_built_by_a_call": [
+        (
+            "    def _effective_admin_key() -> str:\n" + _ADMIN_KEY_READ,
+            "    def _effective_admin_key(_m=dict()) -> str:\n"
+            '        return _m.setdefault("k", core._ADMIN_KEY)\n',
+        )
+    ],
+    # Task 1 re-review, minor b: os under another name escapes os.environ.
+    "os_imported_under_an_alias": [
+        ("import os\n", "import os as _o\n"),
+        (
+            '        bind = os.environ.get("PLUGBOARD_BIND_HOST", "")\n',
+            '        bind = _o.environ.get("ADMIN_" + "KEY", "")\n',
+        ),
+    ],
+    "os_bound_to_a_name": [
+        (
+            '        bind = os.environ.get("PLUGBOARD_BIND_HOST", "")\n',
+            '        env = os\n        bind = env.environ.get("ADMIN_" + "KEY", "")\n',
+        )
+    ],
+    "os_reached_through_os_path": [
+        ("import os\n", "import os\nimport os.path as _p\n"),
+        (
+            '        bind = os.environ.get("PLUGBOARD_BIND_HOST", "")\n',
+            '        bind = _p.os.environ.get("ADMIN_" + "KEY", "")\n',
+        ),
+    ],
+    "os_reached_through_from_import": [
+        ("import os\n", "import os\nfrom os import path as _p\n"),
+        (
+            '        bind = os.environ.get("PLUGBOARD_BIND_HOST", "")\n',
+            '        bind = _p.os.environ.get("ADMIN_" + "KEY", "")\n',
+        ),
     ],
 }
 

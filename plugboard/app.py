@@ -38,6 +38,12 @@ The chat path (`/v1/chat/completions`, `/v1/models`, `/v1/preflight`, `/v2/*`,
 declared by `plugboard/chat_path/` (registered in place by `register(app, core)`,
 PLU-95).
 
+The authentication core behind the `_resolve_client` and `_require_admin` dependencies
+(audit principal and limit scopes, admin key and sessions, cross-site refusal, admin and
+personal-key authentication, MFA step-up, local auto-login) lives in
+`plugboard/auth_core/` (registered in place by `register(app, core)`, PLU-97); both
+dependencies stay here.
+
 Authentication:
   ADMIN_KEY env var (required) -- required for admin endpoints.
   Client API keys stored in data/api_keys.json -- required for /v1/* endpoints.

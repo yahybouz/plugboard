@@ -70,6 +70,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Admin routes moved out of `app.py`** (PLU-36): one module per area under `plugboard/admin_routes/`; routes, answers and the admin OpenAPI document are unchanged.
 - **Chat path moved out of `app.py`** (PLU-95): one module per subject under `plugboard/chat_path/`; routes, answers, the client contract and both OpenAPI documents are unchanged.
+- **Authentication core moved out of `app.py`** (PLU-97): one module per subject under `plugboard/auth_core/`; the `_resolve_client` and `_require_admin` dependencies stay in `app.py`; every authentication decision, route, answer and both OpenAPI documents are unchanged.
 
 ### Security
 
