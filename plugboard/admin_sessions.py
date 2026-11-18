@@ -4,7 +4,9 @@ The dashboard cookie stays an HMAC-signed ``issued_at.nonce.signature`` token,
 but it is honoured only while its nonce is registered here. Logout revokes one
 session; any MFA change (enrolment, rotation, disable) revokes them all. Each
 record also keeps the MFA generation it was opened under, so an MFA change
-refuses older sessions even if this store cannot be rewritten.
+refuses older sessions even if this store cannot be rewritten. A session
+opened with a personal key (PB-AUTH-01) also keeps ``person_id`` and
+``person_generation``, so revoking that key drops its sessions.
 
 Records live in ``data/admin_sessions.json`` (mode 0600) so they survive a
 restart and are shared by every worker reading the same data directory. Only
@@ -62,11 +64,15 @@ def register(
     mfa: bool,
     max_age: int,
     mfa_generation: Optional[str] = None,
+    person_id: Optional[str] = None,
+    person_generation: Optional[str] = None,
 ) -> None:
     """Record a new session; ``mfa`` tells whether a TOTP code was checked.
 
     ``mfa_generation`` is the MFA state the session was opened under (see
     ``admin_mfa.generation``); the caller refuses the session once it changes.
+    ``person_id`` and ``person_generation`` are written only for a session
+    opened with a personal key: an ``ADMIN_KEY`` session keeps its shape.
     """
     now = int(time.time())
     with _LOCK:
@@ -75,11 +81,15 @@ def register(
             for key, rec in _load().items()
             if now - int(rec.get("issued_at", 0)) <= max_age
         }
-        sessions[_digest(nonce)] = {
+        record: Dict[str, Any] = {
             "issued_at": issued_at,
             "mfa": mfa,
             "mfa_generation": mfa_generation,
         }
+        if person_id is not None:
+            record["person_id"] = person_id
+            record["person_generation"] = person_generation
+        sessions[_digest(nonce)] = record
         newest = sorted(sessions.items(), key=lambda kv: kv[1]["issued_at"])
         _save(dict(newest[-_MAX_SESSIONS:]))
 
@@ -97,6 +107,24 @@ def revoke(nonce: str) -> bool:
             return False
         _save(sessions)
         return True
+
+
+def revoke_person(person_id: str) -> int:
+    """Revoke every session opened with that person's key; returns how many.
+
+    Nothing is written when there is none (an unreadable store holds none).
+    """
+    with _LOCK:
+        sessions = _load()
+        kept = {
+            key: rec
+            for key, rec in sessions.items()
+            if not (isinstance(rec, dict) and rec.get("person_id") == person_id)
+        }
+        dropped = len(sessions) - len(kept)
+        if dropped:
+            _save(kept)
+        return dropped
 
 
 def revoke_all() -> None:

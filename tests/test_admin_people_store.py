@@ -10,7 +10,8 @@ import time as _time
 
 import pytest
 
-from plugboard import admin_people
+from plugboard import admin_people, admin_sessions
+from plugboard.storage import StoreUnreadableError
 from tests import people_helpers as ph
 
 
@@ -314,3 +315,115 @@ def test_a_code_is_accepted_once_when_two_threads_check_it_together(env, monkeyp
     for thread in threads:
         thread.join(timeout=10)
     assert sorted(results) == ["confirmed", "refused"]
+
+
+def _session(nonce, **person):
+    admin_sessions.register(
+        nonce, int(_time.time()), mfa=bool(person), max_age=3600, **person
+    )
+
+
+def test_revoke_marks_the_record_changes_its_generation_and_is_idempotent(env):
+    made = ph.new_person()
+    pid = made["person"]["id"]
+    before = admin_people.get(pid)["generation"]
+    view, changed = admin_people.revoke(pid, revoked_by="admin-key")
+    assert changed and view["status"] == "revoked"
+    assert view["revoked_by"] == "admin-key" and view["revoked_at"]
+    assert admin_people.get(pid)["generation"] != before
+    assert admin_people.find_by_key(made["key"]) is None
+    assert admin_people.verify_code(pid, ph.code_now(env, made)) == "refused"
+    again, changed = admin_people.revoke(pid, revoked_by="person:ap_000000000000")
+    assert not changed and again["revoked_by"] == "admin-key"
+
+
+@pytest.mark.parametrize(
+    "pid", ["ap_000000000000", "../admin", "ap_XYZ", "", "ap_000000000000x"]
+)
+def test_revoking_an_unknown_or_malformed_id_returns_none(env, pid):
+    ph.new_person()
+    assert admin_people.revoke(pid, revoked_by="admin-key") is None
+
+
+def test_a_revoked_name_can_be_given_again(env):
+    first = ph.new_person()
+    admin_people.revoke(first["person"]["id"], revoked_by="admin-key")
+    assert ph.new_person()["person"]["status"] == "pending"
+
+
+def test_an_unreadable_store_refuses_a_revocation(env):
+    pid = ph.new_person()["person"]["id"]
+    env.store.write_text("{not json")
+    with pytest.raises(admin_people.PeopleStoreUnreadable):
+        admin_people.revoke(pid, revoked_by="admin-key")
+
+
+def test_sessions_record_the_person_and_revoke_person_drops_only_theirs(env):
+    _session("n-admin")
+    _session("n-one", person_id="ap_aaaaaaaaaaaa", person_generation="g1")
+    _session("n-two", person_id="ap_bbbbbbbbbbbb", person_generation="g2")
+    one = admin_sessions.lookup("n-one")
+    assert (one["person_id"], one["person_generation"]) == ("ap_aaaaaaaaaaaa", "g1")
+    assert "person_id" not in admin_sessions.lookup("n-admin")
+    assert admin_sessions.revoke_person("ap_aaaaaaaaaaaa") == 1
+    assert admin_sessions.lookup("n-one") is None
+    assert admin_sessions.lookup("n-two") and admin_sessions.lookup("n-admin")
+
+
+def test_revoke_cuts_the_person_sessions(env):
+    pid = ph.new_person()["person"]["id"]
+    _session("n-one", person_id=pid, person_generation="g")
+    admin_people.revoke(pid, revoked_by="admin-key")
+    assert admin_sessions.lookup("n-one") is None
+
+
+def test_revoke_person_on_an_unreadable_session_store_does_not_raise(env):
+    (env.dir / "admin_sessions.json").write_text("{bad")
+    assert admin_sessions.revoke_person("ap_aaaaaaaaaaaa") == 0
+
+
+def test_a_revocation_and_a_code_check_at_once_lose_neither(env, monkeypatch):
+    made = ph.new_person()
+    pid, code = made["person"]["id"], ph.code_now(env, made)
+    real_load = admin_people._load
+
+    def slow_load():
+        loaded = real_load()
+        _time.sleep(0.05)  # widen the read-modify-write window
+        return loaded
+
+    monkeypatch.setattr(admin_people, "_load", slow_load)
+    start, outcome = threading.Barrier(2), {}
+
+    def check():
+        start.wait()
+        outcome["code"] = admin_people.verify_code(pid, code)
+
+    def revoke():
+        start.wait()
+        admin_people.revoke(pid, revoked_by="admin-key")
+
+    threads = [threading.Thread(target=check), threading.Thread(target=revoke)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    record = admin_people.get(pid)
+    assert record["revoked_at"]
+    if outcome["code"] != "refused":
+        assert record["last_step"] is not None
+
+
+@pytest.mark.parametrize("error", [OSError("disk full"), StoreUnreadableError("x")])
+def test_a_session_store_that_cannot_be_rewritten_does_not_undo_a_revocation(
+    env, monkeypatch, caplog, error
+):
+    pid = ph.new_person()["person"]["id"]
+
+    def fail(person_id):
+        raise error
+
+    monkeypatch.setattr(admin_sessions, "revoke_person", fail)
+    view, changed = admin_people.revoke(pid, revoked_by="admin-key")
+    assert changed and view["status"] == "revoked"
+    assert type(error).__name__ in caplog.text

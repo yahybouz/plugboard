@@ -29,9 +29,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from plugboard import admin_mfa
+from plugboard import admin_mfa, admin_sessions
 from plugboard.config import SecretUnreadable, _decrypt_token, _encrypt_token
-from plugboard.storage import atomic_write_json, data_dir
+from plugboard.storage import StoreUnreadableError, atomic_write_json, data_dir
 
 log = logging.getLogger(__name__)
 
@@ -271,3 +271,40 @@ def verify_code(person_id: str, code: str) -> str:
             )
             return "refused"
     return outcome
+
+
+def revoke(person_id: str, *, revoked_by: str) -> Optional[tuple[dict, bool]]:
+    """Revoke a personal key and cut its sessions; idempotent.
+
+    ``None`` for an id outside the pattern or unknown, else ``(view,
+    changed)``: only the first call stamps ``revoked_at``/``revoked_by`` and
+    changes the ``generation``. Sessions are cut on every call; a session
+    store that cannot be rewritten is logged and ignored, since the revoked
+    status already refuses them. An unreadable people store raises
+    ``PeopleStoreUnreadable``.
+    """
+    if not isinstance(person_id, str) or not ID_PATTERN.fullmatch(person_id):
+        return None
+    with _LOCK:
+        people, readable = _load()
+        if not readable:
+            raise PeopleStoreUnreadable("admin_people.json is unreadable")
+        record = next((p for p in people if p.get("id") == person_id), None)
+        if record is None:
+            return None
+        changed = not record.get("revoked_at")
+        if changed:
+            record["revoked_at"] = _now()
+            record["revoked_by"] = revoked_by
+            record["generation"] = secrets.token_hex(16)
+            _save(people)
+        view = public_view(record)
+    try:
+        admin_sessions.revoke_person(person_id)
+    except (OSError, StoreUnreadableError) as exc:
+        log.error(
+            "Sessions of %s not cut: %s (refused by the revoked status)",
+            person_id,
+            type(exc).__name__,
+        )
+    return view, changed
