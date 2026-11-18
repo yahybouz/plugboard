@@ -188,6 +188,46 @@ async def test_usage_me_reads_both_rows_and_keeps_its_fields(client, usage_db):
     assert body["summary"]["total_cost_usd"] == pytest.approx(0.75)
 
 
+# What /usage/me answered for an entry under contract 3.0.1.
+_USAGE_ME_FIELDS = {
+    "id",
+    "ts",
+    "month",
+    "client_id",
+    "key_id",
+    "model",
+    "provider_id",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "pricing_month",
+    "cost_usd",
+}
+
+
+@pytest.mark.asyncio
+async def test_usage_me_never_exposes_a_column_added_later(client, usage_db):
+    """/usage/me lists the contract's fields by name: a column added to
+    usage_entries later stays private until it is named there."""
+    from plugboard import usage
+
+    usage.append_usage("admin", "m", "p", 1, 2, "2026_03", 0.5)
+    conn = usage._get_conn()
+    try:
+        conn.execute("ALTER TABLE usage_entries ADD COLUMN future_secret TEXT")
+        conn.execute("UPDATE usage_entries SET future_secret = 'do-not-show'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    resp = await client.get("/usage/me", headers=AUTH, params={"month": "2026_03"})
+
+    assert resp.status_code == 200
+    [entry] = resp.json()["entries"]
+    assert set(entry) == _USAGE_ME_FIELDS
+    assert "do-not-show" not in resp.text
+
+
 @pytest.mark.asyncio
 async def test_admin_exports_carry_the_correlation_columns(client, usage_db):
     _seed_old_and_new_rows()
