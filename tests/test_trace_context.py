@@ -107,6 +107,18 @@ def test_tracestate_is_ignored_without_a_valid_traceparent():
     assert tc.from_headers(["bogus"], ["v=1"]) is None
 
 
+@pytest.mark.parametrize(
+    "tracestates, kept",
+    [
+        (["", "v=1"], "v=1"),
+        (["v=1", " ", "w=2"], "v=1,w=2"),
+        (["", " \t"], None),
+    ],
+)
+def test_empty_tracestate_values_are_left_out(tracestates, kept):
+    assert tc.from_headers([_VALID], tracestates).tracestate == kept
+
+
 # ── Through the gateway ──────────────────────────────────────────────────────
 
 

@@ -74,9 +74,10 @@ def parse_traceparent(value: str) -> Optional[TraceContext]:
 
 
 def _bounded_tracestate(values: Iterable[str]) -> Optional[str]:
-    """The tracestate headers joined, or None when absent, longer than
-    MAX_TRACESTATE_LEN or not printable ASCII. Not parsed further."""
-    joined = ",".join(v.strip(" \t") for v in values)
+    """The non-empty tracestate headers joined, or None when there is none,
+    or when they are longer than MAX_TRACESTATE_LEN or not printable ASCII.
+    Not parsed further."""
+    joined = ",".join(v for v in (v.strip(" \t") for v in values) if v)
     if not joined or len(joined) > MAX_TRACESTATE_LEN:
         return None
     if _PRINTABLE.fullmatch(joined) is None:
