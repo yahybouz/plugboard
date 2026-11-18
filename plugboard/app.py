@@ -67,7 +67,7 @@ from typing import (
     TypeVar,
 )
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import (
     JSONResponse,
@@ -126,6 +126,7 @@ from plugboard.admin_routes import ollama as _admin_ollama
 from plugboard.admin_routes import keys as _admin_keys
 from plugboard.admin_routes import jobs as _admin_jobs
 from plugboard.admin_routes import pricing as _admin_pricing
+from plugboard.admin_routes import usage as _admin_usage
 from plugboard.suivi_api import build_router as build_suivi_router
 from plugboard.legacy_connectors import (
     REMOVED_CONNECTOR_ERROR,
@@ -4458,116 +4459,8 @@ _suggestion_action = _pricing._suggestion_action
 admin_catalog_history = _pricing.admin_catalog_history
 
 
-# -- Admin: Usage reporting --------------------------------------------------
-
-
-@app.get("/admin/usage/{month}")
-async def admin_usage_month(
-    month: str, page: int = 1, limit: int = 100, _: None = Depends(_require_admin)
-):
-    month = _month_param(month)
-    entries, total = _usage.get_usage_paginated(month, page, limit)
-    return {
-        "month": month,
-        "page": page,
-        "limit": limit,
-        "total": total,
-        "entries": entries,
-        "summary": _usage.summarize_usage_month(
-            month
-        ),  # summary is always on ALL entries
-    }
-
-
-@app.delete("/admin/usage/{month}", status_code=204)
-async def delete_usage_month(month: str, _: None = Depends(_require_admin)):
-    month = _month_param(month)
-    if not _usage.delete_usage(month):
-        raise HTTPException(404, f"No usage data for month '{month}'")
-
-
-@app.get("/admin/usage/{month}/export")
-async def export_usage(
-    month: str, format: str = "json", _: None = Depends(_require_admin)
-):
-    """Export usage data as CSV or JSON."""
-    month = _month_param(month)
-    entries = _usage.get_usage(month)
-    if format == "csv":
-        import csv
-        import io
-
-        output = io.StringIO()
-        if entries:
-            writer = csv.DictWriter(output, fieldnames=entries[0].keys())
-            writer.writeheader()
-            writer.writerows(entries)
-        return Response(
-            content=output.getvalue(),
-            media_type="text/csv",
-            headers={"Content-Disposition": f"attachment; filename=usage_{month}.csv"},
-        )
-    return {
-        "month": month,
-        "entries": entries,
-        "summary": _usage.summarize_usage(entries),
-    }
-
-
-@app.get("/admin/usage/{month}/key/{key_id}")
-async def admin_usage_by_key(
-    month: str, key_id: str, _: None = Depends(_require_admin)
-):
-    month = _month_param(month)
-    entries = _usage.get_usage_by_key(month, key_id)
-    return {
-        "month": month,
-        "key_id": key_id,
-        "entries": entries,
-        "summary": _usage.summarize_usage(entries),
-    }
-
-
-@app.post("/admin/usage/purge")
-async def purge_old_usage(
-    keep_months: int = Query(6, ge=1), _: None = Depends(_require_admin)
-):
-    """Delete usage files older than `keep_months` months."""
-    deleted = _usage.purge_old_usage(keep_months)
-    return {"purged": deleted, "keep_months": keep_months}
-
-
-@app.get("/admin/retention")
-async def admin_retention(_: None = Depends(_require_admin)):
-    """Retention settings and the report of the last retention pass."""
-    from plugboard import retention
-
-    return {
-        "settings": retention.settings(),
-        "last_run": retention.last_report(),
-        "held": retention.held(),
-    }
-
-
-@app.post("/admin/usage/migrate")
-async def migrate_usage(_: None = Depends(_require_admin)):
-    """Import existing usage_*.json files into SQLite (idempotent)."""
-    count = _usage.migrate_json_to_sqlite()
-    return {"migrated_entries": count}
-
-
-@app.get("/admin/usage/{month}/{client_id}")
-async def admin_usage_client(
-    month: str, client_id: str, _: None = Depends(_require_admin)
-):
-    month = _month_param(month)
-    entries = _usage.get_usage_by_client(month, client_id)
-    return {
-        "month": month,
-        "client_id": client_id,
-        "entries": entries,
-        "summary": _usage.summarize_usage(entries),
-    }
+# -- /admin/usage, /admin/retention: admin_routes/usage.py
+_admin_usage.register(app, _THIS_MODULE)
 
 
 # -- Client API contract (public) --------------------------------------------
