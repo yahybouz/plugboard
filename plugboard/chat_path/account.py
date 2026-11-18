@@ -19,8 +19,6 @@ from plugboard import billing as _billing
 from plugboard import live_requests as _live
 from plugboard.apikeys import get_keys_by_client, load_keys, mask_key
 
-# -- /usage/me ---------------------------------------------------------------
-
 
 def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
     @app.get("/v1/inflight")

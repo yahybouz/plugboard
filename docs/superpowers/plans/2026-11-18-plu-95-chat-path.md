@@ -262,7 +262,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CHAT_PATH_DIR = ROOT / "plugboard" / "chat_path"
 CHAT_PATH_PACKAGE = "plugboard.chat_path"
 APP_MODULE = "plugboard.app"
-# The modules of the design (Q2 = no: without "account").
+# The modules of the design (Q2 = yes, D-69: "account" included).
 EXPECTED_MODULES = frozenset(
     {"account", "billing", "catalogue", "completions", "limits", "responses",
      "streaming", "v2"}

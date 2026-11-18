@@ -163,6 +163,16 @@ Les règles R1 à R9 de PLU-36 s'appliquent telles quelles, avec ces précisions
   fonctions restent locaux. Ainsi aucun module `plugboard` n'est chargé en plus ni plus tôt.
   Seule exception relevée : `plugboard.cache_common`, qu'`app.py` n'importe qu'à la ligne 310
   (après `setup_logging()`) ; `completions.py` lit donc `core._strict_tenant_mode`.
+  **Écart admis, plus tard** (revue finale, m1) : `plugboard.chat_billing`, qu'`app.py`
+  n'importe plus (`chat_path/billing.py` l'importe), passe de la 21ᵉ à la 42ᵉ place des
+  modules `plugboard` chargés à l'import. Mesure de la revue finale (import à froid sur
+  `c3e4cea` et `cd4d996`) : mêmes 46 modules, mêmes journaux, stderr identique ; seul
+  écart, cette place. Ce n'est pas l'anti-objectif « dans un autre ordre », qui vise un
+  ordre qui change ce qu'on observe à l'import : `chat_billing` n'a aucun effet à l'import
+  (un logger, des constantes), ses dépendances (`billing`, `usage`, `tokenizer`) sont déjà
+  chargées et `setup_logging()` vient après dans les deux cas. Plus tard n'est admis que
+  pour un module sans effet d'import ; la sonde (`tests/route_snapshot.py`) trie les noms
+  et ne verrait pas l'écart si `chat_billing` en gagnait un.
 - **R12 — Câblage d'un module d'aides** : son appel `register()` prend la place de son bloc ;
   ce qui reste du bloc (R2) demeure au-dessus, dans son ordre. Un nom encore utilisé par du
   code non déplacé d'`app.py` est ré-exporté **provisoirement** ; la tâche qui déplace son

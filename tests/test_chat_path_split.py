@@ -104,15 +104,25 @@ def test_chat_path_modules_are_designed_ones():
 
 
 def _is_namespace_export(node: ast.Name, parents: dict) -> bool:
-    """``SimpleNamespace(x=x)`` at the end of ``register()``: the closure handed
-    back to app.py, which re-exports it, not a call that skips ``core.``."""
+    """``return SimpleNamespace(x=x)`` directly in the module-level ``register()``:
+    the closure handed back to app.py, which re-exports it, not a call that skips
+    ``core.``. The same call anywhere else is a bare read."""
     keyword = parents.get(node)
     call = parents.get(keyword)
+    ret = parents.get(call)
+    register = parents.get(ret)
     return (
         isinstance(keyword, ast.keyword)
         and keyword.arg == node.id
         and isinstance(call, ast.Call)
-        and getattr(call.func, "id", "") == "SimpleNamespace"
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "SimpleNamespace"
+        and isinstance(ret, ast.Return)
+        and ret.value is call
+        and isinstance(register, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and register.name == "register"
+        and ret in register.body
+        and isinstance(parents.get(register), ast.Module)
     )
 
 

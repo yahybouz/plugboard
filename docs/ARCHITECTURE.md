@@ -13,8 +13,13 @@ Plugboard is a single FastAPI process. It sits between client applications and L
 │              per-IP rate limit                                      │
 │                                                                     │
 │  app.py        auth (client keys, admin key/session, auto-login)    │
-│                budget / allowed-models / RPM checks · cache lookup  │
-│                billing · usage recording · admin API · dashboard    │
+│                chat admission (concurrency cap, session turn) ·     │
+│                health · dashboard pages                             │
+│                                                                     │
+│  chat_path/    budget / allowed-models / RPM checks · cache lookup  │
+│                billing · usage recording · /v1/models · /v2 aliases │
+│                                                                     │
+│  admin_routes/ admin API                                            │
 │                                                                     │
 │  router.py     model ID → provider(s) · retries · fallback ·        │
 │                load-balancing score · circuit breaker · model list  │

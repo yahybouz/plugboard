@@ -1857,9 +1857,6 @@ _billing_target = _billing_ns._billing_target
 _send_spending_alert = _billing_ns._send_spending_alert
 
 
-# -- /v1/chat/completions ----------------------------------------------------
-
-
 # -- Answers to the client, error responses: chat_path/responses.py -----------
 _responses_ns = _cp_responses.register(app, _THIS_MODULE)
 _provider_disabled_response = _responses_ns._provider_disabled_response
@@ -1869,6 +1866,9 @@ _quota_error_response = _cp_responses._quota_error_response
 _providers_busy_response = _cp_responses._providers_busy_response
 _cli_error_response = _cp_responses._cli_error_response
 _model_not_served_response = _cp_responses._model_not_served_response
+
+
+# -- Chat request refusals: invalid body (400), anonymous chat (401) ---------
 
 
 class _InvalidChatRequest(HTTPException):
