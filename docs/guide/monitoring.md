@@ -2,7 +2,7 @@
 
 Plugboard monitors itself and its providers without external services: everything below works out of the box, and the metrics endpoints let you plug in Prometheus or any HTTP checker.
 
-All `/admin/*` and `/metrics*` routes require `Authorization: Bearer $ADMIN_KEY` (or a dashboard session).
+All `/admin/*` and `/metrics*` routes require `Authorization: Bearer $ADMIN_KEY`, a [personal dashboard key](#personal-dashboard-keys) (`Bearer pba_…`, always with its own TOTP code) or a dashboard session.
 
 ### Changes made with a dashboard session
 
@@ -28,6 +28,52 @@ Sessions are stored on the server (`data/admin_sessions.json`) and last `ADMIN_S
 
 Once a secret is enrolled, changing the second factor needs a current code from it, even from an open session: `DELETE /admin/mfa` takes it in the `X-Plugboard-Admin-TOTP` header, and rotating through `POST /admin/mfa/setup` takes it as `current_code` next to the new `secret` and `code`. Without it the call is refused with 403; wrong codes count towards the admin key's lockout. With a lost authenticator, run `scripts/admin_mfa_setup.py --rotate` on the host.
 
+### Personal dashboard keys
+
+Instead of sharing `ADMIN_KEY`, each person can hold their own dashboard key and their own second factor. A key is named, revocable on its own, and every admin action it makes is recorded under that name in the [audit log](#admin-audit-log). Every person is a full admin: there are no roles and no read-only keys. `ADMIN_KEY` keeps working as before and stays the break-glass key. Personal keys need `ADMIN_KEY` to be set.
+
+**Create a key.** An admin (with `ADMIN_KEY` or a session) uses the **People** page of the dashboard (**+ New person**), or the API:
+
+```bash
+curl -s -X POST http://localhost:8765/admin/people \
+  -H "Authorization: Bearer $ADMIN_KEY" -H "X-Plugboard-Admin-TOTP: <code>" \
+  -H "Content-Type: application/json" -d '{"name": "person-one"}'
+```
+
+The `X-Plugboard-Admin-TOTP` header is needed only where `ADMIN_KEY` itself needs a code (see [Admin API with MFA](#admin-api-with-mfa)); a session cookie replaces both headers. The answer (`201`, `Cache-Control: no-store`) holds the person (`id` like `ap_0123456789ab`, `status`), the raw key (`pba_…`), the TOTP secret and its `otpauth://` URI (issuer `Plugboard`, account the name). **The key, the secret and the URI are shown this once**: only a hash of the key and the encrypted secret are stored, and nothing can show them again. The dashboard shows them with a Copy button each and clears them when you confirm you stored them. The name is 1 to 64 printable characters, unique among the keys that are not revoked; a name with an invisible character, a space at the start, at the end or doubled is refused (`422`), and a name that looks like another once Unicode compatibility forms and letter case are folded (for example a full-width form of it) is refused as taken (`409`). If the audit log cannot record the creation, the key is revoked at once and the call answers `503`: a key is never returned without its audit entry.
+
+**Hand it over.** Send the key and the secret to the person through two different channels, or hand them over in person. The person adds the secret (or the URI) to an authenticator application. The key stays `pending` until its first accepted code, at login or in the header: that code confirms it (the key turns `active`, audited as `admin.person.confirmed`). A key that is never used stays `pending`: revoke it if it was not handed over.
+
+**Sign in.** The login screen takes the personal key in the same field as `ADMIN_KEY`, then asks for the code of the person's own authenticator. A script sends both headers, **always**, even where `ADMIN_KEY` needs no code:
+
+```bash
+curl -s http://localhost:8765/admin/watchdog \
+  -H "Authorization: Bearer pba_…" -H "X-Plugboard-Admin-TOTP: <code>"
+```
+
+A code is accepted once, and no older code after it, as for `ADMIN_KEY`. A session opened with a personal key lasts `ADMIN_SESSION_MAX_AGE` like any other and belongs to that person.
+
+**List and revoke.** `GET /admin/people` lists the keys: `id`, `name`, `key_prefix` (the first 10 characters, to tell keys apart), `status` (`pending`, `active`, `revoked`), the dates and who created, confirmed or revoked each one; never a hash or a secret. `DELETE /admin/people/<id>` revokes a key: it stays in the list as `revoked`, it is refused from then on, and the sessions it opened stop working at once. The call is idempotent (a second one changes nothing and writes no second audit entry); an unknown id answers `404`. Any admin can revoke any key, a person their own included.
+
+**Lost authenticator.** A person's second factor cannot be reset: revoke the key and create a new one (the name is free again once the old key is revoked).
+
+**Lockout.** Wrong codes count against that person's key only: 5 wrong codes in a minute lock that key's code checks for 15 minutes (audited as `auth.person.mfa_failed`, then `auth.login_blocked`), without touching `ADMIN_KEY` nor any other person. A wrong or unknown `pba_` key counts against the caller's address, like a wrong `ADMIN_KEY`; a valid key from a locked address is not refused for that.
+
+**What a personal key does not do.**
+
+- It does not call the client API: `/v1/*` takes client keys (`pb_…`), and `API_KEY` is not a personal key.
+- It does not manage the second factor of `ADMIN_KEY`: `POST /admin/mfa/begin`, `POST /admin/mfa/setup`, `POST /admin/mfa/verify` and `DELETE /admin/mfa` answer `403` to a person (and to a session a person opened), before any code is read, and the refusal is audited as `admin.mfa.person_refused`. Only `GET /admin/mfa/status` answers. Changing the second factor of `ADMIN_KEY` stays with `ADMIN_KEY` and its authenticator.
+
+**What cuts sessions.** Enrolling, rotating or disabling the MFA of `ADMIN_KEY`, and **Log out everywhere**, revoke every session, those of personal keys included; the keys themselves stay valid and their holders sign in again. Revoking a key cuts only that person's sessions.
+
+**Instances without `ADMIN_KEY`.** With authentication fully off (no `API_KEY` and no `ADMIN_KEY`, a local install), the people routes are open like every admin route; `POST /admin/people` answers `503` (`Personal keys need ADMIN_KEY`), since a key would mean nothing, and `GET` and `DELETE` are not protected (a revocation is then recorded as `admin-key`). With `API_KEY` set but no `ADMIN_KEY`, every admin route answers `503`, these included.
+
+**Unreadable store.** If `data/admin_people.json` cannot be read (damaged file, bad permissions), every personal key is refused (`401`) and the people routes answer `503`, with the error type only in the log; `ADMIN_KEY` is not affected. A write failure answers `503` too, never a `500`. Repair the file or restore it from a backup.
+
+**Where things are.** The store is `data/admin_people.json` (mode `0600`): it lives in `data/`, so the [backup](deployment.md#backups-and-upgrades) holds it, and `scripts/rotate_encryption_key.py` re-encrypts the personal secrets with the others (a rotation refuses to run when the file is damaged). The logs mask `pba_…` keys (`pba_***REDACTED***`). These routes are admin routes: they stay out of the client API contract (`CONTRACT_VERSION` is unchanged, 3.0.1) and are documented by the admin-only `/openapi.json` of the instance.
+
+**Rolling back to 4.14.6.** The older version ignores the new store and the two new audit columns, so it starts and serves as before, but personal keys then stop working (only `ADMIN_KEY` is accepted). A session a person opened before the rollback is still honoured by the older version, with full admin rights and no name in the audit log, until it expires: use **Log out everywhere** (or revoke the keys first) before rolling back. Rolling forward again, the keys work again unless revoked meanwhile.
+
 ## Dashboard pages
 
 | Page | What you see |
@@ -36,6 +82,7 @@ Once a secret is enrolled, changing the second factor needs a current code from 
 | Monitoring | Health of each active provider (status, latency, error rate, uptime over 24 hours and 7 days) and the check history of the last 24 hours. Uptime comes from availability snapshots taken every 5 minutes, not from opening the page, which stores nothing; it shows `—` when the period (24 hours or 7 days) holds no snapshot, as before the first one |
 | Catalog history | Models each provider gained or lost, newest first, filtered by provider, period and model name ([details](#catalog-history)) |
 | Usage & billing | Requests, tokens and cost per client for a month |
+| People | Personal dashboard keys: who holds one, its status, **+ New person**, **Revoke** ([details](#personal-dashboard-keys)) |
 | Jobs | The price refresh, the model catalog refresh, the provider watchdog, the availability snapshots (every `PLUGBOARD_MONITORING_INTERVAL_S` seconds) and the daily data retention pass ([data retention](configuration.md#data-retention)): state, last and next run, **Run now** |
 | Playground | Per-model connectivity and internet-access indicators |
 | Tickets (`/suivi`) | Kanban of Plugboard tickets, see below |
@@ -237,7 +284,9 @@ The answer lists `entries` newest first, each with `at` (UTC), `provider`, `adde
 
 ## Admin audit log
 
-Admin actions are recorded in `data/audit.db`: logins (success, failure, lockout, MFA), auto-logins and suspicious auto-login refusals, key creation, revocation, rotation and deletion, provider creation, changes and deletion (including base URL changes and refused domains), OAuth connections, pricing refreshes, cache clears, circuit resets, watchdog actions, model refreshes, Ollama pulls and deletions, job runs, and MFA enrolment. Each entry has an `actor`: `admin` by default, `system` for an egress refusal found when a protected provider connects (`provider.egress_refused`), for a provider whose stored key cannot be decrypted (`provider.secret_unreadable`) and for the first Claude limit of an episode (`provider.quota_limit`, see [Shared Claude quota](#shared-claude-quota)), and `mcp` for the provider calls of the [MCP admin tools](mcp.md#admin-tools-stdio-only). These record `provider.create`, `provider.discover`, `provider.egress.rejected` and `provider.domain.rejected` as for the dashboard, plus their other refusals (`provider.create.refused`, `provider.discover.refused`) and previews (`provider.discover.preview`).
+Admin actions are recorded in `data/audit.db`: logins (success, failure, lockout, MFA), auto-logins and suspicious auto-login refusals, key creation, revocation, rotation and deletion, provider creation, changes and deletion (including base URL changes and refused domains), OAuth connections, pricing refreshes, cache clears, circuit resets, watchdog actions, model refreshes, Ollama pulls and deletions, job runs, and MFA enrolment. Each entry has an `actor` (the channel): `admin` by default, `system` for an egress refusal found when a protected provider connects (`provider.egress_refused`), for a provider whose stored key cannot be decrypted (`provider.secret_unreadable`) and for the first Claude limit of an episode (`provider.quota_limit`, see [Shared Claude quota](#shared-claude-quota)), and `mcp` for the provider calls of the [MCP admin tools](mcp.md#admin-tools-stdio-only). These record `provider.create`, `provider.discover`, `provider.egress.rejected` and `provider.domain.rejected` as for the dashboard, plus their other refusals (`provider.create.refused`, `provider.discover.refused`) and previews (`provider.discover.preview`).
+
+Each entry also names **who** acted, in two columns (added with PB-AUTH-01): `principal` is `admin-key` for `ADMIN_KEY` (and for a session it opened) or `person:<id>` for a [personal key](#personal-dashboard-keys) (and for a session that person opened), and `principal_name` is that person's name at the time. An empty `principal` means no admin credential was known: an entry written before these columns existed (an older database gains them, empty, when it is opened), by the system (`actor` `system`, and background tasks such as the watchdog or a job run), or for a request that did not authenticate. A login with an unknown key names nobody; a wrong code on a personal key names that person. The personal keys write four actions: `admin.person.created`, `admin.person.confirmed` (the first accepted code), `admin.person.revoked` and `auth.person.mfa_failed` (a wrong code); a person refused on a second-factor route of `ADMIN_KEY` writes `admin.mfa.person_refused`. Filter on `action` as below; `GET /admin/audit` returns the two columns on every entry.
 
 ```bash
 curl -s "http://localhost:8765/admin/audit?limit=20" -H "Authorization: Bearer $ADMIN_KEY"

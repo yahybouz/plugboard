@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **A dashboard key for each person** (PB-AUTH-01, D-63): instead of sharing `ADMIN_KEY`, an admin creates a named personal key (`pba_…`) with its own TOTP secret for each person, who is a full admin (no roles). `POST /admin/people` answers once with the key, the secret and its `otpauth://` URI; `GET /admin/people` lists the keys (`pending` until the first accepted code, then `active`, or `revoked`; never a hash or a secret); `DELETE /admin/people/<id>` revokes a key and cuts its sessions at once. A personal key signs in on the login screen (key, then code) or calls the admin API with `Authorization: Bearer pba_…` and `X-Plugboard-Admin-TOTP`. Names refuse invisible characters and doubled or outer spaces, and a name that looks like a live one (Unicode compatibility forms, letter case) is refused as taken. The dashboard has a **People** page (create, show the key, secret and URI once, revoke after a confirmation). `ADMIN_KEY` works as before and stays the break-glass key. The store is `data/admin_people.json` (mode `0600`, in `data/`, so in the backup). How to hand a key over and revoke it: [personal dashboard keys](docs/guide/monitoring.md#personal-dashboard-keys).
+
+- **The audit log names who acted** (PB-AUTH-01): two columns, `principal` (`admin-key`, `person:<id>`, or empty for an entry written before, by the system or without a proven admin) and `principal_name`, on every entry written while serving an admin request, including the sessions a key opened. New actions: `admin.person.created`, `admin.person.confirmed`, `admin.person.revoked`, `auth.person.mfa_failed`, and `admin.mfa.person_refused`. An older `audit.db` gains the columns, empty, when it is opened.
+
+### Security
+
+- **A personal key always needs its own TOTP code** (PB-AUTH-01): on every instance, even where `ADMIN_KEY` needs none, and a code is accepted once. Wrong codes lock that person's key only (5 in a minute, 15 minutes), never `ADMIN_KEY` nor another person. A revoked key, and the sessions it opened, are refused at once; an unreadable store refuses every personal key and never answers `500`.
+- **The second factor of `ADMIN_KEY` stays with `ADMIN_KEY`** (PB-AUTH-01): `POST /admin/mfa/begin`, `/admin/mfa/setup`, `/admin/mfa/verify` and `DELETE /admin/mfa` answer `403` to a person, before any code is read, and audit the refusal; `GET /admin/mfa/status` still answers.
+- **Personal keys are masked in logs and covered by the key rotation** (PB-AUTH-01): `plugboard/log_redact.py` masks `pba_…` (glued to a word or cut short too), and `scripts/rotate_encryption_key.py` re-encrypts the personal TOTP secrets with `ENCRYPTION_KEY` (and refuses to run when `admin_people.json` is damaged).
+
+Rolling back to 4.14.6 works (the older version ignores the store and the two audit columns), but personal keys then stop working, and a session a person opened stays valid until it expires: use **Log out everywhere** first.
+
+**API contract**: unchanged, still **3.0.1** (`docs/api/openapi.json`, `docs/api/mcp.json`). The `/admin/people` routes are admin routes, documented by the admin-only `/openapi.json` of the instance and outside the client contract; `tests/test_admin_people_contract.py` keeps them out of it.
+
+**Not verified**: the browser test of the People page (`tests/e2e/test_people.py`) has not run yet (Playwright is absent from the build environment): it runs with the e2e lane of the milestone validation. No real personal key was created on the UAT or in production: creating the real keys is the owner's gesture.
+
 ## [4.14.6] — 2026-11-17
 
 ### Changed

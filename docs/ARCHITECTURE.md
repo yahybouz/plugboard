@@ -102,14 +102,14 @@ Streaming requests to HTTP providers are proxied chunk by chunk and billed at th
 
 Everything lives under `PLUGBOARD_DATA` (default `data/`):
 
-- JSON files, each replaced atomically: `providers.json`, `api_keys.json` and `pricing/YYYY_MM.json` (also guarded by file locks), `model_status.json`, `admin_mfa.json`;
+- JSON files, each replaced atomically: `providers.json`, `api_keys.json` and `pricing/YYYY_MM.json` (also guarded by file locks), `model_status.json`, `admin_mfa.json`, `admin_people.json` (personal dashboard keys);
 - SQLite databases, most of them in WAL mode: `usage.db`, `cache.db`, `semantic_cache.db`, `audit.db`, `monitoring.db`, `watchdog.db`, `credentials.db`, `sessions.db`, `client_updates.db`.
 
 There is no external database or queue, which keeps the deployment to one process and one directory, and limits it to **one instance per data directory**. Request metrics and circuit breaker states are in memory and reset on restart.
 
 ## Security boundaries
 
-- **Admin plane**: `/admin/*`, `/providers*`, `/metrics*`, `/docs` and the dashboard require the `ADMIN_KEY` (bearer) or a signed session cookie obtained by logging in with it; the session is also recorded server-side and revoked at logout or on any MFA change. With MFA enforced, the bearer needs a single-use TOTP code (`X-Plugboard-Admin-TOTP`). Auto-login only applies to a local install opened from the same machine.
+- **Admin plane**: `/admin/*`, `/providers*`, `/metrics*`, `/docs` and the dashboard require the `ADMIN_KEY` (bearer) or a signed session cookie obtained by logging in with it; the session is also recorded server-side and revoked at logout or on any MFA change. With MFA enforced, the bearer needs a single-use TOTP code (`X-Plugboard-Admin-TOTP`). A personal key (`pba_…`, `data/admin_people.json`) opens the same plane, always with a TOTP code of its own secret, and names its holder in the audit log; it never reaches `/v1/*` nor the second factor of `ADMIN_KEY`. Auto-login only applies to a local install opened from the same machine.
 - **Client plane**: `/v1/*` and `/v2/*` accept client keys (and the admin key, except `/v1/embeddings` and `/v1/decisions`, which take a client key only). Cache entries, sessions and usage are scoped to the client.
 - **Secrets at rest**: provider tokens, OAuth credentials and the MFA secret are encrypted with Fernet; client keys are stored as SHA-256 hashes.
 - **CLI execution**: CLIs are resolved to absolute paths once, run without a shell, from a neutral directory, with a concurrency limit; Codex runs in a read-only sandbox, and every agy launch by the gateway runs in a bubblewrap cage (`plugboard/agy_cage.py`), never without it (the operator's `scripts/bench_latence.py` runs agy bare, BUG-110).

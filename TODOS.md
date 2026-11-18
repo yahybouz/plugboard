@@ -92,20 +92,6 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 **Priority:** P2
 **Depends on:** None
 
-## Auth
-
-### Per-person dashboard keys
-
-**What:** The admin creates, names, revokes and audits one dashboard key per person, instead of sharing the single `ADMIN_KEY`.
-
-**Why:** Owner decision: a local install logs in without a key, a deployed instance gives each person their own key.
-
-**Context:** Planned for the publishable release. Client API keys (`lle_*`, `POST /admin/keys`) already exist; dashboard sessions are signed with `ADMIN_KEY` only (`_create_admin_session_token`). Needs a session claim naming the key, revocation, and roles if read-only users are wanted.
-
-**Effort:** L
-**Priority:** P1
-**Depends on:** None
-
 ## MCP
 
 ### MCP admin tools for providers and catalog

@@ -56,7 +56,7 @@ The full list is in the [configuration reference](configuration.md).
 - the browser holds the operator's secret: the login token, or the cookie of a browser remembered after using it (**Log out everywhere** in the dashboard, or deleting `data/local_devices.json`, forgets every browser);
 - admin MFA is not enforced.
 
-Otherwise the login page asks for `ADMIN_KEY`. If you expected auto-login, the server log says why it was refused: see [Troubleshooting](troubleshooting.md#dashboard-auto-login-does-not-happen).
+Otherwise the login page asks for `ADMIN_KEY` or, on an instance where an admin created one for you, your personal key (`pba_…`) followed by a code from your own authenticator app ([personal dashboard keys](monitoring.md#personal-dashboard-keys)). If you expected auto-login, the server log says why it was refused: see [Troubleshooting](troubleshooting.md#dashboard-auto-login-does-not-happen).
 
 The dashboard has these pages:
 
@@ -71,6 +71,7 @@ The dashboard has these pages:
 | Ollama | Turn Ollama off or on; pull, inspect and delete local Ollama models (Ollama is out of scope for this delivery: keep it off) |
 | Monitoring | Provider health, uptime and recent history |
 | Catalog history | Models each provider gained or lost, newest first |
+| People | Personal dashboard keys: create one per person (the key, secret and URI are shown once), see their status, revoke one |
 | Jobs | The price refresh, the model catalog refresh and the provider watchdog: state, next run, **Run now** |
 
 ## Add a first provider
@@ -122,6 +123,7 @@ Everything is stored under `data/` (or `PLUGBOARD_DATA`):
 | `credentials.db` | Credentials from the dashboard OAuth connections |
 | `sessions.db` | Optional server-side chat sessions |
 | `admin_mfa.json` | Encrypted TOTP secret when MFA is enrolled |
+| `admin_people.json` | Personal dashboard keys (key hashes, encrypted TOTP secrets) |
 | `.encryption_key` | Generated encryption key when `ENCRYPTION_KEY` is empty |
 | `model_status.json`, `quarantined_models.json` | Model connectivity status and quarantine list |
 
