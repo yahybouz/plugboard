@@ -84,3 +84,52 @@ async def test_wrong_codes_from_a_person_never_lock_admin_key(admin_client, env,
     r = await admin_client.delete("/admin/mfa", headers={**ph.ADMIN, ph.TOTP: code})
     assert r.status_code == 204
     assert not admin_mfa.is_enrolled()
+
+
+# -- A person refused on an /admin/mfa route leaves one audit entry -----------
+
+
+@pytest.mark.parametrize("via", ["session", "key"])
+@pytest.mark.parametrize("method,path,body", ROUTES)
+async def test_a_refused_person_is_audited_under_their_own_name(
+    admin_client, env, via, method, path, body
+):
+    secret = admin_mfa.generate_secret()
+    admin_mfa.enroll(secret)
+    made = ph.new_person()
+    pid = made["person"]["id"]
+    if via == "session":
+        cookie = await ph.login(admin_client, made["key"], ph.code_now(env, made))
+        ph.next_step(env)
+        headers = {**cookie, ph.TOTP: "000000"}
+    else:
+        headers = ph.bearer(made, ph.code_now(env, made))
+    admin_client.cookies.clear()
+    r = await admin_client.request(method, path, json=body, headers=headers)
+    assert r.status_code == 403 and r.json()["detail"] == _REFUSED
+    entries = audit.get_audit_log(action="admin.mfa.person_refused")
+    assert len(entries) == 1
+    entry = entries[0]
+    assert (entry["principal"], entry["principal_name"]) == (
+        f"person:{pid}",
+        "person-one",
+    )
+    assert path in entry["details"] and method in entry["details"]
+    # No code was read, nothing counts against ADMIN_KEY.
+    assert "key:admin" not in ratelimit._auth_buckets
+    assert "key:admin" not in ratelimit._lockouts
+    for action in ("admin.mfa.step_up_failed", "admin.mfa.step_up_missing"):
+        assert not audit.get_audit_log(action=action)
+    assert not [
+        e
+        for e in audit.get_audit_log(limit=1000)
+        if e["action"].startswith("admin.mfa") and e["principal"] == "admin-key"
+    ]
+    assert admin_mfa.is_enrolled()
+
+
+async def test_admin_key_on_the_mfa_routes_writes_no_person_refusal(admin_client, env):
+    admin_client.cookies.clear()
+    r = await admin_client.post("/admin/mfa/begin", headers=ph.ADMIN)
+    assert r.status_code == 200
+    assert not audit.get_audit_log(action="admin.mfa.person_refused")

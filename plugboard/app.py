@@ -7964,12 +7964,20 @@ def _refuse_person_principal(request: Request) -> None:
 
     A person (personal key or person-bound session) is refused before any
     code is read, so a person's codes never count on ``key:admin`` nor
-    reach the audit of ADMIN_KEY's factor (PB-AUTH-01).
+    reach the audit of ADMIN_KEY's factor (PB-AUTH-01). The refusal is
+    audited once, under the person's own principal and name.
     """
-    if (
-        getattr(request.state, "admin_principal", _ADMIN_KEY_PRINCIPAL)
-        != _ADMIN_KEY_PRINCIPAL
-    ):
+    principal = getattr(request.state, "admin_principal", _ADMIN_KEY_PRINCIPAL)
+    if principal != _ADMIN_KEY_PRINCIPAL:
+        _audit(
+            "admin.mfa.person_refused",
+            target_type="admin",
+            target_id="admin",
+            details=f"{request.method} {request.url.path}",
+            ip=request.client.host if request.client else "",
+            principal=principal,
+            principal_name=getattr(request.state, "admin_principal_name", ""),
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="The second factor of ADMIN_KEY is managed with ADMIN_KEY",

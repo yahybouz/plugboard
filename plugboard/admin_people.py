@@ -120,9 +120,41 @@ def public_view(record: dict) -> dict:
     return view
 
 
+# Characters that print as nothing, or hide what follows them: format,
+# control, private-use and surrogate code points, line and paragraph
+# separators, variation selectors, the combining grapheme joiner, the Hangul
+# fillers and the braille blank. Two names would otherwise look the same.
+_INVISIBLE_CATEGORIES = frozenset({"Cf", "Cc", "Co", "Cs", "Zl", "Zp"})
+_INVISIBLE_POINTS = frozenset({0x034F, 0x115F, 0x1160, 0x2800, 0x3164, 0xFFA0})
+_COMBINING = frozenset({"Mn", "Me"})
+
+
+def _invisible(char: str) -> bool:
+    point = ord(char)
+    return (
+        unicodedata.category(char) in _INVISIBLE_CATEGORIES
+        or point in _INVISIBLE_POINTS
+        or 0xFE00 <= point <= 0xFE0F
+        or 0xE0100 <= point <= 0xE01EF
+    )
+
+
 def _clean_name(name: str) -> str:
+    """The trimmed name, or ``invalid_name``.
+
+    Refused: an empty or too long name, a non-printable or invisible
+    character, a combining mark with no letter before it, two spaces in a
+    row. Outer spaces are trimmed, never stored.
+    """
     cleaned = name.strip() if isinstance(name, str) else ""
-    if not 1 <= len(cleaned) <= NAME_MAX or not cleaned.isprintable():
+    if (
+        not 1 <= len(cleaned) <= NAME_MAX
+        or not cleaned.isprintable()
+        or any(_invisible(char) for char in cleaned)
+        or unicodedata.category(cleaned[0]) in _COMBINING
+        or cleaned != cleaned.strip(" ")
+        or "  " in cleaned
+    ):
         raise PersonError("invalid_name", _INVALID_NAME)
     return cleaned
 
