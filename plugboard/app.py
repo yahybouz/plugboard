@@ -7959,6 +7959,23 @@ async def admin_logout_all(request: Request, _: None = Depends(_require_admin)):
 # ── Admin MFA (TM-001) ──────────────────────────────────────────────────────
 
 
+def _refuse_person_principal(request: Request) -> None:
+    """The second factor of ADMIN_KEY is managed with ADMIN_KEY only.
+
+    A person (personal key or person-bound session) is refused before any
+    code is read, so a person's codes never count on ``key:admin`` nor
+    reach the audit of ADMIN_KEY's factor (PB-AUTH-01).
+    """
+    if (
+        getattr(request.state, "admin_principal", _ADMIN_KEY_PRINCIPAL)
+        != _ADMIN_KEY_PRINCIPAL
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The second factor of ADMIN_KEY is managed with ADMIN_KEY",
+        )
+
+
 @app.get("/admin/mfa/status", include_in_schema=False)
 async def admin_mfa_status(_: None = Depends(_require_admin)):
     """Expose MFA configuration so the dashboard can render the right UI."""
@@ -7972,12 +7989,14 @@ async def admin_mfa_status(_: None = Depends(_require_admin)):
 
 
 @app.post("/admin/mfa/begin", include_in_schema=False)
-async def admin_mfa_begin(_: None = Depends(_require_admin)):
+async def admin_mfa_begin(request: Request, _: None = Depends(_require_admin)):
     """Step 1 of enrolment: server generates a fresh TOTP secret and the
     otpauth:// provisioning URI. Nothing is persisted yet — the caller must
     confirm with /admin/mfa/setup and a valid code from their authenticator.
     """
     from plugboard import admin_mfa as _mfa
+
+    _refuse_person_principal(request)
 
     secret = _mfa.generate_secret()
     return {
@@ -7999,6 +8018,7 @@ async def admin_mfa_setup(
     secret also needs a current code from it (``current_code``)."""
     from plugboard import admin_mfa as _mfa
 
+    _refuse_person_principal(request)
     _require_mfa_step_up(request, body.current_code)
     # Validate the code matches the *submitted* secret (not any previously
     # stored one — we might be rotating). We don't call _mfa.verify() here
@@ -8016,9 +8036,13 @@ async def admin_mfa_setup(
 
 
 @app.post("/admin/mfa/verify", include_in_schema=False, status_code=204)
-async def admin_mfa_verify(body: AdminMfaVerify, _: None = Depends(_require_admin)):
+async def admin_mfa_verify(
+    body: AdminMfaVerify, request: Request, _: None = Depends(_require_admin)
+):
     """Validate a code against the currently enrolled secret (debug helper)."""
     from plugboard import admin_mfa as _mfa
+
+    _refuse_person_principal(request)
 
     if not _mfa.verify((body.code or "").strip()):
         raise HTTPException(400, "Invalid TOTP code")
@@ -8033,6 +8057,7 @@ async def admin_mfa_disable(request: Request, _: None = Depends(_require_admin))
     the host)."""
     from plugboard import admin_mfa as _mfa
 
+    _refuse_person_principal(request)
     _require_mfa_step_up(request)
     _mfa.disable()
     _audit(
