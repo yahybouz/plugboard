@@ -65,6 +65,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Tuple,
     TypeVar,
 )
 
@@ -1411,10 +1412,14 @@ def _is_admin_key(token: str) -> bool:
     )
 
 
-def _create_admin_session_token(mfa: bool = False) -> str:
+def _create_admin_session_token(
+    mfa: bool = False, person: Optional[Dict[str, Any]] = None
+) -> str:
     """Sign a new session and register it server-side (revocable).
 
-    ``mfa`` records that a TOTP code was checked to open it.
+    ``mfa`` records that a TOTP code was checked to open it. A session opened
+    with a personal key (``person``) always had its code checked, and keeps
+    the person's id and ``generation``: it dies with the key (PB-AUTH-01).
     """
     effective_admin = _effective_admin_key()
     if not effective_admin:
@@ -1429,13 +1434,24 @@ def _create_admin_session_token(mfa: bool = False) -> str:
     ).hexdigest()
     from plugboard import admin_mfa as _mfa
 
-    admin_sessions.register(
-        nonce,
-        issued_at,
-        mfa=mfa,
-        max_age=_ADMIN_SESSION_MAX_AGE,
-        mfa_generation=_mfa.generation(),
-    )
+    if person is None:
+        admin_sessions.register(
+            nonce,
+            issued_at,
+            mfa=mfa,
+            max_age=_ADMIN_SESSION_MAX_AGE,
+            mfa_generation=_mfa.generation(),
+        )
+    else:
+        admin_sessions.register(
+            nonce,
+            issued_at,
+            mfa=True,
+            max_age=_ADMIN_SESSION_MAX_AGE,
+            mfa_generation=_mfa.generation(),
+            person_id=person["id"],
+            person_generation=person["generation"],
+        )
     return f"{payload}.{signature}"
 
 
@@ -1467,21 +1483,44 @@ def _admin_session_nonce(token: str) -> str:
     return nonce
 
 
-def _is_admin_session(token: str) -> bool:
-    """Signed, unexpired, still registered, opened under the current MFA
+def _admin_session_principal(token: str) -> Optional[Tuple[str, str]]:
+    """The ``(principal, name)`` of a valid admin session, else ``None``.
+
+    Valid: signed, unexpired, still registered, opened under the current MFA
     generation, and opened with TOTP when MFA is required (a session from
-    before enforcement does not count)."""
+    before enforcement does not count). ``("admin-key", "")`` for a session
+    of ``ADMIN_KEY``. A session opened with a personal key also needs its
+    person to be in the store, not revoked, and of the generation the
+    session was opened under (PB-AUTH-01): an unreadable store refuses it.
+    """
     nonce = _admin_session_nonce(token)
     if not nonce:
-        return False
+        return None
     record = admin_sessions.lookup(nonce)
     if record is None:
-        return False
+        return None
     from plugboard import admin_mfa as _mfa
 
     if record.get("mfa_generation") != _mfa.generation():
-        return False
-    return bool(record.get("mfa")) or not _mfa.is_required()
+        return None
+    if not (record.get("mfa") or not _mfa.is_required()):
+        return None
+    if "person_id" not in record:
+        return (_ADMIN_KEY_PRINCIPAL, "")
+    person = admin_people.get(record["person_id"])
+    if person is None or person.get("revoked_at"):
+        return None
+    generation = person.get("generation")
+    if not isinstance(generation, str) or not generation:
+        return None
+    if generation != record.get("person_generation"):
+        return None
+    return (_person_principal(person), str(person.get("name", "")))
+
+
+def _is_admin_session(token: str) -> bool:
+    """A valid admin session (see ``_admin_session_principal``)."""
+    return _admin_session_principal(token) is not None
 
 
 # PB-SEC-06: SameSite=Strict keeps the session cookie off cross-site requests
@@ -1695,7 +1734,9 @@ def _admin_request_auth(request: Request) -> str:
     (admin key without a valid TOTP header while MFA is required) or
     "locked" (too many wrong codes for the admin key, from any address:
     a code is only checked with the admin key; BUG-119)."""
-    if _is_admin_session(request.cookies.get(_ADMIN_COOKIE_NAME, "")):
+    session = _admin_session_principal(request.cookies.get(_ADMIN_COOKIE_NAME, ""))
+    if session is not None:
+        _set_principal(request, *session)
         return "ok"
     auth = request.headers.get("Authorization", "")
     token = auth.removeprefix("Bearer ").strip()
@@ -1746,19 +1787,48 @@ def _person_request_auth(request: Request, token: str) -> str:
     if not _effective_admin_key():
         return "denied"
     person = admin_people.find_by_key(token)
-    if person is None:
-        return "denied"
-    person_id = person.get("id")
-    if not isinstance(person_id, str) or not admin_people.ID_PATTERN.fullmatch(
-        person_id
-    ):
-        log.error("auth rejected reason=person_record_malformed")
+    if person is None or not _person_record_is_sound(person):
         return "denied"
     code = request.headers.get(_ADMIN_TOTP_HEADER, "").strip()
     if not code:
         return "mfa_required"
+    outcome = _prove_person_code(request, person, code, via="header")
+    if outcome == "locked":
+        return "locked"
+    if outcome == "unavailable":
+        return "denied"
+    if outcome != "ok":
+        return "mfa_required"
+    _set_principal(request, _person_principal(person), str(person.get("name", "")))
+    return "ok"
+
+
+def _person_record_is_sound(person: Dict[str, Any]) -> bool:
+    """The record's id has the store's shape (a hand-edited one is refused)."""
+    person_id = person.get("id")
+    if isinstance(person_id, str) and admin_people.ID_PATTERN.fullmatch(person_id):
+        return True
+    log.error("auth rejected reason=person_record_malformed")
+    return False
+
+
+def _prove_person_code(
+    request: Request, person: Dict[str, Any], code: str, *, via: str
+) -> str:
+    """Check a code of that person's own secret, on the TOTP header
+    (``via="header"``) or at login (``via="login"``).
+
+    "ok" when accepted (the first accepted code confirms the key, audited);
+    "locked" when that person's scope (``key:admin:<id>``) is locked, nothing
+    checked; "refused" for a wrong code, counted on that scope only and
+    audited, or "refused_locked" when that count locks the scope;
+    "unavailable" for a fault of the store, nothing counted. Every entry
+    names the person explicitly: it may be written before the request is
+    proven.
+    """
     from plugboard.ratelimit import check_auth_rate_limit, record_auth_failure
 
+    person_id = person["id"]
     principal = _person_principal(person)
     name = str(person.get("name", ""))
     scope = _person_scope(person_id)
@@ -1768,30 +1838,30 @@ def _person_request_auth(request: Request, token: str) -> str:
     outcome = admin_people.check_code(person_id, code)
     if outcome == "unavailable":
         log.error("auth rejected reason=person_store_unavailable")
-        return "denied"
+        return "unavailable"
     if outcome == "refused":
         locked = record_auth_failure(scope)
+        where = "header IP" if via == "header" else "IP"
         _audit(
             "auth.person.mfa_failed",
             target_type="admin_person",
             target_id=person_id,
-            details=f"header IP: {client_ip}, locked={locked}",
+            details=f"{where}: {client_ip}, locked={locked}",
             ip=client_ip,
             principal=principal,
             principal_name=name,
         )
-        return "mfa_required"
+        return "refused_locked" if locked else "refused"
     if outcome == "confirmed":
         _audit(
             "admin.person.confirmed",
             target_type="admin_person",
             target_id=person_id,
-            details="via=header",
+            details=f"via={via}",
             ip=client_ip,
             principal=principal,
             principal_name=name,
         )
-    _set_principal(request, principal, name)
     return "ok"
 
 
@@ -7513,6 +7583,7 @@ async def login_page(request: Request):
                 "auth.auto_login",
                 details=f"localhost auto-login host={host} via={proof}",
                 ip=peer,
+                principal=_ADMIN_KEY_PRINCIPAL,
             )
             resp = RedirectResponse(
                 url=_safe_next(request.query_params.get("next", "")), status_code=302
@@ -7560,11 +7631,21 @@ async def admin_login(body: AdminLogin, request: Request):
     address = _address_scope(request)
     token = body.key.strip()
     is_admin_key = _is_admin_key(token)
+    # A live personal key (PB-AUTH-01); without ADMIN_KEY it opens nothing
+    # and counts as a wrong key.
+    person = (
+        None
+        if is_admin_key
+        or not token.startswith(admin_people.KEY_PREFIX)
+        or not _effective_admin_key()
+        else admin_people.find_by_key(token)
+    )
+    known = is_admin_key or person is not None
 
     # Brute-force protection (BUG-119): wrong keys lock their address, but
-    # the address lockout never refuses the admin key itself; behind a proxy
-    # anyone could otherwise lock the operator out.
-    if not is_admin_key and not check_auth_rate_limit(address):
+    # the address lockout never refuses a valid key (the admin key or a live
+    # personal key); behind a proxy anyone could otherwise lock them out.
+    if not known and not check_auth_rate_limit(address):
         remaining = get_lockout_remaining(address)
         _audit(
             "auth.login_blocked", details=f"IP locked out: {client_ip}", ip=client_ip
@@ -7575,7 +7656,7 @@ async def admin_login(body: AdminLogin, request: Request):
             headers={"Retry-After": str(remaining)},
         )
 
-    if not is_admin_key:
+    if not known:
         locked = record_auth_failure(address)
         _audit(
             "auth.login_failed",
@@ -7592,6 +7673,9 @@ async def admin_login(body: AdminLogin, request: Request):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin key required"
         )
+
+    if person is not None:
+        return _person_login(request, body, person)
 
     # TM-001: enforce second factor when MFA is required.
     # is_required() is only true when the operator set the env flag AND
@@ -7616,6 +7700,7 @@ async def admin_login(body: AdminLogin, request: Request):
                 "auth.login_blocked",
                 details=f"admin key locked out (MFA), IP: {client_ip}",
                 ip=client_ip,
+                principal=_ADMIN_KEY_PRINCIPAL,
             )
             return JSONResponse(
                 status_code=429,
@@ -7628,6 +7713,7 @@ async def admin_login(body: AdminLogin, request: Request):
                 "auth.mfa_failed",
                 details=f"IP: {client_ip}, locked={locked}",
                 ip=client_ip,
+                principal=_ADMIN_KEY_PRINCIPAL,
             )
             log.warning("Failed admin MFA from %s (locked=%s)", client_ip, locked)
             if locked:
@@ -7640,7 +7726,12 @@ async def admin_login(body: AdminLogin, request: Request):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid MFA code",
             )
-        _audit("auth.mfa_success", details=f"IP: {client_ip}", ip=client_ip)
+        _audit(
+            "auth.mfa_success",
+            details=f"IP: {client_ip}",
+            ip=client_ip,
+            principal=_ADMIN_KEY_PRINCIPAL,
+        )
 
     session_token = _create_admin_session_token(mfa=mfa_checked)
     if not session_token:
@@ -7648,8 +7739,91 @@ async def admin_login(body: AdminLogin, request: Request):
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin key required"
         )
 
+    _set_principal(request, _ADMIN_KEY_PRINCIPAL)
     _audit("auth.login_success", details=f"IP: {client_ip}", ip=client_ip)
+    return _session_response(request, session_token)
 
+
+def _person_login(
+    request: Request, body: AdminLogin, person: Dict[str, Any]
+) -> Response:
+    """Open a session with a live personal key and its own code (PB-AUTH-01).
+
+    The code is always required, and checked like on the TOTP header
+    (``_prove_person_code``): wrong codes lock that person only. Every entry
+    names the person.
+    """
+    from plugboard.ratelimit import get_lockout_remaining
+
+    client_ip = _client_address(request)
+    generation = person.get("generation")
+    sound = _person_record_is_sound(person)
+    if sound and not (isinstance(generation, str) and generation):
+        # A session without a generation could never be checked again.
+        log.error("auth rejected reason=person_record_malformed")
+        sound = False
+    if not sound:  # a hand-edited record opens nothing; nothing is counted
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin key required"
+        )
+    person_id = person["id"]
+    principal = _person_principal(person)
+    name = str(person.get("name", ""))
+    code = (body.totp_code or "").strip()
+    if not code:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"detail": "MFA code required", "mfa_required": True},
+        )
+    outcome = _prove_person_code(request, person, code, via="login")
+    if outcome == "locked":
+        remaining = get_lockout_remaining(_person_scope(person_id))
+        _audit(
+            "auth.login_blocked",
+            target_type="admin_person",
+            target_id=person_id,
+            details=f"personal key locked out (MFA), IP: {client_ip}",
+            ip=client_ip,
+            principal=principal,
+            principal_name=name,
+        )
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Too many failed attempts. Try again later."},
+            headers={"Retry-After": str(remaining)},
+        )
+    if outcome == "refused_locked":
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Too many failed attempts. Try again later."},
+            headers={"Retry-After": "900"},
+        )
+    if outcome == "refused":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid MFA code"
+        )
+    if outcome != "ok":  # the store failed: refuse, count nothing
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin key required"
+        )
+    session_token = _create_admin_session_token(person=person)
+    if not session_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin key required"
+        )
+    _set_principal(request, principal, name)
+    _audit(
+        "auth.login_success",
+        details=f"IP: {client_ip}",
+        ip=client_ip,
+        principal=principal,
+        principal_name=name,
+    )
+    return _session_response(request, session_token)
+
+
+def _session_response(request: Request, session_token: str) -> Response:
+    """204 that sets the admin session cookie (and drops the legacy one)."""
     resp = Response(status_code=204)
     resp.set_cookie(
         _ADMIN_COOKIE_NAME,
@@ -7667,9 +7841,18 @@ async def admin_login(body: AdminLogin, request: Request):
 @app.post("/auth/admin/logout", include_in_schema=False, status_code=204)
 async def admin_logout(request: Request):
     """Revoke this browser's session server-side, then clear its cookie."""
-    nonce = _admin_session_nonce(request.cookies.get(_ADMIN_COOKIE_NAME, ""))
+    session = request.cookies.get(_ADMIN_COOKIE_NAME, "")
+    nonce = _admin_session_nonce(session)
+    # The author is read before the revocation: the entry names who left.
+    found = _admin_session_principal(session) if nonce else None
+    principal, name = found or ("", "")
     if nonce and admin_sessions.revoke(nonce):
-        _audit("auth.logout", details="admin session revoked")
+        _audit(
+            "auth.logout",
+            details="admin session revoked",
+            principal=principal,
+            principal_name=name,
+        )
     resp = Response(status_code=204)
     resp.delete_cookie(_ADMIN_COOKIE_NAME, path="/")
     resp.delete_cookie("llm_admin_key", path="/")
