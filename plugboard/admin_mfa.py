@@ -11,6 +11,7 @@ Public surface:
     is_enrolled() -> bool              # secret exists on disk
     enroll(secret, used_step) -> None  # persist a secret, revoke admin sessions
     setup_code_step(secret, code)      # time-step of a code confirming a secret
+    matching_step(secret, code, at)    # time-step (±1) a code matches, or None
     verify(code) -> bool               # validate a 6-digit code, once
     disable() -> None                  # delete the secret, revoke admin sessions
     generation() -> Optional[str]      # changes on every enroll and disable
@@ -202,16 +203,12 @@ def verify(code: str, at: Optional[float] = None) -> bool:
     if not secret:
         return False
     try:
-        secret_bytes = _b32_normalize(secret)
+        _b32_normalize(secret)
     except (ValueError, TypeError):
         log.error("The stored admin MFA secret is not valid base32: codes refused")
         return False
-    t_now = int((at if at is not None else time.time()) // _PERIOD)
-    for step in range(-_WINDOW, _WINDOW + 1):
-        candidate = _hotp(secret_bytes, t_now + step)
-        if hmac.compare_digest(candidate, code):
-            return _consume_step(t_now + step)
-    return False
+    step = matching_step(secret, code, at)
+    return step is not None and _consume_step(step)
 
 
 def setup_code_step(secret: str, code: str) -> Optional[int]:
@@ -222,6 +219,30 @@ def setup_code_step(secret: str, code: str) -> Optional[int]:
     counter = int(time.time() // _PERIOD)
     candidate = _hotp(_b32_normalize(secret), counter)
     return counter if hmac.compare_digest(candidate, code) else None
+
+
+def matching_step(secret: str, code: str, at: Optional[float] = None) -> Optional[int]:
+    """The time-step, within ±``_WINDOW`` of ``at`` (default now), whose code is ``code``.
+
+    ``None`` for a code that does not match, a malformed code (not six ASCII
+    digits) or a secret that is not base32: no exception, no log, the caller
+    decides what a refusal means. The step is not recorded: single use is the
+    caller's job (``verify`` stores it for ``ADMIN_KEY``).
+    """
+    if not isinstance(code, str) or len(code) != _DIGITS:
+        return None
+    if not (code.isascii() and code.isdigit()):
+        return None
+    try:
+        secret_bytes = _b32_normalize(secret)
+    except (ValueError, TypeError, AttributeError):
+        return None
+    t_now = int((at if at is not None else time.time()) // _PERIOD)
+    for step in range(-_WINDOW, _WINDOW + 1):
+        candidate = _hotp(secret_bytes, t_now + step)
+        if hmac.compare_digest(candidate, code):
+            return t_now + step
+    return None
 
 
 def _consume_step(counter: int) -> bool:
