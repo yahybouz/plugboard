@@ -241,3 +241,67 @@ async def test_concurrent_requests_keep_their_own_trace(client, usage_db, monkey
 
     recorded = {r["request_id"]: r["trace_id"] for r in usage.get_usage("2026_03")}
     assert recorded == sent
+
+
+# ── Background tasks started by an admin request ─────────────────────────────
+
+
+def _request_context():
+    from plugboard.logging_config import _request_id_var
+
+    return _request_id_var.get(), tc.current.get()
+
+
+@pytest.mark.asyncio
+async def test_the_auto_update_run_holds_no_request_or_trace_id(client, monkeypatch):
+    """The run outlives the admin request: its logs must not carry that
+    request's id nor its trace."""
+    from plugboard import app as app_mod
+
+    seen = []
+
+    class Scheduler:
+        running_since = None
+
+        async def run_now(self, reason):
+            await asyncio.sleep(0)  # runs on after the request has answered
+            seen.append(_request_context())
+
+    state = app_mod.app.state
+    monkeypatch.setattr(state, "pricing_scheduler", Scheduler(), raising=False)
+    monkeypatch.setattr(state, "model_availability_scheduler", None, raising=False)
+    before = set(app_mod._background_tasks)
+
+    resp = await client.post(
+        "/admin/auto-update/run", headers={**AUTH, "traceparent": _VALID}
+    )
+
+    assert resp.status_code == 202
+    await asyncio.gather(*(set(app_mod._background_tasks) - before))
+    assert seen == [("-", None)]
+
+
+@pytest.mark.asyncio
+async def test_the_initial_discovery_holds_no_request_or_trace_id(monkeypatch):
+    """Started while an admin request adds a provider."""
+    from plugboard import app as app_mod
+    from plugboard.logging_config import _request_id_var
+
+    seen = []
+
+    def get_provider(provider_id):
+        seen.append(_request_context())
+        return None
+
+    monkeypatch.setattr(app_mod, "get_provider", get_provider)
+    rid_token = _request_id_var.set("admin-request")
+    trace_token = tc.current.set(tc.parse_traceparent(_VALID))
+    try:
+        app_mod._schedule_initial_discovery("probe")
+    finally:
+        tc.current.reset(trace_token)
+        _request_id_var.reset(rid_token)
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    assert seen == [("-", None)]
