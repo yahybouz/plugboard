@@ -104,9 +104,12 @@ async def emit(event: str, data: Dict[str, Any]) -> int:
 async def emit_fire_and_forget(event: str, data: Dict[str, Any]) -> None:
     """Fire-and-forget webhook emission (non-blocking)."""
     import asyncio
+    import contextvars
 
     try:
         loop = asyncio.get_event_loop()
-        loop.create_task(emit(event, data))
+        # A fresh context: delivery must not hold the principal of the admin
+        # request that triggered it (PB-AUTH-01).
+        loop.create_task(emit(event, data), context=contextvars.Context())
     except Exception:
         pass

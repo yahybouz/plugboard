@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import os
 import time as _time
@@ -30,7 +31,9 @@ _pending: Set["asyncio.Task[None]"] = set()
 def in_background(coro: Coroutine[Any, Any, None]) -> None:
     """Send a webhook without holding the request that triggered it; kept
     until done and waited for at shutdown (drain)."""
-    task = asyncio.get_running_loop().create_task(coro)
+    # A fresh context: the send must not hold the principal of the admin
+    # request that triggered it (PB-AUTH-01).
+    task = asyncio.get_running_loop().create_task(coro, context=contextvars.Context())
     _pending.add(task)
     task.add_done_callback(_pending.discard)
 

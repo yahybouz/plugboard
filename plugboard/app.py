@@ -41,6 +41,7 @@ Authentication:
 from __future__ import annotations
 
 import asyncio as _asyncio
+import contextvars
 import hashlib
 import hmac
 import ipaddress
@@ -1702,10 +1703,12 @@ def _admin_request_auth(request: Request) -> str:
         return _person_request_auth(request, token)
     if not _is_admin_key(token):
         return "denied"
-    _set_principal(request, _ADMIN_KEY_PRINCIPAL)
     from plugboard import admin_mfa as _mfa
 
+    # The principal is set only once the request is proven: a refused one
+    # names nobody (its own audit entries name the admin key explicitly).
     if not _mfa.is_required():
+        _set_principal(request, _ADMIN_KEY_PRINCIPAL)
         return "ok"
     code = request.headers.get(_ADMIN_TOTP_HEADER, "").strip()
     if not code:
@@ -1719,12 +1722,14 @@ def _admin_request_auth(request: Request) -> str:
         # The code is single-use: remember it was proven in this request, so
         # an MFA change made with it (step-up) does not ask for it again.
         request.state.admin_mfa_verified = True
+        _set_principal(request, _ADMIN_KEY_PRINCIPAL)
         return "ok"
     locked = record_auth_failure(_ADMIN_SCOPE)
     _audit(
         "auth.mfa_failed",
         details=f"header IP: {client_ip}, locked={locked}",
         ip=client_ip,
+        principal=_ADMIN_KEY_PRINCIPAL,
     )
     return "mfa_required"
 
@@ -5939,7 +5944,11 @@ def _schedule_initial_discovery(provider_id: str) -> None:
         except Exception as exc:  # noqa: BLE001  (background: never crash the app)
             log.warning("Initial discovery for %s failed: %s", provider_id, exc)
 
-    task = _asyncio.get_running_loop().create_task(_run())
+    # A fresh context: the task outlives the admin request and must not hold
+    # its principal (PB-AUTH-01).
+    task = _asyncio.get_running_loop().create_task(
+        _run(), context=contextvars.Context()
+    )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 
@@ -6883,7 +6892,11 @@ async def auto_update_run(_: None = Depends(_require_admin)):
             except Exception as exc:  # noqa: BLE001
                 log.warning("auto-update: %s update failed: %s", name, exc)
 
-    task = _asyncio.create_task(_run(), name="auto-update-run")
+    # A fresh context: the task outlives the admin request and must not hold
+    # its principal (PB-AUTH-01).
+    task = _asyncio.create_task(
+        _run(), name="auto-update-run", context=contextvars.Context()
+    )
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
     _audit("auto_update.run")

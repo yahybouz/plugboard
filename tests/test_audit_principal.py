@@ -317,3 +317,172 @@ async def test_a_background_task_started_by_a_person_writes_without_them(
     assert started["principal"] == f"person:{made['person']['id']}"
     entry = audit.get_audit_log(action="probe.system")[0]
     assert (entry["principal"], entry["principal_name"]) == ("", "")
+
+
+@pytest.fixture
+def admin_mfa_secret(env, monkeypatch):
+    """Global admin MFA required, with a freshly enrolled secret."""
+    from plugboard import admin_mfa
+
+    secret = admin_mfa.generate_secret()
+    admin_mfa.enroll(secret)
+    monkeypatch.setenv("PLUGBOARD_ADMIN_MFA_REQUIRED", "1")
+    return secret
+
+
+@pytest.fixture
+def principal_at_close(monkeypatch):
+    """The principal each request still held when its holder closed."""
+    seen = []
+    real_end = audit.end_request
+
+    def end(token):
+        seen.append(audit.current_principal())
+        real_end(token)
+
+    monkeypatch.setattr(audit, "end_request", end)
+    return seen
+
+
+def _wrong_admin_code(secret: str) -> str:
+    """A code no step of the verification window accepts."""
+    import time
+
+    from plugboard import admin_mfa
+
+    now = time.time()
+    near = {admin_mfa._generate_code(secret, at=now + d) for d in (-60, -30, 0, 30, 60)}
+    return next(c for c in ("000000", "111111", "222222") if c not in near)
+
+
+async def test_a_refused_admin_key_request_names_no_principal(
+    admin_client, env, admin_mfa_secret, principal_at_close
+):
+    from plugboard import admin_mfa
+
+    wrong = {**ph.ADMIN, ph.TOTP: _wrong_admin_code(admin_mfa_secret)}
+    statuses = [await ph.keys_status(admin_client, ph.ADMIN)]  # no code
+    statuses += [await ph.keys_status(admin_client, wrong) for _ in range(5)]
+    good = {**ph.ADMIN, ph.TOTP: admin_mfa._generate_code(admin_mfa_secret)}
+    statuses.append(await ph.keys_status(admin_client, good))  # locked
+    assert statuses == [401, 401, 401, 401, 401, 401, 429]
+    assert principal_at_close == [("", "")] * 7
+    failed = audit.get_audit_log(action="auth.mfa_failed")
+    assert len(failed) == 5
+    assert {(e["principal"], e["principal_name"]) for e in failed} == {
+        ("admin-key", "")
+    }
+
+
+async def test_a_proven_admin_key_request_still_names_the_admin_key(
+    admin_client, env, admin_mfa_secret, principal_at_close
+):
+    from plugboard import admin_mfa
+
+    good = {**ph.ADMIN, ph.TOTP: admin_mfa._generate_code(admin_mfa_secret)}
+    assert await ph.keys_status(admin_client, good) == 200
+    assert principal_at_close == [("admin-key", "")]
+
+
+async def test_the_watchdog_started_by_a_person_runs_without_them(
+    admin_client, env, monkeypatch
+):
+    from plugboard import provider_watchdog as wd
+
+    seen = []
+
+    async def probe_loop():
+        await asyncio.sleep(0)  # runs on after the request has answered
+        seen.append(audit.current_principal())
+        audit.log_action("probe.watchdog")
+
+    monkeypatch.setattr(wd, "_watchdog_loop", probe_loop)
+    monkeypatch.setattr(wd, "_watchdog_task", None)
+    monkeypatch.setattr(wd, "_running", False)
+    made = ph.new_person()
+    admin_client.cookies.clear()
+    r = await admin_client.post(
+        "/admin/watchdog/start", headers=ph.bearer(made, ph.code_now(env, made))
+    )
+    assert r.status_code == 200
+    await wd._watchdog_task
+    started = audit.get_audit_log(action="watchdog.start")[0]
+    assert started["principal"] == f"person:{made['person']['id']}"
+    assert seen == [("", "")]
+    entry = audit.get_audit_log(action="probe.watchdog")[0]
+    assert (entry["principal"], entry["principal_name"]) == ("", "")
+
+
+async def _held_principal(seen):
+    await asyncio.sleep(0)
+    seen.append(audit.current_principal())
+
+
+def _start_watchdog(seen, monkeypatch):
+    from plugboard import provider_watchdog as wd
+
+    monkeypatch.setattr(wd, "_watchdog_loop", lambda: _held_principal(seen))
+    monkeypatch.setattr(wd, "_watchdog_task", None)
+    monkeypatch.setattr(wd, "_running", False)
+    return wd.start_watchdog()
+
+
+def _send_alert(seen, monkeypatch):
+    from plugboard import alerts
+
+    alerts.in_background(_held_principal(seen))
+
+
+def _emit_webhook(seen, monkeypatch):
+    from plugboard import webhooks
+
+    async def emit(event, data):
+        await _held_principal(seen)
+
+    monkeypatch.setattr(webhooks, "emit", emit)
+    return webhooks.emit_fire_and_forget("probe", {})
+
+
+def _flush_changes(seen, monkeypatch):
+    from plugboard import change_events
+
+    async def send(self):
+        await _held_principal(seen)
+
+    monkeypatch.setattr(change_events.ChangeBatch, "_send", send)
+    monkeypatch.setattr(change_events, "append_journal", lambda rows: None)
+    batch = change_events.ChangeBatch()
+    batch.events = [("probe", {})]
+    batch.flush_in_background()
+
+
+def _schedule_discovery(seen, monkeypatch):
+    from plugboard import app as app_mod
+
+    def get_provider(provider_id):
+        seen.append(audit.current_principal())
+        return None
+
+    monkeypatch.setattr(app_mod, "get_provider", get_provider)
+    app_mod._schedule_initial_discovery("probe")
+
+
+@pytest.mark.parametrize(
+    "start",
+    [_start_watchdog, _send_alert, _emit_webhook, _flush_changes, _schedule_discovery],
+)
+async def test_a_task_started_during_an_admin_request_holds_no_principal(
+    audit_db, monkeypatch, start
+):
+    seen = []
+    token = audit.begin_request()
+    try:
+        audit.set_principal("person:ap_0123456789ab", "person-one")
+        started = start(seen, monkeypatch)
+        if asyncio.iscoroutine(started):
+            await started
+    finally:
+        audit.end_request(token)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert seen == [("", "")]

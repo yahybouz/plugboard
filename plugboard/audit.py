@@ -18,10 +18,14 @@ holder in a context variable, the authentication fills it
 and ``log_action`` reads it. Each HTTP request opens its own holder (the
 request middleware of ``plugboard.app``), so two requests never share one.
 
-A background task started while serving an admin request copies that
-context, holder included. Every audit entry such a task writes today is a
-``system`` one (retention, quota limit, egress refusal, unreadable key), and
-a ``system`` entry never takes the request's principal: it names none
+The authentication sets a principal only on a request it accepts: a
+refused request names nobody, and its own audit entries name the
+credential explicitly.
+
+A background task started while serving an admin request (watchdog, job
+run, webhook or alert delivery, discovery, auto-update) runs in a fresh
+``contextvars.Context()``, so it never holds the request's principal. A
+``system`` entry never takes the request's principal either: it names none
 unless one is passed explicitly.
 """
 

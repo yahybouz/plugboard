@@ -12,6 +12,7 @@ Provides:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import secrets
 import sqlite3
@@ -562,7 +563,11 @@ def start_watchdog() -> Optional[asyncio.Task]:
         log.info("Watchdog already running")
         return _watchdog_task
     _running = True
-    _watchdog_task = asyncio.create_task(_watchdog_loop())
+    # A fresh context: started from an admin request, the loop must not hold
+    # that request's principal (PB-AUTH-01).
+    _watchdog_task = asyncio.create_task(
+        _watchdog_loop(), context=contextvars.Context()
+    )
     return _watchdog_task
 
 

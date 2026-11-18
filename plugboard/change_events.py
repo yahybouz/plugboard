@@ -18,6 +18,7 @@ whatever their age.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 from datetime import date, datetime, time, timedelta, timezone
@@ -309,7 +310,11 @@ class ChangeBatch:
                 log.warning("Webhooks: delivery failed: %s", exc)
 
         try:
-            task = asyncio.get_running_loop().create_task(_send())
+            # A fresh context: delivery must not hold the principal of the
+            # admin request that triggered it (PB-AUTH-01).
+            task = asyncio.get_running_loop().create_task(
+                _send(), context=contextvars.Context()
+            )
         except RuntimeError:  # no running loop
             return {"journaled": len(events), "sent": 0, "truncated": 0}
         _pending.add(task)

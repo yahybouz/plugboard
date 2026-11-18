@@ -8,6 +8,7 @@ any socket is opened.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import errno
 import ipaddress
 import json
@@ -193,8 +194,10 @@ def report_refusal(provider_id: str, host: str, source: str) -> bool:
         host,
         source,
     )
+    # A fresh context: the report must not hold the principal of the admin
+    # request that triggered it (PB-AUTH-01).
     task = asyncio.get_running_loop().create_task(
-        _audit_and_alert(provider_id, host, source)
+        _audit_and_alert(provider_id, host, source), context=contextvars.Context()
     )
     _tasks.add(task)  # keep a reference until it finishes
     task.add_done_callback(_tasks.discard)

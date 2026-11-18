@@ -19,6 +19,7 @@ scheduled runs are disabled.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -265,7 +266,9 @@ async def run_job(job_id: str, app_state: Any = None) -> Dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             log.warning("job %s failed: %s", job_id, exc)
 
-    task = asyncio.create_task(_run())
+    # A fresh context: the run outlives the admin request and must not hold
+    # its principal (PB-AUTH-01).
+    task = asyncio.create_task(_run(), context=contextvars.Context())
     _manual_runs.add(task)
     task.add_done_callback(_manual_runs.discard)
     log.info("Job %s started by hand", job_id)

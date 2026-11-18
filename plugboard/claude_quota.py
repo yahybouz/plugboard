@@ -28,6 +28,7 @@ audit log (actor ``system``), not every call of a burst.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import re
@@ -212,8 +213,11 @@ def note_limit(provider: Mapping[str, Any], model: str, exc: BaseException) -> N
         except RuntimeError:
             record_limit(provider_id, model, **kwargs)
             return
+        # A fresh context: the record must not hold the principal of the
+        # admin request that triggered it (PB-AUTH-01).
         task = loop.create_task(
-            asyncio.to_thread(record_limit, provider_id, model, **kwargs)
+            asyncio.to_thread(record_limit, provider_id, model, **kwargs),
+            context=contextvars.Context(),
         )
         _tasks.add(task)  # keep a reference until it finishes
         task.add_done_callback(_tasks.discard)
