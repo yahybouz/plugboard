@@ -2,8 +2,8 @@
 
 Routes ``/admin/cache*``, ``/admin/claude-quota``, ``/admin/monitoring*``,
 ``/admin/watchdog*``, ``/admin/models/status``, ``/admin/models/refresh``,
-``/admin/audit`` and ``/metrics/prometheus``, moved verbatim from
-``plugboard/app.py`` (PLU-36). ``core`` is the ``plugboard.app`` module that
+``/admin/audit`` and ``/metrics/prometheus``, moved from ``plugboard/app.py``
+(PLU-36), behaviour unchanged. ``core`` is the ``plugboard.app`` module that
 registers them: the names the tests patch there, and the refresh state that
 stays there (``_MODEL_REFRESH_LOCK``, ``_MODEL_REFRESH_COOLDOWN_S``,
 ``_LAST_REFRESH_AT``), are read as ``core.<name>`` when a handler runs; the
@@ -139,7 +139,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
     @app.post("/admin/watchdog/start")
     async def admin_watchdog_start(_: None = Depends(core._require_admin)):
         """Start the provider watchdog background task."""
-        from plugboard.provider_watchdog import start_watchdog, get_watchdog_status
+        from plugboard.provider_watchdog import get_watchdog_status, start_watchdog
 
         start_watchdog()
         core._audit("watchdog.start")
@@ -148,7 +148,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
     @app.post("/admin/watchdog/stop")
     async def admin_watchdog_stop(_: None = Depends(core._require_admin)):
         """Stop the provider watchdog background task."""
-        from plugboard.provider_watchdog import stop_watchdog, get_watchdog_status
+        from plugboard.provider_watchdog import get_watchdog_status, stop_watchdog
 
         stop_watchdog()
         core._audit("watchdog.stop")

@@ -3,10 +3,10 @@
 Routes ``/admin/ollama/settings``, ``/admin/ollama/switch``,
 ``/admin/ollama/cloud-catalog``, ``/admin/ollama/status``,
 ``/admin/ollama/models``, ``/admin/ollama/models/pull`` and
-``/admin/ollama/models/{name:path}`` (DELETE, then GET), moved verbatim from
-``plugboard/app.py`` (PLU-36). ``core`` is the ``plugboard.app`` module that
-registers them: ``_require_admin``, ``_audit`` and ``get_provider`` are read
-as ``core.<name>`` when a handler runs.
+``/admin/ollama/models/{name:path}`` (DELETE, then GET), moved from
+``plugboard/app.py`` (PLU-36), behaviour unchanged. ``core`` is the
+``plugboard.app`` module that registers them: ``_require_admin``, ``_audit``
+and ``get_provider`` are read as ``core.<name>`` when a handler runs.
 """
 
 from __future__ import annotations
@@ -194,7 +194,6 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         not an Ollama Cloud id (403), or when the registry size does not fit on
         disk with the margin (507). An unknown size streams under a disk guard.
         """
-        import json as _json
         from plugboard import ollama_admin
         from plugboard.ollama import delete_model, pull_model
 
@@ -233,18 +232,18 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                         delete=delete_model,
                     )
                 async for progress in progress_iter:
-                    yield _json.dumps(progress) + "\n"
+                    yield json.dumps(progress) + "\n"
                 # Sync models after pull
                 provider = core.get_provider("ollama")
                 if provider:
                     from plugboard.ollama import _sync_models
 
                     await _sync_models(provider)
-                yield _json.dumps({"status": "complete", "model": name}) + "\n"
+                yield json.dumps({"status": "complete", "model": name}) + "\n"
             except ollama_admin.PullAborted:
                 return
             except Exception as exc:
-                yield _json.dumps({"status": "error", "error": str(exc)}) + "\n"
+                yield json.dumps({"status": "error", "error": str(exc)}) + "\n"
 
         core._audit("ollama.pull", target_type="model", target_id=name)
         return StreamingResponse(_stream(), media_type="application/x-ndjson")

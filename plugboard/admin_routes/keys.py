@@ -3,10 +3,10 @@
 Routes ``/admin/keys``, ``/admin/keys/client/{client_id}``,
 ``/admin/keys/{key_id}/revoke``, ``/admin/keys/{key_id}`` (DELETE),
 ``/admin/keys/{key_id}/rotate``, ``/admin/orgs``, ``/admin/orgs/{org_id}/keys``
-and ``/admin/orgs/{org_id}/usage/{month}``, moved verbatim from
-``plugboard/app.py`` (PLU-36). ``core`` is the ``plugboard.app`` module that
-registers them: ``_require_admin``, ``_audit``, ``_month_param``, ``_usage`` and
-``load_providers`` are read as ``core.<name>`` when a handler runs.
+and ``/admin/orgs/{org_id}/usage/{month}``, moved from ``plugboard/app.py``
+(PLU-36), behaviour unchanged. ``core`` is the ``plugboard.app`` module that
+registers them: ``_require_admin``, ``_audit``, ``_month_param``, ``_usage``
+and ``load_providers`` are read as ``core.<name>`` when a handler runs.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, field_validator
 
 from plugboard import envcompat
-from plugboard.webhooks import emit_fire_and_forget as _webhook
 from plugboard.apikeys import (
     KeyRevoked,
     create_key,
@@ -35,6 +34,7 @@ from plugboard.apikeys import (
 )
 from plugboard.legacy_connectors import is_removed_provider
 from plugboard.router import is_unknown_model
+from plugboard.webhooks import emit_fire_and_forget as _webhook
 
 log = logging.getLogger("plugboard.app")
 

@@ -2,10 +2,10 @@
 
 Routes ``/admin/oauth/start``, ``/oauth/callback/{source}`` (public, guarded by
 the state token), ``/admin/oauth/device/poll/{state}``,
-``/admin/oauth/connections`` and ``/admin/oauth/{source}``, moved verbatim from
-``plugboard/app.py`` (PLU-36). ``core`` is the ``plugboard.app`` module that
-registers them: the names the tests patch there are read as ``core.<name>``
-when a handler runs.
+``/admin/oauth/connections`` and ``/admin/oauth/{source}``, moved from
+``plugboard/app.py`` (PLU-36), behaviour unchanged. ``core`` is the
+``plugboard.app`` module that registers them: the names the tests patch there
+are read as ``core.<name>`` when a handler runs.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """Provider management (admin).
 
-Routes ``/providers`` and ``/providers/{provider_id}`` (update, delete,
-health, discover), moved verbatim from ``plugboard/app.py`` (PLU-36).
+Routes ``/providers`` and ``/providers/{provider_id}`` (update, delete, health,
+discover), moved from ``plugboard/app.py`` (PLU-36), behaviour unchanged.
 ``core`` is the ``plugboard.app`` module that registers them: the names the
 tests patch there, and the outbound-address guard that stays there
 (``_require_parsable_base_url``, ``_check_guard_on_edit``,
@@ -18,20 +18,19 @@ from typing import Annotated, Any, Dict, List, Optional
 from fastapi import Depends, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from plugboard import netguard
-from plugboard.webhooks import emit_fire_and_forget as _webhook
-from plugboard import config as _cfg_mod
+from plugboard import config, netguard
+from plugboard import live_requests as _live
 from plugboard.config import (
     create_provider,
     delete_provider,
     mask_token,
 )
-from plugboard import live_requests as _live
 from plugboard.legacy_connectors import (
     REMOVED_CONNECTOR_ERROR,
     is_removed_provider,
     require_supported_provider,
 )
+from plugboard.webhooks import emit_fire_and_forget as _webhook
 
 
 class ProviderCreate(BaseModel):
@@ -163,7 +162,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         try:
             # The domain allowlist first, so its refusals stay audited (TM-004);
             # then an address that cannot be parsed, guard or not (BUG-66).
-            _cfg_mod.check_provider_domain_allowed(body.base_url)
+            config.check_provider_domain_allowed(body.base_url)
             core._require_parsable_base_url(body.base_url, "Provider base_url")
             record = create_provider(
                 name=body.name,
@@ -177,7 +176,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                 auth_header_prefix=body.auth_header_prefix,
                 egress_guard=body.egress_guard,
             )
-        except _cfg_mod.ProviderDomainNotAllowed as exc:
+        except config.ProviderDomainNotAllowed as exc:
             core._audit(
                 "provider.domain.rejected",
                 actor=actor,
@@ -232,12 +231,12 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         try:
             if before is not None and "base_url" in updates:
                 # As on creation: the audited allowlist first (TM-004), then BUG-66.
-                _cfg_mod.check_provider_domain_allowed(updates["base_url"])
+                config.check_provider_domain_allowed(updates["base_url"])
                 core._require_parsable_base_url(
                     updates["base_url"], "Provider base_url"
                 )
             record = core.update_provider(provider_id, updates)
-        except _cfg_mod.ProviderDomainNotAllowed as exc:
+        except config.ProviderDomainNotAllowed as exc:
             core._audit(
                 "provider.domain.rejected",
                 target_type="provider",

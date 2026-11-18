@@ -1,10 +1,10 @@
 """Circuit breakers and internet-access probes of the models (admin).
 
-Routes ``/admin/circuits*`` and ``/admin/models/check-internet*``, moved
-verbatim from ``plugboard/app.py`` (PLU-36). ``core`` is the ``plugboard.app``
-module that registers them: the names the tests patch there, and the bulk-check
-state that stays there (``_BULK_INTERNET_*``), are read as ``core.<name>`` when
-a handler runs.
+Routes ``/admin/circuits*`` and ``/admin/models/check-internet*``, moved from
+``plugboard/app.py`` (PLU-36), behaviour unchanged. ``core`` is the
+``plugboard.app`` module that registers them: the names the tests patch there,
+and the bulk-check state that stays there (``_BULK_INTERNET_*``), are read as
+``core.<name>`` when a handler runs.
 """
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
     async def get_circuits(_: None = Depends(core._require_admin)):
         """View circuit breaker status for all tracked models."""
         from plugboard.circuit_breaker import (
-            get_all_circuits,
             TIER_TIMEOUTS,
+            get_all_circuits,
         )
 
         return {

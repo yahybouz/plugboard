@@ -1,10 +1,10 @@
 """Background jobs and crons (admin).
 
 Routes ``/admin/jobs``, ``/admin/jobs/{job_id}/log`` and
-``/admin/jobs/{job_id}/run``, moved verbatim from ``plugboard/app.py``
-(PLU-36). ``core`` is the ``plugboard.app`` module that registers them:
-``_require_admin`` and ``_audit`` are read as ``core.<name>`` when a handler
-runs; ``app`` is the application itself, read for ``app.state``.
+``/admin/jobs/{job_id}/run``, moved from ``plugboard/app.py`` (PLU-36),
+behaviour unchanged. ``core`` is the ``plugboard.app`` module that registers
+them: ``_require_admin`` and ``_audit`` are read as ``core.<name>`` when a
+handler runs; ``app`` is the application itself, read for ``app.state``.
 """
 
 from __future__ import annotations

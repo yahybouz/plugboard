@@ -3,10 +3,11 @@
 Routes ``/login``, ``/auth/admin/login``, ``/auth/admin/logout``,
 ``/auth/admin/logout-all``, ``/admin/mfa/status``, ``/admin/mfa/begin``,
 ``/admin/mfa/setup``, ``/admin/mfa/verify`` and ``/admin/mfa`` (DELETE), moved
-verbatim from ``plugboard/app.py`` (PLU-36). ``core`` is the ``plugboard.app``
-module that registers them: the auto-login helpers (``_auto_login_refusal``,
-``_local_login_proof``, ``_should_audit_refusal``...), the session and
-personal-key helpers (``_create_admin_session_token``, ``_prove_person_code``,
+from ``plugboard/app.py`` (PLU-36), behaviour unchanged. ``core`` is the
+``plugboard.app`` module that registers them: the auto-login helpers
+(``_auto_login_refusal``, ``_local_login_proof``,
+``_should_audit_refusal``...), the session and personal-key helpers
+(``_create_admin_session_token``, ``_prove_person_code``,
 ``_person_scope``...), ``_require_admin``, ``_audit``, ``_client_address`` and
 ``_is_admin_key`` are read as ``core.<name>`` when a handler runs.
 """
@@ -23,8 +24,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
 
-from plugboard import admin_people
-from plugboard import admin_sessions
+from plugboard import admin_people, admin_sessions
 
 log = logging.getLogger("plugboard.app")
 

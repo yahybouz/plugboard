@@ -2,12 +2,12 @@
 
 Routes ``/admin/direct-providers/presets``, ``/admin/direct-providers/test``,
 ``/admin/direct-providers/{preset_key}/check`` and
-``/admin/direct-providers/{preset_key}``, moved verbatim from
-``plugboard/app.py`` (PLU-36). ``core`` is the ``plugboard.app`` module that
+``/admin/direct-providers/{preset_key}``, moved from ``plugboard/app.py``
+(PLU-36), behaviour unchanged. ``core`` is the ``plugboard.app`` module that
 registers them: the names the tests patch there, the outbound-address guard
-that stays there (``_require_parsable_base_url``, ``_require_public_host``,
-``_require_guard_allows``, shared with ``/providers``) and
-``_background_tasks`` are read as ``core.<name>`` when a handler runs.
+that stays there (``_require_parsable_base_url``, shared with ``/providers``,
+and ``_require_public_host``) and ``_background_tasks`` are read as
+``core.<name>`` when a handler runs.
 """
 
 from __future__ import annotations
@@ -23,9 +23,9 @@ from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from plugboard import netguard
-from plugboard.webhooks import emit_fire_and_forget as _webhook
-from plugboard.legacy_connectors import is_removed_model
 from plugboard.decisions import is_decision_model
+from plugboard.legacy_connectors import is_removed_model
+from plugboard.webhooks import emit_fire_and_forget as _webhook
 
 log = logging.getLogger("plugboard.app")
 
@@ -228,8 +228,8 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
     ):
         """Check a key against a preset or custom endpoint without creating anything."""
         from plugboard.config import (
-            check_provider_domain_allowed,
             ProviderDomainNotAllowed,
+            check_provider_domain_allowed,
         )
         from plugboard.direct_providers import get_preset
 

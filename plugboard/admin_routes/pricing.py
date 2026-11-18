@@ -2,13 +2,13 @@
 
 Routes ``/admin/pricing*`` (LLM-read prices, suggestions, month grids, scrape,
 scheduler status), ``/admin/models/scheduler/status``, ``/admin/auto-update*``,
-``/admin/catalog/history`` and ``/admin/coverage/*``, moved verbatim from
-``plugboard/app.py`` (PLU-36). ``core`` is the ``plugboard.app`` module that
-registers them: the names the tests patch there (``_audit``, ``list_models``,
-``load_providers``) and the shared state that stays there (``_MONTH_RE``,
-``_month_param``, ``_background_tasks``) are read as ``core.<name>`` when a
-handler runs; ``app`` is the application itself, read for ``app.state`` (the
-pricing and model-availability schedulers).
+``/admin/catalog/history`` and ``/admin/coverage/*``, moved from
+``plugboard/app.py`` (PLU-36), behaviour unchanged. ``core`` is the
+``plugboard.app`` module that registers them: the names the tests patch there
+(``_audit``, ``list_models``, ``load_providers``) and the shared state that
+stays there (``_MONTH_RE``, ``_month_param``, ``_background_tasks``) are read
+as ``core.<name>`` when a handler runs; ``app`` is the application itself, read
+for ``app.state`` (the pricing and model-availability schedulers).
 """
 
 from __future__ import annotations

@@ -119,17 +119,19 @@ from plugboard.ratelimit import (
 from plugboard.decision_api import router as decision_router
 from plugboard.embeddings_api import router as embeddings_router
 from plugboard.admin_people_api import build_router as build_people_router
-from plugboard.admin_routes import model_probes as _admin_model_probes
-from plugboard.admin_routes import monitoring as _admin_monitoring
-from plugboard.admin_routes import providers as _admin_providers
-from plugboard.admin_routes import oauth as _admin_oauth
-from plugboard.admin_routes import direct_providers as _admin_direct_providers
-from plugboard.admin_routes import ollama as _admin_ollama
-from plugboard.admin_routes import keys as _admin_keys
-from plugboard.admin_routes import jobs as _admin_jobs
-from plugboard.admin_routes import pricing as _admin_pricing
-from plugboard.admin_routes import usage as _admin_usage
-from plugboard.admin_routes import auth as _admin_auth
+from plugboard.admin_routes import (
+    auth as _admin_auth,
+    direct_providers as _admin_direct_providers,
+    jobs as _admin_jobs,
+    keys as _admin_keys,
+    model_probes as _admin_model_probes,
+    monitoring as _admin_monitoring,
+    oauth as _admin_oauth,
+    ollama as _admin_ollama,
+    pricing as _admin_pricing,
+    providers as _admin_providers,
+    usage as _admin_usage,
+)
 from plugboard.suivi_api import build_router as build_suivi_router
 from plugboard.legacy_connectors import (
     REMOVED_CONNECTOR_ERROR,
@@ -4279,6 +4281,8 @@ async def get_metrics(_: None = Depends(_require_admin)):
     return get_stats(per_model=True)
 
 
+# -- Bulk internet check state, read by admin_routes/model_probes.py ----------
+
 # Concurrency limit for the bulk internet check. Each probe is a real LLM
 # call; running 30+ in parallel would saturate provider rate limits. Tunable
 # via env. Cooldown is shared with /admin/models/refresh to prevent admins
@@ -4293,13 +4297,14 @@ _BULK_INTERNET_PER_MODEL_TIMEOUT_S = max(
 _BULK_INTERNET_LOCK = _asyncio.Lock()
 
 
-# -- /admin/circuits, /admin/models/check-internet: admin_routes/model_probes.py
+# -- /admin/circuits, /admin/models/check-internet ----------------------------
+#    declared by admin_routes/model_probes.py
 _model_probes = _admin_model_probes.register(app, _THIS_MODULE)
 check_model_internet_access = _model_probes.check_model_internet_access
 check_all_models_internet_access = _model_probes.check_all_models_internet_access
 
 
-# -- /admin/models/status and /admin/models/refresh --------------------------
+# -- Model refresh state, read by admin_routes/monitoring.py ------------------
 
 _MODEL_REFRESH_LOCK = _asyncio.Lock()
 _MODEL_REFRESH_COOLDOWN_S: float = envcompat.get_float(
@@ -4308,12 +4313,13 @@ _MODEL_REFRESH_COOLDOWN_S: float = envcompat.get_float(
 _LAST_REFRESH_AT: float = 0.0  # time.monotonic() stamp of last successful refresh
 
 
-# -- /admin/cache ... /admin/audit, /metrics/prometheus: admin_routes/monitoring.py
+# -- /admin/cache ... /admin/audit, /metrics/prometheus -----------------------
+#    declared by admin_routes/monitoring.py
 _monitoring = _admin_monitoring.register(app, _THIS_MODULE)
 admin_models_refresh = _monitoring.admin_models_refresh
 
 
-# -- Provider management -----------------------------------------------------
+# -- Base URL check shared by /providers and /admin/direct-providers ----------
 
 
 def _require_parsable_base_url(base_url: str, label: str) -> None:
@@ -4337,17 +4343,17 @@ def _require_parsable_base_url(base_url: str, label: str) -> None:
         raise HTTPException(422, f"{label} refused: not a valid address ({exc})")
 
 
-# -- /providers: admin_routes/providers.py
+# -- /providers: admin_routes/providers.py ------------------------------------
 _providers = _admin_providers.register(app, _THIS_MODULE)
 get_providers = _providers.get_providers
 
 
-# -- /admin/oauth, /oauth/callback: admin_routes/oauth.py
+# -- /admin/oauth, /oauth/callback: admin_routes/oauth.py ---------------------
 _oauth = _admin_oauth.register(app, _THIS_MODULE)
 oauth_disconnect = _oauth.oauth_disconnect
 
 
-# -- Egress guard shared by /providers and /admin/direct-providers
+# -- Egress guard shared by /providers and /admin/direct-providers ------------
 
 
 async def _require_public_host(base_url: str, *, label: str = "Catalog preset") -> list:
@@ -4432,7 +4438,7 @@ async def _require_guard_allows(
         raise
 
 
-# -- /admin/direct-providers: admin_routes/direct_providers.py
+# -- /admin/direct-providers: admin_routes/direct_providers.py ----------------
 _direct_providers = _admin_direct_providers.register(app, _THIS_MODULE)
 _test_openai_endpoint = _direct_providers._test_openai_endpoint
 _schedule_initial_discovery = _direct_providers._schedule_initial_discovery
@@ -4441,28 +4447,28 @@ _schedule_initial_discovery = _direct_providers._schedule_initial_discovery
 _background_tasks: set = set()
 
 
-# -- /admin/ollama: admin_routes/ollama.py
+# -- /admin/ollama: admin_routes/ollama.py ------------------------------------
 _admin_ollama.register(app, _THIS_MODULE)
 
 
-# -- /admin/keys, /admin/orgs: admin_routes/keys.py
+# -- /admin/keys, /admin/orgs: admin_routes/keys.py ---------------------------
 _keys = _admin_keys.register(app, _THIS_MODULE)
 _default_rpm_limit = _keys._default_rpm_limit
 _default_monthly_limit_usd = _keys._default_monthly_limit_usd
 
 
-# -- /admin/jobs: admin_routes/jobs.py
+# -- /admin/jobs: admin_routes/jobs.py ----------------------------------------
 _admin_jobs.register(app, _THIS_MODULE)
 
 
-# -- /admin/pricing, schedulers, auto-update, catalog history, coverage:
-#    admin_routes/pricing.py
+# -- /admin/pricing, schedulers, auto-update, catalog history, coverage -------
+#    declared by admin_routes/pricing.py
 _pricing = _admin_pricing.register(app, _THIS_MODULE)
 _suggestion_action = _pricing._suggestion_action
 admin_catalog_history = _pricing.admin_catalog_history
 
 
-# -- /admin/usage, /admin/retention: admin_routes/usage.py
+# -- /admin/usage, /admin/retention: admin_routes/usage.py --------------------
 _admin_usage.register(app, _THIS_MODULE)
 
 
@@ -4738,7 +4744,7 @@ def _issue_local_login_token() -> None:
     )
 
 
-# -- /login, /auth/admin/*, /admin/mfa: admin_routes/auth.py
+# -- /login, /auth/admin/*, /admin/mfa: admin_routes/auth.py ------------------
 _auth = _admin_auth.register(app, _THIS_MODULE)
 _LOGIN_HTML_TEMPLATE = _auth._LOGIN_HTML_TEMPLATE
 

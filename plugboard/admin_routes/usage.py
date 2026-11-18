@@ -1,11 +1,11 @@
 """Usage reporting and retention (admin).
 
-Routes ``/admin/usage/{month}`` (read and delete), ``/admin/usage/{month}/export``,
-``/admin/usage/{month}/key/{key_id}``, ``/admin/usage/purge``,
-``/admin/retention``, ``/admin/usage/migrate`` and
-``/admin/usage/{month}/{client_id}``, moved verbatim from ``plugboard/app.py``
-(PLU-36). ``core`` is the ``plugboard.app`` module that registers them:
-``_require_admin``, ``_month_param`` and ``_usage`` are read as
+Routes ``/admin/usage/{month}`` (read and delete),
+``/admin/usage/{month}/export``, ``/admin/usage/{month}/key/{key_id}``,
+``/admin/usage/purge``, ``/admin/retention``, ``/admin/usage/migrate`` and
+``/admin/usage/{month}/{client_id}``, moved from ``plugboard/app.py`` (PLU-36),
+behaviour unchanged. ``core`` is the ``plugboard.app`` module that registers
+them: ``_require_admin``, ``_month_param`` and ``_usage`` are read as
 ``core.<name>`` when a handler runs.
 """
 
