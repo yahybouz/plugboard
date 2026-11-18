@@ -61,7 +61,7 @@ A code is accepted once, and no older code after it, as for `ADMIN_KEY`. A sessi
 
 **What a personal key does not do.**
 
-- It does not call the client API: `/v1/*` takes client keys (`pb_…`), and `API_KEY` is not a personal key.
+- It does not call the client API as a bearer: `/v1/*` takes client keys (`pb_…`), and `API_KEY` is not a personal key. A session a person opened reaches the Playground like any admin session: it is the `admin` client on `/v1/*` (no budget, model restriction or RPM limit), and that usage is recorded under `admin`, not under the person.
 - It does not manage the second factor of `ADMIN_KEY`: `POST /admin/mfa/begin`, `POST /admin/mfa/setup`, `POST /admin/mfa/verify` and `DELETE /admin/mfa` answer `403` to a person (and to a session a person opened), before any code is read, and the refusal is audited as `admin.mfa.person_refused`. Only `GET /admin/mfa/status` answers. Changing the second factor of `ADMIN_KEY` stays with `ADMIN_KEY` and its authenticator.
 
 **What cuts sessions.** Enrolling, rotating or disabling the MFA of `ADMIN_KEY`, and **Log out everywhere**, revoke every session, those of personal keys included; the keys themselves stay valid and their holders sign in again. Revoking a key cuts only that person's sessions.
@@ -72,7 +72,7 @@ A code is accepted once, and no older code after it, as for `ADMIN_KEY`. A sessi
 
 **Where things are.** The store is `data/admin_people.json` (mode `0600`): it lives in `data/`, so the [backup](deployment.md#backups-and-upgrades) holds it, and `scripts/rotate_encryption_key.py` re-encrypts the personal secrets with the others (a rotation refuses to run when the file is damaged). The logs mask `pba_…` keys (`pba_***REDACTED***`). These routes are admin routes: they stay out of the client API contract (`CONTRACT_VERSION` is unchanged, 3.0.1) and are documented by the admin-only `/openapi.json` of the instance.
 
-**Rolling back to 4.14.6.** The older version ignores the new store and the two new audit columns, so it starts and serves as before, but personal keys then stop working (only `ADMIN_KEY` is accepted). A session a person opened before the rollback is still honoured by the older version, with full admin rights and no name in the audit log, until it expires: use **Log out everywhere** (or revoke the keys first) before rolling back. Rolling forward again, the keys work again unless revoked meanwhile.
+**Rolling back to 4.14.6.** The older version ignores the new store and the two new audit columns, so it starts and serves as before, but personal keys then stop working (only `ADMIN_KEY` is accepted). A session a person opened before the rollback is still honoured by the older version, with full admin rights and no name in the audit log, until it expires: use **Log out everywhere** (or revoke the keys first) before rolling back. Rolling forward again, the keys work again unless revoked meanwhile. If `ENCRYPTION_KEY` was rotated while 4.14.6 ran, the older script left the personal secrets on the former key: back on this version every personal key is refused without counting a wrong code (the log says `Personal TOTP secret of <id> cannot be decrypted`); revoke those keys and create new ones.
 
 ## Dashboard pages
 

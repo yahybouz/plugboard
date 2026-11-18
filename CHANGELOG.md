@@ -18,7 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **The second factor of `ADMIN_KEY` stays with `ADMIN_KEY`** (PB-AUTH-01): `POST /admin/mfa/begin`, `/admin/mfa/setup`, `/admin/mfa/verify` and `DELETE /admin/mfa` answer `403` to a person, before any code is read, and audit the refusal; `GET /admin/mfa/status` still answers.
 - **Personal keys are masked in logs and covered by the key rotation** (PB-AUTH-01): `plugboard/log_redact.py` masks `pba_…` (glued to a word or cut short too), and `scripts/rotate_encryption_key.py` re-encrypts the personal TOTP secrets with `ENCRYPTION_KEY` (and refuses to run when `admin_people.json` is damaged).
 
-Rolling back to 4.14.6 works (the older version ignores the store and the two audit columns), but personal keys then stop working, and a session a person opened stays valid until it expires: use **Log out everywhere** first.
+**Rolling back to 4.14.6**: it works (the older version ignores the store and the two audit columns), but personal keys then stop working, and a session a person opened stays valid until it expires: use **Log out everywhere** first. An `ENCRYPTION_KEY` rotation made under 4.14.6 leaves the personal secrets on the former key: rolling forward again, those keys are refused and must be revoked and created anew ([details](docs/guide/monitoring.md#personal-dashboard-keys)).
 
 **API contract**: unchanged, still **3.0.1** (`docs/api/openapi.json`, `docs/api/mcp.json`). The `/admin/people` routes are admin routes, documented by the admin-only `/openapi.json` of the instance and outside the client contract; `tests/test_admin_people_contract.py` keeps them out of it.
 

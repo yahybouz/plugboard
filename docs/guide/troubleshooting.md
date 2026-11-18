@@ -67,7 +67,8 @@ With `PLUGBOARD_ADMIN_MFA_REQUIRED=1`, an `admin_mfa.json` that exists but canno
 
 ## Dashboard login problems
 
-- **`Admin key required`**: the key does not match `ADMIN_KEY`. Check the value the server actually loaded (restart after editing `.env`).
+- **`Admin key required`**: the key does not match `ADMIN_KEY`. Check the value the server actually loaded (restart after editing `.env`). With a personal key (`pba_…`), it also means the key is unknown or revoked, or that `data/admin_people.json` cannot be read (the log says so; `ADMIN_KEY` still works).
+- **`Invalid MFA code` when signing in with a personal key** (a script sending `X-Plugboard-Admin-TOTP` gets `Admin MFA required` instead): the code is not one of that person's own authenticator, or it was already used. After 5 wrong codes within a minute that key alone is locked out for 15 minutes (`429`); `ADMIN_KEY` and the other people are not affected ([personal dashboard keys](monitoring.md#personal-dashboard-keys)).
 - **`Too many failed attempts`**: after 5 failures within a minute, the client IP is locked out for 15 minutes.
 - **Signed out after a while**: sessions last `ADMIN_SESSION_MAX_AGE` (8 hours). Changing `ADMIN_KEY` invalidates every session.
 - **Cookie not kept over plain HTTP on a server**: with `COOKIE_SECURE=auto` the cookie is `Secure` for any host other than localhost, so the browser drops it over `http://`. Serve the dashboard over HTTPS (see [Deployment](deployment.md#behind-a-reverse-proxy)).

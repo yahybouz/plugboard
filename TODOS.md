@@ -28,18 +28,6 @@ Deferred work, with the reason it was deferred. Items move into a release when p
 **Priority:** P2
 **Depends on:** None
 
-### MFA step-up
-
-**What:** Require a current TOTP code to rotate (`/admin/mfa/setup`) or disable (`DELETE /admin/mfa`) MFA.
-
-**Why:** Any admin session, including an auto-login one, can currently remove the second factor.
-
-**Context:** `plugboard/app.py` MFA routes; `admin_mfa.verify`.
-
-**Effort:** S
-**Priority:** P2
-**Depends on:** None
-
 ## Release hardening (deferred from the stage 2 plan)
 
 ### Private companion and identity checks before publication
