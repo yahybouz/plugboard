@@ -30,3 +30,11 @@ def test_matching_step_refuses_an_old_code():
 
 def test_matching_step_refuses_a_secret_that_is_not_base32():
     assert admin_mfa.matching_step("not base32 !", "123456", at=T) is None
+
+
+@pytest.mark.parametrize("code", ["²²²²²²", "١٢٣٤٥٦"])
+def test_verify_refuses_non_ascii_digits_without_raising(monkeypatch, tmp_path, code):
+    monkeypatch.setattr(admin_mfa, "_MFA_FILE", tmp_path / "admin_mfa.json")
+    admin_mfa.enroll(admin_mfa.generate_secret())
+    assert code.isdigit() and not code.isascii()
+    assert admin_mfa.verify(code) is False
