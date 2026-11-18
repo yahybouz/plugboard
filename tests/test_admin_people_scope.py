@@ -139,3 +139,33 @@ async def test_an_admin_key_with_the_personal_prefix_keeps_the_admin_bucket(
     async with _client() as c:
         await c.get("/health", headers={"Authorization": f"Bearer {admin_key}"})
     assert set(rl._buckets) == {"key:admin"}
+
+
+# -- An unreadable store: personal keys and their sessions fall back ---------
+
+
+@pytest.mark.parametrize("live", [True, False])
+async def test_an_unreadable_store_counts_any_personal_key_on_the_address(env, live):
+    import plugboard.ratelimit as rl
+
+    made = ph.new_person()
+    key = made["key"] if live else "pba_" + "C" * 43
+    env.store.write_text("{not json")
+    async with _client() as c:
+        await c.get("/health", headers={"Authorization": f"Bearer {key}"})
+    assert set(rl._buckets) == {f"ip:{PROXY}"}
+
+
+async def test_a_person_session_is_refused_once_the_store_is_unreadable(env):
+    import plugboard.ratelimit as rl
+
+    made = ph.new_person()
+    async with _client() as c:
+        cookie = await ph.login(c, made["key"], ph.code_now(env, made))
+        assert await ph.keys_status(c, cookie) == 200
+        env.store.write_text("{not json")
+        rl._buckets.clear()
+        assert await ph.keys_status(c, cookie) == 401
+        c.cookies.clear()
+        assert (await c.get("/v1/me", headers=cookie)).status_code == 401
+    assert set(rl._buckets) == {f"ip:{PROXY}"}

@@ -1308,6 +1308,9 @@ def _key_scope(request: Request) -> str:
     principal = found[0]
     if principal == _ADMIN_KEY_PRINCIPAL:
         return _ADMIN_SCOPE
+    # The id needs no check here: the principal names a person that
+    # ``admin_people.get`` found, and ``get`` refuses any id outside
+    # ``ID_PATTERN`` (that is where the id guard lives).
     return _person_scope(principal.removeprefix("person:"))
 
 
@@ -7676,18 +7679,13 @@ async def admin_login(body: AdminLogin, request: Request):
         and bool(_effective_admin_key())
     )
     person = admin_people.find_by_key(token) if personal else None
-    if personal and person is None and not admin_people.is_readable():
-        # A fault of the store, not a wrong key: refuse and count nothing,
-        # as on the TOTP header.
-        log.error("auth rejected reason=person_store_unavailable")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin key required"
-        )
     known = is_admin_key or person is not None
 
     # Brute-force protection (BUG-119): wrong keys lock their address, but
     # the address lockout never refuses a valid key (the admin key or a live
     # personal key); behind a proxy anyone could otherwise lock them out.
+    # Checked before the store refusal below, so a locked address gets no
+    # free guess while the people store is unreadable (PB-AUTH-01).
     if not known and not check_auth_rate_limit(address):
         remaining = get_lockout_remaining(address)
         _audit(
@@ -7697,6 +7695,14 @@ async def admin_login(body: AdminLogin, request: Request):
             status_code=429,
             content={"detail": "Too many failed attempts. Try again later."},
             headers={"Retry-After": str(remaining)},
+        )
+
+    if personal and person is None and not admin_people.is_readable():
+        # A fault of the store, not a wrong key: refuse and count nothing,
+        # as on the TOTP header.
+        log.error("auth rejected reason=person_store_unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin key required"
         )
 
     if not known:

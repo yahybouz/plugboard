@@ -296,3 +296,29 @@ async def test_a_hand_edited_record_cannot_sign_in_never_a_500(admin_client, env
     assert "set-cookie" not in r.headers
     assert not (env.dir / "admin_sessions.json").exists()
     assert not ratelimit._auth_buckets and not ratelimit._lockouts
+
+
+# -- Address lock before the store: an unreadable store hides no guess -------
+
+
+@pytest.mark.parametrize("guess", ["pba_" + "Y" * 43, "pba_" + "Z" * 42 + "Y"])
+async def test_a_locked_address_is_refused_before_an_unreadable_store(
+    admin_client, env, monkeypatch, guess
+):
+    """An ``ADMIN_KEY`` that starts with ``pba_`` can never be guessed from a
+    locked address while the people store is unreadable."""
+    admin_key = "pba_" + "Z" * 43
+    monkeypatch.setattr("plugboard.app._ADMIN_KEY", admin_key)
+    for _ in range(5):
+        await admin_client.post("/auth/admin/login", json={"key": "not-the-key"})
+    assert not ratelimit.check_auth_rate_limit("ip:127.0.0.1")
+    env.store.write_text("{not json")
+    admin_client.cookies.clear()
+    r = await admin_client.post(
+        "/auth/admin/login", json={"key": guess, "totp_code": "123456"}
+    )
+    assert r.status_code == 429
+    assert r.json()["detail"] == "Too many failed attempts. Try again later."
+    assert "set-cookie" not in r.headers
+    # The right ADMIN_KEY still passes the address lockout (BUG-119).
+    await ph.login(admin_client, admin_key)
