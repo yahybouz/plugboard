@@ -65,7 +65,8 @@ DEVICE_COOKIE = "plugboard_local_device"
 # Functions of plugboard.app, called with the case's request. "a+b" calls a
 # then b on the same request (the order of an admin route that changes MFA),
 # stopping at the first refusal. "a[body]" calls a(request, code) with the
-# case's TOTP code taken off the header and passed as the request body's.
+# case's TOTP code taken off the header and passed as the request body's; when
+# the case sets body_totp, the header keeps its code and the body gets that one.
 FUNCTIONS = (
     "_key_scope",
     "_person_bearer_scope",
@@ -120,6 +121,7 @@ class Case:
     #                   | "client_legacy" ("lle_" key) | "client_legacy_unknown"
     #                   | "garbage" | "person" | "person_revoked"
     totp: str = ""  # "" | "admin" | "admin_wrong" | "person" | "person_wrong"
+    body_totp: str = ""  # as totp, or "absent": the body code of "[body]" calls
     cookie: str = ""  # "" | "admin" | "admin_no_mfa" | "person" | "person_revoked"
     #                   | "person_rekeyed" | "forged" | "expired" | "future"
     #                   | "unregistered" | "pre_enrollment" | "malformed_no_dots"
@@ -535,6 +537,56 @@ CASES = (
     Case("admin_session_malformed_issued_at", cookie="malformed_issued_at"),
     Case("admin_session_malformed_empty_nonce", cookie="malformed_empty_nonce"),
     Case("admin_session_malformed_empty_signature", cookie="malformed_empty_signature"),
+    # Task 2 re-review, N1: the body's code comes before the header's.
+    Case(
+        "mfa_step_up_body_wrong_header_good",
+        mfa="required",
+        cookie="admin",
+        totp="admin",
+        body_totp="admin_wrong",
+    ),
+    Case(
+        "mfa_step_up_body_good_header_wrong",
+        mfa="required",
+        cookie="admin",
+        totp="admin_wrong",
+        body_totp="admin",
+    ),
+    Case(
+        "mfa_step_up_body_absent_header_good",
+        mfa="required",
+        cookie="admin",
+        totp="admin",
+        body_totp="absent",
+    ),
+    Case(
+        "mfa_step_up_body_absent_header_wrong",
+        mfa="required",
+        cookie="admin",
+        totp="admin_wrong",
+        body_totp="absent",
+    ),
+    Case(
+        "mfa_step_up_body_good_header_good",
+        mfa="required",
+        cookie="admin",
+        totp="admin",
+        body_totp="admin",
+    ),
+    Case(
+        "mfa_admin_key_body_wrong_header_good",
+        mfa="required",
+        bearer="admin",
+        totp="admin",
+        body_totp="admin_wrong",
+    ),
+    Case(
+        "mfa_enrolled_step_up_body_wrong_header_good",
+        mfa="enrolled",
+        cookie="admin_no_mfa",
+        totp="admin",
+        body_totp="admin_wrong",
+    ),
 )
 
 
@@ -831,6 +883,11 @@ def _credentials(case: Case, env, mp, tmp: Path) -> dict:
     if case.totp:
         base = codes[case.totp.removesuffix("_wrong")]
         totp = people_helpers.wrong(base) if case.totp.endswith("_wrong") else base
+    body_totp = ""
+    if case.body_totp and case.body_totp != "absent":
+        base = codes[case.body_totp.removesuffix("_wrong")]
+        wrong_code = case.body_totp.endswith("_wrong")
+        body_totp = people_helpers.wrong(base) if wrong_code else base
     authorization = ""
     if case.bearer:
         value = made[case.bearer]
@@ -858,6 +915,7 @@ def _credentials(case: Case, env, mp, tmp: Path) -> dict:
         "cookie": "; ".join(cookies),
         "query": query,
         "markers": markers,
+        "body_totp": body_totp if case.body_totp else None,
         "codes": sorted(code_values),
     }
 
@@ -937,8 +995,11 @@ def run_case(case: Case) -> dict:
             calls = []
             body = name.endswith("[body]")
             for _ in range(case.repeat):
-                request = _request(case, credentials, totp_header=not body)
-                outcome = _decide(app_module, name, request, credentials["totp"])
+                # Without body_totp the code moves from the header to the body.
+                own_body = credentials["body_totp"] is not None
+                code = credentials["body_totp"] if own_body else credentials["totp"]
+                request = _request(case, credentials, totp_header=own_body or not body)
+                outcome = _decide(app_module, name, request, code)
                 calls.append(
                     {
                         "outcome": outcome,

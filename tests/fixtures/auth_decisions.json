@@ -25587,6 +25587,360 @@
    }
   ]
  },
+ "mfa_admin_key_body_wrong_header_good": {
+  "_admin_request_auth": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "ok",
+     {
+      "admin_mfa_verified": true,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_auto_login_refusal": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "not_navigation",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_check_dashboard_auth": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     true,
+     {
+      "admin_mfa_verified": true,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_key_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "key:admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_local_login_proof": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     [
+      "",
+      "no_local_secret"
+     ],
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_person_bearer_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_rate_limit_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "key:admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_refuse_cross_site_session": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_admin": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": true,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_admin+_require_mfa_step_up": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": true,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_mfa_step_up": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_mfa_step_up[body]": [
+   {
+    "audit": [
+     [
+      "admin.mfa.step_up_failed",
+      [
+       [
+        "details",
+        "IP: 127.0.0.1, locked=False"
+       ],
+       [
+        "ip",
+        "127.0.0.1"
+       ]
+      ]
+     ]
+    ],
+    "auth_buckets": [
+     [
+      "key:admin",
+      1
+     ]
+    ],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "http",
+     403,
+     "Invalid MFA code",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_resolve_client": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [
+     [
+      "plugboard.app",
+      "DEBUG",
+      "auth resolved client_id=admin via=admin_token dev_mode=False",
+      "auth resolved client_id=admin via=admin_token dev_mode=False"
+     ]
+    ],
+    "outcome": [
+     "ok",
+     "admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": "admin",
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_should_use_secure_cookie": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     false,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ]
+ },
  "mfa_admin_key_code_replayed": {
   "_admin_request_auth": [
    {
@@ -33354,6 +33708,360 @@
    }
   ]
  },
+ "mfa_enrolled_step_up_body_wrong_header_good": {
+  "_admin_request_auth": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "ok",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_auto_login_refusal": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "not_navigation",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_check_dashboard_auth": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     true,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_key_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "key:admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_local_login_proof": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     [
+      "",
+      "no_local_secret"
+     ],
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_person_bearer_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_rate_limit_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "key:admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_refuse_cross_site_session": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_admin": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_admin+_require_mfa_step_up": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_mfa_step_up": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_mfa_step_up[body]": [
+   {
+    "audit": [
+     [
+      "admin.mfa.step_up_failed",
+      [
+       [
+        "details",
+        "IP: 127.0.0.1, locked=False"
+       ],
+       [
+        "ip",
+        "127.0.0.1"
+       ]
+      ]
+     ]
+    ],
+    "auth_buckets": [
+     [
+      "key:admin",
+      1
+     ]
+    ],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "http",
+     403,
+     "Invalid MFA code",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_resolve_client": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [
+     [
+      "plugboard.app",
+      "DEBUG",
+      "auth resolved client_id=admin via=admin_cookie dev_mode=%s",
+      "auth resolved client_id=admin via=admin_cookie dev_mode=False"
+     ]
+    ],
+    "outcome": [
+     "ok",
+     "admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": "admin",
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_should_use_secure_cookie": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     false,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ]
+ },
  "mfa_flag_only_admin_key": {
   "_admin_request_auth": [
    {
@@ -36388,6 +37096,1796 @@
        ""
       ],
       "key_id": "",
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_should_use_secure_cookie": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     false,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ]
+ },
+ "mfa_step_up_body_absent_header_good": {
+  "_admin_request_auth": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "ok",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_auto_login_refusal": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "not_navigation",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_check_dashboard_auth": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     true,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_key_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "key:admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_local_login_proof": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     [
+      "",
+      "no_local_secret"
+     ],
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_person_bearer_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_rate_limit_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "key:admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_refuse_cross_site_session": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_admin": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_admin+_require_mfa_step_up": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_mfa_step_up": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_mfa_step_up[body]": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_resolve_client": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [
+     [
+      "plugboard.app",
+      "DEBUG",
+      "auth resolved client_id=admin via=admin_cookie dev_mode=%s",
+      "auth resolved client_id=admin via=admin_cookie dev_mode=False"
+     ]
+    ],
+    "outcome": [
+     "ok",
+     "admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": "admin",
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_should_use_secure_cookie": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     false,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ]
+ },
+ "mfa_step_up_body_absent_header_wrong": {
+  "_admin_request_auth": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "ok",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_auto_login_refusal": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "not_navigation",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_check_dashboard_auth": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     true,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_key_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "key:admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_local_login_proof": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     [
+      "",
+      "no_local_secret"
+     ],
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_person_bearer_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_rate_limit_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "key:admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_refuse_cross_site_session": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_admin": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_admin+_require_mfa_step_up": [
+   {
+    "audit": [
+     [
+      "admin.mfa.step_up_failed",
+      [
+       [
+        "details",
+        "IP: 127.0.0.1, locked=False"
+       ],
+       [
+        "ip",
+        "127.0.0.1"
+       ]
+      ]
+     ]
+    ],
+    "auth_buckets": [
+     [
+      "key:admin",
+      1
+     ]
+    ],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "http",
+     403,
+     "Invalid MFA code",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_mfa_step_up": [
+   {
+    "audit": [
+     [
+      "admin.mfa.step_up_failed",
+      [
+       [
+        "details",
+        "IP: 127.0.0.1, locked=False"
+       ],
+       [
+        "ip",
+        "127.0.0.1"
+       ]
+      ]
+     ]
+    ],
+    "auth_buckets": [
+     [
+      "key:admin",
+      1
+     ]
+    ],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "http",
+     403,
+     "Invalid MFA code",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_mfa_step_up[body]": [
+   {
+    "audit": [
+     [
+      "admin.mfa.step_up_failed",
+      [
+       [
+        "details",
+        "IP: 127.0.0.1, locked=False"
+       ],
+       [
+        "ip",
+        "127.0.0.1"
+       ]
+      ]
+     ]
+    ],
+    "auth_buckets": [
+     [
+      "key:admin",
+      1
+     ]
+    ],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "http",
+     403,
+     "Invalid MFA code",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_resolve_client": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [
+     [
+      "plugboard.app",
+      "DEBUG",
+      "auth resolved client_id=admin via=admin_cookie dev_mode=%s",
+      "auth resolved client_id=admin via=admin_cookie dev_mode=False"
+     ]
+    ],
+    "outcome": [
+     "ok",
+     "admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": "admin",
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_should_use_secure_cookie": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     false,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ]
+ },
+ "mfa_step_up_body_good_header_good": {
+  "_admin_request_auth": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "ok",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_auto_login_refusal": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "not_navigation",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_check_dashboard_auth": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     true,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_key_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "key:admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_local_login_proof": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     [
+      "",
+      "no_local_secret"
+     ],
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_person_bearer_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_rate_limit_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "key:admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_refuse_cross_site_session": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_admin": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_admin+_require_mfa_step_up": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_mfa_step_up": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_mfa_step_up[body]": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_resolve_client": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [
+     [
+      "plugboard.app",
+      "DEBUG",
+      "auth resolved client_id=admin via=admin_cookie dev_mode=%s",
+      "auth resolved client_id=admin via=admin_cookie dev_mode=False"
+     ]
+    ],
+    "outcome": [
+     "ok",
+     "admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": "admin",
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_should_use_secure_cookie": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     false,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ]
+ },
+ "mfa_step_up_body_good_header_wrong": {
+  "_admin_request_auth": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "ok",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_auto_login_refusal": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "not_navigation",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_check_dashboard_auth": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     true,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_key_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "key:admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_local_login_proof": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     [
+      "",
+      "no_local_secret"
+     ],
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_person_bearer_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_rate_limit_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "key:admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_refuse_cross_site_session": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_admin": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_admin+_require_mfa_step_up": [
+   {
+    "audit": [
+     [
+      "admin.mfa.step_up_failed",
+      [
+       [
+        "details",
+        "IP: 127.0.0.1, locked=False"
+       ],
+       [
+        "ip",
+        "127.0.0.1"
+       ]
+      ]
+     ]
+    ],
+    "auth_buckets": [
+     [
+      "key:admin",
+      1
+     ]
+    ],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "http",
+     403,
+     "Invalid MFA code",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_mfa_step_up": [
+   {
+    "audit": [
+     [
+      "admin.mfa.step_up_failed",
+      [
+       [
+        "details",
+        "IP: 127.0.0.1, locked=False"
+       ],
+       [
+        "ip",
+        "127.0.0.1"
+       ]
+      ]
+     ]
+    ],
+    "auth_buckets": [
+     [
+      "key:admin",
+      1
+     ]
+    ],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "http",
+     403,
+     "Invalid MFA code",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_mfa_step_up[body]": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_resolve_client": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [
+     [
+      "plugboard.app",
+      "DEBUG",
+      "auth resolved client_id=admin via=admin_cookie dev_mode=%s",
+      "auth resolved client_id=admin via=admin_cookie dev_mode=False"
+     ]
+    ],
+    "outcome": [
+     "ok",
+     "admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": "admin",
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_should_use_secure_cookie": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     false,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ]
+ },
+ "mfa_step_up_body_wrong_header_good": {
+  "_admin_request_auth": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "ok",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_auto_login_refusal": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "not_navigation",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_check_dashboard_auth": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     true,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_key_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "key:admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_local_login_proof": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     [
+      "",
+      "no_local_secret"
+     ],
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_person_bearer_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_rate_limit_scope": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     "key:admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_refuse_cross_site_session": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_admin": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_admin+_require_mfa_step_up": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": "admin-key",
+      "admin_principal_name": "",
+      "audit_principal": [
+       "admin-key",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_mfa_step_up": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "ok",
+     null,
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_require_mfa_step_up[body]": [
+   {
+    "audit": [
+     [
+      "admin.mfa.step_up_failed",
+      [
+       [
+        "details",
+        "IP: 127.0.0.1, locked=False"
+       ],
+       [
+        "ip",
+        "127.0.0.1"
+       ]
+      ]
+     ]
+    ],
+    "auth_buckets": [
+     [
+      "key:admin",
+      1
+     ]
+    ],
+    "lockouts": [],
+    "log": [],
+    "outcome": [
+     "http",
+     403,
+     "Invalid MFA code",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": null,
+      "key_record": null
+     }
+    ]
+   }
+  ],
+  "_resolve_client": [
+   {
+    "audit": [],
+    "auth_buckets": [],
+    "lockouts": [],
+    "log": [
+     [
+      "plugboard.app",
+      "DEBUG",
+      "auth resolved client_id=admin via=admin_cookie dev_mode=%s",
+      "auth resolved client_id=admin via=admin_cookie dev_mode=False"
+     ]
+    ],
+    "outcome": [
+     "ok",
+     "admin",
+     {
+      "admin_mfa_verified": null,
+      "admin_principal": null,
+      "admin_principal_name": null,
+      "audit_principal": [
+       "",
+       ""
+      ],
+      "key_id": "admin",
       "key_record": null
      }
     ]
