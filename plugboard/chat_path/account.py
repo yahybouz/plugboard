@@ -19,6 +19,11 @@ from plugboard import billing as _billing
 from plugboard import live_requests as _live
 from plugboard.apikeys import get_keys_by_client, load_keys, mask_key
 
+# Usage entry columns /usage/me leaves out: the grid entry that priced a call
+# (reveals provider routing) and the request correlation (PLU-106), which is
+# not part of the client contract.
+_ADMIN_ONLY_FIELDS = ("price_key", "price_source", "request_id", "trace_id")
+
 
 def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
     @app.get("/v1/inflight")
@@ -45,9 +50,9 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         if client_id is None:
             return {"entries": [], "summary": {}}
         m = month or _billing.current_pricing_month()
-        # Which grid entry priced a call reveals provider routing: admin only.
+        # Admin-only columns stay out of the client answer.
         entries = [
-            {k: v for k, v in e.items() if k not in ("price_key", "price_source")}
+            {k: v for k, v in e.items() if k not in _ADMIN_ONLY_FIELDS}
             for e in core._usage.get_usage_by_client(m, client_id)
         ]
         return {
