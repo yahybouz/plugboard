@@ -57,7 +57,7 @@ Streaming requests to HTTP providers are proxied chunk by chunk and billed at th
 | Module | Responsibility |
 |---|---|
 | `__init__.py` | Package version; loads `.env` (unless `PLUGBOARD_SKIP_DOTENV=1`) and applies `envcompat` before any module reads its settings |
-| `app.py` | HTTP API, authentication, limits, caching and billing glue, dashboard and login pages ; registers the admin routes |
+| `app.py` | HTTP API, authentication, limits, caching and billing glue, dashboard pages; registers the admin routes |
 | `admin_routes/` | Admin endpoints, one module per area (model probes, monitoring, providers, OAuth, direct providers, Ollama, keys, jobs, pricing, usage, sign-in and MFA), each declared on the app by `register(app, core)` |
 | `router.py` | Model resolution, forwarding, retries, fallback, model listing and discovery |
 | `provider_admission.py`, `request_wait.py`, `session_turns.py`, `route_pauses.py` | Per-provider cap on requests in flight and the wait for a slot; one wait budget per chat request; one turn at a time per client session; a route that answered `429` is tried last for a while |
