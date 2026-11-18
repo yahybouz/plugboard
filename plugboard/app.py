@@ -1216,6 +1216,10 @@ class _RequestIdMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         rid = uuid.uuid4().hex[:16]
         token = _request_id_var.set(rid)
+        # This request's own principal holder (PB-AUTH-01): the admin
+        # authentication fills it, every audit entry of the request reads it.
+        # A streamed body still sees it after this function returns.
+        principal_token = _audit_mod.begin_request()
         try:
             try:
                 response = await call_next(request)
@@ -1226,6 +1230,7 @@ class _RequestIdMiddleware(BaseHTTPMiddleware):
             _live.set_status(rid, response.status_code)
             return response
         finally:
+            _audit_mod.end_request(principal_token)
             _request_id_var.reset(token)
 
 

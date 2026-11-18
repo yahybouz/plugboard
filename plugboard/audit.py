@@ -15,9 +15,14 @@ empty, when it is opened).
 The principal travels with the request: ``begin_request`` puts an empty
 holder in a context variable, the authentication fills it
 (``set_principal``, also from a worker thread, which shares the holder),
-and ``log_action`` reads it. A background task started while serving an
-admin request copies that context, so its later entries name the person
-who started it.
+and ``log_action`` reads it. Each HTTP request opens its own holder (the
+request middleware of ``plugboard.app``), so two requests never share one.
+
+A background task started while serving an admin request copies that
+context, holder included. Every audit entry such a task writes today is a
+``system`` one (retention, quota limit, egress refusal, unreadable key), and
+a ``system`` entry never takes the request's principal: it names none
+unless one is passed explicitly.
 """
 
 from __future__ import annotations
@@ -135,14 +140,19 @@ def log_action(
 ) -> Dict[str, Any]:
     """Record an admin action. Returns the audit entry.
 
-    ``principal`` defaults to the current request's (``current_principal``);
-    given without ``principal_name``, the name is empty.
+    ``principal`` defaults to the current request's (``current_principal``),
+    except for a ``system`` entry, which defaults to none. Given without
+    ``principal_name``, the name is empty; without a principal, the name is
+    always empty.
     """
     if principal is None:
-        principal, current_name = current_principal()
+        if actor == "system":
+            principal, current_name = "", ""
+        else:
+            principal, current_name = current_principal()
         if principal_name is None:
             principal_name = current_name
-    if principal_name is None:
+    if not principal or principal_name is None:
         principal_name = ""
     entry = {
         "id": secrets.token_hex(8),
