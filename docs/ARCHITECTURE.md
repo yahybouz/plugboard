@@ -57,8 +57,9 @@ Streaming requests to HTTP providers are proxied chunk by chunk and billed at th
 | Module | Responsibility |
 |---|---|
 | `__init__.py` | Package version; loads `.env` (unless `PLUGBOARD_SKIP_DOTENV=1`) and applies `envcompat` before any module reads its settings |
-| `app.py` | HTTP API, authentication, limits, caching and billing glue, dashboard pages; registers the admin routes |
+| `app.py` | Authentication, middlewares, chat admission (concurrency cap, session turn), health, contract and dashboard pages; registers the admin routes and the chat path |
 | `admin_routes/` | Admin endpoints, one module per area (model probes, monitoring, providers, OAuth, direct providers, Ollama, keys, jobs, pricing, usage, sign-in and MFA), each declared on the app by `register(app, core)` |
+| `chat_path/` | Chat path, one module per subject (client hang-up and SSE, answers and errors, spending and model access checks, billing, chat completions, model catalogue and preflight, `/v2` aliases, client account), each declared on the app by `register(app, core)` |
 | `router.py` | Model resolution, forwarding, retries, fallback, model listing and discovery |
 | `provider_admission.py`, `request_wait.py`, `session_turns.py`, `route_pauses.py` | Per-provider cap on requests in flight and the wait for a slot; one wait budget per chat request; one turn at a time per client session; a route that answered `429` is tried last for a while |
 | `live_requests.py` | In-memory list of the chat requests in flight and the last finished ones, with their phase (`/v1/inflight`, `/admin/inflight`) |
@@ -101,7 +102,7 @@ Streaming requests to HTTP providers are proxied chunk by chunk and billed at th
 
 ### Route table guard
 
-`tests/test_admin_routes_guard.py` compares the app with `tests/fixtures/admin_routes_snapshot.json`: the route table (paths, methods, dependencies, parameters, include context of the routers), the admin OpenAPI document and the effects of a cold import of `plugboard.app` (logs, loaded modules, data files). Any change to a route fails it, on purpose, and so does a new `plugboard` module loaded when the app is imported. When you add, remove or change a route (or such a module) deliberately, regenerate the fixture from the repository root, then review its diff and commit it with the change:
+`tests/test_admin_routes_guard.py` compares the app with `tests/fixtures/admin_routes_snapshot.json`: the route table (paths, methods, dependencies, parameters, include context of the routers), the admin OpenAPI document and the effects of a cold import of `plugboard.app` (logs, loaded modules, data files). Any change to a route fails it, on purpose, and so does a new `plugboard` module loaded when the app is imported (the modules of `plugboard/admin_routes/` and `plugboard/chat_path/` do not count among these import effects). When you add, remove or change a route (or such a module) deliberately, regenerate the fixture from the repository root, then review its diff and commit it with the change:
 
 ```bash
 .venv/bin/python -m tests.route_snapshot
@@ -109,6 +110,13 @@ git diff tests/fixtures/admin_routes_snapshot.json
 ```
 
 The diff must show only the change you meant. Never regenerate it to silence a failure you cannot explain: that failure is what the guard is for.
+
+`tests/test_chat_path_guard.py` compares the app with `tests/fixtures/chat_path_snapshot.json`: the client routes and their place in the route table, the client contract (`build_openapi()`, its version included), the exception handlers and the middleware stack, in order. The same rule applies: regenerate it only for a change you meant, then review its diff and commit it with the change:
+
+```bash
+.venv/bin/python -m tests.chat_path_snapshot
+git diff tests/fixtures/chat_path_snapshot.json
+```
 
 ## State
 

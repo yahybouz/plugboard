@@ -1,11 +1,12 @@
 """Counting, pricing and recording a chat call, and replaying a whole answer
 as a stream: one place for the chat routes and the router (PLU-28).
 
-A chat answer comes either streamed by its provider (``app._bill_streaming``
-reads the counts from the stream) or whole: a non-streamed chat, a CLI
-route, the response cache. A whole answer asked as a stream is replayed as
-OpenAI SSE chunks by :func:`replay_as_sse`, its last chunk carrying the
-usage priced here, so what the client sees is what was recorded.
+A chat answer comes either streamed by its provider (``_bill_streaming``, in
+``plugboard/chat_path/billing.py``, reads the counts from the stream) or
+whole: a non-streamed chat, a CLI route, the response cache. A whole answer
+asked as a stream is replayed as OpenAI SSE chunks by :func:`replay_as_sse`,
+its last chunk carrying the usage priced here, so what the client sees is
+what was recorded.
 """
 
 from __future__ import annotations

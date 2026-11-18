@@ -1,6 +1,7 @@
 # Sortir le chemin du chat de `app.py` (PLU-95) — conception
 
-Date : 2026-11-18. Ticket : PLU-95. Décision du propriétaire : à prendre (questions Q1 à Q3, en fin de document).
+Date : 2026-11-18. Ticket : PLU-95. Décision du propriétaire : D-69, Q1, Q2 et Q3 décidées
+comme recommandé (questions en fin de document).
 Base : `main` à `c3e4cea`, branche `refactor/plu-95-chat-path`. Modèle suivi : PLU-36
 (`docs/superpowers/specs/2026-11-18-plu-36-admin-routes-design.md`, D-67).
 
@@ -195,7 +196,7 @@ Les 32 autres points de patch (`_API_KEY`, `_ADMIN_KEY`, `_DEV_MODE`,
 `_CACHE_RESPONSE_FLOOR_MS`, `_INFLIGHT_*`, `_inflight_chat_*`, `_MAX_BODY_BYTES`, les noms
 d'administration…) ne sont lus que par du code qui reste ou par `admin_routes/`.
 
-### Noms ré-exportés par `app.py` (31, permanents)
+### Noms ré-exportés par `app.py` (33, permanents)
 
 - Lus par les tests ou le code : `_MAX_HELD`, `_complete_events`, `_done_event_at`,
   `_retry_after_headers`, `_quota_error_response`, `_providers_busy_response`,
@@ -207,6 +208,8 @@ d'administration…) ne sont lus que par du code qui reste ou par `admin_routes/
 - Fermetures lues par un autre module du paquet (R10) : `_aclose_quietly`,
   `_provider_disabled_response`, `_chat_error_response`, `_guard_accepts`, `_charge_answer`,
   `_models_for_key`.
+- Lus par `tests/test_inflight_disconnect.py`, qui ne peut pas changer (ruling R-P1 du
+  préflight) : `_ClientGone`, `_unless_client_gone`.
 
 ### Câblage et ordre
 

@@ -98,8 +98,55 @@ def test_chat_path_code_logs_under_the_app_logger():
 
 
 def test_chat_path_modules_are_designed_ones():
+    """Exactly the modules of the design: none missing, none extra."""
     found = {_short_name(module) for module in _chat_path_modules()}
-    assert found <= EXPECTED_MODULES, sorted(found - EXPECTED_MODULES)
+    assert sorted(found) == sorted(EXPECTED_MODULES)
+
+
+def _is_namespace_export(node: ast.Name, parents: dict) -> bool:
+    """``SimpleNamespace(x=x)`` at the end of ``register()``: the closure handed
+    back to app.py, which re-exports it, not a call that skips ``core.``."""
+    keyword = parents.get(node)
+    call = parents.get(keyword)
+    return (
+        isinstance(keyword, ast.keyword)
+        and keyword.arg == node.id
+        and isinstance(call, ast.Call)
+        and getattr(call.func, "id", "") == "SimpleNamespace"
+    )
+
+
+def _bare_patch_points(tree: ast.AST, names: frozenset) -> list:
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in names:
+            if not _is_namespace_export(node, parents):
+                found.append((node.lineno, node.id))
+        elif isinstance(node, ast.arg) and node.arg in names:
+            found.append((node.lineno, node.arg))
+        elif isinstance(node, ast.alias) and (node.asname or node.name) in names:
+            found.append((node.lineno, node.asname or node.name))
+    return sorted(found)
+
+
+def test_chat_path_reads_patch_points_only_through_core():
+    """A patch point defined in plugboard.app is read as ``core.<name>`` at call
+    time, even one whose closure is defined in the same register(): a bare
+    name would miss the tests' patches of plugboard.app (R3, PLU-95)."""
+    app = _app_module()
+    names = frozenset(name for name in PATCH_POINTS if hasattr(app, name))
+    found = {}
+    for path in sorted(CHAT_PATH_DIR.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        hits = _bare_patch_points(tree, names)
+        if hits:
+            found[path.name] = hits
+    assert found == {}
 
 
 def _usage_calls(path: Path) -> list:

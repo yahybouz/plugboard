@@ -33,6 +33,11 @@ Endpoints:
 
 Admin routes are declared by `plugboard/admin_routes/` (one module per area, registered in place by `register(app, core)`, PLU-36).
 
+The chat path (`/v1/chat/completions`, `/v1/models`, `/v1/preflight`, `/v2/*`,
+`/v1/inflight`, `/usage/me`, `/v1/me`) and its limits, billing and error answers are
+declared by `plugboard/chat_path/` (registered in place by `register(app, core)`,
+PLU-95).
+
 Authentication:
   ADMIN_KEY env var (required) -- required for admin endpoints.
   Client API keys stored in data/api_keys.json -- required for /v1/* endpoints.
@@ -80,7 +85,9 @@ from plugboard import envcompat
 from plugboard import netguard
 from plugboard import billing as _billing
 from plugboard import usage as _usage
-from plugboard.alerts import check_and_alert as _check_and_alert  # noqa: F401  (patch point read through core, PLU-95)
+
+# Patch point read through core (PLU-95).
+from plugboard.alerts import check_and_alert as _check_and_alert  # noqa: F401
 from plugboard.audit import log_action as _audit
 from plugboard.apikeys import (
     KEY_PREFIXES,  # ARCH-DEBT-029
@@ -894,8 +901,9 @@ async def _session_turn_dep(request: Request):
     """Give the session's turn back once the response is sent, and the
     budget hold of a call that was not billed (BUG-52).
 
-    The handler takes the turn (``_take_session_turn``) only when the call
-    carries a session id; a yield dependency (scope "request") exits after
+    The chat handler takes the turn (its closure ``_take_session_turn``, in
+    ``plugboard/chat_path/completions.py``) only when the call carries a
+    session id; a yield dependency (scope "request") exits after
     the last byte, streams included, and on any error the handler raises.
     """
     try:

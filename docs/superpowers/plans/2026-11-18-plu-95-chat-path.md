@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-18-plu-95-chat-path-design.md` (fait foi : règles R2 étendue, R3, R10–R12, tableau des points de patch, questions Q1–Q3). Les règles R1–R9 sont celles de `docs/superpowers/specs/2026-11-18-plu-36-admin-routes-design.md`.
 
-**Décisions attendues avant la tâche 1 :** Q1 (une ligne de `tests/route_snapshot.py`), Q2 (tâche 9), Q3 (cible). Le plan suit les recommandations ; les variantes sont dites dans la tâche concernée.
+**Décisions (D-69) :** Q1 (une ligne de `tests/route_snapshot.py`), Q2 (tâche 9) et Q3 (cible ≈ 2 520, cœur d'authentification dans un autre ticket) décidées comme recommandé ; les variantes « Q1/Q2 = non » des tâches sont sans objet. Ruling R-P1 du préflight : `_ClientGone` et `_unless_client_gone` restent ré-exportés en permanence (lus par `tests/test_inflight_disconnect.py`) ; les tâches 7 et 10 ne les retirent ni ne les cherchent.
 
 ## Global Constraints
 
