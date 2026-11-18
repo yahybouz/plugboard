@@ -50,7 +50,11 @@ def _load() -> Dict[str, Dict[str, Any]]:
         # Unreadable store: no session is valid (fail closed).
         log.error("Failed to read %s: %s", path, exc)
         return {}
-    return sessions if isinstance(sessions, dict) else {}
+    if not isinstance(sessions, dict):
+        return {}
+    # A record that is not an object is ignored: it validates nothing, and
+    # the next write drops it (never a 500 on a hand-edited store).
+    return {key: rec for key, rec in sessions.items() if isinstance(rec, dict)}
 
 
 def _save(sessions: Dict[str, Dict[str, Any]]) -> None:

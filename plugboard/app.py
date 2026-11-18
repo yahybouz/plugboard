@@ -7633,13 +7633,19 @@ async def admin_login(body: AdminLogin, request: Request):
     is_admin_key = _is_admin_key(token)
     # A live personal key (PB-AUTH-01); without ADMIN_KEY it opens nothing
     # and counts as a wrong key.
-    person = (
-        None
-        if is_admin_key
-        or not token.startswith(admin_people.KEY_PREFIX)
-        or not _effective_admin_key()
-        else admin_people.find_by_key(token)
+    personal = (
+        not is_admin_key
+        and token.startswith(admin_people.KEY_PREFIX)
+        and bool(_effective_admin_key())
     )
+    person = admin_people.find_by_key(token) if personal else None
+    if personal and person is None and not admin_people.is_readable():
+        # A fault of the store, not a wrong key: refuse and count nothing,
+        # as on the TOTP header.
+        log.error("auth rejected reason=person_store_unavailable")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin key required"
+        )
     known = is_admin_key or person is not None
 
     # Brute-force protection (BUG-119): wrong keys lock their address, but
@@ -7838,6 +7844,28 @@ def _session_response(request: Request, session_token: str) -> Response:
     return resp
 
 
+def _session_record_author(nonce: str) -> Tuple[str, str]:
+    """``(principal, name)`` of a session no longer valid, from its record.
+
+    A logout still names who opened the session once that person is revoked
+    (or the people store is unreadable: no name then), or once an MFA change
+    refused an ``ADMIN_KEY`` session. ``("", "")`` without a record or with a
+    hand-edited ``person_id``.
+    """
+    record = admin_sessions.lookup(nonce) if nonce else None
+    if record is None:
+        return ("", "")
+    if "person_id" not in record:
+        return (_ADMIN_KEY_PRINCIPAL, "")
+    person_id = record.get("person_id")
+    if not isinstance(person_id, str) or not admin_people.ID_PATTERN.fullmatch(
+        person_id
+    ):
+        return ("", "")
+    person = admin_people.get(person_id)
+    return ("person:" + person_id, str(person.get("name", "")) if person else "")
+
+
 @app.post("/auth/admin/logout", include_in_schema=False, status_code=204)
 async def admin_logout(request: Request):
     """Revoke this browser's session server-side, then clear its cookie."""
@@ -7845,7 +7873,7 @@ async def admin_logout(request: Request):
     nonce = _admin_session_nonce(session)
     # The author is read before the revocation: the entry names who left.
     found = _admin_session_principal(session) if nonce else None
-    principal, name = found or ("", "")
+    principal, name = found or _session_record_author(nonce)
     if nonce and admin_sessions.revoke(nonce):
         _audit(
             "auth.logout",

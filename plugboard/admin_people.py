@@ -178,6 +178,11 @@ def list_people() -> list[dict]:
     return [public_view(p) for p in people]
 
 
+def is_readable() -> bool:
+    """The store can be read (a missing file is readable and empty)."""
+    return _load()[1]
+
+
 def _hash_bytes(record: dict) -> bytes:
     stored = record.get("key_hash")
     return stored.encode("utf-8") if isinstance(stored, str) else b""
