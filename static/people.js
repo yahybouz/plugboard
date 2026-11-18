@@ -3,9 +3,12 @@
  *
  * Data: GET and POST /admin/people, DELETE /admin/people/{id} (admin session).
  * A new key, its secret and its otpauth URI are shown once, as text, and
- * cleared from the page by "I have stored them" or by leaving the tab. They
- * never go to Web Storage, the URL or the console. Names are only ever
- * written as text, through h() or textContent, never as HTML; each one sits
+ * stay on the page until "I have stored them" or until the page is left
+ * (pagehide): a tab change keeps them, so a key that lands while another tab
+ * is open is still there when its tab comes back. No other key can be created
+ * while they are shown. They never go to Web Storage, the URL or the console.
+ * Names are only ever written as text, through h() or textContent, never as
+ * HTML; each one sits
  * next to its key prefix and its status, so two look-alike names stay apart.
  * Uses the helpers of app.js: api, h, table, toast, confirmAction,
  * emptyState, skeleton, _errorDetail.
@@ -114,11 +117,20 @@
     load();
   }
 
+  function showingOnce() {
+    return !el("new-person-alert").classList.contains("hidden");
+  }
+
+  function storeFirst() {
+    toast("Store the key shown first, then click \u201cI have stored them\u201d.", "error");
+  }
+
   async function createPerson() {
     var input = el("person-name");
     var name = input.value.trim();
     if (!name) { input.focus(); return; }
     if (creating) return;
+    if (showingOnce()) { storeFirst(); return; }
     creating = true;
     el("btn-submit-person").disabled = true;
     try {
@@ -158,7 +170,7 @@
   }
 
   el("btn-create-person").addEventListener("click", function () {
-    forget();
+    if (showingOnce()) { storeFirst(); return; }
     el("create-person-form").classList.toggle("hidden");
     if (!el("create-person-form").classList.contains("hidden")) el("person-name").focus();
   });
@@ -168,16 +180,12 @@
     if (ev.key === "Enter") { ev.preventDefault(); createPerson(); }
   });
   el("btn-person-copied").addEventListener("click", forget);
+  window.addEventListener("pagehide", forget);
   el("new-person-alert").addEventListener("click", function (ev) {
     var button = ev.target.closest("[data-copy]");
     if (button) copy(button.getAttribute("data-copy"));
   });
-  // Leaving the tab clears what was shown once.
-  window.addEventListener("hashchange", function () {
-    if (location.hash.slice(1) !== "people") forget();
-  });
-
-  window.loadPeoplePage = function () { forget(); load(); };
+  window.loadPeoplePage = load;
   // Opened straight on #people after the tab switch already ran.
-  if (el("page-people").classList.contains("active")) window.loadPeoplePage();
+  if (el("page-people").classList.contains("active")) load();
 })();

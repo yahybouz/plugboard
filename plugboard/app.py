@@ -7355,7 +7355,7 @@ f.onsubmit=async ev=>{
     e.textContent='Enter the 6-digit code from your authenticator.';
     return;
   }
-  e.textContent=(payload && payload.detail) || 'Invalid admin key';
+  e.textContent=(payload && payload.detail) || 'Invalid key or code';
 };
 </script></div></body></html>"""
 

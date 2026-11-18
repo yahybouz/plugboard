@@ -36,11 +36,14 @@
     <div class="login-head">
       <div class="modal-logo"><svg width="30" height="30" aria-hidden="true"><use href="#i-logo"/></svg></div>
       <h2>Plugboard</h2>
-      <p class="muted">Enter your admin key to continue</p>
+      <p class="muted">Enter your admin key or your personal key</p>
     </div>
     <form id="login-form">
       <div class="form-group">
-        <input type="password" id="login-key" placeholder="Admin key" autocomplete="off" required>
+        <input type="password" id="login-key" placeholder="Admin or personal key" autocomplete="off" required>
+      </div>
+      <div class="form-group hidden" id="login-code-group">
+        <input type="text" id="login-code" placeholder="Authenticator code (6 digits)" aria-label="Authenticator code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code">
       </div>
       <div id="login-error" class="error hidden"></div>
       <button type="submit" class="btn btn-primary btn-block btn-login">Sign in</button>

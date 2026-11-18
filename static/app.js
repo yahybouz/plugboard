@@ -68,18 +68,39 @@ function fmt(n) { return Number(n || 0).toLocaleString(); }
 const loginModal = document.getElementById("login-modal");
 const loginForm = document.getElementById("login-form");
 const loginError = document.getElementById("login-error");
+const loginCode = document.getElementById("login-code");
 const appEl = document.getElementById("app");
 
-async function tryLogin(key) {
+// Same rules as the /login page: a personal key (pba_) always takes a code
+// from its own authenticator, ADMIN_KEY one when admin MFA is required. The
+// code goes in the JSON body only, never in the URL.
+function showLoginCode() {
+  document.getElementById("login-code-group").classList.remove("hidden");
+  loginCode.required = true;
+}
+function loginCodeShown() {
+  return !document.getElementById("login-code-group").classList.contains("hidden");
+}
+
+async function tryLogin(key, code) {
+  const body = { key: key };
+  if (code) body.totp_code = code;
   try {
     const res = await fetch("/auth/admin/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key: key }),
+      body: JSON.stringify(body),
     });
-    return res.ok;
-  } catch (e) { console.debug("admin session check failed:", e);
-    return false;
+    if (res.ok) return { ok: true };
+    let payload = {};
+    try { payload = await res.json(); } catch (e) { console.debug("login error body is not JSON"); }
+    return {
+      ok: false,
+      mfaRequired: Boolean(payload && payload.mfa_required),
+      detail: payload && typeof payload.detail === "string" ? payload.detail : "",
+    };
+  } catch (e) { console.debug("admin login request failed");
+    return { ok: false, mfaRequired: false, detail: "" };
   }
 }
 
@@ -88,13 +109,23 @@ loginForm.addEventListener("submit", async function (e) {
   loginError.classList.add("hidden");
   const key = document.getElementById("login-key").value.trim();
   if (!key) return;
-  const ok = await tryLogin(key);
-  if (ok) {
+  if (key.startsWith("pba_")) showLoginCode();
+  const code = loginCodeShown() ? loginCode.value.trim() : "";
+  if (loginCodeShown() && !code) { loginCode.focus(); return; }
+  const result = await tryLogin(key, code);
+  loginCode.value = "";  // a code is accepted once: never resend it
+  if (result.ok) {
     showApp();
-  } else {
-    loginError.textContent = "Invalid admin key.";
-    loginError.classList.remove("hidden");
+    return;
   }
+  if (result.mfaRequired && !code) {
+    showLoginCode();
+    loginCode.focus();
+    loginError.textContent = "Enter the 6-digit code from your authenticator.";
+  } else {
+    loginError.textContent = result.detail || "Invalid key or code.";
+  }
+  loginError.classList.remove("hidden");
 });
 
 function showApp() {

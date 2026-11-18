@@ -31,8 +31,61 @@ def test_app_js_routes_the_people_tab():
 def test_people_js_writes_text_only_and_keeps_nothing():
     js = (STATIC / "people.js").read_text()
     assert "localStorage" not in js and "sessionStorage" not in js
-    assert all(v.strip() == '""' for v in re.findall(r"innerHTML\s*=\s*([^;]+);", js))
+    assert not re.search(r"\bconsole\.[a-z]+\s*\(", js)
+    for sink in (
+        "outerHTML",
+        "insertAdjacentHTML",
+        "document.write",
+        "createContextualFragment",
+        "DOMParser",
+        "srcdoc",
+    ):
+        assert sink not in js, sink
+    # Every innerHTML in the file only empties an element, whatever the spacing.
+    every = re.findall(r"innerHTML", js)
+    emptying = re.findall(r"\.innerHTML\s*=\s*(?:\"\"|'')\s*;", js)
+    assert len(every) == len(emptying)
     assert "btn-person-copied" in js and "confirmAction(" in js
+
+
+def test_people_js_keeps_the_one_time_values_until_they_are_stored():
+    js = (STATIC / "people.js").read_text()
+    # Only two things clear them: "I have stored them" and leaving the page.
+    # A tab change does not: a key that lands while another tab is open
+    # must still be there when its tab comes back.
+    assert 'el("btn-person-copied").addEventListener("click", forget);' in js
+    assert 'window.addEventListener("pagehide", forget);' in js
+    assert (
+        len(re.findall(r"\bforget\b", js)) == 3
+    )  # the definition and the two listeners
+    assert "hashchange" not in js
+
+
+def test_the_dashboard_relogin_takes_a_personal_key_and_its_code():
+    html = (STATIC / "index.html").read_text()
+    modal = html[html.index('id="login-modal"') : html.index("<!-- App shell -->")]
+    assert "Enter your admin key or your personal key" in modal
+    assert 'placeholder="Admin or personal key"' in modal
+    code = re.search(r"<input[^>]*\bid=\"login-code\"[^>]*>", modal)
+    assert code and 'autocomplete="one-time-code"' in code.group(0)
+    assert 'inputmode="numeric"' in code.group(0) and "aria-label=" in code.group(0)
+    app_js = (STATIC / "app.js").read_text()
+    login = app_js[
+        app_js.index("async function tryLogin") : app_js.index("function showApp")
+    ]
+    # The code travels in the JSON body, never in the URL.
+    assert re.findall(r"fetch\(([^,]+),", login) == ['"/auth/admin/login"']
+    assert "body.totp_code = code" in login and "JSON.stringify(body)" in login
+    assert "mfa_required" in login and 'startsWith("pba_")' in login
+
+
+def test_the_fallback_error_fits_every_key():
+    from plugboard.app import _LOGIN_HTML_TEMPLATE
+
+    app_js = (STATIC / "app.js").read_text()
+    for text in (_LOGIN_HTML_TEMPLATE, app_js):
+        assert "Invalid admin key" not in text
+        assert "Invalid key or code" in text
 
 
 def test_the_login_screen_names_personal_keys():
