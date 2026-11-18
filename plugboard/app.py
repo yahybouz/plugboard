@@ -82,7 +82,9 @@ from contextlib import nullcontext as _nullcontext
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from plugboard import __version__
+from plugboard import admin_people
 from plugboard import admin_sessions
+from plugboard import audit as _audit_mod
 from plugboard import envcompat
 from plugboard import netguard
 from plugboard import billing as _billing
@@ -1228,6 +1230,24 @@ class _RequestIdMiddleware(BaseHTTPMiddleware):
 
 
 _ADMIN_SCOPE = "key:admin"
+_ADMIN_KEY_PRINCIPAL = "admin-key"
+
+
+def _person_principal(person: Dict[str, Any]) -> str:
+    """The audit principal of a personal key: ``person:<id>``."""
+    return "person:" + person["id"]
+
+
+def _person_scope(person_id: str) -> str:
+    """Lockout counter of one person's codes: ``key:admin:<id>``."""
+    return f"{_ADMIN_SCOPE}:{person_id}"
+
+
+def _set_principal(request: Request, principal: str, name: str = "") -> None:
+    """Name the admin credential of this request, for the audit and the routes."""
+    request.state.admin_principal = principal
+    request.state.admin_principal_name = name
+    _audit_mod.set_principal(principal, name)
 
 
 def _client_address(request: Request) -> str:
@@ -1673,8 +1693,11 @@ def _admin_request_auth(request: Request) -> str:
         return "ok"
     auth = request.headers.get("Authorization", "")
     token = auth.removeprefix("Bearer ").strip()
+    if token.startswith(admin_people.KEY_PREFIX) and not _is_admin_key(token):
+        return _person_request_auth(request, token)
     if not _is_admin_key(token):
         return "denied"
+    _set_principal(request, _ADMIN_KEY_PRINCIPAL)
     from plugboard import admin_mfa as _mfa
 
     if not _mfa.is_required():
@@ -1699,6 +1722,55 @@ def _admin_request_auth(request: Request) -> str:
         ip=client_ip,
     )
     return "mfa_required"
+
+
+def _person_request_auth(request: Request, token: str) -> str:
+    """Admin authentication by a personal key (``pba_``), with the same
+    outcomes as ``_admin_request_auth``. A code of that person's own secret
+    is always required, even where global admin MFA is not; wrong codes lock
+    that person only (``key:admin:<id>``). An unknown or revoked key, or an
+    unreadable people store, is "denied" and counts nothing. The admin key's MFA proof
+    (``admin_mfa_verified``) is never set here."""
+    person = admin_people.find_by_key(token)
+    if person is None:
+        return "denied"
+    code = request.headers.get(_ADMIN_TOTP_HEADER, "").strip()
+    if not code:
+        return "mfa_required"
+    from plugboard.ratelimit import check_auth_rate_limit, record_auth_failure
+
+    person_id = person["id"]
+    principal = _person_principal(person)
+    name = str(person.get("name", ""))
+    scope = _person_scope(person_id)
+    client_ip = _client_address(request)
+    if not check_auth_rate_limit(scope):
+        return "locked"
+    outcome = admin_people.verify_code(person_id, code)
+    if outcome == "refused":
+        locked = record_auth_failure(scope)
+        _audit(
+            "auth.person.mfa_failed",
+            target_type="admin_person",
+            target_id=person_id,
+            details=f"header IP: {client_ip}, locked={locked}",
+            ip=client_ip,
+            principal=principal,
+            principal_name=name,
+        )
+        return "mfa_required"
+    if outcome == "confirmed":
+        _audit(
+            "admin.person.confirmed",
+            target_type="admin_person",
+            target_id=person_id,
+            details="via=header",
+            ip=client_ip,
+            principal=principal,
+            principal_name=name,
+        )
+    _set_principal(request, principal, name)
+    return "ok"
 
 
 def _require_mfa_step_up(request: Request, code: Optional[str] = None) -> None:
