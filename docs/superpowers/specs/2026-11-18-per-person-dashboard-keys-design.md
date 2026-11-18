@@ -90,8 +90,9 @@ per-person keys at all.
   revokes that person's sessions at once. Idempotent.
 - Any admin may call them (D-63: everyone is a full admin), `ADMIN_KEY` or a
   person, a person revoking themselves included.
-- These routes are public API: the contract version goes up (minor) and
-  `openapi.json` / `mcp.json` are regenerated (`docs/api/README.md`).
+- These are admin routes: like every admin route they stay out of the
+  client contract (`docs/api/README.md`), documented by the instance's
+  admin-only `/openapi.json`. `CONTRACT_VERSION` does not change.
 
 ### Authentication
 

@@ -26,7 +26,7 @@ Les « Builder's call » de la conception, et les points que le code impose de t
 10. **Noms.** Espaces de bord retirés ; 1 à 64 caractères ; `str.isprintable()` ; uniques sans tenir compte de la casse (`casefold`) parmi les clés non révoquées ; le nom d'une clé révoquée peut resservir.
 11. **`last_used_at`** est mis à jour quand un code est accepté (connexion ou en-tête), pas à chaque requête de session (pas d'écriture disque par clic).
 12. **`POST /admin/people` refuse en 503 sans `ADMIN_KEY`**, même auth entièrement coupée : une clé créée là ne pourrait jamais servir (les sessions sont signées avec `ADMIN_KEY`).
-13. **Contrat d'API.** La conception demande une montée mineure. Le code classe les routes admin hors du contrat client (`tests/test_api_contract.py::test_every_public_route_is_in_the_contract_and_nothing_else` exclut toute route derrière `_require_admin` ; note « API contract » de 4.14.6). Les routes `/admin/people` sont donc documentées par le `/openapi.json` admin (automatique) ; conformément à la conception, `CONTRACT_VERSION` passe de `3.0.1` à `3.1.0` et les deux fichiers sont régénérés (seul le numéro change). **À confirmer par YB** (voir le retour).
+13. **Contrat d'API.** Les routes admin sont hors du contrat client (`docs/api/README.md` l.12, `tests/test_api_contract.py`). Les routes `/admin/people` sont documentées par le `/openapi.json` admin ; `CONTRACT_VERSION` reste `3.0.1`, aucun export régénéré (décision de l'orchestrateur du 18/11, la conception est corrigée dans le même sens).
 14. **Rotation de `ENCRYPTION_KEY`** (`plugboard/secrets_rekey.py`) re-chiffre aussi `admin_people.json` : sinon une rotation rendrait tous les codes personnels illisibles.
 15. **Journaux.** `plugboard/log_redact.py` masque les clés `pba_…` (le motif `secret=` couvre déjà l'URI `otpauth://`, vérifié).
 16. **Fichiers.** Magasin `plugboard/admin_people.py`, routes `plugboard/admin_people_api.py`, page `static/people.js` (modèle `catalog_history.js`). Champ `confirmed_at` ajouté à l'enregistrement (date de confirmation, affichée).
@@ -1599,21 +1599,20 @@ git commit -m "feat(security): mask personal dashboard keys in logs (PB-AUTH-01)
 
 ---
 
-### Task 14: Contrat d'API 3.1.0 et exports
+### Task 14: Les routes `/admin/people` restent hors du contrat client
 
 **Files:**
-- Modify: `plugboard/api_contract.py:44` (`CONTRACT_VERSION`)
-- Modify (régénérés) : `docs/api/openapi.json`, `docs/api/mcp.json`
 - Create: `tests/test_admin_people_contract.py`
+- Aucun changement de `plugboard/api_contract.py` ni de `docs/api/*.json` (décision de l'orchestrateur, 18/11 : les routes admin ne sont pas dans le contrat client, `docs/api/README.md` l.12 ; `CONTRACT_VERSION` reste `3.0.1`).
 
 **Interfaces:**
 - Consumes: routes de la tâche 10.
-- Produces: `CONTRACT_VERSION = "3.1.0"` ; les routes `/admin/people` dans le schéma admin (`app.openapi()`), hors `api_contract.PUBLIC_ROUTES`.
+- Produces: rien de nouveau ; la preuve que le contrat client ne bouge pas.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Write the tests**
 
 ```python
-"""The people routes: admin schema, outside the client contract; contract 3.1.0 (PB-AUTH-01)."""
+"""The people routes: admin schema only, outside the client contract (PB-AUTH-01)."""
 
 from plugboard import api_contract
 
@@ -1628,36 +1627,20 @@ def test_people_routes_are_in_the_admin_schema_only():
     assert not people & api_contract.PUBLIC_ROUTES
 
 
-def test_the_contract_version_is_3_1_0():
-    assert api_contract.CONTRACT_VERSION == "3.1.0"
+def test_the_client_contract_version_does_not_move():
+    assert api_contract.CONTRACT_VERSION == "3.0.1"
 ```
 
-- [ ] **Step 2: Run them to see the version test fail**
-
-Run: `$PYTEST tests/test_admin_people_contract.py`
-Expected: `test_the_contract_version_is_3_1_0` FAIL (`'3.0.1' == '3.1.0'`).
-
-- [ ] **Step 3: Bump the version and regenerate both files**
-
-```bash
-cd /srv/dev/worktrees/plugboard/pbauth01 && S="$(mktemp -d)" && \
-  PLUGBOARD_SKIP_DOTENV=1 PLUGBOARD_DATA="$S" /srv/dev/plugboard/.venv/bin/python scripts/export_contract.py && \
-  PLUGBOARD_SKIP_DOTENV=1 PLUGBOARD_DATA="$S" /srv/dev/plugboard/.venv/bin/python scripts/export_contract.py --mcp; \
-  rm -rf "$S"
-git diff --stat docs/api/
-```
-Expected: seules les lignes `"version": "3.1.0"` (`openapi.json`) et `"contract_version": "3.1.0"` (`mcp.json`) changent.
-
-- [ ] **Step 4: Run the tests and the checks**
+- [ ] **Step 2: Run the tests and the export checks**
 
 Run: `$PYTEST tests/test_admin_people_contract.py tests/test_api_contract.py tests/test_contract_without_fastapi.py`, puis `cd /srv/dev/worktrees/plugboard/pbauth01 && PLUGBOARD_SKIP_DOTENV=1 /srv/dev/plugboard/.venv/bin/python scripts/export_contract.py --check && PLUGBOARD_SKIP_DOTENV=1 /srv/dev/plugboard/.venv/bin/python scripts/export_contract.py --mcp --check`
-Expected: all PASS ; `docs/api/openapi.json: up to date`, `docs/api/mcp.json: up to date`.
+Expected: all PASS ; `docs/api/openapi.json: up to date`, `docs/api/mcp.json: up to date` (si un export n'est plus à jour, une route admin a fui dans le contrat : corriger la route, jamais l'export).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
-git add plugboard/api_contract.py docs/api/openapi.json docs/api/mcp.json tests/test_admin_people_contract.py
-git commit -m "feat(api): contract 3.1.0 for the personal key routes (PB-AUTH-01)"
+git add tests/test_admin_people_contract.py
+git commit -m "test(api): the personal key routes stay out of the client contract (PB-AUTH-01)"
 ```
 
 ---
@@ -1811,7 +1794,7 @@ git commit -m "feat(dashboard): People page and personal key sign-in (PB-AUTH-01
 **Interfaces:**
 - Contenu exigé de `### Personal dashboard keys` : créer (`curl -X POST /admin/people -d '{"name": …}'` avec `ADMIN_KEY` ou une session), la réponse unique (clé `pba_…`, secret, URI), comment la remettre à la personne (canal séparé pour la clé et le secret, ajout du secret dans une application d'authentification, premier code = confirmation, statut `pending` → `active`), se connecter (écran de connexion : clé puis code) ou appeler l'API (`Authorization: Bearer pba_…` + `X-Plugboard-Admin-TOTP`, toujours), lister, révoquer (`DELETE /admin/people/<id>`, sessions coupées à l'instant, idempotent), perte d'authenticator (révoquer et recréer), verrou (5 mauvais codes en une minute verrouillent cette clé 15 minutes, pas les autres), ce qu'une clé personnelle ne fait pas (`/v1/*`, routes `/admin/mfa` sauf `status`), effet d'un changement de MFA de `ADMIN_KEY` ou de « Log out everywhere » (toutes les sessions), store illisible (clés personnelles refusées, `ADMIN_KEY` intact).
 - `## Admin audit log` : les champs `principal` (`admin-key`, `person:<id>`, vide = non enregistré : entrée antérieure, système ou requête non authentifiée) et `principal_name` ; les quatre nouvelles actions.
-- CHANGELOG `[Unreleased]` : `### Added` (PB-AUTH-01, D-63 : clés, routes, page People, audit `principal`), `### Security` (TOTP propre exigé partout, verrou par personne, routes `/admin/mfa` réservées à `ADMIN_KEY`, masquage `pba_`, rotation `ENCRYPTION_KEY`), ligne `**API contract**: 3.1.0 …` (routes admin documentées par `/openapi.json` admin, contrat client inchangé hormis le numéro), ligne `**Not verified**:` (remplie par l'exécutant avec ce qu'il n'a pas pu lancer).
+- CHANGELOG `[Unreleased]` : `### Added` (PB-AUTH-01, D-63 : clés, routes, page People, audit `principal`), `### Security` (TOTP propre exigé partout, verrou par personne, routes `/admin/mfa` réservées à `ADMIN_KEY`, masquage `pba_`, rotation `ENCRYPTION_KEY`), ligne `**API contract**: unchanged (3.0.1)` (routes admin documentées par le `/openapi.json` admin, hors contrat client), ligne `**Not verified**:` (remplie par l'exécutant avec ce qu'il n'a pas pu lancer).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1844,7 +1827,7 @@ def test_the_todo_entry_is_gone():
 
 def test_unreleased_names_the_feature_and_the_contract():
     unreleased = _read("CHANGELOG.md").split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
-    assert "PB-AUTH-01" in unreleased and "3.1.0" in unreleased
+    assert "PB-AUTH-01" in unreleased and "3.1.0" not in unreleased
 ```
 
 - [ ] **Step 2: Run them to see them fail**
