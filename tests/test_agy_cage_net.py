@@ -35,8 +35,10 @@ from tests.test_agy_cage import (  # noqa: F401 - pytest fixtures
     _BODY,
     _SHELL_RO,
     _install,
+    open_unix,
     real_bwrap,
     setup,
+    unix_bind,
 )
 
 
@@ -51,8 +53,7 @@ def _tmpdir(setup) -> str:
 
 
 def _listening_unix(path: str) -> socket.socket:
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.bind(path)
+    sock = unix_bind(path)
     sock.listen()
     return sock
 
@@ -133,7 +134,7 @@ async def test_agy_caged_serves_the_socket_and_sets_the_proxy(setup, fake_agy):
         assert egress in argv
         for name, value in agy_cage.proxy_env().items():
             assert env[name] == value, name
-        reader, writer = await asyncio.open_unix_connection(egress)
+        reader, writer = await open_unix(egress)
         writer.write(b"CONNECT example.com:443 HTTP/1.1\r\n\r\n")
         await writer.drain()
         head = await asyncio.wait_for(reader.read(100), 5)
@@ -175,7 +176,7 @@ async def egress(tmp_path):
 
 
 async def _ask(path: str, target: str) -> bytes:
-    reader, writer = await asyncio.open_unix_connection(path)
+    reader, writer = await open_unix(path)
     writer.write(f"CONNECT {target} HTTP/1.1\r\n\r\n".encode())
     await writer.drain()
     head = await asyncio.wait_for(reader.read(200), 5)
@@ -245,7 +246,7 @@ async def test_proxy_tunnels_a_listed_host(egress, fake_dns, monkeypatch):
     monkeypatch.setattr(netguard, "ip_is_public", lambda _ip: True)
     monkeypatch.setattr(web_egress, "_TLS_PORT", up_port)
     try:
-        reader, writer = await asyncio.open_unix_connection(egress)
+        reader, writer = await open_unix(egress)
         writer.write(
             f"CONNECT cloudcode-pa.googleapis.com:{up_port} HTTP/1.1\r\n\r\n".encode()
         )
@@ -457,6 +458,9 @@ async def test_egress_on_a_path_longer_than_a_unix_socket_name(tmp_path, fake_dn
 async def test_real_cage_with_a_long_tmpdir(setup, real_bwrap, fake_dns, tmp_path):
     spawn = _long_dir(tmp_path)
     os.chmod(spawn, 0o700)
+    # The egress the relay joins runs past a socket's 107-byte name.
+    egress = os.path.join(spawn, "agy-tmp-xxxxxxxx", agy_cage.EGRESS_SOCKET)
+    assert len(egress.encode()) > 108
     fake_dns["example.com"] = ["93.184.216.34"]
     params = {"gateway_port": 9, "target": "example.com:443"}
     code, stdout, stderr = await _run_caged(
@@ -483,14 +487,14 @@ async def test_egress_refuses_the_connection_past_its_cap(tmp_path, fake_dns, ca
     held = []
     try:
         for _ in range(web_egress.MAX_CONNECTIONS):
-            held.append(await asyncio.open_unix_connection(path))
+            held.append(await open_unix(path))
         await _wait_for(
             lambda: server.active_connections == web_egress.MAX_CONNECTIONS,
             "every connection accepted",
         )
         with caplog.at_level(logging.INFO, logger="plugboard.web_egress"):
             for _ in range(5):
-                reader, writer = await asyncio.open_unix_connection(path)
+                reader, writer = await open_unix(path)
                 head = await asyncio.wait_for(reader.read(100), 5)
                 writer.close()
                 assert head.startswith(b"HTTP/1.1 503"), head
@@ -624,7 +628,7 @@ async def test_a_cancelled_call_removes_its_egress(setup, agy_without_cage, canc
     egress = os.path.join(tmpdir, agy_cage.EGRESS_SOCKET)
     assert os.path.exists(egress)
     # A connection open on the egress, as agy's would be.
-    _reader, writer = await asyncio.open_unix_connection(egress)
+    _reader, writer = await open_unix(egress)
     writer.write(b"CONNECT oauth2.googleapis.com:443 HTTP/1.1\r\n")
     await writer.drain()
 

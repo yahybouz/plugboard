@@ -177,14 +177,46 @@ def shell_in_cage(monkeypatch):
 # ── Command line ────────────────────────────────────────────────────────────
 
 
+def unix_bind(path: str) -> socket.socket:
+    """A unix socket bound at ``path``, however long (a CI's tmp path runs
+    past the 107 bytes of a socket's name): the gateway's own way,
+    ``agy_egress._bind``."""
+    from plugboard import agy_egress
+
+    return agy_egress._bind(path)
+
+
+def unix_connect(path: str) -> socket.socket:
+    """A unix socket connected to ``path``, however long: through the
+    folder's descriptor, ``/proc/self/fd/<fd>/<name>``, kept open until the
+    connection is made."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        if len(os.fsencode(path)) <= 107:
+            sock.connect(path)
+        else:
+            folder = os.open(os.path.dirname(path), os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                sock.connect(f"/proc/self/fd/{folder}/{os.path.basename(path)}")
+            finally:
+                os.close(folder)
+    except BaseException:
+        sock.close()
+        raise
+    return sock
+
+
+async def open_unix(path: str):
+    """``asyncio.open_unix_connection`` to ``path``, however long."""
+    return await asyncio.open_unix_connection(sock=unix_connect(path))
+
+
 def _egress(tmpdir: Path) -> str:
     """The egress socket the gateway makes in the TMPDIR (BUG-156): a socket
     file left by a bound, then closed, unix socket."""
     path = tmpdir / agy_cage.EGRESS_SOCKET
     if not path.exists():
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.bind(str(path))
-        sock.close()
+        unix_bind(str(path)).close()
     return str(path)
 
 
