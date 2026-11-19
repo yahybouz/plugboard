@@ -27,7 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 **Rolling back to 4.14.6**: it works (the older version ignores the store and the two audit columns), but personal keys then stop working, and a session a person opened stays valid until it expires: use **Log out everywhere** first. An `ENCRYPTION_KEY` rotation made under 4.14.6 leaves the personal secrets on the former key: rolling forward again, those keys are refused and must be revoked and created anew ([details](docs/guide/monitoring.md#personal-dashboard-keys)).
 
-**API contract**: unchanged, still **3.0.1** (`docs/api/openapi.json`, `docs/api/mcp.json`). The `/admin/people` routes are admin routes, documented by the admin-only `/openapi.json` of the instance and outside the client contract; `tests/test_admin_people_contract.py` keeps them out of it.
+**API contract**: PB-AUTH-01 does not change it; this version publishes **3.1.0** for ADR-039 (`docs/api/openapi.json`, `docs/api/mcp.json`). The `/admin/people` routes are admin routes, documented by the admin-only `/openapi.json` of the instance and outside the client contract; `tests/test_admin_people_contract.py` keeps them out of it.
 
 **Not verified**: the browser test of the People page (`tests/e2e/test_people.py`) has not run yet (Playwright is absent from the build environment): it runs with the e2e lane of the milestone validation. No real personal key was created on the UAT or in production: creating the real keys is the owner's gesture.
 
