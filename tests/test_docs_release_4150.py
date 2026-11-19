@@ -58,12 +58,12 @@ def test_the_compose_file_and_the_health_examples_name_4_15_0():
     assert '"version": "4.14.6"' not in monitoring
 
 
-def test_one_entry_under_an_empty_unreleased():
+def test_one_entry_under_unreleased():
+    # Changes made after the release go under Unreleased, above this entry.
     text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     assert text.count("## [4.15.0]") == 1
     assert text.index("## [Unreleased]") < text.index("## [4.15.0] — 2026-11-19")
     assert text.index("## [4.15.0] — 2026-11-19") < text.index("## [4.14.6]")
-    assert _section(text, "[Unreleased]").strip() == ""
 
 
 def test_the_entry_holds_both_merged_features():
