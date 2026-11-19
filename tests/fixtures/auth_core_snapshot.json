@@ -81,6 +81,7 @@
   "_background_tasks",
   "_bill_completion",
   "_bill_streaming",
+  "_bill_web_runs",
   "_billing_ns",
   "_billing_target",
   "_bind_host",
@@ -183,6 +184,7 @@
   "_strict_tenant_mode",
   "_suggestion_action",
   "_take_budget_hold",
+  "_take_web_runs",
   "_test_openai_endpoint",
   "_unless_client_gone",
   "_usage_unavailable_handler",
@@ -190,6 +192,7 @@
   "_value_error_handler",
   "_warn_trusted_proxies",
   "_warned_auto_login_values",
+  "_web_finish",
   "admin_catalog_history",
   "admin_models_refresh",
   "annotations",
@@ -355,6 +358,12 @@
   ],
   [
    "/admin/inflight",
+   [
+    "plugboard.app._require_admin"
+   ]
+  ],
+  [
+   "/admin/web",
    [
     "plugboard.app._require_admin"
    ]
@@ -671,6 +680,12 @@
   ],
   [
    "/admin/keys/{key_id}",
+   [
+    "plugboard.app._require_admin"
+   ]
+  ],
+  [
+   "/admin/keys/{key_id}/web",
    [
     "plugboard.app._require_admin"
    ]
@@ -1039,15 +1054,31 @@
   "plugboard.audit",
   "plugboard.alerts",
   "plugboard.netguard",
+  "plugboard.trace_context",
   "plugboard.billing",
   "plugboard.usage",
   "plugboard.apikeys",
   "plugboard.logging_config",
   "plugboard.live_requests",
-  "plugboard.provider_admission",
-  "plugboard.request_wait",
+  "plugboard.cli_tools",
+  "plugboard.web_access",
+  "plugboard.claude_quota",
   "plugboard.tokenizer",
   "plugboard.metrics",
+  "plugboard.provider_admission",
+  "plugboard.request_wait",
+  "plugboard.route_pauses",
+  "plugboard.circuit_breaker",
+  "plugboard.cli_auth",
+  "plugboard.cli_limits",
+  "plugboard.web_egress",
+  "plugboard.agy_store",
+  "plugboard.agy_cage",
+  "plugboard.agy_egress",
+  "plugboard.cli_subprocess",
+  "plugboard.endpoints",
+  "plugboard.router",
+  "plugboard.web_gate",
   "plugboard.ratelimit",
   "plugboard.decisions",
   "plugboard.decision_api",
@@ -1055,16 +1086,6 @@
   "plugboard.embeddings_api",
   "plugboard.admin_people_api",
   "plugboard.webhooks",
-  "plugboard.claude_quota",
-  "plugboard.route_pauses",
-  "plugboard.circuit_breaker",
-  "plugboard.cli_auth",
-  "plugboard.cli_limits",
-  "plugboard.agy_store",
-  "plugboard.agy_cage",
-  "plugboard.cli_subprocess",
-  "plugboard.endpoints",
-  "plugboard.router",
   "plugboard.suivi",
   "plugboard.suivi_import",
   "plugboard.suivi_api",
