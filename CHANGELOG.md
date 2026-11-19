@@ -26,6 +26,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **The egress guard refuses two more IPv6 ranges** (PLU-171, I1 of the 4.15.1 security review): Python 3.12 reads `5f00::/16` (SRv6 segment identifiers, RFC 9602) and `3fff::/20` (documentation, RFC 9637) as global, although the IANA registry marks them not globally reachable. Both are now refused whole by `ip_is_public`, for the web tools' egress guard, agy's egress and the protected providers alike.
 
+- **agy's egress checks the TLS name of each tunnel** (PLU-171, I2 of the 4.15.1 security review): after `CONNECT` to a listed Google host, a client could send a ClientHello for another name served by Google's shared front ends (SNI fronting). agy's egress now reads the tunnel's first TLS record and closes the tunnel, nothing sent upstream, unless it is a ClientHello whose server name is the host of the `CONNECT` (any case, a final dot ignored); a ClientHello without a name or spread over several records closes the tunnel too; each closing is logged as a refusal (`sent another TLS name (or none)`). The `Host` inside the TLS stays unseen: fronting by `Host` remains a known limit. The web tools' tunnels are unchanged (never read).
+
 ## [4.15.1] — 2026-11-19
 
 ### Security

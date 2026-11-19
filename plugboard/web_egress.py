@@ -279,6 +279,68 @@ async def _public_addresses(host: str, port: int) -> list:
     return infos
 
 
+# The ClientHello of a tunnel checked by name (agy's egress, PLU-171): one
+# TLS record, at most 2^14 bytes of handshake (RFC 8446 5.1) plus slack.
+_MAX_HELLO_RECORD = 16384 + 256
+
+
+def _u(data: bytes, start: int, size: int) -> int:
+    if start + size > len(data):
+        raise IndexError(start)
+    return int.from_bytes(data[start : start + size], "big")
+
+
+def client_hello_sni(record: bytes) -> Optional[str]:
+    """The server name (SNI) of a TLS record holding a whole ClientHello;
+    None when it is not one, is cut, or names no server."""
+    try:
+        if _u(record, 0, 1) != 0x16 or _u(record, 3, 2) != len(record) - 5:
+            return None
+        if _u(record, 5, 1) != 0x01:  # handshake type: ClientHello
+            return None
+        hello = record[9 : 9 + _u(record, 6, 3)]
+        if len(hello) != _u(record, 6, 3):
+            return None  # spread over more records: never from agy's Go TLS
+        i = 2 + 32  # client_version, random
+        i += 1 + _u(hello, i, 1)  # session id
+        i += 2 + _u(hello, i, 2)  # cipher suites
+        i += 1 + _u(hello, i, 1)  # compression methods
+        end = i + 2 + _u(hello, i, 2)
+        i += 2
+        while i + 4 <= end:
+            kind, size = _u(hello, i, 2), _u(hello, i + 2, 2)
+            ext = hello[i + 4 : i + 4 + size]
+            i += 4 + size
+            if kind == 0:  # server_name: list length, type 0 (host), name
+                if _u(ext, 2, 1) != 0:
+                    return None
+                name = ext[5 : 5 + _u(ext, 3, 2)]
+                if len(name) != _u(ext, 3, 2):
+                    return None
+                return name.decode("ascii")
+        return None
+    except (IndexError, UnicodeDecodeError):
+        return None
+
+
+async def _same_tls_name(reader: asyncio.StreamReader, host: str) -> Optional[bytes]:
+    """The tunnel's first TLS record when its SNI is ``host``, else None."""
+    try:
+        head = await asyncio.wait_for(reader.readexactly(5), _HEAD_TIMEOUT_S)
+        size = int.from_bytes(head[3:5], "big")
+        if head[0] != 0x16 or size > _MAX_HELLO_RECORD:
+            return None
+        record = head + await asyncio.wait_for(
+            reader.readexactly(size), _HEAD_TIMEOUT_S
+        )
+    except (TimeoutError, asyncio.IncompleteReadError, ConnectionError, OSError):
+        return None
+    sni = client_hello_sni(record)
+    if sni is None or sni.lower().removesuffix(".") != host.lower().removesuffix("."):
+        return None
+    return record
+
+
 async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     try:
         while True:
@@ -345,6 +407,7 @@ async def serve_connect(
     label: str = "web egress",
     tunnel_opened: Optional[Callable[[], None]] = None,
     refusals: Optional[RefusalLog] = None,
+    match_sni: bool = False,
 ) -> Optional[bool]:
     """Answer one CONNECT request: tunnel it, or refuse it.
 
@@ -354,7 +417,9 @@ async def serve_connect(
     once a tunnel ended, None for a malformed request or an upstream that
     could not be reached. ``label`` starts every log line, which names the
     host asked, never a path; refusals go through ``refusals`` (one line
-    per host and window).
+    per host, port and window). With ``match_sni`` (agy's egress), the
+    tunnel's first bytes must be a TLS ClientHello naming the host of the
+    ``CONNECT``: anything else closes it, nothing sent upstream (PLU-171).
     """
     if refusals is None:
         refusals = RefusalLog(label)
@@ -420,6 +485,14 @@ async def serve_connect(
         writer.close()  # the client left before the 200
         up_writer.close()
         return True
+    if match_sni:
+        record = await _same_tls_name(reader, host)
+        if record is None:
+            refusals.refused(host, port, " sent another TLS name (or none)")
+            writer.close()
+            up_writer.close()
+            return False
+        up_writer.write(record)
     limit = tunnel_max_seconds()
     try:
         await asyncio.wait_for(

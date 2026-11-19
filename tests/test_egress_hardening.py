@@ -261,3 +261,156 @@ async def test_refused_hosts_are_logged_escaped_and_bounded(guard, caplog):
 def test_the_log_escapes_what_it_names():
     refusals = web_egress.RefusalLog("test egress")
     assert refusals.key("a\x1b[0m‮b", 443) == ("a\\x1b[0m\\u202eb", 443)
+
+
+# ── PLU-171 (I2): agy's tunnel carries the TLS name its CONNECT asked ────────
+
+
+def _client_hello(server_name) -> bytes:
+    """The first TLS record a client sends to ``server_name`` (no network:
+    a memory BIO)."""
+    import ssl
+
+    ctx = ssl.create_default_context()
+    if server_name is None:
+        ctx.check_hostname = False
+    incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
+    tls = ctx.wrap_bio(incoming, outgoing, server_hostname=server_name)
+    with pytest.raises(ssl.SSLWantReadError):
+        tls.do_handshake()
+    return outgoing.read()
+
+
+def test_client_hello_sni_reads_the_server_name():
+    hello = _client_hello("oauth2.googleapis.com")
+    assert web_egress.client_hello_sni(hello) == "oauth2.googleapis.com"
+    assert web_egress.client_hello_sni(hello[:-10]) is None  # cut short
+    assert web_egress.client_hello_sni(b"GET / HTTP/1.1\r\n\r\n") is None
+    assert web_egress.client_hello_sni(b"\x16\x03\x01\xff") is None
+    assert web_egress.client_hello_sni(b"") is None
+
+
+def test_client_hello_without_a_name_has_no_sni():
+    import ssl
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
+    tls = ctx.wrap_bio(incoming, outgoing)
+    with pytest.raises(ssl.SSLWantReadError):
+        tls.do_handshake()
+    assert web_egress.client_hello_sni(outgoing.read()) is None
+
+
+async def _recording_upstream():
+    got = bytearray()
+
+    async def keep(reader, writer):
+        try:
+            while data := await reader.read(65536):
+                got.extend(data)
+                writer.write(b"ok")
+                await writer.drain()
+        except (ConnectionError, OSError):
+            pass
+        finally:
+            writer.close()
+
+    server = await asyncio.start_server(keep, "127.0.0.1", 0)
+    return server, server.sockets[0].getsockname()[1], got
+
+
+async def _tunnel_once(open_conn, target: str, payload: bytes) -> bytes:
+    """CONNECT ``target``, send ``payload`` and return what comes back
+    before the tunnel closes (b"" when it is closed at once)."""
+    reader, writer = await open_conn()
+    writer.write(f"CONNECT {target} HTTP/1.1\r\n\r\n".encode())
+    await writer.drain()
+    head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+    assert head.startswith(b"HTTP/1.1 200"), head
+    writer.write(payload)
+    await writer.drain()
+    try:
+        back = await asyncio.wait_for(reader.read(100), 5)
+    except (ConnectionError, OSError):
+        back = b""
+    writer.close()
+    return back
+
+
+@pytest.fixture
+async def agy_egress_path(tmp_path):
+    from plugboard import agy_egress
+
+    path = str(tmp_path / "e.sock")
+    server = await agy_egress.start(path)
+    try:
+        yield path
+    finally:
+        await server.close()
+
+
+async def test_agy_tunnel_passes_a_client_hello_naming_its_host(
+    agy_egress_path, fake_dns, monkeypatch
+):
+    upstream, up_port, got = await _recording_upstream()
+    fake_dns["oauth2.googleapis.com"] = ["127.0.0.1"]
+    monkeypatch.setattr(web_egress.netguard, "ip_is_public", lambda _ip: True)
+    monkeypatch.setattr(web_egress, "_TLS_PORT", up_port)
+    try:
+        hello = _client_hello("OAuth2.googleapis.com.")
+        back = await _tunnel_once(
+            lambda: asyncio.open_unix_connection(agy_egress_path),
+            f"oauth2.googleapis.com:{up_port}",
+            hello,
+        )
+        assert back == b"ok"
+        assert bytes(got) == hello
+    finally:
+        upstream.close()
+        await upstream.wait_closed()
+
+
+@pytest.mark.parametrize("sent", ["storage.googleapis.com", None, "not tls"])
+async def test_agy_tunnel_closes_on_another_tls_name(
+    agy_egress_path, fake_dns, monkeypatch, caplog, sent
+):
+    """SNI fronting: CONNECT a listed name, then a ClientHello for another
+    Google name (or none, or no TLS at all): nothing reaches upstream."""
+    upstream, up_port, got = await _recording_upstream()
+    fake_dns["www.googleapis.com"] = ["127.0.0.1"]
+    monkeypatch.setattr(web_egress.netguard, "ip_is_public", lambda _ip: True)
+    monkeypatch.setattr(web_egress, "_TLS_PORT", up_port)
+    payload = b"\x16\x03\x01\x00\x05hello" if sent == "not tls" else _client_hello(sent)
+    try:
+        with caplog.at_level(logging.INFO, logger="plugboard.web_egress"):
+            back = await _tunnel_once(
+                lambda: asyncio.open_unix_connection(agy_egress_path),
+                f"www.googleapis.com:{up_port}",
+                payload,
+            )
+        assert back == b""
+        await asyncio.sleep(0.1)
+        assert bytes(got) == b""
+        lines = _refused(caplog)
+        assert any("www.googleapis.com" in li and "TLS name" in li for li in lines)
+    finally:
+        upstream.close()
+        await upstream.wait_closed()
+
+
+async def test_web_tunnels_never_read_the_client_hello(guard, fake_dns, monkeypatch):
+    upstream, up_port, got = await _recording_upstream()
+    fake_dns["docs.example.org"] = ["127.0.0.1"]
+    monkeypatch.setattr(web_egress.netguard, "ip_is_public", lambda _ip: True)
+    monkeypatch.setattr(web_egress, "_TLS_PORT", up_port)
+    try:
+        back = await _tunnel_once(
+            lambda: asyncio.open_connection("127.0.0.1", guard),
+            f"docs.example.org:{up_port}",
+            b"plain bytes",
+        )
+        assert back == b"ok" and bytes(got) == b"plain bytes"
+    finally:
+        upstream.close()
+        await upstream.wait_closed()

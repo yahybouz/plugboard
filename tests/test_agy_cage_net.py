@@ -32,6 +32,7 @@ import pytest
 
 from plugboard import agy_cage, agy_egress, netguard, web_egress
 from plugboard import cli_subprocess as cs
+from tests.test_egress_hardening import _client_hello
 from tests.test_agy_cage import (  # noqa: F401 - pytest fixtures
     _BODY,
     _SHELL_RO,
@@ -281,9 +282,15 @@ async def test_proxy_refuses_an_internal_address_literal(egress):
 
 async def _echo_server():
     async def echo(reader, writer):
-        writer.write(await reader.read(100))
-        await writer.drain()
-        writer.close()
+        # Echoes until the client leaves (a ClientHello, then a ping).
+        try:
+            while data := await reader.read(65536):
+                writer.write(data)
+                await writer.drain()
+        except (ConnectionError, OSError):
+            pass
+        finally:
+            writer.close()
 
     server = await asyncio.start_server(echo, "127.0.0.1", 0)
     return server, server.sockets[0].getsockname()[1]
@@ -304,6 +311,12 @@ async def test_proxy_tunnels_a_listed_host(egress, fake_dns, monkeypatch):
         await writer.drain()
         head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
         assert head.startswith(b"HTTP/1.1 200")
+        # agy's tunnel starts with a ClientHello naming its host (PLU-171).
+        hello = _client_hello("cloudcode-pa.googleapis.com")
+        writer.write(hello)
+        await writer.drain()
+        back = await asyncio.wait_for(reader.readexactly(len(hello)), 5)
+        assert back == hello
         writer.write(b"ping")
         await writer.drain()
         assert await asyncio.wait_for(reader.read(10), 5) == b"ping"
@@ -353,6 +366,16 @@ while b"\r\n\r\n" not in head:
     head += chunk
 out["proxy"] = head.split(b"\r\n")[0].decode()
 if out["proxy"].startswith("HTTP/1.1 200"):
+    # A ClientHello naming the CONNECT host first (PLU-171), then a ping.
+    hello = bytes.fromhex(p["hello"])
+    s.sendall(hello)
+    back = b""
+    while len(back) < len(hello):
+        chunk = s.recv(65536)
+        if not chunk:
+            break
+        back += chunk
+    out["hello"] = back == hello
     s.sendall(b"ping")
     out["echo"] = s.recv(10).decode()
 s.close()
@@ -388,6 +411,7 @@ async def test_real_cage_reaches_only_the_egress(
     params = {
         "gateway_port": gateway_port,
         "target": f"cloudcode-pa.googleapis.com:{up_port}",
+        "hello": _client_hello("cloudcode-pa.googleapis.com").hex(),
     }
     try:
         # Outside the cage, the same listener answers: the refusal inside is
@@ -408,6 +432,7 @@ async def test_real_cage_reaches_only_the_egress(
     assert seen["private"] != "connected"
     assert seen["metadata"] != "connected"
     assert seen["proxy"].startswith("HTTP/1.1 200")
+    assert seen["hello"] is True
     assert seen["echo"] == "ping"
     # The relay became agy: agy is still the cage's pid 1.
     assert seen["pid"] == 1

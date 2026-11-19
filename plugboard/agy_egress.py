@@ -27,10 +27,13 @@ to Google remains):
   ``www.googleapis.com`` also serves, for one, the Cloud Storage JSON API
   (``/storage/v1``, ``/upload/storage/v1``), which reaches any bucket the
   credentials in the request can write;
-- the tunnel is opaque (TLS end to end): the proxy never sees the SNI nor
-  the ``Host`` inside it, which may name another Google service than the
-  ``CONNECT`` did, Google's front ends serving many names on the same
-  addresses.
+- the tunnel is TLS end to end: the proxy reads only its first record, the
+  ClientHello, whose server name (SNI) must be the host of the ``CONNECT``
+  (any case, a final dot ignored), else the tunnel is closed before a byte
+  goes upstream (PLU-171): no fronting by SNI, no ClientHello without a
+  name, nor one spread over several records. The ``Host`` inside stays
+  unseen and may name another Google service than the ``CONNECT`` did,
+  Google's front ends serving many names on the same addresses.
 
 What the list does rule out: any non-Google host, and the other Google
 names by their own (``storage.googleapis.com``...). Each listed name:
@@ -132,6 +135,7 @@ class Egress:
                 host_allowed=host_allowed,
                 label=_LABEL,
                 refusals=self._refusals,
+                match_sni=True,
             )
         finally:
             self._cap.leave()
