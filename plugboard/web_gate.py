@@ -16,6 +16,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from plugboard import apikeys as _apikeys
+from plugboard import cli_tools as _cli_tools
 from plugboard import web_access as _web_access
 from plugboard.router import WebUnavailableError, web_refusal
 
@@ -80,6 +81,15 @@ def _web_gate(
             _web_access.WEB_NOT_ALLOWED,
             "This API key is not allowed to use the web: ask the administrator "
             "to turn web_access on for it. Nothing was called.",
+        )
+    if _cli_tools.engaged(body):
+        _web_access.count("refused_with_tools")
+        log.info("web refused: tools declared (client=%s)", client_id or "-")
+        return _web_refused(
+            400,
+            WEB_WITH_TOOLS,
+            "Web access and tools cannot be used in the same request: send "
+            "the request without tools, or without web. Nothing was called.",
         )
     refusal = web_refusal(body.get("model", ""))
     if refusal is not None:

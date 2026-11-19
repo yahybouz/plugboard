@@ -57,9 +57,18 @@ Streaming (`"stream": true`) works the same way.
 |---|---|---|---|
 | `400` | `web_bad_request` | the header or the `plugboard` field is malformed | no |
 | `403` | `web_not_allowed` | the key does not hold `web_access` | no |
+| `400` | `web_with_tools_unsupported` | the request also declares `tools` (ADR-040) | no |
 | `400` | `web_unavailable` | no claude CLI route serves the model | no |
 | `429` | `web_busy` | the web requests in progress are at their limit; `Retry-After: 10` | no |
 | `502` | `web_budget_exhausted` | the model used its `web_max_uses` calls without a final answer | yes |
+
+**Web and tools**: a request that asks for the web cannot declare `tools`
+(400 `web_with_tools_unsupported`, nothing called), even where tools are
+emulated on CLI routes (`PLUGBOARD_CLI_TOOLS_EMULATION=1`, `allow_cli_tools`):
+a web run gives the CLI only its two web tools. Send two requests: one with
+the web, one with your tools ([ADR-040](../adr/ADR-040-web-et-outils.md)).
+The refusals come in this order: `web_bad_request`, `web_not_allowed`,
+`web_with_tools_unsupported`, `web_unavailable`, `web_busy`. Contract 3.2.0.
 
 A web answer is never read from nor written to the response cache: it depends
 on the live web. Its usage entry is marked (`web`, `web_uses`), and the month's

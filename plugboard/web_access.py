@@ -218,7 +218,7 @@ def prometheus_lines() -> List[str]:
         f"plugboard_web_tool_uses_total {s['tool_uses']}",
     ]
     # One counter per reason: the metric labels stay provider, model and le.
-    for reason in ("not_allowed", "unavailable", "busy"):
+    for reason in ("not_allowed", "unavailable", "busy", "with_tools"):
         name = f"plugboard_web_refused_{reason}_total"
         lines += [
             f"# HELP {name} Web requests refused ({reason})",
