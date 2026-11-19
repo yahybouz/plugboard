@@ -30,6 +30,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import contextlib
+import functools
 import json
 import logging
 import os
@@ -40,6 +41,7 @@ import sys
 import tempfile
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -740,9 +742,29 @@ def agy_sandbox_error(cause: str, model: str = "") -> CliSubprocessError:
     )
 
 
+# The threads that copy and remove agy's private stores (BUG-157): off the
+# event loop, and off asyncio's default executor (the billing writes there).
+_store_threads: Optional[ThreadPoolExecutor] = None
+
+
+async def _off_loop(function: Callable[..., Any], *args: Any) -> Any:
+    """``function(*args)`` in one of the store threads, awaited."""
+    global _store_threads
+    if _store_threads is None:
+        _store_threads = ThreadPoolExecutor(
+            max_workers=max(2, _CONCURRENCY_LIMIT), thread_name_prefix="agy-store"
+        )
+    return await asyncio.get_running_loop().run_in_executor(
+        _store_threads, functools.partial(function, *args)
+    )
+
+
 @contextlib.asynccontextmanager
 async def agy_caged(
-    binary: str, args: List[str], spawn_cwd: str
+    binary: str,
+    args: List[str],
+    spawn_cwd: str,
+    slot: Optional[contextlib.AbstractAsyncContextManager] = None,
 ) -> AsyncIterator[tuple]:
     """Yield ``(argv, env)`` running agy ``args`` in its cage, with a private
     ``TMPDIR``, a private store (BUG-157) and the cage's egress, all removed
@@ -752,9 +774,14 @@ async def agy_caged(
     served here, in the TMPDIR, by agy's proxy (agy_egress), which agy
     reaches through the relay its proxy variables name. agy's store is a
     folder of this call only, beside the TMPDIR (agy_store.private_store),
-    which the cage fills with copies of the token, ``bin/`` and ``builtin/``
-    and shows at the store's path: what agy writes there never reaches the
-    shared store.
+    which is filled with copies of the token, ``bin/`` and ``builtin/``
+    (agy_cage.fill_private_store) and shown at the store's path: what agy
+    writes there never reaches the shared store. The copy and the removal
+    run in a thread of their own (they can take a while: a large ``bin/``),
+    never on the event loop. ``slot``, when given (the CLI slot of
+    ``complete()``), is taken once the cage's checks have passed and before
+    the copy, and held until the context ends: a call still waiting for its
+    slot has an empty store, nothing copied.
 
     Raises :class:`agy_cage.CageUnavailable` before anything is launched when
     the cage, its store or its egress cannot be built.
@@ -764,14 +791,16 @@ async def agy_caged(
     env.update(agy_cage.proxy_env())
     # Resolved: the cage binds the TMPDIR and the store by their real path.
     spawn = os.path.realpath(spawn_cwd)
-    with contextlib.ExitStack() as folders:
-        tmpdir = folders.enter_context(agy_private_tmp(spawn))
+    # Left in reverse order: the slot, the egress, the store, the TMPDIR.
+    async with contextlib.AsyncExitStack() as stack:
+        tmpdir = stack.enter_context(agy_private_tmp(spawn))
         try:
-            store = folders.enter_context(agy_store.private_store(spawn))
+            store = agy_store.create_private_store(spawn)
         except OSError as exc:
             raise agy_cage.CageUnavailable(
                 f"agy private store cannot be created ({type(exc).__name__})"
             ) from None
+        stack.push_async_callback(_off_loop, agy_store.remove_private_store, store)
         env["TMPDIR"] = tmpdir
         try:
             egress = await agy_egress.start(
@@ -781,15 +810,14 @@ async def agy_caged(
             raise agy_cage.CageUnavailable(
                 f"agy egress socket cannot be created ({type(exc).__name__})"
             ) from None
-        try:
-            yield (
-                agy_cage.cage_argv(
-                    binary, args, env=env, tmpdir=tmpdir, private_store=store
-                ),
-                env,
-            )
-        finally:
-            await egress.close()
+        stack.push_async_callback(egress.close)
+        argv = agy_cage.cage_argv(
+            binary, args, env=env, tmpdir=tmpdir, private_store=store
+        )
+        if slot is not None:
+            await stack.enter_async_context(slot)
+        await _off_loop(agy_cage.fill_private_store, env, store)
+        yield argv, env
 
 
 def gemini_isolation_env(home: str) -> Dict[str, str]:
@@ -2347,23 +2375,26 @@ async def complete(
         if backend.stdin_arg:
             # Last, after every option: the operand telling the CLI to read stdin.
             argv.append(backend.stdin_arg)
+        t0 = time.perf_counter()
+        # Per-backend semaphore: cap concurrent spawns to PLUGBOARD_SUBPROCESS_LIMIT
+        # so a burst of requests can't fork-bomb the host (TM-001 mitigation).
+        _live.update(phase="cli_queue")
+        slot: Any = _get_semaphore(kind)
         if kind == "agy":
             # Inside its bubblewrap cage, or not at all (BUG-86, agy_cage);
             # raised before anything is launched. Its TMPDIR and its store are
             # private, never the server's, /tmp nor the shared store (see
             # agy_private_tmp(), agy_store); like the gemini home, removed once
-            # the child is dead and reaped.
+            # the child is dead and reaped. agy_caged takes the CLI slot
+            # itself, before it copies the store (BUG-157).
             try:
                 argv, env = await cleanup.enter_async_context(
-                    agy_caged(argv[0], argv[1:], spawn_cwd)
+                    agy_caged(argv[0], argv[1:], spawn_cwd, slot=slot)
                 )
             except agy_cage.CageUnavailable as exc:
                 raise agy_sandbox_error(str(exc), model) from None
-        t0 = time.perf_counter()
-        # Per-backend semaphore: cap concurrent spawns to PLUGBOARD_SUBPROCESS_LIMIT
-        # so a burst of requests can't fork-bomb the host (TM-001 mitigation).
-        _live.update(phase="cli_queue")
-        async with _get_semaphore(kind):
+            slot = contextlib.nullcontext()
+        async with slot:
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *argv,

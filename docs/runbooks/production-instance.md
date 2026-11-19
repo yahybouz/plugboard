@@ -488,10 +488,50 @@ completed by the operator.
   `log/`, `cache/`, `crashes/`, and conversations of calls cut before the
   purge. No call sees them any more; delete them by hand if you wish, never
   `antigravity-oauth-token`, `settings.json`, `installation_id`,
-  `jetski_state.pbtxt`, `bin/` nor `builtin/`. Look once at `bin/`: a program
-  a call left there before 4.15.2 would be copied into every call.
+  `jetski_state.pbtxt`, `bin/` nor `builtin/` (see the check below).
 - agy run by hand in the container (its sign-in) still writes there.
 - A backup taken before 4.15.2 may keep conversations of before, in clear.
+
+### Check agy's shared `bin/` and `builtin/` once, after switching to 4.15.2
+
+Up to 4.15.1 every agy call could write in the shared `bin/` (programs agy
+runs) and `builtin/` (skills it loads) (BUG-157). Since 4.15.2 each call gets
+a copy of both: a program or a skill a call left there before would be copied
+into, and run or loaded by, every call. Check them once, on each instance
+(UAT and production), after the switch:
+
+1. List what changed there after agy's install (its `installation_id`),
+   executables and links included:
+
+   ```bash
+   docker compose -f deploy/ovh/compose.yml exec -T gateway sh -c '
+     s="$HOME/.gemini/antigravity-cli"
+     find "$s/bin" "$s/builtin" -newer "$s/installation_id" \
+       -printf "%TY-%Tm-%Td %TH:%TM %M %s %p\n" 2>/dev/null | sort'
+   ```
+
+   agy itself rewrites them at a new version or on demand, so dates after
+   the install are not proof of anything by themselves; look for a name that
+   is not agy's (`bin/` holds the programs agy unpacked from its own binary;
+   `builtin/` its `skills/`, `.checksum` and `keep.txt`), a script, or a file
+   changed at the time of a suspicious request.
+2. When in doubt, have agy unpack them again: move both aside (never delete
+   them before you have looked), then run agy once in a shell, as for its
+   sign-in, and quit it:
+
+   ```bash
+   docker compose -f deploy/ovh/compose.yml exec -T gateway sh -c '
+     cd "$HOME/.gemini/antigravity-cli" &&
+     mv bin bin.before-4.15.2 && mv builtin builtin.before-4.15.2'
+   docker compose -f deploy/ovh/compose.yml exec -it gateway agy
+   ```
+
+   agy 1.4.4 writes `builtin/` again at start-up (offline run, 19/11). `bin/`
+   is unpacked again when agy needs it (not shown without a real call); in a
+   gateway call, that lands in the call's own store only, so until agy has
+   rewritten the shared `bin/` in a shell, each call unpacks its own. The `.before`
+   folders are never copied into a call (only `bin/` and `builtin/` are):
+   keep them for analysis, then remove them.
 
 ## agy cage
 

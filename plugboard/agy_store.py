@@ -15,7 +15,7 @@ program in ``bin/`` for a later call, and read the conversation of another
 call in progress; the gateway removed each call's conversation afterwards
 (BUG-97), too late for a neighbour still running.
 
-Now each call gets a folder of its own, :func:`private_store` (``mkdtemp``,
+Now each call gets a folder of its own, :func:`create_private_store` (``mkdtemp``,
 mode 0700, under the CLIs' launch directory, beside the call's ``TMPDIR``,
 never inside the shared store), which the cage binds at the store's path
 instead of the store (:mod:`plugboard.agy_cage` fills it). Whatever agy
@@ -40,7 +40,6 @@ import os
 import shutil
 import stat
 import tempfile
-from typing import Iterator
 
 log = logging.getLogger(__name__)
 
@@ -79,13 +78,16 @@ def _remove(path: str) -> None:
     log.warning("agy private store left in place after the call")
 
 
-@contextlib.contextmanager
-def private_store(parent: str) -> Iterator[str]:
-    """Yield a new empty folder (mode 0700) under ``parent`` for one agy
-    call's store, and remove it afterwards. Raises :class:`OSError` when it
-    cannot be made: the caller then launches nothing."""
-    path = tempfile.mkdtemp(prefix=PRIVATE_PREFIX, dir=parent)
-    try:
-        yield path
-    finally:
-        _remove(path)
+def create_private_store(parent: str) -> str:
+    """A new empty folder (mode 0700) under ``parent`` for one agy call's
+    store. Raises :class:`OSError` when it cannot be made: the caller then
+    launches nothing. The caller removes it with
+    :func:`remove_private_store` once the call is over."""
+    return tempfile.mkdtemp(prefix=PRIVATE_PREFIX, dir=parent)
+
+
+def remove_private_store(path: str) -> None:
+    """Remove the call's store ``path`` (see :func:`_remove`); never raises.
+    It may take a while (a large ``bin/``): the gateway runs it off its
+    event loop."""
+    _remove(path)

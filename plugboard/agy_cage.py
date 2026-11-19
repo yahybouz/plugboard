@@ -43,9 +43,10 @@ This module builds the gateway's only command line that launches agy
   store (``$HOME/.gemini/antigravity-cli``) instead of it, and the request's
   private ``TMPDIR``. Nothing else. The shared store is never bound
   writable: the call's store is a fresh folder
-  (:func:`plugboard.agy_store.private_store`, 0700, beside the ``TMPDIR``,
-  removed with it after the call) which :func:`cage_argv` fills with
-  copies, never links, of the
+  (:func:`plugboard.agy_store.create_private_store`, 0700, beside the
+  ``TMPDIR``, removed with it after the call) which
+  :func:`fill_private_store` fills, once the call has its CLI slot and off
+  the event loop (``cli_subprocess.agy_caged``), with copies, never links, of the
   sign-in token (:data:`STORE_TOKEN`, which agy may refresh: the copy is
   thrown away, never copied back) and of what agy unpacks from its binary,
   ``bin/`` and ``builtin/`` (:data:`STORE_UNPACKED`, which agy may rewrite:
@@ -586,16 +587,15 @@ def _copy_tree(src_dir: int, target: str) -> None:
                 _copy_file(src_dir, entry.name, path, mode)
 
 
-def _fill_private_store(store: str, private: str) -> None:
-    """Copy into the call's store what agy needs of the shared one and may
-    change: its token (:data:`STORE_TOKEN`) and what it unpacks
-    (:data:`STORE_UNPACKED`), each when it exists. Nothing is linked, and
-    nothing ever goes back the other way.
+def _copied_entries(store: str) -> List[str]:
+    """The entries of the shared store copied into the call's own: the token
+    (:data:`STORE_TOKEN`) and what agy unpacks (:data:`STORE_UNPACKED`),
+    those that exist.
 
     The token or one of those folders through a symbolic link, or of the
     wrong type: :class:`CageUnavailable` (as for :data:`STORE_READ_ONLY`).
-    A link or a special file inside a folder is skipped. A missing token is
-    not refused: agy then says it is not signed in, as before.
+    A missing token is not refused: agy then says it is not signed in, as
+    before.
     """
     wanted = [(STORE_TOKEN, "a regular file", stat.S_ISREG)]
     wanted += [(name, "a directory", stat.S_ISDIR) for name in STORE_UNPACKED]
@@ -611,6 +611,15 @@ def _fill_private_store(store: str, private: str) -> None:
         if not check(os.lstat(path).st_mode):
             raise CageUnavailable(f"agy's store entry {name} is not {kind}")
         found.append(name)
+    return found
+
+
+def _fill_private_store(store: str, private: str) -> None:
+    """Copy into the call's store what agy needs of the shared one and may
+    change (:func:`_copied_entries`, checked again here). Nothing is linked,
+    nothing ever goes back the other way; a link or a special file inside a
+    folder is skipped."""
+    found = _copied_entries(store)
     try:
         folder = os.open(store, _OPEN_FLAGS | os.O_DIRECTORY)
         try:
@@ -630,6 +639,17 @@ def _fill_private_store(store: str, private: str) -> None:
         raise CageUnavailable(
             f"agy private store cannot be filled ({type(exc).__name__})"
         ) from None
+
+
+def fill_private_store(env: Mapping[str, str], private_store: str) -> None:
+    """Fill the call's store ``private_store`` (still empty, checked again)
+    with copies of the shared store's token, ``bin/`` and ``builtin/``
+    (BUG-157). Called after :func:`cage_argv` and before the launch; it
+    reads and writes files, possibly megabytes: the gateway runs it in a
+    thread, once the call has its CLI slot. Raises :class:`CageUnavailable`
+    (agy must then not run)."""
+    store = _store(env)
+    _fill_private_store(store, _private_store(private_store, store))
 
 
 def _system_args(env: Mapping[str, str]) -> List[str]:
@@ -760,10 +780,10 @@ def cage_argv(
     ``tmpdir`` is the request's private ``TMPDIR``, writable and the working
     directory. ``private_store`` is the call's own store, an empty 0700
     folder the caller made and removes after the call
-    (:func:`plugboard.agy_store.private_store`): once every check has
-    passed, it is filled here (:func:`_fill_private_store`), then bound at
-    the store's path, writable, instead of the store (BUG-157); it has no
-    default. ``_extra_ro_for_tests`` is for the test suite only (a fake agy
+    (:func:`plugboard.agy_store.create_private_store`), bound at the
+    store's path, writable, instead of the store (BUG-157); it has no
+    default. The caller fills it with :func:`fill_private_store` before the
+    launch. ``_extra_ro_for_tests`` is for the test suite only (a fake agy
     written in shell needs ``/usr/bin`` and ``/bin``): the gateway never
     passes it.
 
@@ -784,8 +804,9 @@ def cage_argv(
     egress = _egress_socket(tmpdir)
     python = _relay_python()
     private = _private_store(private_store, store)
-    # Last: the only check that writes (in the call's own store).
-    _fill_private_store(store, private)
+    # What will be copied into it (fill_private_store): checked now, before
+    # the call waits for its slot.
+    _copied_entries(store)
 
     argv = [bwrap, *_NAMESPACES, *_system_args(env)]
     for path in _extra_ro_for_tests:

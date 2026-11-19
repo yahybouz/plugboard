@@ -142,6 +142,9 @@ def test_the_private_store_gets_copies_never_the_shared_files(setup, fake_binary
     private = _private(setup)
 
     _argv(setup, str(fake_binary), private_store=str(private))
+    # cage_argv only checks; the copy is made apart (in a thread, BUG-157).
+    assert os.listdir(private) == []
+    agy_cage.fill_private_store({"HOME": str(setup["home"])}, str(private))
 
     # The shared store is unchanged.
     assert _snapshot(store) == before
@@ -172,6 +175,7 @@ def test_without_a_token_nothing_is_copied_and_the_cage_is_built(setup, fake_bin
     (setup["store"] / _TOKEN).unlink()
     private = _private(setup)
     _argv(setup, str(fake_binary), private_store=str(private))
+    agy_cage.fill_private_store({"HOME": str(setup["home"])}, str(private))
     assert os.listdir(private) == []
 
 
@@ -456,3 +460,107 @@ async def test_a_private_store_that_cannot_be_made_launches_nothing(setup, monke
     assert "agy private store cannot be created (OSError)" in str(info.value)
     assert not ran.exists()
     assert os.listdir(setup["spawn"]) == []
+
+
+# ── The copy never holds the event loop, and waits for the call's slot ──────
+
+
+def _slow(real, seconds: float, calls: list):
+    def slow(*args, **kwargs):
+        calls.append(time.monotonic())
+        time.sleep(seconds)
+        return real(*args, **kwargs)
+
+    return slow
+
+
+async def test_filling_and_removing_the_store_never_block_the_event_loop(
+    setup, real_bwrap, shell_in_cage, monkeypatch
+):
+    """A slow copy (a large bin/, a slow disk) and a slow removal run in a
+    thread: the gateway keeps serving meanwhile."""
+    from plugboard import agy_store
+
+    _fill_shared(setup)
+    _install(setup["bin"], "agy", "cat >/dev/null\n" + _answer("OK"))
+    fills, removals = [], []
+    monkeypatch.setattr(
+        agy_cage, "_fill_private_store", _slow(agy_cage._fill_private_store, 0.8, fills)
+    )
+    monkeypatch.setattr(agy_store, "_remove", _slow(agy_store._remove, 0.8, removals))
+    gaps = []
+
+    async def ticker():
+        last = time.monotonic()
+        while True:
+            await asyncio.sleep(0.02)
+            now = time.monotonic()
+            gaps.append(now - last)
+            last = now
+
+    tick = asyncio.ensure_future(ticker())
+    try:
+        result = await cs.complete("agy", dict(_BODY))
+    finally:
+        tick.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await tick
+
+    assert _content(result) == "OK"
+    assert len(fills) == 1 and len(removals) == 1
+    assert max(gaps) < 0.4, f"the event loop was held {max(gaps):.2f}s"
+    _no_private_store_left(setup)
+
+
+async def test_the_store_is_filled_only_once_the_call_has_its_slot(
+    setup, real_bwrap, shell_in_cage, monkeypatch
+):
+    """With one CLI slot, a second call waits for it with an empty store of
+    its own: nothing is copied for a call still queued."""
+    store = _fill_shared(setup)
+    monkeypatch.setattr(cs, "_CONCURRENCY_LIMIT", 1)
+    monkeypatch.setattr(cs, "_semaphores", {})
+    fills = []
+    monkeypatch.setattr(
+        agy_cage, "_fill_private_store", _slow(agy_cage._fill_private_store, 0, fills)
+    )
+    marker = f"{uuid.uuid4().int % 10**9:09d}"
+    _install(
+        setup["bin"],
+        "agy",
+        "PROMPT=$(cat)\n"
+        f'case "$PROMPT" in *first*) sleep 2.{marker} ;; esac\n' + _answer("OK"),
+    )
+    first = {**_BODY, "messages": [{"role": "user", "content": "first"}]}
+    task_a = asyncio.ensure_future(cs.complete("agy", first))
+    task_b = None
+    try:
+        deadline = time.monotonic() + 15
+        while not _processes_with(f"2.{marker}".encode()):
+            assert time.monotonic() < deadline, "the first call never started"
+            await asyncio.sleep(0.02)
+        task_b = asyncio.ensure_future(cs.complete("agy", dict(_BODY)))
+        while len(list(setup["spawn"].glob("agy-store-*"))) < 2:
+            assert time.monotonic() < deadline, "the second call never queued"
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(0.3)
+
+        # The first call has its copy; the second, queued, an empty store.
+        assert len(fills) == 1
+        stores = sorted(
+            setup["spawn"].glob("agy-store-*"), key=lambda p: len(os.listdir(p))
+        )
+        assert os.listdir(stores[0]) == []
+        assert (stores[1] / _TOKEN).read_text() == (store / _TOKEN).read_text()
+
+        results = await asyncio.gather(task_a, task_b)
+    finally:
+        for task in (task_a, task_b):
+            if task is not None and not task.done():
+                task.cancel()
+                with contextlib.suppress(BaseException):
+                    await task
+
+    assert [_content(r) for r in results] == ["OK", "OK"]
+    assert len(fills) == 2
+    _no_private_store_left(setup)
