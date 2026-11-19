@@ -26,18 +26,19 @@ is ever copied back to the shared store: agy's writes never reach it, so
 there is nothing left to purge there (the BUG-97 purge is gone with it), and
 the conversations of other calls are never in sight.
 
-The removal never follows a link (``rmtree``) and gives the owner back its
-rights on a folder agy made read-only, so that the copy of the token does not
-stay behind. What still cannot be removed is logged with the error type only,
-never a path, an id nor a prompt; the answer to the client is not affected.
+The removal follows no link (a link is removed as itself, never its target),
+recurses not (agy may leave a tree deeper than Python's stack) and first
+gives the gateway, which owns every folder of the store (agy runs with its
+uid), read, write and search rights on each folder it opens, the root
+included: a ``chmod 000`` by agy does not keep the copy of the token behind.
+What still cannot be removed is logged with the error type only, never a
+path, an id nor a prompt; the answer to the client is not affected.
 """
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import os
-import shutil
 import stat
 import tempfile
 
@@ -47,35 +48,69 @@ STORE_PARTS = (".gemini", "antigravity-cli")
 PRIVATE_PREFIX = "agy-store-"
 
 
+_DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
+
+
+def _purge_tree(path: str) -> None:
+    """Remove the folder ``path`` and everything in it, without recursion
+    (agy may leave a tree deeper than Python's stack, or than ``PATH_MAX``:
+    one descriptor at a time, by name in its parent) and without following
+    any link (a link is unlinked as itself, never its target). Before each
+    folder is read, its owner (the gateway, agy's uid) gives itself back
+    read, write and search rights on it, the root included: agy may have
+    taken them off (``chmod 000``). Raises on the first failure."""
+    if stat.S_ISLNK(os.lstat(path).st_mode):
+        os.unlink(path)
+        return
+    os.chmod(path, stat.S_IRWXU)
+    fd = os.open(path, _DIR_FLAGS | os.O_NOFOLLOW)
+    names = []
+    try:
+        while True:
+            with os.scandir(fd) as entries:
+                found = [(e.name, e.is_dir(follow_symlinks=False)) for e in entries]
+            sub = None
+            for name, is_dir in found:
+                if is_dir:
+                    sub = name
+                    break
+                os.unlink(name, dir_fd=fd)
+            if sub is not None:
+                # A folder (no link: checked just above, agy is gone).
+                os.chmod(sub, stat.S_IRWXU, dir_fd=fd)
+                child = os.open(sub, _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=fd)
+                os.close(fd)
+                fd = child
+                names.append(sub)
+                continue
+            if not names:
+                break
+            parent = os.open("..", _DIR_FLAGS, dir_fd=fd)
+            os.close(fd)
+            fd = parent
+            os.rmdir(names.pop(), dir_fd=fd)
+    finally:
+        os.close(fd)
+    os.rmdir(path)
+
+
 def _remove(path: str) -> None:
-    """Remove the folder ``path`` whole, links as links (never their
-    targets), even where agy took its own rights off a folder; never
-    raises."""
-    root = path.rstrip(os.sep) + os.sep
-
-    def retry(function, failed, exc):
-        if not isinstance(exc, PermissionError) or not failed.startswith(root):
-            raise exc
-        # A folder of the call made read-only or unreadable by agy: its
-        # owner (the gateway) gives itself its rights back, then removes it.
-        with contextlib.suppress(OSError):
-            os.chmod(os.path.dirname(failed), stat.S_IRWXU)
-        if os.path.isdir(failed) and not os.path.islink(failed):
-            os.chmod(failed, stat.S_IRWXU)
-            shutil.rmtree(failed, onexc=retry)
-        else:
-            function(failed)
-
+    """Remove the call's store ``path`` whole (:func:`_purge_tree`), tried
+    twice; what is left is logged with the error type only; never raises."""
+    failure = None
     for _ in range(2):
         try:
-            shutil.rmtree(path, onexc=retry)
+            _purge_tree(path)
         except FileNotFoundError:
             pass
-        except Exception:  # noqa: BLE001 - tried once more, then logged
-            pass
+        except Exception as exc:  # noqa: BLE001 - tried once more, then logged
+            failure = exc
         if not os.path.lexists(path):
             return
-    log.warning("agy private store left in place after the call")
+    log.warning(
+        "agy private store left in place after the call (%s)",
+        type(failure).__name__ if failure is not None else "unknown",
+    )
 
 
 def create_private_store(parent: str) -> str:

@@ -488,6 +488,9 @@ async def test_filling_and_removing_the_store_never_block_the_event_loop(
         agy_cage, "_fill_private_store", _slow(agy_cage._fill_private_store, 0.8, fills)
     )
     monkeypatch.setattr(agy_store, "_remove", _slow(agy_store._remove, 0.8, removals))
+    # The cage's once-per-process /proc check (it runs bwrap, held on the
+    # loop by design, under 5 s): done before the measure.
+    agy_cage._proc_mountable(agy_cage._bwrap(), {})
     gaps = []
 
     async def ticker():
@@ -564,3 +567,155 @@ async def test_the_store_is_filled_only_once_the_call_has_its_slot(
     assert [_content(r) for r in results] == ["OK", "OK"]
     assert len(fills) == 2
     _no_private_store_left(setup)
+
+
+# ── Whatever agy leaves in its store, the store is removed ──────────────────
+
+
+@pytest.mark.parametrize("mode", ["000", "100", "500"])
+async def test_the_store_is_removed_even_when_agy_locks_its_root(
+    setup, real_bwrap, shell_in_cage, mode
+):
+    _fill_shared(setup)
+    _install(
+        setup["bin"],
+        "agy",
+        "cat >/dev/null\n"
+        'S="$HOME/.gemini/antigravity-cli"\n'
+        'mkdir -p "$S/brain/x" && echo prompt > "$S/brain/x/t"\n'
+        f'chmod {mode} "$S/brain/x" "$S"\n' + _answer("OK"),
+    )
+
+    result = await cs.complete("agy", dict(_BODY))
+
+    assert _content(result) == "OK"
+    _no_private_store_left(setup)
+
+
+async def test_a_very_deep_tree_left_by_agy_is_removed(
+    setup, real_bwrap, shell_in_cage
+):
+    """Deeper than Python's recursion limit (shutil.rmtree recurses)."""
+    _fill_shared(setup)
+    _install(
+        setup["bin"],
+        "agy",
+        "cat >/dev/null\n"
+        'cd "$HOME/.gemini/antigravity-cli" && i=0\n'
+        "while [ $i -lt 1200 ]; do mkdir a && cd a || break; i=$((i+1)); done\n"
+        "echo x > f\n" + _answer("depth=$i"),
+    )
+
+    result = await cs.complete("agy", dict(_BODY))
+
+    assert _content(result) == "depth=1200"
+    _no_private_store_left(setup)
+
+
+async def test_links_left_by_agy_are_removed_never_their_targets(
+    setup, real_bwrap, shell_in_cage
+):
+    """As the purge of BUG-97 did: a link is removed as a link."""
+    _fill_shared(setup)
+    target_file = setup["app_data"] / "providers.json"
+    target_dir = setup["app_data"]
+    _install(
+        setup["bin"],
+        "agy",
+        "cat >/dev/null\n"
+        'S="$HOME/.gemini/antigravity-cli"\n'
+        f'ln -s {target_file} "$S/file-link" && ln -s {target_dir} "$S/dir-link"\n'
+        f'mkdir -p "$S/brain" && ln -s {target_dir} "$S/brain/inner-link"\n'
+        + _answer("OK"),
+    )
+
+    result = await cs.complete("agy", dict(_BODY))
+
+    assert _content(result) == "OK"
+    assert target_file.read_text() == "app-data-secret"
+    assert sorted(os.listdir(target_dir)) == ["providers.json"]
+    _no_private_store_left(setup)
+
+
+async def test_a_failed_removal_is_logged_and_the_answer_still_served(
+    setup, real_bwrap, shell_in_cage, monkeypatch, caplog
+):
+    from plugboard import agy_store
+
+    _fill_shared(setup)
+    _install(setup["bin"], "agy", "cat >/dev/null\n" + _answer("OK"))
+    prefix = str(setup["spawn"] / agy_store.PRIVATE_PREFIX)
+    real_rmdir = os.rmdir
+
+    def rmdir(path, *args, **kwargs):
+        if str(path).startswith(prefix):
+            raise OSError(16, "Device or resource busy")
+        return real_rmdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "rmdir", rmdir)
+    caplog.set_level("WARNING", logger="plugboard.agy_store")
+
+    result = await cs.complete("agy", dict(_BODY))
+
+    monkeypatch.setattr(os, "rmdir", real_rmdir)
+    assert _content(result) == "OK"
+    messages = [
+        r.getMessage() for r in caplog.records if r.name == "plugboard.agy_store"
+    ]
+    assert messages == ["agy private store left in place after the call (OSError)"]
+    assert str(setup["spawn"]) not in " ".join(messages)
+    (left,) = setup["spawn"].glob("agy-store-*")
+    agy_store.remove_private_store(str(left))
+    assert not left.exists()
+
+
+async def test_a_copy_that_fails_refuses_the_call_and_leaves_nothing(
+    setup, monkeypatch
+):
+    import errno
+
+    _fill_shared(setup)
+    ran = setup["tmp"] / "agy-ran"
+    _install(setup["bin"], "agy", f"touch {ran}\n")
+
+    def full(*_args, **_kwargs):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(agy_cage, "_copy_file", full)
+
+    with pytest.raises(cs.CliSubprocessError) as info:
+        await cs.complete("agy", dict(_BODY))
+
+    assert info.value.sandbox_failed is True
+    assert "agy private store cannot be filled (OSError)" in str(info.value)
+    assert not ran.exists()
+    _no_private_store_left(setup)
+
+
+async def test_a_too_deep_shared_bin_refuses_the_call_and_leaves_nothing(setup):
+    from plugboard import agy_store
+
+    store = _fill_shared(setup)
+    ran = setup["tmp"] / "agy-ran"
+    _install(setup["bin"], "agy", f"touch {ran}\n")
+    deep = store / "bin" / "deep"
+    deep.mkdir()
+    fd = os.open(deep, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for _ in range(1200):
+            os.mkdir("a", dir_fd=fd)
+            child = os.open("a", os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+            os.close(fd)
+            fd = child
+    finally:
+        os.close(fd)
+    try:
+        with pytest.raises(cs.CliSubprocessError) as info:
+            await cs.complete("agy", dict(_BODY))
+
+        assert info.value.sandbox_failed is True
+        assert "agy private store cannot be filled (RecursionError)" in str(info.value)
+        assert not ran.exists()
+        _no_private_store_left(setup)
+    finally:
+        agy_store.remove_private_store(str(deep))

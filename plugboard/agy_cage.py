@@ -635,7 +635,9 @@ def _fill_private_store(store: str, private: str) -> None:
                     os.close(sub)
         finally:
             os.close(folder)
-    except OSError as exc:
+    except (OSError, RecursionError) as exc:
+        # RecursionError: a tree deeper than Python's stack in bin/ or
+        # builtin/ (_copy_tree recurses); never agy's own layout.
         raise CageUnavailable(
             f"agy private store cannot be filled ({type(exc).__name__})"
         ) from None

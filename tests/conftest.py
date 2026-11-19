@@ -155,8 +155,9 @@ def agy_without_cage(monkeypatch):
     whose fake process stands in for agy itself: what they check (private
     TMPDIR, stream, usage, process group...) does not depend on the cage.
     Without the cage, agy also runs on the store of the HOME it is given,
-    not on a private copy of it (BUG-157). The cage itself, and agy run inside it, are tested in
-    tests/test_agy_cage.py. The gateway has no such switch."""
+    not on a private copy of it (BUG-157). The cage itself, and agy run
+    inside it, are tested in tests/test_agy_cage.py. The gateway has no such
+    switch."""
     from plugboard import agy_cage
 
     monkeypatch.setattr(
