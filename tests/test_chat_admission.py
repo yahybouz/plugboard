@@ -441,26 +441,37 @@ def test_wait_budget_outside_a_request_keeps_each_ceiling():
     asyncio.run(outside())
 
 
-def test_wait_budget_adds_up_the_waits_only():
+def test_wait_budget_adds_up_the_waits_only(monkeypatch):
+    from types import SimpleNamespace
+
     from plugboard import request_wait
+
+    # A simulated clock (BUG-154): on a loaded host a real sleep wakes late
+    # and the sums drifted out of their bounds. The budget reads this clock
+    # only; ``sleep`` moves it by exactly the time asked.
+    now = [1000.0]
+    monkeypatch.setattr(request_wait, "time", SimpleNamespace(monotonic=lambda: now[0]))
+
+    async def sleep(seconds):
+        now[0] += seconds
 
     async def inside():
         budget = request_wait.start(1.0)
         with request_wait.waiting(0.2) as wait_s:
             assert wait_s == 0.2  # its own ceiling
         with request_wait.waiting() as wait_s:
-            assert wait_s == pytest.approx(1.0, abs=0.05)
-            await asyncio.sleep(0.3)
-        await asyncio.sleep(0.2)  # work, not counted
+            assert wait_s == pytest.approx(1.0)
+            await sleep(0.3)
+        await sleep(0.2)  # work, not counted
         with request_wait.waiting(5.0) as wait_s:
-            assert 0.6 < wait_s <= 0.7
+            assert wait_s == pytest.approx(0.7)
         with pytest.raises(TimeoutError):  # counted however the wait ends
             with request_wait.waiting():
-                await asyncio.sleep(0.4)
+                await sleep(0.4)
                 raise TimeoutError
-        assert 0.7 <= budget.spent < 0.9
+        assert budget.spent == pytest.approx(0.7)  # 0.3 + 0.4, the work left out
         with request_wait.waiting(5.0) as wait_s:
-            assert wait_s < 0.3
+            assert wait_s == pytest.approx(0.3)
         request_wait.start(0.0)
         with request_wait.waiting(5.0) as wait_s:
             assert wait_s == 0.0
