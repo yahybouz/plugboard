@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 
 import pytest
 from aiohttp import web
@@ -233,12 +232,44 @@ async def test_an_undeclared_tool_is_named_in_the_detail(client, cli, agent, opt
 
 
 @pytest.mark.asyncio
-async def test_a_bad_answer_is_not_billed(client, cli, keys, option_on):
+async def test_a_streamed_request_gets_the_502_as_json(client, cli, agent, option_on):
+    cli.answers = ["Sunny in Rabat."]
+
+    resp = await client.post(
+        "/v1/chat/completions", headers=agent, json=_chat(stream=True)
+    )
+
+    assert resp.status_code == 502, resp.text
+    assert resp.headers["content-type"].startswith("application/json")
+    assert resp.json()["code"] == "cli_tool_call_invalid"
+    assert resp.headers["x-should-retry"] == "false"
+    assert len(cli.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_bad_answer_is_not_billed(client, cli, keys, option_on, monkeypatch):
+    from types import SimpleNamespace
+
     import plugboard.usage as usage
+    from plugboard import chat_billing
     from plugboard.billing import current_pricing_month
 
-    rec = keys.create_key("pbtest-agent", "t", allow_cli_tools=True)
+    rec = keys.create_key(
+        "pbtest-agent", "t", monthly_limit_usd=100.0, allow_cli_tools=True
+    )
     cli.answers = ["not json"]
+    # A priced call, so the budget hold is not zero.
+    monkeypatch.setattr(
+        chat_billing, "price", lambda *a, **k: SimpleNamespace(cost_usd=0.5)
+    )
+    held: list = []
+    real_hold = usage.hold_budget
+
+    def spy_hold(**kwargs):
+        held.append(kwargs["cost"])
+        return real_hold(**kwargs)
+
+    monkeypatch.setattr(usage, "hold_budget", spy_hold)
 
     resp = await client.post(
         "/v1/chat/completions",
@@ -248,6 +279,9 @@ async def test_a_bad_answer_is_not_billed(client, cli, keys, option_on):
 
     assert resp.status_code == 502, resp.text
     assert usage.get_usage(current_pricing_month()) == []
+    assert held and held[0] > 0  # a hold was taken...
+    month = current_pricing_month()
+    assert usage.get_held_cost(month, key_id=rec["key_id"]) == 0  # ...and given back
 
 
 @pytest.mark.asyncio
@@ -266,12 +300,32 @@ async def test_a_bad_answer_does_not_fall_back_nor_count_against_the_route(
         failures.append(("alert", provider_id))
 
     monkeypatch.setattr(router, "record_provider_failure", alert)
+    import plugboard.metrics as metrics
+    import plugboard.model_quarantine as quarantine
+
+    real_record = metrics.record
+
+    def record(provider_id, latency, *, error=False):
+        if error:
+            failures.append(("error-metric", provider_id))
+        real_record(provider_id, latency, error=error)
+
+    monkeypatch.setattr(metrics, "record", record)
+    for name in (
+        "record_failure",
+        "record_account_unsupported",
+        "record_terminal_unavailable",
+    ):
+        monkeypatch.setattr(
+            quarantine, name, lambda *a, _n=name, **k: failures.append((_n, a))
+        )
 
     resp = await client.post("/v1/chat/completions", headers=agent, json=_chat())
 
     assert resp.status_code == 502, resp.text
     assert len(cli.calls) == 1
     assert failures == []
+    assert metrics._stats["pbtest-codex-cli"]["errors"] == 0
 
 
 # -- streaming (case 11) --------------------------------------------------------
@@ -332,10 +386,66 @@ async def test_without_the_flag_forward_and_forward_stream_refuse(cli, option_on
     assert cli.calls == []
 
 
-def test_the_probes_never_set_the_flag():
-    root = Path(__file__).resolve().parents[1] / "plugboard"
-    for path in ("model_availability.py", "admin_routes/model_probes.py"):
-        assert "cli_tools" not in (root / path).read_text(), path
+@pytest.fixture
+def forward_spy(monkeypatch):
+    """Records the keyword arguments of every forward() the app makes."""
+    from plugboard import app as app_mod
+
+    seen: list[dict] = []
+    real = app_mod.forward
+
+    async def spy(body, *args, **kwargs):
+        seen.append(kwargs)
+        return await real(body, *args, **kwargs)
+
+    monkeypatch.setattr(app_mod, "forward", spy)
+    return seen
+
+
+def _no_instruction(cli) -> bool:
+    return all(body["messages"][0]["role"] != "system" for _, body, _ in cli.calls)
+
+
+@pytest.mark.asyncio
+async def test_the_preflight_ping_never_emulates_tools(
+    client, cli, agent, option_on, forward_spy
+):
+    resp = await client.post(
+        "/v1/preflight",
+        headers=agent,
+        json={"items": [{"provider": "pbtest-codex-cli", "model": MODEL}]},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert forward_spy and all(not kw.get("cli_tools") for kw in forward_spy)
+    assert cli.calls and _no_instruction(cli)
+
+
+@pytest.mark.asyncio
+async def test_the_admin_internet_probe_never_emulates_tools(
+    client, cli, option_on, forward_spy
+):
+    resp = await client.post(
+        "/admin/models/check-internet",
+        headers=ADMIN,
+        json={"model_id": f"pbtest-codex-cli:{MODEL}"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert forward_spy and all(not kw.get("cli_tools") for kw in forward_spy)
+    assert cli.calls and _no_instruction(cli)
+
+
+@pytest.mark.asyncio
+async def test_the_catalogue_probe_sends_plain_text(cli, option_on):
+    from plugboard import model_availability
+
+    await model_availability.probe_subprocess_model("codex", MODEL, timeout_s=5)
+
+    ((kind, body, _),) = cli.calls
+    assert kind == "codex"
+    assert not {"tools", "tool_choice", "parallel_tool_calls"} & set(body)
+    assert _no_instruction(cli)
 
 
 # -- cache (case 13) ------------------------------------------------------------
@@ -494,6 +604,20 @@ async def test_a_request_past_a_bound_is_a_400_before_any_call(
 
     assert resp.status_code == 400, resp.text
     assert resp.json()["code"] == "invalid_request"
+    assert cli.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_session_with_emulated_tools_says_why(client, cli, agent, option_on):
+    resp = await client.post(
+        "/v1/chat/completions", headers=agent, json=_chat(session_id="pbtest-s")
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert resp.json() == {
+        "detail": "session_id cannot be used with tools on a CLI subscription route",
+        "code": "invalid_request",
+    }
     assert cli.calls == []
 
 
