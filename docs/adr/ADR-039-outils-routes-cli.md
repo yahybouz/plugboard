@@ -151,3 +151,5 @@ Fichiers de test :
   - D-74 ouvre des routes au jeton et les agents internes y sont passés ;
   - le taux de `cli_tool_call_invalid` sur les appels émulés dépasse **5 % sur 200 appels** au moins (7 jours glissants, lu dans les journaux) ;
   - une faille d'injection passe par l'émulation alors qu'une route native l'aurait arrêtée.
+- **Limites connues** :
+  - une réponse hors protocole (502 `cli_tool_call_invalid`) compte comme un succès dans la métrique de latence de la route (`metrics.record`, sans erreur), puisque la CLI a bien répondu ; le taux d'échec du critère de retrait se lit donc dans les journaux (`outcome=invalid:…`), pas dans les métriques de la route.
