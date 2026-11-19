@@ -66,6 +66,14 @@ from httpx import AsyncClient, ASGITransport  # noqa: E402
 
 from tests.factories import PROVIDER_A, PROVIDER_B  # noqa: E402
 
+# `pricing_scraper` binds `current_pricing_month`, `load_pricing` and
+# `save_pricing` from `billing` by name when it is first imported, and
+# `billing` imports it lazily (a price missing from the grid). Imported here,
+# it binds the real functions: a test that patches `billing.current_pricing_month`
+# and happens to trigger that first import no longer leaves its month in the
+# scraper for the rest of the run (BUG-158).
+import plugboard.pricing_scraper  # noqa: E402, F401
+
 
 def pytest_configure(config):
     config.addinivalue_line(
