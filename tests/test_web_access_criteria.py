@@ -316,6 +316,20 @@ async def test_c4_egress_refuses_plain_http_and_malformed_requests(
     assert fake_dns["asked"] == []
 
 
+@pytest.mark.parametrize(
+    "target", ["93.184.216.34:80", "public.example.test:80", "93.184.216.34:8080"]
+)
+async def test_c4_egress_tunnels_only_to_port_443(guard, fake_dns, target, caplog):
+    """No plain HTTP inside a tunnel either: CONNECT to a public address on
+    any port but 443 is refused before the name is resolved."""
+    fake_dns["answers"]["public.example.test"] = ["93.184.216.34"]
+    with caplog.at_level(logging.INFO, logger="plugboard.web_egress"):
+        head = await _send(guard, f"CONNECT {target} HTTP/1.1\r\n\r\n".encode())
+    assert head.startswith(b"HTTP/1.1 403"), (target, head)
+    assert fake_dns["asked"] == []
+    assert any("port" in r.getMessage() for r in caplog.records)
+
+
 # ── 5. the helper model is never Haiku ───────────────────────────────────────
 
 
@@ -600,6 +614,8 @@ async def test_c7_egress_logs_the_tunnel_host_not_what_goes_through(
     upstream = await asyncio.start_server(echo, "127.0.0.1", 0)
     up_port = upstream.sockets[0].getsockname()[1]
     monkeypatch.setattr(netguard, "ip_is_public", lambda _ip: True)
+    # The echo server stands for an HTTPS host: its port is the allowed one.
+    monkeypatch.setattr(web_egress, "_TLS_PORT", up_port)
     caplog.set_level(logging.DEBUG, logger="plugboard.web_egress")
     port = await web_egress.ensure_started()
     try:

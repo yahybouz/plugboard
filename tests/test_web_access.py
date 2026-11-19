@@ -390,6 +390,8 @@ async def test_egress_tunnels_to_a_public_address(monkeypatch):
     upstream = await asyncio.start_server(echo, "127.0.0.1", 0)
     up_port = upstream.sockets[0].getsockname()[1]
     monkeypatch.setattr(netguard, "ip_is_public", lambda _ip: True)
+    # The echo server stands for an HTTPS host: its port is the allowed one.
+    monkeypatch.setattr(web_egress, "_TLS_PORT", up_port)
     port = await web_egress.ensure_started()
     try:
         reader, writer = await asyncio.open_connection("127.0.0.1", port)

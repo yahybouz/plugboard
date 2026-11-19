@@ -124,7 +124,9 @@ tunnel connects to the checked address, so a second resolution cannot point
 elsewhere. Each tunnel and each refusal is logged with the host and port
 asked (`web egress tunnel: host=...`), never a path or a page. Loopback, private ranges, the CGNAT range of the tailnet,
 link-local and the metadata address are refused (`403`); a name that resolves
-to one non-public address is refused whole. Plain-HTTP proxying is refused too.
+to one non-public address is refused whole. Plain-HTTP proxying is refused too,
+and so is a tunnel to any port but `443` (`403`, since 4.15.0): no plain HTTP
+goes out, inside a tunnel or not.
 
 ## Load
 

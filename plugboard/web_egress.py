@@ -6,8 +6,9 @@ public addresses: every destination is resolved here, each address is checked
 with ``netguard.ip_is_public`` and the tunnel connects to the checked address
 (no second resolution, so no DNS rebinding). Loopback, private ranges, the
 tailnet's CGNAT range, link-local and the cloud metadata address are refused
-with 403. Plain-HTTP proxying (absolute-URI GET) is refused too: WebFetch
-upgrades http:// to https://, and nothing else is needed.
+with 403, and so is a tunnel to any port but 443 (4.15.0), so no plain HTTP
+goes through it. Plain-HTTP proxying (absolute-URI GET) is refused too:
+WebFetch upgrades http:// to https://, and nothing else is needed.
 
 It runs in the gateway's event loop, started on first use. It reads no body:
 it only moves bytes, and logs nothing of what goes through (host names only
@@ -34,6 +35,8 @@ _BUF = 65536
 
 _server: Optional[asyncio.AbstractServer] = None
 _port: Optional[int] = None
+# The only port a tunnel goes to: HTTPS.
+_TLS_PORT = 443
 _lock: Optional[asyncio.Lock] = None
 refused_total = 0
 tunnels_total = 0
@@ -130,6 +133,12 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
         await _reply(writer, "405 Method Not Allowed")
         return
     host, port = target
+    if port != _TLS_PORT:
+        # No plain HTTP inside a tunnel either: WebFetch speaks HTTPS only.
+        refused_total += 1
+        log.info("web egress refused: host=%s port=%d is not 443", host[:253], port)
+        await _reply(writer, "403 Forbidden")
+        return
     addrs = await _public_addresses(host, port)
     if not addrs:
         refused_total += 1
