@@ -15,11 +15,13 @@ from __future__ import annotations
 import asyncio as _asyncio
 import logging
 from types import ModuleType, SimpleNamespace
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Request
 
+from plugboard import billing as _billing
 from plugboard import chat_billing
+from plugboard import web_access as _web_access
 from plugboard.apikeys import load_keys
 from plugboard.router import usage_reported as _usage_reported
 from plugboard.tokenizer import count_tokens, estimate_prompt_tokens
@@ -130,30 +132,41 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         chat_billing.record(client_id, key_id, charge, hold=hold)
         return charge.billing_info()
 
-    def _bill_web_exhausted(
+    def _bill_web_runs(
         client_id: str,
         key_id: str,
         body: Dict[str, Any],
-        exc: BaseException,
+        runs: List[_web_access.ExhaustedRun],
         hold: Optional[chat_billing.BudgetHold] = None,
     ) -> Dict[str, Any]:
-        """Record a web run that spent its turns without answering (502
-        web_budget_exhausted, BUG-159): the tokens claude reported, at the
-        price of the route that ran it, as a served answer is; without a
-        valid report, the prompt's estimate. Returns the billing dict."""
-        reported = getattr(exc, "reported_usage", None)
-        result = {
-            "choices": [{"message": {"role": "assistant", "content": ""}}],
-            "usage": dict(reported or {}),
-        }
-        provider, real_model = getattr(exc, "billing_target", None) or (
-            _billing_target(body)
-        )
-        charge = chat_billing.charge_completion(
-            body, result, provider, real_model, reported=reported is not None
-        )
-        chat_billing.record(client_id, key_id, charge, hold=hold)
-        return charge.billing_info()
+        """Record the web runs of a request that spent their turns without
+        answering (BUG-159), one usage entry each, whatever the request's
+        outcome: the tokens claude reported (else the prompt's estimate), at
+        the price of the route that ran it, with its own web tool calls. The
+        first takes the request's hold when it is still open. Returns
+        ``{"pricing_month", "cost_usd"}`` of them all."""
+        month = _billing.current_pricing_month()
+        cost = 0.0
+        for run in runs:
+            result = {
+                "choices": [{"message": {"role": "assistant", "content": ""}}],
+                "usage": dict(run.usage or {}),
+            }
+            charge = chat_billing.charge_completion(
+                body,
+                result,
+                run.provider,
+                run.real_model,
+                reported=run.usage is not None,
+            )
+            chat_billing.record(client_id, key_id, charge, hold=hold, web_uses=run.uses)
+            month, cost = charge.pricing_month, cost + charge.cost_usd
+        return {"pricing_month": month, "cost_usd": cost}
+
+    def _take_web_runs() -> List[_web_access.ExhaustedRun]:
+        """The request's web runs stopped by their turns, not billed yet."""
+        policy = _web_access.current()
+        return policy.take_exhausted() if policy is not None else []
 
     async def _charge_answer(
         request: Request,
@@ -163,48 +176,46 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         body: Dict[str, Any],
         result: Dict[str, Any],
         *,
-        web_exhausted: Optional[BaseException] = None,
+        answered: bool = True,
     ) -> Dict[str, Any]:
         """Bill a whole answer (a non-streamed chat, or one a CLI route answered
         for a stream) and check the spending alert; {} when nothing was billed.
         A billing error does not fail the answer: it is logged. The usage write
-        runs off the event loop (PLU-27). With ``web_exhausted`` (the error of
-        a web run stopped by its turns, BUG-159), that run is billed instead."""
+        runs off the event loop (PLU-27). The request's web runs stopped by
+        their turns are billed too (BUG-159), after the answer; without an
+        answer (``answered`` False: the request failed), they alone are."""
+        runs = _take_web_runs()
         if not client_id:
             return {}
+        key_id = getattr(request.state, "key_id", "")
         hold = getattr(request.state, "budget_hold", None)
         if hold is not None:
             hold.settling = True  # never given back while it is billed
+        billing_info: Dict[str, Any] = {}
+        spent: Dict[str, Any] = {}
         try:
-            if web_exhausted is not None:
+            if answered:
                 billing_info = await _asyncio.to_thread(
-                    _bill_web_exhausted,
-                    client_id,
-                    getattr(request.state, "key_id", ""),
-                    body,
-                    web_exhausted,
-                    hold=hold,
+                    _bill_completion, client_id, key_id, body, result, hold=hold
                 )
-            else:
-                billing_info = await _asyncio.to_thread(
-                    _bill_completion,
-                    client_id,
-                    getattr(request.state, "key_id", ""),
-                    body,
-                    result,
-                    hold=getattr(request.state, "budget_hold", None),
+            if runs:
+                spent = await _asyncio.to_thread(
+                    _bill_web_runs, client_id, key_id, body, runs, hold=hold
                 )
         except Exception as exc:
             log.warning("Billing error (non-fatal): %s", exc)
-            _keep_hold(getattr(request.state, "budget_hold", None))
-            return {}
-        if client_id != "admin":
+            _keep_hold(hold)
+            if not billing_info:
+                return {}
+        billed_cost = billing_info.get("cost_usd", 0.0) + spent.get("cost_usd", 0.0)
+        month = billing_info.get("pricing_month") or spent.get("pricing_month")
+        if client_id != "admin" and month:
             try:
                 core._send_spending_alert(
                     client_id,
-                    billing_info["pricing_month"],
+                    month,
                     key_record=key_record,
-                    current_total_usd=spending_total + billing_info["cost_usd"],
+                    current_total_usd=spending_total + billed_cost,
                 )
             except Exception as exc:
                 log.warning("Spending alert error (non-fatal): %s", exc)
@@ -264,7 +275,8 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
     return SimpleNamespace(
         _bill_streaming=_bill_streaming,
         _bill_completion=_bill_completion,
-        _bill_web_exhausted=_bill_web_exhausted,
+        _bill_web_runs=_bill_web_runs,
+        _take_web_runs=_take_web_runs,
         _charge_answer=_charge_answer,
         _billing_target=_billing_target,
         _send_spending_alert=_send_spending_alert,

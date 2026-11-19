@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
-- **A web request is billed on what it really used** (BUG-159): a web run is now billed on the tokens claude reports for it, every model counted (the page-summary helper included) and cache writes and reads as prompt tokens, at the price of the model asked, instead of an estimate of the question and the answer. A run stopped by its turns (`502 web_budget_exhausted`) is billed too and counts against the key's budget; its answer is unchanged. Without a usable report, the estimate as before. Requests without the web are unchanged ([what a web request costs](docs/guide/web-access.md#what-a-web-request-costs)).
+- **A web request is billed on what it really used** (BUG-159): a web run is now billed on the tokens claude reports for it, every model counted (the page-summary helper included) and cache writes and reads as prompt tokens at the input price, at the price of the route that served the model asked, instead of an estimate of the question and the answer. A run stopped by its turns is billed too, on its own entry, and counts against the key's budget whatever the request's outcome (`502 web_budget_exhausted`, unchanged; another route's error; or another route's answer). Without a usable report (no `result` event, a counter that is not an integer from 0 to 10^12), the estimate as before. Requests without the web are unchanged ([what a web request costs](docs/guide/web-access.md#what-a-web-request-costs)).
 
 ## [4.15.0] — 2026-11-19
 

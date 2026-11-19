@@ -383,11 +383,12 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
             with tools emulated, the text the CLI got (ADR-039)."""
             return _cli_tools.to_text_body(body) if emulated else body
 
-        async def failed(exc: Exception, where: str):
-            """The error answer of a call that failed before its first word. A
-            web run stopped by its turns (502 web_budget_exhausted) is billed
-            first, as a served answer is (BUG-159); the answer is unchanged."""
-            if getattr(exc, "web_exhausted", False):
+        async def bill_web_runs() -> None:
+            """Bill the web runs that spent their turns without answering
+            (BUG-159) when the request ends without an answer: an error, any
+            route's, or a client gone. The answer is unchanged."""
+            policy = _web_access.current()
+            if policy is not None and policy.exhausted:
                 await core._charge_answer(
                     request,
                     client_id,
@@ -395,9 +396,20 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                     spending_total,
                     billed(),
                     {},
-                    web_exhausted=exc,
+                    answered=False,
                 )
+
+        async def failed(exc: Exception, where: str):
+            """The error answer of a call that failed before its first word,
+            the request's spent web runs billed first (BUG-159)."""
+            await bill_web_runs()
             return core._chat_error_response(exc, client_id, where)
+
+        async def gone():
+            """The answer to a client gone before the first word, the
+            request's spent web runs billed first (BUG-159)."""
+            await bill_web_runs()
+            return _client_gone_response(body.get("model", "?"))
 
         # A budget cannot hold a call whose price is unknown (402, nothing called)
         if client_id and client_id != "admin":
@@ -580,7 +592,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                         core.forward({**body, "stream": False}, **forward_options),
                     )
                 except _ClientGone:
-                    return _client_gone_response(body.get("model", "?"))
+                    return await gone()
                 except HTTPException:
                     raise
                 except Exception as exc:
@@ -661,7 +673,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                 first = await _unless_client_gone(request, gen.__anext__())
             except _ClientGone:
                 await core._aclose_quietly(gen)
-                return _client_gone_response(body.get("model", "?"))
+                return await gone()
             except StopAsyncIteration:
                 return StreamingResponse(
                     iter([]),
@@ -728,14 +740,21 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                             try:
                                 # On the loop: a cancelled request cannot await
                                 # here (the rare path; PLU-27 moves the others).
-                                if getattr(cut, "reported_usage", None) is not None:
-                                    # A web run stopped by its turns after its
-                                    # first words: the tokens claude reported,
-                                    # which hold those words (BUG-159).
-                                    core._bill_web_exhausted(
-                                        cid, kid, req_body, cut, hold=_hold
-                                    )
-                                else:
+                                # BUG-159: the request's web runs stopped by
+                                # their turns. One stopped after its first
+                                # words is the cut: billed on the tokens
+                                # claude reported, which hold those words;
+                                # without them, on its partial answer.
+                                runs = core._take_web_runs()
+                                cut_run = (
+                                    runs[-1]
+                                    if runs and getattr(cut, "web_exhausted", False)
+                                    else None
+                                )
+                                if cut_run is not None and cut_run.usage is None:
+                                    runs.pop()
+                                    cut_run = None
+                                if cut_run is None:
                                     core._bill_streaming(
                                         cid,
                                         req_body,
@@ -746,6 +765,10 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                                         # before the cut; without it this
                                         # changes nothing.
                                         reported=_usage_reported(),
+                                    )
+                                if runs:
+                                    core._bill_web_runs(
+                                        cid, kid, req_body, runs, hold=_hold
                                     )
                                 log.info(
                                     "Stream interrupted: billed the partial answer "
@@ -791,6 +814,27 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                     except Exception as exc:
                         log.warning("Stream billing error (non-fatal): %s", exc)
                         _keep_hold(_hold)
+                # BUG-159: a web run stopped by its turns before the route that
+                # answered is billed too, on its own entry.
+                runs = core._take_web_runs()
+                spent_cost = 0.0
+                if cid and runs:
+                    try:
+                        spent, late_cancel = await _to_thread_to_the_end(
+                            functools.partial(
+                                core._bill_web_runs,
+                                cid,
+                                kid,
+                                req_body,
+                                runs,
+                                hold=_hold,
+                            )
+                        )
+                        spent_cost = spent["cost_usd"]
+                        cancelled = cancelled or late_cancel
+                    except Exception as exc:
+                        log.warning("Web run billing error (non-fatal): %s", exc)
+                        _keep_hold(_hold)
                 if bill is not None and cid and cid != "admin":
                     # As a whole answer is: the spending alert follows its billing
                     # (a CLI stream used to be billed through forward() and had it).
@@ -799,7 +843,9 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                             cid,
                             bill["pricing_month"],
                             key_record=key_record,
-                            current_total_usd=spending_total + bill["cost_usd"],
+                            current_total_usd=spending_total
+                            + bill["cost_usd"]
+                            + spent_cost,
                         )
                     except Exception as exc:
                         log.warning("Spending alert error (non-fatal): %s", exc)
@@ -857,7 +903,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                 request, core.forward(body, **forward_options)
             )
         except _ClientGone:
-            return _client_gone_response(body.get("model", "?"))
+            return await gone()
         except HTTPException:
             raise
         except Exception as exc:

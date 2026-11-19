@@ -171,7 +171,12 @@ class BudgetHold:
 
 
 def record(
-    client_id: str, key_id: str, charge: Charge, hold: Optional[BudgetHold] = None
+    client_id: str,
+    key_id: str,
+    charge: Charge,
+    hold: Optional[BudgetHold] = None,
+    *,
+    web_uses: Optional[int] = None,
 ) -> None:
     """Write the call to the usage log (raises when it cannot).
 
@@ -200,11 +205,13 @@ def record(
         trace_id=trace.trace_id if trace is not None else None,
     )
     # PLU-158: a call served with web access is marked, with its tool calls
-    # (the request's policy, read in the billing thread's copied context).
+    # (the request's policy, read in the billing thread's copied context);
+    # ``web_uses`` names those of one run when the request had several
+    # (BUG-159: a run stopped by its turns is billed on its own).
     web = _web_access.current()
     if web is not None:
         fields["web"] = True
-        fields["web_uses"] = web.uses
+        fields["web_uses"] = web.uses if web_uses is None else web_uses
     if hold is not None and not hold.done:
         hold.done = True
         _usage.settle_hold(hold.id, **fields)

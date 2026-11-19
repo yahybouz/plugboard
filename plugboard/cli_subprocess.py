@@ -1680,9 +1680,15 @@ def _agy_empty_answer(stdout_text: str, command: str) -> Tuple[str, bool]:
 USAGE_REPORTED_KEY = "_plugboard_usage_reported"
 
 
+# No real call reports more: a larger counter is not trusted (and would not
+# fit the usage store, whose write would then fail and bill nothing).
+MAX_REPORTED_TOKENS = 10**12
+
+
 def _usage_count(value: Any) -> Optional[int]:
-    """A token counter: a non-negative int (bool, str, float, None rejected)."""
-    if type(value) is not int or value < 0:
+    """A token counter: an int from 0 to MAX_REPORTED_TOKENS (bool, str,
+    float, None rejected)."""
+    if type(value) is not int or not 0 <= value <= MAX_REPORTED_TOKENS:
         return None
     return value
 

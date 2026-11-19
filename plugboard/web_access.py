@@ -72,6 +72,17 @@ class WebRequestError(ValueError):
 
 
 @dataclass
+class ExhaustedRun:
+    """A web run that spent its turns without answering (BUG-159): billed by
+    the chat route whatever the request's outcome, once."""
+
+    provider: Dict[str, Any]
+    real_model: str
+    usage: Optional[Dict[str, Any]]  # what claude reported, None: estimate
+    uses: int
+
+
+@dataclass
 class WebPolicy:
     """The web policy of one request; ``uses`` counts its web tool calls."""
 
@@ -80,6 +91,14 @@ class WebPolicy:
     tools_seen: List[str] = field(default_factory=list)
     # Models the CLI reported in its result (``modelUsage``): names only.
     models: List[str] = field(default_factory=list)
+    # Runs of this request stopped by their turns, not billed yet (BUG-159):
+    # the router adds them, the chat route takes and bills them.
+    exhausted: List[ExhaustedRun] = field(default_factory=list)
+
+    def take_exhausted(self) -> List[ExhaustedRun]:
+        """The runs not billed yet, handed over once."""
+        runs, self.exhausted = self.exhausted, []
+        return runs
 
     @property
     def max_turns(self) -> int:

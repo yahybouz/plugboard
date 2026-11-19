@@ -85,13 +85,17 @@ not on an estimate of the question and the answer:
 - `prompt_tokens` = input + cache writes + cache reads, `completion_tokens` =
   output; the cache reads are also shown as
   `prompt_tokens_details.cached_tokens`;
-- the whole is priced at the price of the model you asked for, with this
-  month's grid, as any other call; there is no separate web price, and a
-  grid without a cache price bills cache reads as input.
+- the whole is priced at the price of the route that served the model you
+  asked for, with this month's grid, as any other call; there is no
+  separate web price. Billing has no cache price: cache writes and cache
+  reads are billed at the input price.
 
-A `502 web_budget_exhausted` is billed too: the run did spend those tokens.
-Its usage entry (`web`, `web_uses`, the tokens reported) counts against the
-key's monthly budget like a served answer; the `502` you get is unchanged. A
+A run that spends its turns without answering is billed too: it did spend
+those tokens. Its usage entry (`web`, its own `web_uses`, the tokens
+reported, at the price of the route that ran it) counts against the key's
+monthly budget like a served answer, whatever the request's outcome: the
+`502 web_budget_exhausted` you get (unchanged), another route's error, or
+the answer another claude route then gave (billed on its own entry). A
 stream that had already sent words when the run stopped is billed once, on
 the tokens reported.
 

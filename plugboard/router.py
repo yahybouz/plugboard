@@ -609,10 +609,21 @@ def _request_caused(exc: BaseException) -> bool:
 def _mark_web_run(
     exc: BaseException, provider: Dict[str, Any], real_model: str
 ) -> None:
-    """A web run stopped by its turns (502 web_budget_exhausted) is billed by
-    the chat route (BUG-159): its exception names the route that ran it."""
-    if getattr(exc, "web_exhausted", False):
-        exc.billing_target = (provider, real_model)  # type: ignore[attr-defined]
+    """A web run stopped by its turns is kept on the request's web policy,
+    with the route that ran it and the tokens claude reported: the chat
+    route bills it whatever the request's outcome (BUG-159), the next
+    route's error or answer included."""
+    policy = web_access.current()
+    if policy is None or not getattr(exc, "web_exhausted", False):
+        return
+    policy.exhausted.append(
+        web_access.ExhaustedRun(
+            provider=provider,
+            real_model=real_model,
+            usage=getattr(exc, "reported_usage", None),
+            uses=policy.uses,
+        )
+    )
 
 
 def _tool_refused(exc: BaseException) -> bool:

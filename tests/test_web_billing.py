@@ -5,9 +5,10 @@ model the run called, the page-summary helper included, fed on every API
 call (read in the claude 2.1.328 binary: the cost ledger adds each call's
 input, output, cache-read and cache-creation tokens to its model's entry).
 Its ``usage`` block is the main model's only, so a web run is billed on the
-sum of ``modelUsage``, at the price of the model asked; a run stopped by
-``error_max_turns`` (502 web_budget_exhausted) is billed too. A run without
-web keeps its estimate.
+sum of ``modelUsage``, at the price of the route that served the model
+asked; a run stopped by ``error_max_turns`` is billed too, whatever the
+request's outcome (502 web_budget_exhausted, another route's error or
+answer). A run without web keeps its estimate.
 
 Only the subprocess boundary is faked (no CLI starts, no inference, nothing
 leaves the machine): the real claude wrapper, router, billing and SQLite
@@ -160,12 +161,18 @@ def _billing_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 class _FakeClaude:
+    """Each run writes ``stdout`` (exit 0), or the next of ``queue``:
+    ``(stdout, returncode, stderr)``, one per run, in order."""
+
     def __init__(self) -> None:
         self.stdout = b""
+        self.queue: list = []
         self.runs = 0
 
     async def exec(self, *argv, **kwargs):
         self.runs += 1
+        if self.queue:
+            return _FakeProc(*self.queue.pop(0))
         return _FakeProc(self.stdout)
 
 
@@ -185,11 +192,11 @@ async def claude(_providers_file, tmp_path, monkeypatch):
     await web_egress.stop()
 
 
-async def _chat(client, key, *, web=True, stream=False):
+async def _chat(client, key, *, web=True, stream=False, model=MODEL):
     return await client.post(
         "/v1/chat/completions",
         headers=_auth(key, web),
-        json={"model": MODEL, "messages": MESSAGES, "stream": stream, "cache": False},
+        json={"model": model, "messages": MESSAGES, "stream": stream, "cache": False},
     )
 
 
@@ -284,6 +291,23 @@ _BAD_MODEL_USAGE = {
     },
     "bool": {
         "claude-opus-5-5": {**MODEL_USAGE["claude-opus-5-5"], "outputTokens": True}
+    },
+    "one_negative_among_full_counters": {
+        **MODEL_USAGE,
+        "claude-sonnet-5-5": {
+            **MODEL_USAGE["claude-sonnet-5-5"],
+            "cacheCreationInputTokens": -1,
+        },
+    },
+    "past_the_ceiling": {
+        **MODEL_USAGE,
+        "claude-opus-5-5": {**MODEL_USAGE["claude-opus-5-5"], "inputTokens": 10**30},
+    },
+    "just_past_10_12": {
+        "claude-opus-5-5": {
+            **MODEL_USAGE["claude-opus-5-5"],
+            "outputTokens": 10**12 + 1,
+        }
     },
     "not_an_object": ["claude-opus-5-5"],
     "entry_not_an_object": {"claude-opus-5-5": 12},
@@ -449,3 +473,142 @@ def test_main_usage_is_not_added_to_model_usage():
     got = cli_subprocess.claude_reported_usage(_answered().decode())
     assert got["prompt_tokens"] == PROMPT  # not PROMPT + 36200
     assert got["completion_tokens"] == COMPLETION  # not COMPLETION + 800
+
+
+def test_counters_up_to_10_12_are_kept():
+    big = {
+        "claude-opus-5-5": {
+            **MODEL_USAGE["claude-opus-5-5"],
+            "inputTokens": 10**12,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0,
+            "outputTokens": 0,
+        }
+    }
+    got = cli_subprocess.claude_reported_usage(
+        _answered(_result(modelUsage=big)).decode()
+    )
+    assert got["prompt_tokens"] == 10**12
+
+
+# ── 7. several claude routes: every run that spent its turns is billed ──────
+
+ROUTE_A = {**CLI, "id": "pbtest-claude-a", "name": "claude A"}
+ROUTE_B = {**CLI, "id": "pbtest-claude-b", "name": "claude B"}
+PRICE_A = (3.0, 15.0)
+PRICE_B = (5.0, 25.0)
+B_USAGE = {
+    "claude-opus-5-5": {
+        "inputTokens": 700,
+        "outputTokens": 300,
+        "cacheReadInputTokens": 1000,
+        "cacheCreationInputTokens": 0,
+    }
+}
+B_PROMPT, B_COMPLETION = 1700, 300
+
+
+def _priced(price: tuple, prompt: int, completion: int) -> float:
+    return round(prompt / 1e6 * price[0] + completion / 1e6 * price[1], 8)
+
+
+@pytest.fixture
+def two_routes(claude, _providers_file, monkeypatch):
+    """Two claude CLI routes for ``model-x``, A tried first, priced apart."""
+    import plugboard.billing as b
+
+    _providers_file.write_text(json.dumps({"providers": [ROUTE_A, ROUTE_B]}))
+    router.invalidate_models_cache()
+    order = {ROUTE_A["id"]: 0.0, ROUTE_B["id"]: 1.0}
+    monkeypatch.setattr(router, "_provider_lb_score", lambda pid, _s: order[pid])
+    b.save_pricing(
+        MONTH,
+        {
+            "models": {},
+            "models_by_provider": {
+                ROUTE_A["id"]: {
+                    "model-x": {"input_price": PRICE_A[0], "output_price": PRICE_A[1]}
+                },
+                ROUTE_B["id"]: {
+                    "model-x": {"input_price": PRICE_B[0], "output_price": PRICE_B[1]}
+                },
+            },
+        },
+    )
+    return claude
+
+
+def _by_provider(key) -> dict:
+    return {r["provider_id"]: r for r in _rows(key)}
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+async def test_exhausted_run_is_billed_when_the_next_route_fails(
+    client, budget_key, two_routes, stream
+):
+    two_routes.queue = [
+        (_exhausted(), 0, b""),
+        (b"", 1, b"API Error: 529 overloaded"),
+    ]
+    resp = await _chat(client, budget_key, stream=stream, model="model-x")
+    assert resp.status_code != 200, resp.text
+    assert two_routes.runs == 2
+    row = _only_row(budget_key)
+    assert row["provider_id"] == ROUTE_A["id"]
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (PROMPT, COMPLETION)
+    assert (row["web"], row["web_uses"]) == (1, 2)
+    cost = _priced(PRICE_A, PROMPT, COMPLETION)
+    assert row["cost_usd"] == pytest.approx(cost)
+    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
+    assert usage.get_committed_cost(
+        MONTH, key_id=budget_key["key_id"]
+    ) == pytest.approx(cost)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+async def test_exhausted_run_is_billed_besides_the_answer_of_the_next_route(
+    client, budget_key, two_routes, stream
+):
+    two_routes.queue = [
+        (_exhausted(), 0, b""),
+        (_answered(_result(modelUsage=B_USAGE)), 0, b""),
+    ]
+    resp = await _chat(client, budget_key, stream=stream, model="model-x")
+    assert resp.status_code == 200, resp.text
+    assert two_routes.runs == 2
+    rows = _by_provider(budget_key)
+    assert sorted(rows) == [ROUTE_A["id"], ROUTE_B["id"]]
+    a, b = rows[ROUTE_A["id"]], rows[ROUTE_B["id"]]
+    assert (a["prompt_tokens"], a["completion_tokens"]) == (PROMPT, COMPLETION)
+    assert (b["prompt_tokens"], b["completion_tokens"]) == (B_PROMPT, B_COMPLETION)
+    assert a["web"] == b["web"] == 1
+    cost_a = _priced(PRICE_A, PROMPT, COMPLETION)
+    cost_b = _priced(PRICE_B, B_PROMPT, B_COMPLETION)
+    assert a["cost_usd"] == pytest.approx(cost_a)
+    assert b["cost_usd"] == pytest.approx(cost_b)
+    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
+    assert usage.get_committed_cost(
+        MONTH, key_id=budget_key["key_id"]
+    ) == pytest.approx(cost_a + cost_b)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+async def test_two_exhausted_runs_are_each_billed_once(
+    client, budget_key, two_routes, stream
+):
+    two_routes.queue = [
+        (_exhausted(), 0, b""),
+        (_exhausted(), 0, b""),
+    ]
+    resp = await _chat(client, budget_key, stream=stream, model="model-x")
+    assert resp.status_code == 502, resp.text
+    assert resp.json()["code"] == "web_budget_exhausted"
+    rows = _by_provider(budget_key)
+    assert len(_rows(budget_key)) == 2
+    cost_a = _priced(PRICE_A, PROMPT, COMPLETION)
+    cost_b = _priced(PRICE_B, PROMPT, COMPLETION)
+    assert rows[ROUTE_A["id"]]["cost_usd"] == pytest.approx(cost_a)
+    assert rows[ROUTE_B["id"]]["cost_usd"] == pytest.approx(cost_b)
+    assert usage.get_committed_cost(
+        MONTH, key_id=budget_key["key_id"]
+    ) == pytest.approx(cost_a + cost_b)
