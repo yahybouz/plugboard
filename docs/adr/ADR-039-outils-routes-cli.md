@@ -39,8 +39,8 @@ Nouveau module pur `plugboard/cli_tools.py` (sans import du routeur ni de l'app)
   - outil nommé : seul cet outil est présenté, et l'appel est exigé (nom absent de `tools` : 400 `invalid_request`) ;
   - `none` : ni outils ni protocole dans la consigne ; la réponse texte est rendue telle quelle.
 - **Historique** :
-  - un `assistant.tool_calls` devient un tour `assistant` contenant l'objet `{"tool_calls": …}` du protocole, encodé par `json.dumps` ;
-  - un message `role: tool` devient un tour `user` : `TOOL_RESULT ` suivi de `{"id", "name", "content"}` encodé par `json.dumps`. Le `name` est retrouvé par `tool_call_id` dans le dernier `assistant.tool_calls` ; un id inconnu donne 400 `invalid_request`. L'échappement empêche une sortie d'outil de forger un tour `[System]` ou `[User]`.
+  - un `assistant.tool_calls` devient un tour `assistant` contenant l'objet `{"tool_calls": …}` du protocole, encodé par `json.dumps` ; le texte que ce tour portait aussi est gardé, en tour `assistant` juste avant ;
+  - un message `role: tool` devient un tour `user` : `TOOL_RESULT ` suivi de `{"id", "name", "content"}` encodé par `json.dumps`. Le `name` est retrouvé par `tool_call_id` dans le dernier `assistant.tool_calls`, sans tour `user` entre les deux ; un id inconnu donne 400 `invalid_request`. L'échappement empêche une sortie d'outil de forger un tour `[System]` ou `[User]`.
 - **`parallel_tool_calls`** : `true` (défaut OpenAI) = plusieurs appels permis ; `false` = la consigne dit « un seul appel » et la réponse en porte au plus un.
 
 ## 4. Analyse de la réponse
@@ -63,7 +63,8 @@ Nouveau module pur `plugboard/cli_tools.py` (sans import du routeur ni de l'app)
 - **Aucun outil n'est exécuté par la passerelle**, et la CLI n'en reçoit aucun : son argv ne change pas (claude garde `--tools ""` à `cli_subprocess.py:484`, codex et agy gardent leur cage).
 - La consigne « système » **n'a pas le rang d'un prompt système**. `messages_to_prompt` aplatit tout en `[System]`/`[User]`, dans le prompt utilisateur, sous le prompt système propre à la CLI. Le modèle peut donc la suivre moins bien qu'un vrai `system`.
 - Injection par les sorties d'outil (messages `tool`) : elles sont encodées en JSON et la consigne les désigne comme des données. Cette barrière est **faible** ; la vraie reste chez l'appelant.
-- Les messages `user` ne sont **pas** échappés : ils peuvent forger un `[System]`, comme aujourd'hui sur toute route CLI.
+- Les messages `user` ne sont **pas** échappés : ils peuvent forger un `[System]`, comme aujourd'hui sur toute route CLI. Seule une ligne qui commence par `TOOL_RESULT` y reçoit la marque `[user text]` en tête, que la consigne explique, pour qu'un texte de l'utilisateur ne passe pas pour une sortie d'outil.
+- Un message `user` peut aussi écrire le format de réponse ou pousser le modèle à appeler un outil : le contrôle de la passerelle porte sur l'outil déclaré et son schéma, jamais sur l'intention de l'appel, qui reste à juger par l'appelant.
 - Les **descriptions d'outils** de l'appelant entrent dans la consigne : un outil empoisonné (description qui donne des ordres) est un vecteur d'injection. La sérialisation JSON limite la forge de tours, pas l'effet des ordres. La liste des outils est à la charge de l'appelant.
 - Lien avec P0-2 :
   - M-13 : un appel vers un outil non déclaré est refusé (502), en seconde barrière derrière le refus par le worker, qu'il ne remplace pas ;
