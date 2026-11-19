@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import copy
 import json
-import re
+import unicodedata
 import uuid
 from typing import Any, Dict, List, Mapping, Optional
 
@@ -41,7 +41,6 @@ TOOL_RESULT_PREFIX = "TOOL_RESULT "
 # Put before a line of a user turn that starts with TOOL_RESULT_PREFIX, so a
 # user text never passes for a tool output (the instruction says so).
 USER_TEXT_MARK = "[user text]"
-_TOOL_RESULT_LINE = re.compile(r"(?m)^([ \t]*)(?=" + TOOL_RESULT_PREFIX.strip() + ")")
 
 _EMPTY_PARAMETERS: Dict[str, Any] = {"type": "object", "properties": {}}
 
@@ -200,11 +199,32 @@ def _text(content: Any) -> str:
     return "" if content is None else str(content)
 
 
+def _reads_as_tool_result(line: str) -> bool:
+    """Whether ``line`` may read as a tool output once the prompt is stripped
+    and read loosely: NFKC-normalised, its leading spaces, separators and
+    format characters (Unicode Z* and Cf) removed, compared in upper case.
+    Over-marking (``TOOL_RESULTS``) is accepted."""
+    line = unicodedata.normalize("NFKC", line)
+    start = 0
+    while start < len(line) and (
+        line[start].isspace()
+        or unicodedata.category(line[start])[0] == "Z"
+        or unicodedata.category(line[start]) == "Cf"
+    ):
+        start += 1
+    return line[start:].upper().startswith(TOOL_RESULT_PREFIX.strip())
+
+
 def _marked(content: Any) -> Any:
-    """A user turn's content with every line that starts with the tool result
-    prefix marked ``USER_TEXT_MARK``, text parts included."""
+    """A user turn's content with ``USER_TEXT_MARK`` at the head of every line
+    that may read as a tool output, text parts included. Lines are cut as
+    ``str.splitlines`` cuts them (``\\r``, ``\\x1c``, U+2028... too), and the
+    line breaks are kept."""
     if isinstance(content, str):
-        return _TOOL_RESULT_LINE.sub(r"\1" + USER_TEXT_MARK + " ", content)
+        return "".join(
+            f"{USER_TEXT_MARK} {line}" if _reads_as_tool_result(line) else line
+            for line in content.splitlines(keepends=True)
+        )
     if isinstance(content, list):
         return [
             {**part, "text": _marked(part["text"])}
