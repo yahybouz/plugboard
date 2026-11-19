@@ -32,7 +32,9 @@ from plugboard.router import (
     ProviderQuotaError,
     ProviderTimeoutError,
     UnsupportedOnCliError,
+    WebUnavailableError,
 )
+from plugboard.web_gate import _web_unavailable_response
 
 log = logging.getLogger("plugboard.app")
 
@@ -283,6 +285,8 @@ def _cli_error_response(
                 f"{exc.model_id!r}: pick another model from GET /v1/models "
                 f"(reference {ref} in the gateway log)."
             )
+        elif getattr(exc, "web_exhausted", False):
+            detail = str(exc)  # written by cli_subprocess: no secret
         else:
             detail = f"The {name} provider failed (reference {ref} in the gateway log)."
         content = {
@@ -291,6 +295,9 @@ def _cli_error_response(
             "provider_name": exc.provider_name,
             "model_id": exc.model_id,
         }
+    if getattr(exc, "web_exhausted", False) and not quota:
+        content["code"] = "web_budget_exhausted"
+        return JSONResponse(status_code=502, content=content)
     if sandbox:
         # No Retry-After: a missing or refused sandbox does not come back by
         # itself.
@@ -436,6 +443,8 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
             return _provider_disabled_response(exc.provider_id)
         if isinstance(exc, UnsupportedOnCliError):
             return _unsupported_on_cli_response(exc)
+        if isinstance(exc, WebUnavailableError):
+            return _web_unavailable_response(exc)
         if isinstance(exc, ModelNotServedError):
             return _model_not_served_response()  # nothing was started (BUG-120)
         if isinstance(exc, CliToolCallError):

@@ -7,6 +7,7 @@
 | [Getting started](guide/getting-started.md) | Install Plugboard, open the dashboard, send a first request |
 | [Providers and subscriptions](guide/providers-and-subscriptions.md) | Add API keys, local models, custom endpoints and subscriptions, and understand the risks |
 | [Clients and keys](guide/clients-and-keys.md) | Issue `pb_` keys, set budgets and rate limits, read usage |
+| [Web access](guide/web-access.md) | Let a key's requests search and read the web (claude CLI routes), and what bounds it |
 | [Pricing](guide/pricing.md) | Understand and edit the monthly pricing grid |
 | [Monitoring](guide/monitoring.md) | Use the dashboard, health and metrics endpoints, watchdog, audit log and alerts |
 | [Configuration](guide/configuration.md) | Look up every environment variable |

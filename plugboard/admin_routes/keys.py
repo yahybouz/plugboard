@@ -2,7 +2,7 @@
 
 Routes ``/admin/keys``, ``/admin/keys/client/{client_id}``,
 ``/admin/keys/{key_id}/revoke``, ``/admin/keys/{key_id}`` (DELETE),
-``/admin/keys/{key_id}/rotate``, ``/admin/orgs``, ``/admin/orgs/{org_id}/keys``
+``/admin/keys/{key_id}/rotate``, ``/admin/keys/{key_id}/web`` (PLU-158), ``/admin/orgs``, ``/admin/orgs/{org_id}/keys``
 and ``/admin/orgs/{org_id}/usage/{month}``, moved from ``plugboard/app.py``
 (PLU-36), behaviour unchanged. ``core`` is the ``plugboard.app`` module that
 registers them: ``_require_admin``, ``_audit``, ``_month_param``, ``_usage``
@@ -11,13 +11,15 @@ and ``load_providers`` are read as ``core.<name>`` when a handler runs.
 
 from __future__ import annotations
 
+import asyncio as _asyncio
 import logging
 from types import ModuleType, SimpleNamespace
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import Depends, FastAPI, HTTPException
-from pydantic import BaseModel, StrictBool, field_validator
+from pydantic import BaseModel, Field, StrictBool, field_validator
 
+from plugboard import apikeys as _apikeys
 from plugboard import envcompat
 from plugboard.apikeys import (
     KeyRevoked,
@@ -39,6 +41,19 @@ from plugboard.webhooks import emit_fire_and_forget as _webhook
 log = logging.getLogger("plugboard.app")
 
 
+class KeyWebPolicy(BaseModel):
+    """PLU-158: a key's web right, changed in place (the key stays the same)."""
+
+    web_access: StrictBool
+    web_max_uses: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=_apikeys.WEB_MAX_USES_CEILING,
+        strict=True,
+        description="Web tool calls per request (1..10); unchanged when absent.",
+    )
+
+
 class KeyCreate(BaseModel):
     client_id: str
     label: str = ""
@@ -54,6 +69,14 @@ class KeyCreate(BaseModel):
     org_id: str = ""  # organisation (empty = no org)
     # ADR-039: tools emulated on CLI routes, a JSON boolean only.
     allow_cli_tools: StrictBool = False
+    # PLU-158: web search and fetch, a JSON boolean only, off by default.
+    web_access: StrictBool = False
+    web_max_uses: int = Field(
+        default=_apikeys.WEB_MAX_USES_DEFAULT,
+        ge=1,
+        le=_apikeys.WEB_MAX_USES_CEILING,
+        strict=True,
+    )
 
     @field_validator("client_id")
     @classmethod
@@ -183,6 +206,8 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
             org_id=body.org_id,
             allowed_decision_models=body.allowed_decision_models,
             allow_cli_tools=body.allow_cli_tools,
+            web_access=body.web_access,
+            web_max_uses=body.web_max_uses,
         )
         core._audit(
             "key.create",
@@ -216,6 +241,30 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         if not delete_key(key_id):
             raise HTTPException(404, f"Key '{key_id}' not found")
         core._audit("key.delete", target_type="key", target_id=key_id)
+
+    @app.put("/admin/keys/{key_id}/web")
+    async def set_api_key_web(
+        key_id: str, body: KeyWebPolicy, _: None = Depends(core._require_admin)
+    ):
+        """Turn a key's web access on or off without recreating it (PLU-158)."""
+        try:
+            rec = await _asyncio.to_thread(
+                _apikeys.set_web_policy, key_id, body.web_access, body.web_max_uses
+            )
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        if rec is None:
+            raise HTTPException(404, f"Key '{key_id}' not found")
+        core._audit(
+            "key.web",
+            target_type="key",
+            target_id=key_id,
+            details=(
+                f"web_access={rec.get('web_access') is True}, "
+                f"web_max_uses={rec.get('web_max_uses')}"
+            ),
+        )
+        return _admin_key_view(rec)
 
     @app.post("/admin/keys/{key_id}/rotate", status_code=201)
     async def rotate_api_key(key_id: str, _: None = Depends(core._require_admin)):

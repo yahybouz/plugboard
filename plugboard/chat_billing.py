@@ -20,6 +20,7 @@ from plugboard import billing as _billing
 from plugboard import trace_context as _trace
 from plugboard import usage as _usage
 from plugboard.logging_config import _request_id_var
+from plugboard import web_access as _web_access
 from plugboard.tokenizer import estimate_completion_tokens, estimate_prompt_tokens
 
 log = logging.getLogger(__name__)
@@ -198,6 +199,12 @@ def record(
         request_id=None if request_id == "-" else request_id,
         trace_id=trace.trace_id if trace is not None else None,
     )
+    # PLU-158: a call served with web access is marked, with its tool calls
+    # (the request's policy, read in the billing thread's copied context).
+    web = _web_access.current()
+    if web is not None:
+        fields["web"] = True
+        fields["web_uses"] = web.uses
     if hold is not None and not hold.done:
         hold.done = True
         _usage.settle_hold(hold.id, **fields)

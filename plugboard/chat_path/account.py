@@ -16,7 +16,9 @@ from typing import Any, Dict, Optional
 from fastapi import Depends, FastAPI, HTTPException, Request
 
 from plugboard import billing as _billing
+from plugboard import apikeys as _apikeys
 from plugboard import live_requests as _live
+from plugboard import web_access as _web_access
 from plugboard.apikeys import get_keys_by_client, load_keys, mask_key
 
 # The usage entry fields /usage/me answers (contract 3.0.1), named one by one:
@@ -56,6 +58,11 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         """Every chat call in flight and the last results, with routing details."""
         return _live.snapshot(admin=True)
 
+    @app.get("/admin/web", dependencies=[Depends(core._require_admin)])
+    async def web_admin():
+        """PLU-158: web requests in progress, the limit, started, refused, tool calls."""
+        return _web_access.stats()
+
     @app.get("/usage/me")
     async def usage_me(
         month: Optional[str] = None,
@@ -89,6 +96,8 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
             info["allowed_models"] = key_record.get("allowed_models", [])
             info["rpm_limit"] = key_record.get("rpm_limit", 0)
             info["org_id"] = key_record.get("org_id", "")
+            info["web_access"] = _apikeys.allows_web(key_record)
+            info["web_max_uses"] = _apikeys.web_max_uses(key_record)
         else:
             for k in load_keys():
                 if k.get("client_id") == client_id:

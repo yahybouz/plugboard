@@ -333,6 +333,18 @@
        "description": "OpenAI: false allows one tool call at most. Passed to the provider that serves tools natively. With tools emulated on CLI routes (PLUGBOARD_CLI_TOOLS_EMULATION=1 and allow_cli_tools on the key), false makes an answer with several calls a 502 cli_tool_call_invalid.",
        "title": "Parallel Tool Calls"
       },
+      "plugboard": {
+       "anyOf": [
+        {
+         "$ref": "#/components/schemas/PlugboardExtension"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Plugboard options (since contract 3.2.0): web access."
+      },
       "response_format": {
        "anyOf": [
         {
@@ -679,6 +691,32 @@
         }
        ],
        "default": null
+      },
+      "web_access": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "The key may ask for web access (search and page fetch).",
+       "title": "Web Access"
+      },
+      "web_max_uses": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Web tool calls one request may make (1..10).",
+       "title": "Web Max Uses"
       }
      },
      "required": [
@@ -2338,6 +2376,20 @@
      "title": "NoulQuestion",
      "type": "object"
     },
+    "PlugboardExtension": {
+     "additionalProperties": false,
+     "description": "Plugboard's own request options, removed before the provider is called.",
+     "properties": {
+      "web": {
+       "default": false,
+       "description": "true asks for web access (search and page fetch), like the X-Plugboard-Web: 1 header. Served only when the key holds web_access (else 403 web_not_allowed) and a claude CLI route serves the model (else 400 web_unavailable); 429 web_busy when the web requests in progress are at their limit. Never cached.",
+       "title": "Web",
+       "type": "boolean"
+      }
+     },
+     "title": "PlugboardExtension",
+     "type": "object"
+    },
     "PreflightItem": {
      "properties": {
       "model": {
@@ -2657,6 +2709,18 @@
        "default": 0,
        "title": "Total Tokens",
        "type": "integer"
+      },
+      "web_requests": {
+       "default": 0,
+       "description": "Calls served with web access.",
+       "title": "Web Requests",
+       "type": "integer"
+      },
+      "web_uses": {
+       "default": 0,
+       "description": "Their web tool calls (search, fetch).",
+       "title": "Web Uses",
+       "type": "integer"
       }
      },
      "title": "UsageSummary",
@@ -2674,7 +2738,7 @@
   "info": {
    "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md.",
    "title": "Plugboard client API",
-   "version": "3.1.0"
+   "version": "3.2.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2783,6 +2847,21 @@
    "/v1/chat/completions": {
     "post": {
      "operationId": "post_v1_chat_completions",
+     "parameters": [
+      {
+       "description": "1 asks for web access (search and page fetch), like plugboard.web in the body (since contract 3.2.0).",
+       "in": "header",
+       "name": "X-Plugboard-Web",
+       "required": false,
+       "schema": {
+        "enum": [
+         "0",
+         "1"
+        ],
+        "type": "string"
+       }
+      }
+     ],
      "requestBody": {
       "content": {
        "application/json": {
@@ -2850,7 +2929,7 @@
          }
         }
        },
-       "description": "Invalid request; nothing was billed. code unsupported_on_cli: only CLI subscription routes (subprocess providers) serve the model and the request asks for what they cannot serve: tools, a tool_choice other than none or auto, functions, a function_call other than none or auto, a response_format other than text, or a content part other than text; unsupported lists them, hint says what to send; nothing was called. code context_length_exceeded: a CLI subscription route found the prompt too long for the model's context; no other provider was tried. code model_not_supported_by_subscription: the account plan a CLI subscription route is signed in with does not serve the model (codex with a ChatGPT account); hint says what to do, no other provider was tried. code invalid_request (BUG-121): messages missing or invalid, a message role other than system, developer, user, assistant, tool or function (detail names it, cut to 40 characters), or a max_tokens or max_completion_tokens that is not a whole number from 1 to 262144 (detail names the field); for every caller, the admin key included, before the budget hold; nothing was called. Without code: a body that is not valid JSON or not a JSON object, a model that is not a string or is removed, a session_id that is a list or an object, a decision model (use /v1/decisions), or a request an HTTP provider rejected (context too long, parameters; error_ref): after the other candidates were tried, whether the request asked for a stream or not (PLU-26), or at once when the stream had already begun."
+       "description": "Invalid request; nothing was billed. code unsupported_on_cli: only CLI subscription routes (subprocess providers) serve the model and the request asks for what they cannot serve: tools, a tool_choice other than none or auto, functions, a function_call other than none or auto, a response_format other than text, or a content part other than text; unsupported lists them, hint says what to send; nothing was called. code context_length_exceeded: a CLI subscription route found the prompt too long for the model's context; no other provider was tried. code model_not_supported_by_subscription: the account plan a CLI subscription route is signed in with does not serve the model (codex with a ChatGPT account); hint says what to do, no other provider was tried. code invalid_request (BUG-121): messages missing or invalid, a message role other than system, developer, user, assistant, tool or function (detail names it, cut to 40 characters), or a max_tokens or max_completion_tokens that is not a whole number from 1 to 262144 (detail names the field); for every caller, the admin key included, before the budget hold; nothing was called. Without code: a body that is not valid JSON or not a JSON object, a model that is not a string or is removed, a session_id that is a list or an object, a decision model (use /v1/decisions), or a request an HTTP provider rejected (context too long, parameters; error_ref): after the other candidates were tried, whether the request asked for a stream or not (PLU-26), or at once when the stream had already begun. code web_unavailable: web access was asked (X-Plugboard-Web: 1 or plugboard.web) and no claude CLI route serves the model; code web_bad_request: the header or the plugboard field is malformed; code web_with_tools_unsupported: web access was asked with tools declared (contract 3.2.0, ADR-040); nothing was called."
       },
       "401": {
        "content": {
@@ -2880,7 +2959,7 @@
          }
         }
        },
-       "description": "The key may not use this model (code forbidden_model); or the provider's own credentials could not be used on the last provider tried (a Copilot licence missing, for example): error_ref, nothing was called on that provider."
+       "description": "The key may not use this model (code forbidden_model); or the provider's own credentials could not be used on the last provider tried (a Copilot licence missing, for example): error_ref, nothing was called on that provider. code web_not_allowed: web access was asked and the key does not hold web_access; nothing was called."
       },
       "404": {
        "content": {
@@ -2910,7 +2989,7 @@
          }
         }
        },
-       "description": "Rate limit or monthly spending limit exceeded, or this call's estimated cost does not fit in what the budget has left once the calls in progress are counted (nothing was called), or the quota of the last provider tried is exhausted (code quota_exhausted; retry_after and Retry-After when it gives a delay)."
+       "description": "Rate limit or monthly spending limit exceeded, or this call's estimated cost does not fit in what the budget has left once the calls in progress are counted (nothing was called), or the quota of the last provider tried is exhausted (code quota_exhausted; retry_after and Retry-After when it gives a delay), or the web requests in progress are at their limit (code web_busy, retry_after and Retry-After 10; nothing was called)."
       },
       "502": {
        "content": {
@@ -2920,7 +2999,7 @@
          }
         }
        },
-       "description": "The provider failed or answered with an error (error_ref). code cli_tool_call_invalid: tools were emulated as text on a CLI subscription route (PLUGBOARD_CLI_TOOLS_EMULATION=1 and allow_cli_tools on the key) and the model's answer was not one protocol object, called a tool not declared (or not the one tool_choice names), gave arguments that do not match the tool's parameters, made several calls with parallel_tool_calls false, or no call when one was required; detail gives the reason (and the tool name), error_ref the log entry; header x-should-retry: false; no other provider was tried, nothing was billed."
+       "description": "The provider failed or answered with an error (error_ref). code cli_tool_call_invalid: tools were emulated as text on a CLI subscription route (PLUGBOARD_CLI_TOOLS_EMULATION=1 and allow_cli_tools on the key) and the model's answer was not one protocol object, called a tool not declared (or not the one tool_choice names), gave arguments that do not match the tool's parameters, made several calls with parallel_tool_calls false, or no call when one was required; detail gives the reason (and the tool name), error_ref the log entry; header x-should-retry: false; no other provider was tried, nothing was billed. code web_budget_exhausted: a web request used its web tool calls without a final answer."
       },
       "503": {
        "content": {
@@ -3650,6 +3729,21 @@
    "/v2/chat/completions": {
     "post": {
      "operationId": "post_v2_chat_completions",
+     "parameters": [
+      {
+       "description": "1 asks for web access (search and page fetch), like plugboard.web in the body (since contract 3.2.0).",
+       "in": "header",
+       "name": "X-Plugboard-Web",
+       "required": false,
+       "schema": {
+        "enum": [
+         "0",
+         "1"
+        ],
+        "type": "string"
+       }
+      }
+     ],
      "requestBody": {
       "content": {
        "application/json": {
@@ -3717,7 +3811,7 @@
          }
         }
        },
-       "description": "Invalid request; nothing was billed. code unsupported_on_cli: only CLI subscription routes (subprocess providers) serve the model and the request asks for what they cannot serve: tools, a tool_choice other than none or auto, functions, a function_call other than none or auto, a response_format other than text, or a content part other than text; unsupported lists them, hint says what to send; nothing was called. code context_length_exceeded: a CLI subscription route found the prompt too long for the model's context; no other provider was tried. code model_not_supported_by_subscription: the account plan a CLI subscription route is signed in with does not serve the model (codex with a ChatGPT account); hint says what to do, no other provider was tried. code invalid_request (BUG-121): messages missing or invalid, a message role other than system, developer, user, assistant, tool or function (detail names it, cut to 40 characters), or a max_tokens or max_completion_tokens that is not a whole number from 1 to 262144 (detail names the field); for every caller, the admin key included, before the budget hold; nothing was called. Without code: a body that is not valid JSON or not a JSON object, a model that is not a string or is removed, a session_id that is a list or an object, a decision model (use /v1/decisions), or a request an HTTP provider rejected (context too long, parameters; error_ref): after the other candidates were tried, whether the request asked for a stream or not (PLU-26), or at once when the stream had already begun."
+       "description": "Invalid request; nothing was billed. code unsupported_on_cli: only CLI subscription routes (subprocess providers) serve the model and the request asks for what they cannot serve: tools, a tool_choice other than none or auto, functions, a function_call other than none or auto, a response_format other than text, or a content part other than text; unsupported lists them, hint says what to send; nothing was called. code context_length_exceeded: a CLI subscription route found the prompt too long for the model's context; no other provider was tried. code model_not_supported_by_subscription: the account plan a CLI subscription route is signed in with does not serve the model (codex with a ChatGPT account); hint says what to do, no other provider was tried. code invalid_request (BUG-121): messages missing or invalid, a message role other than system, developer, user, assistant, tool or function (detail names it, cut to 40 characters), or a max_tokens or max_completion_tokens that is not a whole number from 1 to 262144 (detail names the field); for every caller, the admin key included, before the budget hold; nothing was called. Without code: a body that is not valid JSON or not a JSON object, a model that is not a string or is removed, a session_id that is a list or an object, a decision model (use /v1/decisions), or a request an HTTP provider rejected (context too long, parameters; error_ref): after the other candidates were tried, whether the request asked for a stream or not (PLU-26), or at once when the stream had already begun. code web_unavailable: web access was asked (X-Plugboard-Web: 1 or plugboard.web) and no claude CLI route serves the model; code web_bad_request: the header or the plugboard field is malformed; code web_with_tools_unsupported: web access was asked with tools declared (contract 3.2.0, ADR-040); nothing was called."
       },
       "401": {
        "content": {
@@ -3747,7 +3841,7 @@
          }
         }
        },
-       "description": "The key may not use this model (code forbidden_model); or the provider's own credentials could not be used on the last provider tried (a Copilot licence missing, for example): error_ref, nothing was called on that provider."
+       "description": "The key may not use this model (code forbidden_model); or the provider's own credentials could not be used on the last provider tried (a Copilot licence missing, for example): error_ref, nothing was called on that provider. code web_not_allowed: web access was asked and the key does not hold web_access; nothing was called."
       },
       "404": {
        "content": {
@@ -3777,7 +3871,7 @@
          }
         }
        },
-       "description": "Rate limit or monthly spending limit exceeded, or this call's estimated cost does not fit in what the budget has left once the calls in progress are counted (nothing was called), or the quota of the last provider tried is exhausted (code quota_exhausted; retry_after and Retry-After when it gives a delay)."
+       "description": "Rate limit or monthly spending limit exceeded, or this call's estimated cost does not fit in what the budget has left once the calls in progress are counted (nothing was called), or the quota of the last provider tried is exhausted (code quota_exhausted; retry_after and Retry-After when it gives a delay), or the web requests in progress are at their limit (code web_busy, retry_after and Retry-After 10; nothing was called)."
       },
       "502": {
        "content": {
@@ -3787,7 +3881,7 @@
          }
         }
        },
-       "description": "The provider failed or answered with an error (error_ref). code cli_tool_call_invalid: tools were emulated as text on a CLI subscription route (PLUGBOARD_CLI_TOOLS_EMULATION=1 and allow_cli_tools on the key) and the model's answer was not one protocol object, called a tool not declared (or not the one tool_choice names), gave arguments that do not match the tool's parameters, made several calls with parallel_tool_calls false, or no call when one was required; detail gives the reason (and the tool name), error_ref the log entry; header x-should-retry: false; no other provider was tried, nothing was billed."
+       "description": "The provider failed or answered with an error (error_ref). code cli_tool_call_invalid: tools were emulated as text on a CLI subscription route (PLUGBOARD_CLI_TOOLS_EMULATION=1 and allow_cli_tools on the key) and the model's answer was not one protocol object, called a tool not declared (or not the one tool_choice names), gave arguments that do not match the tool's parameters, made several calls with parallel_tool_calls false, or no call when one was required; detail gives the reason (and the tool name), error_ref the log entry; header x-should-retry: false; no other provider was tried, nothing was billed. code web_budget_exhausted: a web request used its web tool calls without a final answer."
       },
       "503": {
        "content": {
@@ -4495,7 +4589,7 @@
    }
   ],
   [
-   15,
+   16,
    {
     "coroutine": true,
     "dependencies": [
@@ -4532,7 +4626,7 @@
    }
   ],
   [
-   16,
+   17,
    {
     "coroutine": true,
     "dependencies": [
@@ -4561,7 +4655,7 @@
    }
   ],
   [
-   17,
+   18,
    {
     "coroutine": true,
     "dependencies": [
@@ -4590,7 +4684,7 @@
    }
   ],
   [
-   102,
+   104,
    {
     "coroutine": true,
     "dependencies": [],

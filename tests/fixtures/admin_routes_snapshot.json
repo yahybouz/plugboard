@@ -63,6 +63,9 @@
    "plugboard.tokenizer",
    "plugboard.trace_context",
    "plugboard.usage",
+   "plugboard.web_access",
+   "plugboard.web_egress",
+   "plugboard.web_gate",
    "plugboard.webhooks"
   ]
  },
@@ -357,12 +360,52 @@
         }
        ],
        "title": "Rpm Limit"
+      },
+      "web_access": {
+       "default": false,
+       "title": "Web Access",
+       "type": "boolean"
+      },
+      "web_max_uses": {
+       "default": 3,
+       "maximum": 10.0,
+       "minimum": 1.0,
+       "title": "Web Max Uses",
+       "type": "integer"
       }
      },
      "required": [
       "client_id"
      ],
      "title": "KeyCreate",
+     "type": "object"
+    },
+    "KeyWebPolicy": {
+     "description": "PLU-158: a key's web right, changed in place (the key stays the same).",
+     "properties": {
+      "web_access": {
+       "title": "Web Access",
+       "type": "boolean"
+      },
+      "web_max_uses": {
+       "anyOf": [
+        {
+         "maximum": 10.0,
+         "minimum": 1.0,
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Web tool calls per request (1..10); unchanged when absent.",
+       "title": "Web Max Uses"
+      }
+     },
+     "required": [
+      "web_access"
+     ],
+     "title": "KeyWebPolicy",
      "type": "object"
     },
     "NoulQuestion": {
@@ -1896,6 +1939,54 @@
       }
      },
      "summary": "Rotate Api Key"
+    }
+   },
+   "/admin/keys/{key_id}/web": {
+    "put": {
+     "description": "Turn a key's web access on or off without recreating it (PLU-158).",
+     "operationId": "set_api_key_web_admin_keys__key_id__web_put",
+     "parameters": [
+      {
+       "in": "path",
+       "name": "key_id",
+       "required": true,
+       "schema": {
+        "title": "Key Id",
+        "type": "string"
+       }
+      }
+     ],
+     "requestBody": {
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/KeyWebPolicy"
+        }
+       }
+      },
+      "required": true
+     },
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {}
+        }
+       },
+       "description": "Successful Response"
+      },
+      "422": {
+       "content": {
+        "application/json": {
+         "schema": {
+          "$ref": "#/components/schemas/HTTPValidationError"
+         }
+        }
+       },
+       "description": "Validation Error"
+      }
+     },
+     "summary": "Set Api Key Web"
     }
    },
    "/admin/models/check-internet": {
@@ -3801,6 +3892,23 @@
      "summary": "Admin Watchdog Restart"
     }
    },
+   "/admin/web": {
+    "get": {
+     "description": "PLU-158: web requests in progress, the limit, started, refused, tool calls.",
+     "operationId": "web_admin_admin_web_get",
+     "responses": {
+      "200": {
+       "content": {
+        "application/json": {
+         "schema": {}
+        }
+       },
+       "description": "Successful Response"
+      }
+     },
+     "summary": "Web Admin"
+    }
+   },
    "/health": {
     "get": {
      "description": "Liveness (PLU-31): always 200 while the process answers. Public, so it\nshows the status and the version only and reads no file; the provider\nlist is on the admin `GET /providers`, the auth posture on\n`GET /health/ready`.",
@@ -5027,6 +5135,32 @@
    "summary": null,
    "tags": [],
    "unique_id": "inflight_admin_admin_inflight_get"
+  },
+  {
+   "coroutine": true,
+   "dependencies": [
+    [
+     "plugboard.app._require_admin",
+     []
+    ]
+   ],
+   "deprecated": null,
+   "description": "PLU-158: web requests in progress, the limit, started, refused, tool calls.",
+   "include_in_schema": true,
+   "kind": "api",
+   "methods": [
+    "GET"
+   ],
+   "name": "web_admin",
+   "operation_id": null,
+   "params": [],
+   "path": "/admin/web",
+   "response_class": "JSONResponse",
+   "response_model": null,
+   "status_code": null,
+   "summary": null,
+   "tags": [],
+   "unique_id": "web_admin_admin_web_get"
   },
   {
    "coroutine": true,
@@ -6717,6 +6851,47 @@
    "summary": null,
    "tags": [],
    "unique_id": "delete_api_key_admin_keys__key_id__delete"
+  },
+  {
+   "coroutine": true,
+   "dependencies": [
+    [
+     "plugboard.app._require_admin",
+     []
+    ]
+   ],
+   "deprecated": null,
+   "description": "Turn a key's web access on or off without recreating it (PLU-158).",
+   "include_in_schema": true,
+   "kind": "api",
+   "methods": [
+    "PUT"
+   ],
+   "name": "set_api_key_web",
+   "operation_id": null,
+   "params": [
+    [
+     "path",
+     "key_id",
+     "key_id",
+     true,
+     "str"
+    ],
+    [
+     "body",
+     "body",
+     "body",
+     true,
+     "KeyWebPolicy"
+    ]
+   ],
+   "path": "/admin/keys/{key_id}/web",
+   "response_class": "JSONResponse",
+   "response_model": null,
+   "status_code": null,
+   "summary": null,
+   "tags": [],
+   "unique_id": "set_api_key_web_admin_keys__key_id__web_put"
   },
   {
    "coroutine": true,

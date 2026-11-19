@@ -102,6 +102,7 @@ from plugboard.config import (
     update_provider,  # noqa: F401  (patch point read through core, PLU-36)
 )
 from plugboard import live_requests as _live
+from plugboard.web_gate import _web_finish
 from plugboard import provider_admission as _provider_admission
 from plugboard import request_wait as _request_wait
 from plugboard.logging_config import _request_id_var, setup_logging
@@ -875,6 +876,7 @@ async def _inflight_chat_dep(request: Request):
                 await slot.take(wait_s)
         yield
     finally:
+        _web_finish(request)  # PLU-158: the web slot, after the last byte
         if slot is not None:
             slot.release()
         if budget is not None:

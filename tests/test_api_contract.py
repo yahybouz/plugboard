@@ -349,12 +349,14 @@ def test_committed_contract_names_the_provider_credentials_401_and_403():
 
 
 def test_committed_contract_states_the_tools_emulated_on_cli_routes():
-    """ADR-039 (contract 3.1.0): tools may be emulated as text on CLI routes
-    for a key the admin allowed, when the instance option is on; an answer
-    off the protocol is a 502 cli_tool_call_invalid, not to be retried."""
-    assert api_contract.CONTRACT_VERSION == "3.1.0"
+    """ADR-039 (contract 3.1.0, kept by 3.2.0): tools may be emulated as text
+    on CLI routes for a key the admin allowed, when the instance option is on;
+    an answer off the protocol is a 502 cli_tool_call_invalid, not to be
+    retried."""
+    version = api_contract.CONTRACT_VERSION
+    assert tuple(map(int, version.split("."))) >= (3, 1, 0)
     doc = json.loads((ROOT / "docs" / "api" / "openapi.json").read_text("utf-8"))
-    assert doc["info"]["version"] == "3.1.0"
+    assert doc["info"]["version"] == version
     schemas = doc["components"]["schemas"]
     fields = schemas["ChatCompletionRequest"]["properties"]
     assert "parallel_tool_calls" in fields
@@ -369,7 +371,7 @@ def test_committed_contract_states_the_tools_emulated_on_cli_routes():
         assert "cli_tool_call_invalid" in bad_gateway, path
         assert "x-should-retry: false" in bad_gateway, path
     mcp = json.loads((ROOT / "docs" / "api" / "mcp.json").read_text("utf-8"))
-    assert mcp["contract_version"] == "3.1.0"
+    assert mcp["contract_version"] == version
 
 
 _SEMVER = r"\d+\.\d+\.\d+"

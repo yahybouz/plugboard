@@ -48,6 +48,7 @@ from plugboard import (
     provider_admission,
     request_wait,
     route_pauses,
+    web_access,
 )
 from plugboard.alerts import record_provider_failure, record_provider_success
 from plugboard.circuit_breaker import is_request_too_long
@@ -1242,6 +1243,10 @@ def _candidates_for(
     from plugboard.circuit_breaker import check_circuit
 
     candidates = _served_routes(body.get("model", ""))
+    # PLU-158: a web request goes only to the claude CLI routes (the only
+    # backend with web tools here), refused with nothing started otherwise.
+    if web_access.current() is not None:
+        candidates = _web_routes(candidates)
     # A CLI route would drop tools, a structured format or an image: it is
     # left out, before any circuit read, guard or slot, and the request is
     # refused when nothing else is left.
@@ -1259,6 +1264,43 @@ def _candidates_for(
 
     candidates, refused = _guarded_routes(candidates, route_guard)
     return _order_routes(candidates, open_routes), refused
+
+
+class WebUnavailableError(RuntimeError):
+    """A web request for a model no claude CLI route serves (PLU-158).
+    The request's own error: 400 ``web_unavailable``, nothing started."""
+
+    def __init__(self, provider_id: str):
+        super().__init__(
+            f"Web access is not available for provider '{provider_id}': only "
+            "claude CLI routes (claude-code:...) can use the web"
+        )
+        self.provider_id = provider_id
+
+
+def _is_web_route(provider: Dict[str, Any]) -> bool:
+    return str(provider.get("auth_source", "")) == "subprocess:claude"
+
+
+def _web_routes(candidates: List[tuple]) -> List[tuple]:
+    kept = [route for route in candidates if _is_web_route(route[0])]
+    if candidates and not kept:
+        raise WebUnavailableError(candidates[0][0]["id"])
+    return kept
+
+
+def web_refusal(model_str: str) -> Optional[WebUnavailableError]:
+    """The ``WebUnavailableError`` a web request for ``model_str`` would
+    raise, or None (no route at all is left to the other checks)."""
+    try:
+        candidates = _resolve_all_providers(model_str)
+    except ValueError:
+        return None
+    try:
+        _web_routes(candidates)
+    except WebUnavailableError as exc:
+        return exc
+    return None
 
 
 def _served_routes(model_str: str) -> List[tuple]:
@@ -1473,6 +1515,7 @@ async def forward(
                             kind,
                             sub_body,
                             timeout_s=timeout,
+                            **web_access.cli_kwargs(),
                         )
                     except Exception as cli_exc:
                         # A prompt too long or a model the subscription
@@ -2008,7 +2051,11 @@ async def _cli_live(
     pieces: "asyncio.Queue[str]" = asyncio.Queue()
     task = asyncio.ensure_future(
         cli_subprocess.complete(
-            kind, body, timeout_s=timeout, on_delta=pieces.put_nowait
+            kind,
+            body,
+            timeout_s=timeout,
+            on_delta=pieces.put_nowait,
+            **web_access.cli_kwargs(),
         )
     )
     getter: Optional["asyncio.Future[str]"] = None
@@ -2104,6 +2151,7 @@ async def _stream_route(
                     kind,
                     sub_body,
                     timeout_s=timeout,
+                    **web_access.cli_kwargs(),
                 )
             metrics.record(provider["id"], _time.perf_counter() - _t_cli)
         except ModelNotServedError:

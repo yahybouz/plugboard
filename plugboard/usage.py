@@ -48,7 +48,9 @@ CREATE TABLE IF NOT EXISTS usage_entries (
     price_key       TEXT NOT NULL DEFAULT '',
     price_source    TEXT NOT NULL DEFAULT '',
     request_id      TEXT,
-    trace_id        TEXT
+    trace_id        TEXT,
+    web             INTEGER NOT NULL DEFAULT 0,
+    web_uses        INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -60,6 +62,9 @@ _ADDED_COLUMNS = {
     # NULL when unknown (entries written before, lapsed holds, no traceparent).
     "request_id": "TEXT",
     "trace_id": "TEXT",
+    # PLU-158: 1 for a call served with web access; its web tool calls.
+    "web": "INTEGER NOT NULL DEFAULT 0",
+    "web_uses": "INTEGER NOT NULL DEFAULT 0",
 }
 
 _CREATE_INDEXES = [
@@ -160,6 +165,8 @@ def append_usage(
     price_source: str = "",
     request_id: Optional[str] = None,
     trace_id: Optional[str] = None,
+    web: bool = False,
+    web_uses: int = 0,
 ) -> Dict[str, Any]:
     """Append a usage entry. Returns the written entry.
 
@@ -180,6 +187,8 @@ def append_usage(
         price_source,
         request_id,
         trace_id,
+        web,
+        web_uses,
     )
     conn = _get_conn()
     try:
@@ -203,6 +212,8 @@ def _entry(
     price_source: str = "",
     request_id: Optional[str] = None,
     trace_id: Optional[str] = None,
+    web: bool = False,
+    web_uses: int = 0,
 ) -> Dict[str, Any]:
     month = _billing.current_pricing_month()
     return {
@@ -222,6 +233,8 @@ def _entry(
         "price_source": price_source,
         "request_id": request_id,
         "trace_id": trace_id,
+        "web": 1 if web else 0,
+        "web_uses": max(int(web_uses or 0), 0),
     }
 
 
@@ -230,10 +243,10 @@ def _insert(conn: sqlite3.Connection, entry: Dict[str, Any]) -> None:
         """INSERT INTO usage_entries
                (id, ts, month, client_id, key_id, model, provider_id,
                 prompt_tokens, completion_tokens, total_tokens, pricing_month, cost_usd,
-                price_key, price_source, request_id, trace_id)
+                price_key, price_source, request_id, trace_id, web, web_uses)
                VALUES (:id, :ts, :month, :client_id, :key_id, :model, :provider_id,
                        :prompt_tokens, :completion_tokens, :total_tokens, :pricing_month, :cost_usd,
-                       :price_key, :price_source, :request_id, :trace_id)""",
+                       :price_key, :price_source, :request_id, :trace_id, :web, :web_uses)""",
         entry,
     )
 
@@ -536,7 +549,9 @@ def _summarize_scope(
                 COALESCE(SUM(prompt_tokens), 0) AS total_prompt_tokens,
                 COALESCE(SUM(completion_tokens), 0) AS total_completion_tokens,
                 COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                COALESCE(SUM(cost_usd), 0.0) AS total_cost_usd
+                COALESCE(SUM(cost_usd), 0.0) AS total_cost_usd,
+                COALESCE(SUM(web), 0) AS web_requests,
+                COALESCE(SUM(web_uses), 0) AS web_uses
             FROM usage_entries
             WHERE month = ? AND client_id = ? AND key_id = ?
         """
@@ -559,7 +574,9 @@ def _summarize_scope(
                 COALESCE(SUM(prompt_tokens), 0) AS total_prompt_tokens,
                 COALESCE(SUM(completion_tokens), 0) AS total_completion_tokens,
                 COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                COALESCE(SUM(cost_usd), 0.0) AS total_cost_usd
+                COALESCE(SUM(cost_usd), 0.0) AS total_cost_usd,
+                COALESCE(SUM(web), 0) AS web_requests,
+                COALESCE(SUM(web_uses), 0) AS web_uses
             FROM usage_entries
             WHERE month = ? AND client_id = ?
         """
@@ -582,7 +599,9 @@ def _summarize_scope(
                 COALESCE(SUM(prompt_tokens), 0) AS total_prompt_tokens,
                 COALESCE(SUM(completion_tokens), 0) AS total_completion_tokens,
                 COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                COALESCE(SUM(cost_usd), 0.0) AS total_cost_usd
+                COALESCE(SUM(cost_usd), 0.0) AS total_cost_usd,
+                COALESCE(SUM(web), 0) AS web_requests,
+                COALESCE(SUM(web_uses), 0) AS web_uses
             FROM usage_entries
             WHERE month = ? AND key_id = ?
         """
@@ -605,7 +624,9 @@ def _summarize_scope(
                 COALESCE(SUM(prompt_tokens), 0) AS total_prompt_tokens,
                 COALESCE(SUM(completion_tokens), 0) AS total_completion_tokens,
                 COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                COALESCE(SUM(cost_usd), 0.0) AS total_cost_usd
+                COALESCE(SUM(cost_usd), 0.0) AS total_cost_usd,
+                COALESCE(SUM(web), 0) AS web_requests,
+                COALESCE(SUM(web_uses), 0) AS web_uses
             FROM usage_entries
             WHERE month = ?
         """
@@ -634,6 +655,9 @@ def _summarize_scope(
         "total_completion_tokens": int(totals["total_completion_tokens"] or 0),
         "total_tokens": int(totals["total_tokens"] or 0),
         "total_cost_usd": round(float(totals["total_cost_usd"] or 0.0), 8),
+        # PLU-158: calls served with web access, and their web tool calls.
+        "web_requests": int(totals["web_requests"] or 0),
+        "web_uses": int(totals["web_uses"] or 0),
         "by_model": {},
     }
     for row in by_model_rows:
@@ -715,10 +739,15 @@ def summarize_usage(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
         "total_completion_tokens": 0,
         "total_tokens": 0,
         "total_cost_usd": 0.0,
+        "web_requests": 0,
+        "web_uses": 0,
         "by_model": {},
     }
     for e in entries:
         summary["total_prompt_tokens"] += e.get("prompt_tokens", 0)
+        # PLU-158: calls served with web access, and their web tool calls.
+        summary["web_requests"] += 1 if e.get("web") else 0
+        summary["web_uses"] += int(e.get("web_uses") or 0)
         summary["total_completion_tokens"] += e.get("completion_tokens", 0)
         summary["total_tokens"] += e.get("total_tokens", 0)
         summary["total_cost_usd"] += e.get("cost_usd", 0.0)

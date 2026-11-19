@@ -28,6 +28,7 @@ from plugboard import chat_billing
 from plugboard import cli_tools as _cli_tools
 from plugboard import live_requests as _live
 from plugboard import request_wait as _request_wait
+from plugboard import web_access as _web_access
 from plugboard.api_contract import CHAT_ROLES, MAX_OUTPUT_TOKENS_CAP
 from plugboard.apikeys import allows_cli_tools
 from plugboard.chat_path.billing import _keep_hold
@@ -39,6 +40,7 @@ from plugboard.chat_path.responses import (
     _replay_completion_as_sse,
     _unsupported_on_cli_response,
 )
+from plugboard.web_gate import _web_gate
 from plugboard.chat_path.streaming import (
     _ClientGone,
     _client_gone_response,
@@ -341,6 +343,13 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         # are emulated as text; without both, the refusal is unchanged.
         # The routes are resolved once: the refusal names the fields left once
         # the tools are emulated.
+        # PLU-158, first: web asked for -> the key's right (403), no tools
+        # (400, ADR-040), a claude route (400), a web slot (429); nothing
+        # counted when refused. Not asked: unchanged.
+        web_refused = _web_gate(request, body, client_id, key_record)
+        if web_refused is not None:
+            return web_refused
+        _web_on = _web_access.current() is not None
         refusal = core.cli_refusal(body)
         emulated = False
         if (
@@ -410,7 +419,8 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         _is_streaming = body.get("stream") is True
         # Historical cache entries do not bind the effective serving identity.
         # Restricted keys must not reuse responses from another route or policy.
-        _use_cache = _cache_enabled and route_guard is None
+        # A web answer depends on the live web: never read nor written (PLU-158).
+        _use_cache = _cache_enabled and route_guard is None and not _web_on
         _cache_key = None
         if _use_cache:
             from plugboard.cache import compute_cache_key, get_cached, key_params
