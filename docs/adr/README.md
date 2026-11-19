@@ -28,6 +28,7 @@ Numbers are not contiguous: gaps correspond to records that were never published
 | [ADR-037](ADR-037-openai-direct-provider.md) | Direct OpenAI provider with an API key | Accepted | 2026-05-04 |
 | [ADR-039](ADR-039-outils-routes-cli.md) | Tools emulated as text on CLI subscription routes (opt-in) | Accepted | 2026-11-19 |
 | [ADR-040](ADR-040-web-et-outils.md) | Web access and tools in one request: refused (400 web_with_tools_unsupported) | Accepted | 2026-11-19 |
+| [ADR-041](ADR-041-limites-cages-cli.md) | Known limits of the CLI cages: codex's secret in its environment, exec and nested unshare, claude and gemini without an OS cage | Accepted | 2026-11-19 |
 
 ## When to write an ADR
 
