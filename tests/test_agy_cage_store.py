@@ -694,7 +694,48 @@ async def test_a_copy_that_fails_refuses_the_call_and_leaves_nothing(
     _no_private_store_left(setup)
 
 
+def _deep_tree(root: Path, depth: int) -> None:
+    """``depth`` nested folders ``a/a/…`` under ``root``, made through
+    descriptors: never a path longer than one name, whatever ``root``."""
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for _ in range(depth):
+            os.mkdir("a", dir_fd=fd)
+            child = os.open("a", os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
+            os.close(fd)
+            fd = child
+    finally:
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def _recursion_limit(limit: int):
+    """Python's recursion limit set to ``limit``, restored on exit. The
+    garbage left by earlier tests is collected first and the collector held
+    meanwhile: a finalizer run at the bottom of the lowered stack would fail
+    on it (an unraisable RecursionError) and not be the test's own."""
+    import gc
+    import sys
+
+    gc.collect()
+    collecting = gc.isenabled()
+    gc.disable()
+    before = sys.getrecursionlimit()
+    sys.setrecursionlimit(limit)
+    try:
+        yield
+    finally:
+        sys.setrecursionlimit(before)
+        if collecting:
+            gc.enable()
+
+
 async def test_a_too_deep_shared_bin_refuses_the_call_and_leaves_nothing(setup):
+    """A 1200-level tree in bin/: the copy recurses (one call and two open
+    descriptors per level), so it stops on the first limit reached:
+    Python's stack (RecursionError) or, under a soft limit of 1024 open
+    files as in the CI, EMFILE (OSError). Either way the call is refused
+    before agy runs and nothing is left (BUG-157)."""
     from plugboard import agy_store
 
     store = _fill_shared(setup)
@@ -702,18 +743,41 @@ async def test_a_too_deep_shared_bin_refuses_the_call_and_leaves_nothing(setup):
     _install(setup["bin"], "agy", f"touch {ran}\n")
     deep = store / "bin" / "deep"
     deep.mkdir()
-    fd = os.open(deep, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        for _ in range(1200):
-            os.mkdir("a", dir_fd=fd)
-            child = os.open("a", os.O_RDONLY | os.O_DIRECTORY, dir_fd=fd)
-            os.close(fd)
-            fd = child
-    finally:
-        os.close(fd)
+    _deep_tree(deep, 1200)
     try:
         with pytest.raises(cs.CliSubprocessError) as info:
             await cs.complete("agy", dict(_BODY))
+
+        assert info.value.sandbox_failed is True
+        assert any(
+            f"agy private store cannot be filled ({kind})" in str(info.value)
+            for kind in ("RecursionError", "OSError")
+        ), str(info.value)
+        assert not ran.exists()
+        _no_private_store_left(setup)
+    finally:
+        agy_store.remove_private_store(str(deep))
+
+
+async def test_a_shared_bin_deeper_than_the_stack_refuses_the_call(setup):
+    """RecursionError itself, whatever the run's limits: the recursion limit
+    is lowered to a known margin above the current depth, so that a short
+    tree (far from any limit on open files or path length) is deeper than
+    the stack. The call is refused before agy runs, nothing left (BUG-157)."""
+    import inspect
+
+    from plugboard import agy_store
+
+    store = _fill_shared(setup)
+    ran = setup["tmp"] / "agy-ran"
+    _install(setup["bin"], "agy", f"touch {ran}\n")
+    deep = store / "bin" / "deep"
+    deep.mkdir()
+    _deep_tree(deep, 300)
+    try:
+        with _recursion_limit(len(inspect.stack(0)) + 150):
+            with pytest.raises(cs.CliSubprocessError) as info:
+                await cs.complete("agy", dict(_BODY))
 
         assert info.value.sandbox_failed is True
         assert "agy private store cannot be filled (RecursionError)" in str(info.value)
