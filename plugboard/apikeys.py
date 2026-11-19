@@ -10,7 +10,9 @@ Schema: {"keys": [{
   "label": str,         # free text
   "created_at": str,    # ISO8601 UTC
   "is_active": bool,
-  "monthly_limit_usd": float  # 0 = unlimited
+  "monthly_limit_usd": float, # 0 = unlimited
+  "web_access": bool,         # PLU-158: web search/fetch allowed (default false)
+  "web_max_uses": int         # PLU-158: web tool calls per request (1..10, default 3)
 }]}
 
 v3.0.0 BREAKING: the legacy fallback that synthesised a record from the
@@ -45,6 +47,13 @@ KEY_PREFIX = "pb_"
 KEY_PREFIXES = (KEY_PREFIX, "lle_")
 
 log = logging.getLogger(__name__)
+
+# ── Web access (PLU-158) ──────────────────────────────────────────────────────
+# A key may let its requests use the web tools (search, page fetch) of the
+# claude CLI. Off by default; ``web_max_uses`` bounds the tool calls of one
+# request (1..WEB_MAX_USES_CEILING, default WEB_MAX_USES_DEFAULT).
+WEB_MAX_USES_DEFAULT = 3
+WEB_MAX_USES_CEILING = 10
 
 # In-process cache for key records. Invalidated via file mtime check so
 # external writers (admin_portal, migrations) are picked up automatically.
@@ -207,6 +216,8 @@ def _new_key(
     rpm_limit: int = 0,
     org_id: str = "",
     allowed_decision_models: Optional[List[str]] = None,
+    web_access: bool = False,
+    web_max_uses: int = WEB_MAX_USES_DEFAULT,
 ) -> tuple[Dict[str, Any], str]:
     """A new key record and its plaintext key; nothing is written."""
     if allowed_decision_models is not None:
@@ -230,6 +241,10 @@ def _new_key(
         "allowed_models": allowed_models or [],
         "rpm_limit": rpm_limit,
         "allowed_decision_models": allowed_decision_models,
+        # PLU-158: web search and fetch, off by default; only the boolean
+        # true grants it.
+        "web_access": web_access is True,
+        "web_max_uses": _checked_web_max_uses(web_max_uses),
     }
     return record, raw_key
 
@@ -242,6 +257,8 @@ def create_key(
     rpm_limit: int = 0,
     org_id: str = "",
     allowed_decision_models: Optional[List[str]] = None,
+    web_access: bool = False,
+    web_max_uses: int = WEB_MAX_USES_DEFAULT,
 ) -> Dict[str, Any]:
     """Generate a new random key, persist its hash, return record with plaintext key.
 
@@ -256,6 +273,8 @@ def create_key(
         rpm_limit,
         org_id,
         allowed_decision_models,
+        web_access,
+        web_max_uses,
     )
     with _lock():
         data = _read()
@@ -323,6 +342,56 @@ def get_orgs() -> List[Dict[str, Any]]:
     ]
 
 
+def _checked_web_max_uses(value: Any) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 1 <= value <= WEB_MAX_USES_CEILING
+    ):
+        raise ValueError(
+            f"web_max_uses must be an integer from 1 to {WEB_MAX_USES_CEILING}"
+        )
+    return value
+
+
+def allows_web(record: Optional[Dict[str, Any]]) -> bool:
+    """Whether a key record holds the web right. Only ``web_access`` set to
+    the boolean true grants it; the admin has no record and never holds it."""
+    return isinstance(record, dict) and record.get("web_access") is True
+
+
+def web_max_uses(record: Optional[Dict[str, Any]]) -> int:
+    """The web tool calls one request of this key may make (a record written
+    before PLU-158, or holding a bad value, gets the default)."""
+    value = (record or {}).get("web_max_uses", WEB_MAX_USES_DEFAULT)
+    try:
+        return _checked_web_max_uses(value)
+    except ValueError:
+        return WEB_MAX_USES_DEFAULT
+
+
+def set_web_policy(
+    key_id: str, web_access: bool, max_uses: Optional[int] = None
+) -> Optional[Dict[str, Any]]:
+    """Set a key's web right in place (the key itself is unchanged, no
+    rotation). Returns the updated record, or None when the key is unknown.
+    Raises ValueError for a bad ``max_uses``."""
+    if max_uses is not None:
+        _checked_web_max_uses(max_uses)
+    with _lock():
+        data = _read()
+        for k in data.get("keys", []):
+            if k.get("key_id") == key_id:
+                k["web_access"] = web_access is True
+                if max_uses is not None:
+                    k["web_max_uses"] = max_uses
+                elif "web_max_uses" not in k:
+                    k["web_max_uses"] = WEB_MAX_USES_DEFAULT
+                _write(data)
+                return dict(k)
+    return None
+
+
 class KeyRevoked(Exception):
     """Rotation asked for a key that is already revoked (BUG-80)."""
 
@@ -354,6 +423,8 @@ def rotate_key(key_id: str) -> Optional[Dict[str, Any]]:
             rpm_limit=old.get("rpm_limit", 0),
             org_id=old.get("org_id", ""),
             allowed_decision_models=old.get("allowed_decision_models"),
+            web_access=allows_web(old),
+            web_max_uses=web_max_uses(old),
         )
         keys = [{**k, "is_active": False} if k is old else k for k in keys]
         keys.append(record)

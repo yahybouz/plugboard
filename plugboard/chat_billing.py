@@ -17,6 +17,7 @@ from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
 from plugboard import billing as _billing
 from plugboard import usage as _usage
+from plugboard import web_access as _web_access
 from plugboard.tokenizer import estimate_completion_tokens, estimate_prompt_tokens
 
 log = logging.getLogger(__name__)
@@ -187,6 +188,12 @@ def record(
         price_key=charge.price_key,
         price_source=charge.price_source,
     )
+    # PLU-158: a call served with web access is marked, with its tool calls
+    # (the request's policy, read in the billing thread's copied context).
+    web = _web_access.current()
+    if web is not None:
+        fields["web"] = True
+        fields["web_uses"] = web.uses
     if hold is not None and not hold.done:
         hold.done = True
         _usage.settle_hold(hold.id, **fields)

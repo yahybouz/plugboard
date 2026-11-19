@@ -45,7 +45,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-from plugboard import agy_cage, agy_store, envcompat
+from plugboard import agy_cage, agy_store, envcompat, web_access, web_egress
 from plugboard.circuit_breaker import (
     is_model_unsupported_by_subscription,
     is_request_too_long,
@@ -140,6 +140,8 @@ class CliSubprocessError(RuntimeError):
         self.timed_out = timed_out
         self.sandbox_failed = sandbox_failed
         self.tool_refused = tool_refused
+        # PLU-158: a web run that spent its turns without answering.
+        self.web_exhausted = False
         self.exit_code = exit_code
         self.stderr = stderr
         self.pid = pid
@@ -2101,6 +2103,7 @@ async def complete(
     *,
     timeout_s: Optional[float] = None,
     on_delta: Optional[Callable[[str], None]] = None,
+    web: Optional["web_access.WebPolicy"] = None,
 ) -> Dict[str, Any]:
     """Run the CLI and return an OpenAI chat.completions-compatible response.
 
@@ -2114,6 +2117,10 @@ async def complete(
             so the answer billed and replayed is the one the client got
             (BUG-92). A CLI that refuses its streaming option before doing
             anything is run once more without it, without callbacks (BUG-93).
+        web: the request's web policy (PLU-158), claude only: the CLI gets
+            the two web tools and nothing else, bounded turns, its own
+            timeout, the egress guard as proxy and no Haiku helper. None:
+            no tool at all, as always.
 
     Returns:
         OpenAI-style response dict.
@@ -2122,6 +2129,9 @@ async def complete(
         RuntimeError: if the CLI fails or returns unparseable output.
     """
     backend = get_backend(kind)
+    if web is not None and kind != "claude":
+        # The router keeps only claude routes for a web request (PLU-158).
+        raise RuntimeError(f"web access is not available on the {kind} CLI")
     # The router passes the provider's own model name: kept whole, since a
     # native name may hold a colon (``qwen3:8b``).
     model = body.get("model") or backend.default_model
@@ -2163,9 +2173,13 @@ async def complete(
         if on_delta is not None:
             on_delta(text)
 
+    base_args = backend.args
+    if web is not None:
+        # Only WebSearch and WebFetch, checked (web_access.check_web_args).
+        base_args = web_access.claude_args(backend.args, web)
     argv = [
         binary_path,
-        *(_stream_args(kind, backend.args) if read_delta else backend.args),
+        *(_stream_args(kind, base_args) if read_delta else base_args),
     ]
     if kind == "codex":
         argv.extend(codex_isolation_args(spawn_cwd))
@@ -2175,13 +2189,22 @@ async def complete(
     # Never argv: it holds the isolation options and the operator's paths.
     # The prompt itself is never in argv; it goes to the CLI's stdin.
     log.info(
-        "spawn CLI: %s (model=%s, prompt_chars=%d)", backend.kind, model, len(prompt)
+        "spawn CLI: %s (model=%s, prompt_chars=%d%s)",
+        backend.kind,
+        model,
+        len(prompt),
+        f", web max_uses={web.max_uses}" if web is not None else "",
     )
 
     deadline = timeout_s or backend.timeout_s
     # Allowlisted env: the server's secrets (ADMIN_KEY, API_KEY,
     # ENCRYPTION_KEY...) must never reach a CLI running a tenant prompt.
     env = build_child_env(kind)
+    if web is not None:
+        deadline = web_access.TIMEOUT_S
+        # Every connection of the run goes through the egress guard (public
+        # addresses only); the page-summary helper is never Haiku.
+        env.update(web_access.child_env(await web_egress.ensure_started()))
 
     with contextlib.ExitStack() as cleanup:
         if kind == "gemini":
@@ -2305,12 +2328,29 @@ async def complete(
             "(update the CLI to stream)",
             backend.command,
         )
-        return await complete(kind, body, timeout_s=max(deadline - elapsed, 1.0))
+        return await complete(
+            kind, body, timeout_s=max(deadline - elapsed, 1.0), web=web
+        )
     stdout_text = (stdout or b"").decode("utf-8", "replace")
     if kind == "agy" and read_delta is not None:
         stdout_text = _agy_stream_to_json(stdout_text)
     stderr_text = (stderr or b"").decode("utf-8", "replace")
     rate_limited = kind == "claude" and _claude_rate_limited(stdout_text)
+    if web is not None:
+        web_access.count_tool_uses(stdout_text, web)
+        if web_access.max_turns_reached(stdout_text):
+            # The model spent its turns on the web without answering: the
+            # request's limit, not the route's fault (no circuit, no alert).
+            exhausted = CliSubprocessError(
+                f"web: the model used its {web.max_uses} web tool calls without "
+                "a final answer; ask a narrower question or raise web_max_uses",
+                exit_code=proc.returncode,
+                provider_name=backend.command,
+                model_id=model,
+                tool_refused=True,
+            )
+            exhausted.web_exhausted = True  # 502 web_budget_exhausted
+            raise exhausted
 
     if proc.returncode != 0:
         # W004 (2026-05-13): Gemini CLI v0.41+ may exit != 0 due to

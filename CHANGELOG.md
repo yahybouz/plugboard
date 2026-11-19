@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Web access for the models, granted per key** (PLU-158): a request asks for the web (search and page fetch) with the `X-Plugboard-Web: 1` header or the body field `"plugboard": {"web": true}`. It is served only when the key holds `web_access` (off by default for every key; `403 web_not_allowed` otherwise) and a claude CLI route serves the model (`400 web_unavailable` otherwise: codex, agy, gemini, Ollama and the HTTP providers have no web here); a web request goes only to the claude CLI routes. The CLI then gets `--tools WebSearch,WebFetch` and the same `--allowedTools`, nothing else (permission mode `default`, strict MCP, no setting source; checked before the start), `--max-turns` = `web_max_uses` + 2, its own deadline (`PLUGBOARD_WEB_TIMEOUT_S`) and a helper model that is never Haiku (`PLUGBOARD_WEB_HELPER_MODEL`, default `claude-sonnet-5-5`). Every connection of a web run goes through an egress guard of the gateway (a CONNECT proxy on `127.0.0.1`) that tunnels only to public addresses, so `WebFetch` cannot reach the host, the other containers, the tailnet nor a metadata address. Web requests have their own cap, `PLUGBOARD_MAX_INFLIGHT_WEB` (default `2`, `429 web_busy` with `Retry-After: 10` beyond); a run that spends its calls without answering gets `502 web_budget_exhausted`. A web answer is never cached. Keys get `web_access` and `web_max_uses` (1–10, default 3; kept by a rotation), `PUT /admin/keys/{key_id}/web` switches them in place, the dashboard has a **Web** column on the API keys page, `GET /admin/web` and `/metrics` (`plugboard_web_*`) count the web requests, and the usage entries record `web` and `web_uses` (new columns, added on start), summed as `web_requests` and `web_uses` in the month's summaries. A request that does not ask for the web is served as before. Guide: `docs/guide/web-access.md`.
+
+**API contract**: **3.1.0** (minor): the optional `plugboard` field of a chat request, the optional `X-Plugboard-Web` header, `web_access` and `web_max_uses` in `GET /v1/me`, `web_requests` and `web_uses` in the usage summary, and the codes `web_bad_request`, `web_unavailable` (400), `web_not_allowed` (403), `web_busy` (429) and `web_budget_exhausted` (502). The MCP contract changes only its `contract_version`.
+
 ## [4.14.6] — 2026-11-17
 
 ### Changed

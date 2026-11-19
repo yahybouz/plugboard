@@ -428,6 +428,14 @@ def format_prometheus() -> str:
             f'model="{_label(model)}"}} {stats.busy_refusals}'
         )
 
+    # PLU-158: web requests (in progress, started, refused, tool calls).
+    try:
+        from plugboard.web_access import prometheus_lines as _web_lines
+
+        lines.extend(_web_lines())
+    except Exception:  # a scrape never fails for it
+        pass
+
     # PLU-67: the shared Claude quota, from real calls (data/claude_quota.json).
     try:
         from plugboard.claude_quota import prometheus_lines

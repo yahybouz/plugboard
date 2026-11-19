@@ -407,6 +407,12 @@ async function loadKeys() {
           : h("span", { className: "badge badge-red" }, "revoked")),
         h("td", null, k.monthly_limit_usd ? usd(k.monthly_limit_usd) : h("span", { className: "muted" }, "Unlimited")),
         h("td", null, k.rpm_limit ? k.rpm_limit + "/min" : h("span", { className: "muted" }, "—")),
+        // PLU-158: web access of the key, switched in place (no rotation).
+        h("td", null, h("button", {
+          className: "btn btn-sm" + (k.web_access === true ? " btn-primary" : ""),
+          title: k.web_access === true ? "Web on (max " + (k.web_max_uses || 3) + " uses per request): click to turn off" : "Web off: click to turn on",
+          onClick: function () { setKeyWeb(k.key_id, k.web_access !== true); },
+        }, k.web_access === true ? "on · " + (k.web_max_uses || 3) : "off")),
         h("td", null, k.created_at ? k.created_at.slice(0, 10) : "—"),
         h("td", null, h("div", { className: "btn-group" },
           k.is_active ? h("button", { className: "btn btn-sm", onClick: function () { revokeKey(k.key_id); } }, "Revoke") : null,
@@ -414,7 +420,7 @@ async function loadKeys() {
         )),
       );
     });
-    container.appendChild(table(["Client", "Label", "Key", "Status", "Limit", "RPM", "Created", "Actions"], rows));
+    container.appendChild(table(["Client", "Label", "Key", "Status", "Limit", "RPM", "Web", "Created", "Actions"], rows));
   } catch (e) { console.warn("keys load failed:", e); container.innerHTML = ""; container.appendChild(h("div", { className: "alert alert-error" }, "Failed to load keys.")); }
 }
 
@@ -422,6 +428,13 @@ async function revokeKey(keyId) {
   if (!await confirmAction("Revoke this key?")) return;
   await api("POST", "/admin/keys/" + keyId + "/revoke");
   toast("Key revoked", "success");
+  loadKeys();
+}
+async function setKeyWeb(keyId, on) {
+  if (!await confirmAction(on ? "Allow this key to use the web (search and page fetch)?" : "Turn web access off for this key?")) return;
+  const res = await api("PUT", "/admin/keys/" + keyId + "/web", { web_access: on });
+  if (!res.ok) { toast("Failed to change web access: " + await _errorDetail(res), "error"); return; }
+  toast(on ? "Web access on" : "Web access off", "success");
   loadKeys();
 }
 async function deleteKey(keyId) {

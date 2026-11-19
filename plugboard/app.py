@@ -76,7 +76,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 from contextlib import asynccontextmanager
 from contextlib import nullcontext as _nullcontext
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -87,6 +87,8 @@ from plugboard import envcompat
 from plugboard import netguard
 from plugboard import billing as _billing
 from plugboard import usage as _usage
+from plugboard import apikeys as _apikeys
+from plugboard import web_access as _web_access
 from plugboard.alerts import check_and_alert as _check_and_alert
 from plugboard.audit import count_audit_log, get_audit_log, log_action as _audit
 from plugboard.webhooks import emit_fire_and_forget as _webhook
@@ -150,9 +152,11 @@ from plugboard.router import (
     ProviderQuotaError,
     ProviderTimeoutError,
     UnsupportedOnCliError,
+    WebUnavailableError,
     chat_routes,
     cli_refusal,
     disabled_route,
+    web_refusal,
     discover_models,
     forward,
     forward_stream,
@@ -892,6 +896,7 @@ async def _inflight_chat_dep(request: Request):
                 await slot.take(wait_s)
         yield
     finally:
+        _web_finish(request)  # PLU-158: the web slot, after the last byte
         if slot is not None:
             slot.release()
         if budget is not None:
@@ -2559,6 +2564,101 @@ def _unsupported_on_cli_response(exc: UnsupportedOnCliError) -> JSONResponse:
     )
 
 
+# ── Web access (PLU-158) ─────────────────────────────────────────────────────
+
+
+def _web_refused(status_code: int, code: str, detail: str, **extra: Any):
+    content: Dict[str, Any] = {"detail": detail, "code": code, **extra}
+    headers = {}
+    if status_code == 429:
+        headers["Retry-After"] = str(_web_access.RETRY_AFTER_S)
+        content["retry_after"] = _web_access.RETRY_AFTER_S
+    return JSONResponse(status_code=status_code, content=content, headers=headers)
+
+
+def _web_unavailable_response(exc: "WebUnavailableError") -> JSONResponse:
+    """400 ``web_unavailable``: no claude CLI route serves the model."""
+    _web_access.count("refused_unavailable")
+    log.info("web refused: unavailable for provider=%s", exc.provider_id)
+    return _web_refused(
+        400,
+        _web_access.WEB_UNAVAILABLE,
+        f"{exc} (web is not available for this provider). Nothing was called.",
+        hint="Use a claude-code:... model, or send the request without web.",
+    )
+
+
+def _web_gate(
+    request: Request,
+    body: Dict[str, Any],
+    client_id: Optional[str],
+    key_record: Optional[Dict[str, Any]],
+) -> Optional[JSONResponse]:
+    """Decide the request's web access (PLU-158) and pop its extension.
+
+    No web asked: None, nothing changes. Asked: 400 for a malformed field,
+    403 ``web_not_allowed`` when the key does not hold the right (the admin
+    key never does), 400 ``web_unavailable`` when no claude CLI route serves
+    the model, 429 ``web_busy`` when the web slots are all taken; otherwise
+    the slot is held until the response is sent (_inflight_chat_dep) and the
+    request's policy is set for the router, the CLI and billing.
+    """
+    try:
+        asked = _web_access.requested(body, request.headers)
+    except _web_access.WebRequestError as exc:
+        return _web_refused(400, _web_access.WEB_BAD_REQUEST, str(exc))
+    if not asked:
+        # A context copied from an earlier web request never leaks into this one.
+        _web_access.activate(None)
+        return None
+    if not _apikeys.allows_web(key_record):
+        _web_access.count("refused_not_allowed")
+        log.info("web refused: key not allowed (client=%s)", client_id or "-")
+        return _web_refused(
+            403,
+            _web_access.WEB_NOT_ALLOWED,
+            "This API key is not allowed to use the web: ask the administrator "
+            "to turn web_access on for it. Nothing was called.",
+        )
+    refusal = web_refusal(body.get("model", ""))
+    if refusal is not None:
+        return _web_unavailable_response(refusal)
+    slot = _web_access.try_acquire()
+    if slot is None:
+        log.info("web refused: busy (client=%s)", client_id or "-")
+        return _web_refused(
+            429,
+            _web_access.WEB_BUSY,
+            f"Too many web requests in progress (limit "
+            f"{_web_access.MAX_INFLIGHT}): retry in "
+            f"{_web_access.RETRY_AFTER_S} s.",
+        )
+    request.state.web_slot = slot
+    request.state.web_t0 = time.perf_counter()
+    policy = _web_access.WebPolicy(max_uses=_apikeys.web_max_uses(key_record))
+    request.state.web_policy = policy
+    _web_access.activate(policy)
+    return None
+
+
+def _web_finish(request: Request) -> None:
+    """Give the web slot back and log the call, without its content."""
+    slot = getattr(request.state, "web_slot", None)
+    if slot is None:
+        return
+    policy = getattr(request.state, "web_policy", None)
+    t0 = getattr(request.state, "web_t0", None)
+    slot.release()
+    log.info(
+        "web call done: client=%s key=%s uses=%s max_uses=%s elapsed=%.1fs",
+        getattr(request.state, "client_id", None) or "-",
+        getattr(request.state, "key_id", "") or "-",
+        policy.uses if policy else "?",
+        policy.max_uses if policy else "?",
+        (time.perf_counter() - t0) if t0 else -1.0,
+    )
+
+
 # A whole answer asked as a stream is replayed by chat_billing (PLU-28).
 _replay_completion_as_sse = chat_billing.replay_as_sse
 
@@ -2581,6 +2681,8 @@ def _chat_error_response(
         return _provider_disabled_response(exc.provider_id)
     if isinstance(exc, UnsupportedOnCliError):
         return _unsupported_on_cli_response(exc)
+    if isinstance(exc, WebUnavailableError):
+        return _web_unavailable_response(exc)
     if isinstance(exc, ModelNotServedError):
         return _model_not_served_response()  # nothing was started (BUG-120)
     # Before the timeout test: a CLI message quotes its stderr.
@@ -2727,6 +2829,8 @@ def _cli_error_response(
                 f"{exc.model_id!r}: pick another model from GET /v1/models "
                 f"(reference {ref} in the gateway log)."
             )
+        elif getattr(exc, "web_exhausted", False):
+            detail = str(exc)  # written by cli_subprocess: no secret
         else:
             detail = f"The {name} provider failed (reference {ref} in the gateway log)."
         content = {
@@ -2735,6 +2839,9 @@ def _cli_error_response(
             "provider_name": exc.provider_name,
             "model_id": exc.model_id,
         }
+    if getattr(exc, "web_exhausted", False) and not quota:
+        content["code"] = "web_budget_exhausted"
+        return JSONResponse(status_code=502, content=content)
     if sandbox:
         # No Retry-After: a missing or refused sandbox does not come back by
         # itself.
@@ -3044,6 +3151,13 @@ async def chat_completions(
     if refusal is not None:
         return _unsupported_on_cli_response(refusal)
 
+    # PLU-158: web asked for -> the key's right (403), a claude route (400),
+    # a web slot (429); nothing counted when refused. Not asked: unchanged.
+    web_refused = _web_gate(request, body, client_id, key_record)
+    if web_refused is not None:
+        return web_refused
+    _web_on = _web_access.current() is not None
+
     # A budget cannot hold a call whose price is unknown (402, nothing called)
     if client_id and client_id != "admin":
         _check_price_known(client_id, body.get("model", ""), key_record=key_record)
@@ -3078,7 +3192,8 @@ async def chat_completions(
     _is_streaming = body.get("stream") is True
     # Historical cache entries do not bind the effective serving identity.
     # Restricted keys must not reuse responses from another route or policy.
-    _use_cache = _cache_enabled and route_guard is None
+    # A web answer depends on the live web: never read nor written (PLU-158).
+    _use_cache = _cache_enabled and route_guard is None and not _web_on
     _cache_key = None
     if _use_cache:
         from plugboard.cache import compute_cache_key, get_cached, key_params
@@ -3986,6 +4101,12 @@ async def inflight_admin():
     return _live.snapshot(admin=True)
 
 
+@app.get("/admin/web", dependencies=[Depends(_require_admin)])
+async def web_admin():
+    """PLU-158: web requests in progress, the limit, started, refused, tool calls."""
+    return _web_access.stats()
+
+
 @app.get("/usage/me")
 async def usage_me(
     month: Optional[str] = None,
@@ -4024,6 +4145,8 @@ async def client_info(
         info["allowed_models"] = key_record.get("allowed_models", [])
         info["rpm_limit"] = key_record.get("rpm_limit", 0)
         info["org_id"] = key_record.get("org_id", "")
+        info["web_access"] = _apikeys.allows_web(key_record)
+        info["web_max_uses"] = _apikeys.web_max_uses(key_record)
     else:
         for k in load_keys():
             if k.get("client_id") == client_id:
@@ -6136,6 +6259,14 @@ class KeyCreate(BaseModel):
     ] = None
     rpm_limit: Optional[int] = None  # calls to a model per minute (BUG-124)
     org_id: str = ""  # organisation (empty = no org)
+    # PLU-158: web search and fetch, a JSON boolean only, off by default.
+    web_access: StrictBool = False
+    web_max_uses: int = Field(
+        default=_apikeys.WEB_MAX_USES_DEFAULT,
+        ge=1,
+        le=_apikeys.WEB_MAX_USES_CEILING,
+        strict=True,
+    )
 
     @field_validator("client_id")
     @classmethod
@@ -6261,6 +6392,8 @@ async def create_api_key(body: KeyCreate, _: None = Depends(_require_admin)):
         rpm_limit=rpm,
         org_id=body.org_id,
         allowed_decision_models=body.allowed_decision_models,
+        web_access=body.web_access,
+        web_max_uses=body.web_max_uses,
     )
     _audit(
         "key.create",
@@ -6295,6 +6428,44 @@ async def delete_api_key(key_id: str, _: None = Depends(_require_admin)):
     if not delete_key(key_id):
         raise HTTPException(404, f"Key '{key_id}' not found")
     _audit("key.delete", target_type="key", target_id=key_id)
+
+
+class KeyWebPolicy(BaseModel):
+    """PLU-158: a key's web right, changed in place (the key stays the same)."""
+
+    web_access: StrictBool
+    web_max_uses: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=_apikeys.WEB_MAX_USES_CEILING,
+        strict=True,
+        description="Web tool calls per request (1..10); unchanged when absent.",
+    )
+
+
+@app.put("/admin/keys/{key_id}/web")
+async def set_api_key_web(
+    key_id: str, body: KeyWebPolicy, _: None = Depends(_require_admin)
+):
+    """Turn a key's web access on or off without recreating it (PLU-158)."""
+    try:
+        rec = await _asyncio.to_thread(
+            _apikeys.set_web_policy, key_id, body.web_access, body.web_max_uses
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    if rec is None:
+        raise HTTPException(404, f"Key '{key_id}' not found")
+    _audit(
+        "key.web",
+        target_type="key",
+        target_id=key_id,
+        details=(
+            f"web_access={rec.get('web_access') is True}, "
+            f"web_max_uses={rec.get('web_max_uses')}"
+        ),
+    )
+    return _admin_key_view(rec)
 
 
 @app.post("/admin/keys/{key_id}/rotate", status_code=201)

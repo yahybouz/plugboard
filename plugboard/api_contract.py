@@ -41,7 +41,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "3.0.1"
+CONTRACT_VERSION = "3.1.0"
 _JSON = "application/json"
 
 
@@ -153,6 +153,27 @@ class ChatCompletionRequest(_Open):
         description=(
             "Plugboard: the gateway keeps the conversation and prepends it, so "
             "only the new turn is sent. Same as the X-LLM-Session-ID header."
+        ),
+    )
+    plugboard: Optional[PlugboardExtension] = Field(
+        default=None,
+        description="Plugboard options (since contract 3.1.0): web access.",
+    )
+
+
+class PlugboardExtension(BaseModel):
+    """Plugboard's own request options, removed before the provider is called."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    web: bool = Field(
+        default=False,
+        description=(
+            "true asks for web access (search and page fetch), like the "
+            "X-Plugboard-Web: 1 header. Served only when the key holds "
+            "web_access (else 403 web_not_allowed) and a claude CLI route "
+            "serves the model (else 400 web_unavailable); 429 web_busy when "
+            "the web requests in progress are at their limit. Never cached."
         ),
     )
 
@@ -459,6 +480,10 @@ class UsageSummary(_Open):
     total_completion_tokens: int = 0
     total_tokens: int = 0
     total_cost_usd: float = 0.0
+    web_requests: int = Field(default=0, description="Calls served with web access.")
+    web_uses: int = Field(
+        default=0, description="Their web tool calls (search, fetch)."
+    )
     by_model: Dict[str, Any] = {}
 
 
@@ -483,6 +508,13 @@ class ClientInfo(_Open):
         ),
     )
     org_id: Optional[str] = None
+    web_access: Optional[bool] = Field(
+        default=None,
+        description="The key may ask for web access (search and page fetch).",
+    )
+    web_max_uses: Optional[int] = Field(
+        default=None, description="Web tool calls one request may make (1..10)."
+    )
     current_month: Optional[str] = None
     usage: Optional[UsageSummary] = None
     remaining_usd: Optional[float] = Field(
@@ -713,7 +745,9 @@ _CHAT_ERRORS = {
     "429": "Rate limit or monthly spending limit exceeded, or this call's estimated"
     " cost does not fit in what the budget has left once the calls in progress are"
     " counted (nothing was called), or the quota of the last provider tried is"
-    " exhausted (code quota_exhausted; retry_after and Retry-After when it gives a delay).",
+    " exhausted (code quota_exhausted; retry_after and Retry-After when it gives a delay),"
+    " or the web requests in progress are at their limit (code web_busy,"
+    " retry_after and Retry-After 10; nothing was called).",
     "400": "Invalid request; nothing was billed."
     " code unsupported_on_cli: only CLI subscription routes (subprocess"
     " providers) serve the model and the request asks for what they cannot serve:"
@@ -736,11 +770,17 @@ _CHAT_ERRORS = {
     " /v1/decisions), or a request an HTTP provider rejected (context too long,"
     " parameters; error_ref): after the other candidates were tried, whether"
     " the request asked for a stream or not (PLU-26), or at once when the"
-    " stream had already begun.",
+    " stream had already begun."
+    " code web_unavailable: web access was asked (X-Plugboard-Web: 1 or"
+    " plugboard.web) and no claude CLI route serves the model; code"
+    " web_bad_request: the header or the plugboard field is malformed;"
+    " nothing was called.",
     "402": "The key has a monthly budget and the model no known price; nothing was called.",
     "403": "The key may not use this model (code forbidden_model); or the provider's own credentials"
     " could not be used on the last provider tried (a Copilot licence missing,"
-    " for example): error_ref, nothing was called on that provider.",
+    " for example): error_ref, nothing was called on that provider."
+    " code web_not_allowed: web access was asked and the key does not hold"
+    " web_access; nothing was called.",
     "404": "No provider knows the model: no provider ID prefixes it, no provider"
     " lists it, and every active provider has a model list. Or the model ID"
     " selects CLI subscription routes only (claude, codex, gemini, agy) and"
@@ -751,7 +791,9 @@ _CHAT_ERRORS = {
     " for every caller, the admin key included, and the detail is generic."
     " code is model_not_found, hint says what to send; nothing was called.",
     "413": "Request body larger than MAX_BODY_BYTES (10 MB by default).",
-    "502": "The provider failed or answered with an error.",
+    "502": "The provider failed or answered with an error; code"
+    " web_budget_exhausted: a web request used its web tool calls without a"
+    " final answer.",
     "503": "Provider timeout (code provider_timeout, retry_after), the agy provider's sandbox"
     " unable to start, agy not run (code provider_sandbox_unavailable, no Retry-After),"
     " the global cap of concurrent chat"
@@ -893,6 +935,19 @@ def _parameters(path: str) -> List[Dict[str, Any]]:
                 "required": True,
                 "description": "May contain slashes and colons.",
                 "schema": {"type": "string"},
+            }
+        ]
+    if path.endswith("/chat/completions"):
+        return [
+            {
+                "name": "X-Plugboard-Web",
+                "in": "header",
+                "required": False,
+                "description": (
+                    "1 asks for web access (search and page fetch), like "
+                    "plugboard.web in the body (since contract 3.1.0)."
+                ),
+                "schema": {"type": "string", "enum": ["0", "1"]},
             }
         ]
     if path == "/usage/me":
