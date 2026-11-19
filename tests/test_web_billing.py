@@ -655,3 +655,82 @@ async def test_exhausted_run_is_billed_when_a_cut_stream_billing_fails(
     assert "Le prix est" in resp.text
     assert two_routes.runs == 1
     _billed_once_on_a(budget_key)
+
+
+# ── 8. the rare exits bill the spent runs too (PLU-171, review I5) ──────────
+#
+# forward() raises no HTTPException today and an empty stream after a run
+# is rare; a run already kept on the request's web policy is billed on
+# these exits all the same, never dropped.
+
+_SPENT = {
+    "prompt_tokens": PROMPT,
+    "completion_tokens": COMPLETION,
+    "total_tokens": PROMPT + COMPLETION,
+}
+
+
+def _keep_spent_run() -> None:
+    """What the router does for a run stopped by its turns (_mark_web_run)."""
+    policy = web_access.current()
+    assert policy is not None, "a web request"
+    policy.exhausted.append(
+        web_access.ExhaustedRun(
+            provider=CLI, real_model="model-x", usage=dict(_SPENT), uses=2
+        )
+    )
+
+
+def _billed_once(key) -> None:
+    row = _only_row(key)
+    assert row["provider_id"] == CLI["id"]
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (PROMPT, COMPLETION)
+    assert (row["web"], row["web_uses"]) == (1, 2)
+    cost = _cost(PROMPT, COMPLETION)
+    assert row["cost_usd"] == pytest.approx(cost)
+    assert usage.get_held_cost(MONTH, key_id=key["key_id"]) == 0.0
+    assert usage.get_committed_cost(MONTH, key_id=key["key_id"]) == pytest.approx(cost)
+
+
+@pytest.mark.parametrize("path", ["plain", "stream", "stream_whole"])
+async def test_spent_run_is_billed_when_the_call_raises_an_http_error(
+    client, budget_key, claude, monkeypatch, path
+):
+    from fastapi import HTTPException
+
+    import plugboard.app as app_module
+
+    async def forward(body, *args, **kwargs):
+        _keep_spent_run()
+        raise HTTPException(status_code=503, detail="refused")
+
+    async def forward_stream(body, *args, **kwargs):
+        _keep_spent_run()
+        raise HTTPException(status_code=503, detail="refused")
+        yield b""  # pragma: no cover - an async generator
+
+    monkeypatch.setattr(app_module, "forward", forward)
+    monkeypatch.setattr(app_module, "forward_stream", forward_stream)
+    if path == "stream_whole":
+        # The CLI run whole for a stream (a CLI that cannot stream).
+        monkeypatch.setattr(cli_subprocess, "can_stream", lambda kind: False)
+    resp = await _chat(client, budget_key, stream=path != "plain")
+    assert resp.status_code == 503, resp.text
+    _billed_once(budget_key)
+
+
+async def test_spent_run_is_billed_when_the_stream_is_empty(
+    client, budget_key, claude, monkeypatch
+):
+    import plugboard.app as app_module
+
+    async def forward_stream(body, *args, **kwargs):
+        _keep_spent_run()
+        return
+        yield b""  # pragma: no cover - an async generator
+
+    monkeypatch.setattr(app_module, "forward_stream", forward_stream)
+    resp = await _chat(client, budget_key, stream=True)
+    assert resp.status_code == 200, resp.text
+    assert resp.text == ""
+    _billed_once(budget_key)

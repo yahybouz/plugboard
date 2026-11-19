@@ -386,7 +386,8 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         async def bill_web_runs() -> None:
             """Bill the web runs that spent their turns without answering
             (BUG-159) when the request ends without an answer: an error, any
-            route's, or a client gone. The answer is unchanged."""
+            route's (an HTTPException included), an empty stream (PLU-171),
+            or a client gone. The answer is unchanged."""
             policy = _web_access.current()
             if policy is not None and policy.exhausted:
                 await core._charge_answer(
@@ -594,6 +595,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                 except _ClientGone:
                     return await gone()
                 except HTTPException:
+                    await bill_web_runs()  # PLU-171: never dropped
                     raise
                 except Exception as exc:
                     return await failed(exc, "subprocess stream")
@@ -675,12 +677,14 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                 await core._aclose_quietly(gen)
                 return await gone()
             except StopAsyncIteration:
+                await bill_web_runs()  # PLU-171: an empty stream, runs billed
                 return StreamingResponse(
                     iter([]),
                     media_type="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
                 )
             except HTTPException:
+                await bill_web_runs()  # PLU-171: never dropped
                 raise
             except Exception as exc:
                 return await failed(exc, "stream")
@@ -924,6 +928,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         except _ClientGone:
             return await gone()
         except HTTPException:
+            await bill_web_runs()  # PLU-171: never dropped
             raise
         except Exception as exc:
             return await failed(exc, "forward")

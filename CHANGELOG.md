@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 
 - **A web run that spent its turns is final** (BUG-160): a web run stopped by its turns without a final answer (`502 web_budget_exhausted`) no longer hands the request over to the next claude route, which ran the same search again and billed it a second time. The run is billed once, at the price of the route that ran it, and that route is not counted as failing (no circuit, no error metric, no `provider_down` alert); streamed or not ([what a web request costs](docs/guide/web-access.md#what-a-web-request-costs)).
+- **A spent web run is billed on every exit** (PLU-171): a web run stopped by its turns is billed too when the request ends on an HTTP error raised by the gateway or on an empty stream, the two exits that did not bill it yet; the answer is unchanged.
 
 ## [4.15.1] — 2026-11-19
 
