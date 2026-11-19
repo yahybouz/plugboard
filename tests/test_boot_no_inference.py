@@ -228,7 +228,13 @@ def boot(tmp_path, monkeypatch, agy_without_cage):  # fake spawn, see conftest
 
     monkeypatch.setattr("plugboard.change_events.drain", _noop)
     monkeypatch.setattr("plugboard.http_pool.close_session", _noop)
-    return state
+    # The lifespan stores its schedulers on the shared app's state, the stub
+    # pricing scheduler among them: put the state back as it was, so a later
+    # test (GET /admin/jobs) never reads them (PLU-165).
+    saved = dict(app_module.app.state._state)
+    yield state
+    app_module.app.state._state.clear()
+    app_module.app.state._state.update(saved)
 
 
 async def _run_boot(state: _Boot) -> Dict[str, Any]:
