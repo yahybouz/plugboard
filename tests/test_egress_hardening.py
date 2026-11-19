@@ -16,6 +16,8 @@ import time
 import pytest
 
 from plugboard import web_egress
+from tests.tls_helpers import build_client_hello, sni_extension
+from tests.tls_helpers import client_hello as _client_hello
 
 
 async def _send(port: int, data: bytes, wait: float = 5) -> bytes:
@@ -266,21 +268,6 @@ def test_the_log_escapes_what_it_names():
 # ── PLU-171 (I2): agy's tunnel carries the TLS name its CONNECT asked ────────
 
 
-def _client_hello(server_name) -> bytes:
-    """The first TLS record a client sends to ``server_name`` (no network:
-    a memory BIO)."""
-    import ssl
-
-    ctx = ssl.create_default_context()
-    if server_name is None:
-        ctx.check_hostname = False
-    incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
-    tls = ctx.wrap_bio(incoming, outgoing, server_hostname=server_name)
-    with pytest.raises(ssl.SSLWantReadError):
-        tls.do_handshake()
-    return outgoing.read()
-
-
 def test_client_hello_sni_reads_the_server_name():
     hello = _client_hello("oauth2.googleapis.com")
     assert web_egress.client_hello_sni(hello) == "oauth2.googleapis.com"
@@ -291,15 +278,34 @@ def test_client_hello_sni_reads_the_server_name():
 
 
 def test_client_hello_without_a_name_has_no_sni():
-    import ssl
+    assert web_egress.client_hello_sni(_client_hello(None)) is None
 
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    incoming, outgoing = ssl.MemoryBIO(), ssl.MemoryBIO()
-    tls = ctx.wrap_bio(incoming, outgoing)
-    with pytest.raises(ssl.SSLWantReadError):
-        tls.do_handshake()
-    assert web_egress.client_hello_sni(outgoing.read()) is None
+
+def test_a_well_formed_built_client_hello_is_read():
+    hello = build_client_hello([sni_extension(["www.googleapis.com"])])
+    assert web_egress.client_hello_sni(hello) == "www.googleapis.com"
+
+
+@pytest.mark.parametrize(
+    "extensions",
+    [
+        # Two server_name extensions: which one the server reads is its call.
+        [
+            sni_extension(["www.googleapis.com"]),
+            sni_extension(["storage.googleapis.com"]),
+        ],
+        # One extension, two names in its list.
+        [sni_extension(["www.googleapis.com", "storage.googleapis.com"])],
+        # Bytes left after the list.
+        [sni_extension(["www.googleapis.com"], trailing=b"\x00\x00\x03abc")],
+        # Encrypted ClientHello: the outer name is not the one served.
+        [sni_extension(["www.googleapis.com"]), (0xFE0D, b"\x00" * 16)],
+        [(0xFE0D, b"\x00" * 16), sni_extension(["www.googleapis.com"])],
+    ],
+    ids=["two-extensions", "two-names", "trailing-bytes", "ech-after", "ech-before"],
+)
+def test_ambiguous_or_encrypted_client_hellos_have_no_sni(extensions):
+    assert web_egress.client_hello_sni(build_client_hello(extensions)) is None
 
 
 async def _recording_upstream():
@@ -414,3 +420,94 @@ async def test_web_tunnels_never_read_the_client_hello(guard, fake_dns, monkeypa
     finally:
         upstream.close()
         await upstream.wait_closed()
+
+
+async def test_a_big_client_hello_in_many_segments_is_accepted(
+    agy_egress_path, fake_dns, monkeypatch
+):
+    """A ClientHello of about 1.8 KB (post-quantum key shares) reaching the
+    egress in small TCP segments is read whole and passed on."""
+    upstream, up_port, got = await _recording_upstream()
+    fake_dns["cloudcode-pa.googleapis.com"] = ["127.0.0.1"]
+    monkeypatch.setattr(web_egress.netguard, "ip_is_public", lambda _ip: True)
+    monkeypatch.setattr(web_egress, "_TLS_PORT", up_port)
+    hello = _client_hello("cloudcode-pa.googleapis.com", alpn=["p" * 200] * 7)
+    assert 1700 <= len(hello) <= 2000, len(hello)
+    try:
+        reader, writer = await asyncio.open_unix_connection(agy_egress_path)
+        writer.write(
+            f"CONNECT cloudcode-pa.googleapis.com:{up_port} HTTP/1.1\r\n\r\n".encode()
+        )
+        await writer.drain()
+        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+        assert head.startswith(b"HTTP/1.1 200"), head
+        for i in range(0, len(hello), 97):
+            writer.write(hello[i : i + 97])
+            await writer.drain()
+            await asyncio.sleep(0.005)
+        assert await asyncio.wait_for(reader.read(10), 5) == b"ok"
+        writer.close()
+        assert bytes(got) == hello
+    finally:
+        upstream.close()
+        await upstream.wait_closed()
+
+
+async def test_a_cancelled_sni_check_leaves_no_transport_open(
+    tmp_path, fake_dns, monkeypatch
+):
+    """agy's call ends while the egress waits for the ClientHello: the
+    upstream connection is closed, not left to the loop."""
+    from plugboard import agy_egress
+
+    closed = asyncio.Event()
+
+    async def upstream_handler(reader, writer):
+        await reader.read()  # until EOF
+        closed.set()
+        writer.close()
+
+    upstream = await asyncio.start_server(upstream_handler, "127.0.0.1", 0)
+    up_port = upstream.sockets[0].getsockname()[1]
+    fake_dns["oauth2.googleapis.com"] = ["127.0.0.1"]
+    monkeypatch.setattr(web_egress.netguard, "ip_is_public", lambda _ip: True)
+    monkeypatch.setattr(web_egress, "_TLS_PORT", up_port)
+    egress = await agy_egress.start(str(tmp_path / "e.sock"))
+    try:
+        reader, writer = await asyncio.open_unix_connection(egress.path)
+        writer.write(
+            f"CONNECT oauth2.googleapis.com:{up_port} HTTP/1.1\r\n\r\n".encode()
+        )
+        await writer.drain()
+        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+        assert head.startswith(b"HTTP/1.1 200"), head
+        await asyncio.sleep(0.05)  # the egress now waits for the ClientHello
+        await egress.close()  # cancels the connection's task
+        await asyncio.wait_for(closed.wait(), 2)
+        writer.close()
+    finally:
+        upstream.close()
+        await upstream.wait_closed()
+
+
+def test_stop_from_another_loop_cancels_the_sweeper(monkeypatch):
+    """stop() run by another loop than the one the sweeper runs in still
+    cancels it (thread-safely); a sweeper of a closed loop is let go."""
+    other = asyncio.new_event_loop()
+    try:
+        task = other.create_task(asyncio.sleep(3600))
+        other.run_until_complete(asyncio.sleep(0))
+        monkeypatch.setattr(web_egress, "_sweeper", task)
+        monkeypatch.setattr(web_egress, "_server", None)
+        asyncio.run(web_egress.stop())
+        other.run_until_complete(asyncio.sleep(0))
+        assert task.cancelled()
+        assert web_egress._sweeper is None
+        # A sweeper whose loop is closed: nothing left to cancel, no error.
+        dead = other.create_task(asyncio.sleep(3600))
+        other.run_until_complete(asyncio.sleep(0))
+    finally:
+        other.close()
+    monkeypatch.setattr(web_egress, "_sweeper", dead)
+    asyncio.run(web_egress.stop())
+    assert web_egress._sweeper is None

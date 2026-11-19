@@ -32,7 +32,7 @@ import pytest
 
 from plugboard import agy_cage, agy_egress, netguard, web_egress
 from plugboard import cli_subprocess as cs
-from tests.test_egress_hardening import _client_hello
+from tests.tls_helpers import client_hello as _client_hello
 from tests.test_agy_cage import (  # noqa: F401 - pytest fixtures
     _BODY,
     _SHELL_RO,

@@ -290,9 +290,15 @@ def _u(data: bytes, start: int, size: int) -> int:
     return int.from_bytes(data[start : start + size], "big")
 
 
+_EXT_SERVER_NAME = 0x0000
+_EXT_ECH = 0xFE0D  # encrypted_client_hello: the outer name is not the one served
+
+
 def client_hello_sni(record: bytes) -> Optional[str]:
     """The server name (SNI) of a TLS record holding a whole ClientHello;
-    None when it is not one, is cut, or names no server."""
+    None when it is not one, is cut, names no server, or is ambiguous: more
+    than one server_name extension or name, bytes left after the name list,
+    or an encrypted ClientHello (ECH)."""
     try:
         if _u(record, 0, 1) != 0x16 or _u(record, 3, 2) != len(record) - 5:
             return None
@@ -307,18 +313,23 @@ def client_hello_sni(record: bytes) -> Optional[str]:
         i += 1 + _u(hello, i, 1)  # compression methods
         end = i + 2 + _u(hello, i, 2)
         i += 2
-        while i + 4 <= end:
+        if end != len(hello):
+            return None
+        name: Optional[str] = None
+        while i < end:
             kind, size = _u(hello, i, 2), _u(hello, i + 2, 2)
             ext = hello[i + 4 : i + 4 + size]
             i += 4 + size
-            if kind == 0:  # server_name: list length, type 0 (host), name
-                if _u(ext, 2, 1) != 0:
+            if len(ext) != size or kind == _EXT_ECH:
+                return None
+            if kind == _EXT_SERVER_NAME:
+                # One list holding one entry, type 0 (host), and nothing after.
+                if name is not None or _u(ext, 0, 2) != size - 2:
                     return None
-                name = ext[5 : 5 + _u(ext, 3, 2)]
-                if len(name) != _u(ext, 3, 2):
+                if _u(ext, 2, 1) != 0 or 3 + _u(ext, 3, 2) != size - 2:
                     return None
-                return name.decode("ascii")
-        return None
+                name = ext[5:].decode("ascii")
+        return name
     except (IndexError, UnicodeDecodeError):
         return None
 
@@ -485,16 +496,16 @@ async def serve_connect(
         writer.close()  # the client left before the 200
         up_writer.close()
         return True
-    if match_sni:
-        record = await _same_tls_name(reader, host)
-        if record is None:
-            refusals.refused(host, port, " sent another TLS name (or none)")
-            writer.close()
-            up_writer.close()
-            return False
-        up_writer.write(record)
     limit = tunnel_max_seconds()
     try:
+        # Inside the try: a call cancelled while the ClientHello is awaited
+        # still closes both ends.
+        if match_sni:
+            record = await _same_tls_name(reader, host)
+            if record is None:
+                refusals.refused(host, port, " sent another TLS name (or none)")
+                return False
+            up_writer.write(record)
         await asyncio.wait_for(
             asyncio.gather(_pipe(reader, up_writer), _pipe(up_reader, writer)),
             limit,
@@ -549,10 +560,15 @@ async def ensure_started() -> int:
 async def stop() -> None:
     global _server, _port, _dns_pool, _sweeper
     if _sweeper is not None:
-        if _sweeper.get_loop() is asyncio.get_running_loop():
+        home = _sweeper.get_loop()
+        if home is asyncio.get_running_loop():
             _sweeper.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await _sweeper
+        elif not home.is_closed():
+            # Another loop (tests, another thread): cancelled there, safely.
+            home.call_soon_threadsafe(_sweeper.cancel)
+        # A closed loop never runs its tasks again: nothing left to cancel.
         _sweeper = None
     if _server is not None:
         _server.close()

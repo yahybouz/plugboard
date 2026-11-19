@@ -31,7 +31,9 @@ to Google remains):
   ClientHello, whose server name (SNI) must be the host of the ``CONNECT``
   (any case, a final dot ignored), else the tunnel is closed before a byte
   goes upstream (PLU-171): no fronting by SNI, no ClientHello without a
-  name, nor one spread over several records. The ``Host`` inside stays
+  name, nor one spread over several records, nor an ambiguous one (two
+  names, bytes after the name list), nor an encrypted one (ECH, whose
+  outer name is not the one served). The ``Host`` inside stays
   unseen and may name another Google service than the ``CONNECT`` did,
   Google's front ends serving many names on the same addresses.
 
