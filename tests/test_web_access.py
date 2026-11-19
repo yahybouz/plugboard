@@ -327,6 +327,21 @@ def test_tool_uses_and_max_turns_are_read_from_stream_json():
     assert web_access.count_tool_uses(out, policy) == 2
     assert policy.tools_seen == ["WebSearch", "WebFetch"]
     assert web_access.max_turns_reached(out)
+    result = json.dumps(
+        {
+            "type": "result",
+            "subtype": "success",
+            "modelUsage": {"claude-sonnet-5-5": {}, "claude-opus-5-5": {}},
+        }
+    )
+    assert web_access.models_used(result, policy) == [
+        "claude-opus-5-5",
+        "claude-sonnet-5-5",
+    ]
+    before = web_access.stats()["helper_haiku"]
+    haiku = result.replace("claude-sonnet-5-5", "claude-haiku-5-5")
+    assert "claude-haiku-5-5" in web_access.models_used(haiku, policy)
+    assert web_access.stats()["helper_haiku"] == before + 1
     assert not web_access.max_turns_reached('{"type":"result","subtype":"success"}')
 
 

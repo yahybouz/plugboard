@@ -132,8 +132,10 @@ other. A refused request costs nothing.
   `plugboard_web_refused_not_allowed_total`, `plugboard_web_refused_unavailable_total`,
   `plugboard_web_refused_busy_total`, `plugboard_web_egress_tunnels_total`,
   `plugboard_web_egress_refused_total`.
-- The gateway log has one line per web call (client, key id, tool calls,
-  duration), never its content.
+- The gateway log has one line per web run (model, tool calls, and the models
+  the CLI reports in its result, helper included: a Haiku there is a warning
+  and counts in `helper_haiku` of `GET /admin/web`) and one per web call
+  (client, key id, tool calls, duration), never their content.
 
 ## Settings
 

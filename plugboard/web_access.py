@@ -78,6 +78,8 @@ class WebPolicy:
     max_uses: int
     uses: int = 0
     tools_seen: List[str] = field(default_factory=list)
+    # Models the CLI reported in its result (``modelUsage``): names only.
+    models: List[str] = field(default_factory=list)
 
     @property
     def max_turns(self) -> int:
@@ -150,6 +152,7 @@ _stats: Dict[str, int] = {
     "refused_busy": 0,
     "tool_uses": 0,
     "errors": 0,
+    "helper_haiku": 0,
 }
 
 
@@ -343,6 +346,30 @@ def count_tool_uses(stdout_text: str, policy: WebPolicy) -> int:
     if n:
         count("tool_uses", n)
     return n
+
+
+def models_used(stdout_text: str, policy: WebPolicy) -> List[str]:
+    """The models claude reports in its result event (``modelUsage`` keys),
+    helper calls included, so the log shows that no Haiku served the run.
+    A Haiku there is counted (``helper_haiku``) and logged as a warning."""
+    names: List[str] = []
+    for line in reversed(stdout_text.splitlines()):
+        if '"modelUsage"' not in line:
+            continue
+        try:
+            evt = json.loads(line)
+        except ValueError:
+            continue
+        usage = evt.get("modelUsage") if isinstance(evt, dict) else None
+        if evt.get("type") == "result" and isinstance(usage, dict):
+            names = sorted(str(name)[:60] for name in usage)
+            break
+    policy.models = names
+    haiku = [name for name in names if "haiku" in name.lower()]
+    if haiku:
+        count("helper_haiku")
+        log.warning("web run used a Haiku model: %s", ",".join(haiku))
+    return names
 
 
 def max_turns_reached(stdout_text: str) -> bool:

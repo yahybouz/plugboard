@@ -2338,6 +2338,13 @@ async def complete(
     rate_limited = kind == "claude" and _claude_rate_limited(stdout_text)
     if web is not None:
         web_access.count_tool_uses(stdout_text, web)
+        log.info(
+            "web run: model=%s uses=%d tools=%s models_used=%s",
+            model,
+            web.uses,
+            ",".join(web.tools_seen) or "-",
+            ",".join(web_access.models_used(stdout_text, web)) or "-",
+        )
         if web_access.max_turns_reached(stdout_text):
             # The model spent its turns on the web without answering: the
             # request's limit, not the route's fault (no circuit, no alert).
