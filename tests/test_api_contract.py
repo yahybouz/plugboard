@@ -345,3 +345,40 @@ def test_committed_contract_names_the_provider_credentials_401_and_403():
             text = responses[status]["description"]
             assert "provider's own credentials" in text, (path, status)
             assert "error_ref" in text, (path, status)
+
+
+def test_committed_contract_states_the_tools_emulated_on_cli_routes():
+    """ADR-039 (contract 3.1.0): tools may be emulated as text on CLI routes
+    for a key the admin allowed, when the instance option is on; an answer
+    off the protocol is a 502 cli_tool_call_invalid, not to be retried."""
+    assert api_contract.CONTRACT_VERSION == "3.1.0"
+    doc = json.loads((ROOT / "docs" / "api" / "openapi.json").read_text("utf-8"))
+    assert doc["info"]["version"] == "3.1.0"
+    schemas = doc["components"]["schemas"]
+    fields = schemas["ChatCompletionRequest"]["properties"]
+    assert "parallel_tool_calls" in fields
+    for name in ("tools", "tool_choice", "parallel_tool_calls"):
+        description = fields[name].get("description", "")
+        assert "PLUGBOARD_CLI_TOOLS_EMULATION" in description, name
+        assert "allow_cli_tools" in description, name
+    code = schemas["ErrorResponse"]["properties"]["code"]["description"]
+    assert "cli_tool_call_invalid" in code
+    for path in ("/v1/chat/completions", "/v2/chat/completions"):
+        bad_gateway = doc["paths"][path]["post"]["responses"]["502"]["description"]
+        assert "cli_tool_call_invalid" in bad_gateway, path
+        assert "x-should-retry: false" in bad_gateway, path
+    mcp = json.loads((ROOT / "docs" / "api" / "mcp.json").read_text("utf-8"))
+    assert mcp["contract_version"] == "3.1.0"
+
+
+def test_the_contract_version_is_the_same_everywhere():
+    """D-81: the code, both committed documents and the unreleased CHANGELOG
+    section name one contract version."""
+    version = api_contract.CONTRACT_VERSION
+    doc = json.loads((ROOT / "docs" / "api" / "openapi.json").read_text("utf-8"))
+    mcp = json.loads((ROOT / "docs" / "api" / "mcp.json").read_text("utf-8"))
+    assert doc["info"]["version"] == version
+    assert mcp["contract_version"] == version
+    changelog = (ROOT / "CHANGELOG.md").read_text("utf-8")
+    unreleased = changelog.split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
+    assert f"contract {version}" in unreleased

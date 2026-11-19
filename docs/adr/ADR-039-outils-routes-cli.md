@@ -2,7 +2,7 @@
 
 ## Statut
 
-Proposé (19/11/2026). Décision de principe D-77 ; cette note en fixe la conception.
+Accepté (19/11/2026, D-79). Décision de principe D-77 ; cette note en fixe la conception.
 
 ## 1. Contexte et décision
 
