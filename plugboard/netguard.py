@@ -41,11 +41,15 @@ _NAT64_LOCAL = ipaddress.ip_network("64:ff9b:1::/48")
 # IPv6 ranges refused whole (PLU-161): IPv4-compatible (::/96, deprecated),
 # IPv4-translated (SIIT, ::ffff:0:0:0/96) and site-local (fec0::/10,
 # deprecated). Python reads some of them as global; a stack or a translator
-# may still route them inside.
+# may still route them inside. Also refused (PLU-171): SRv6 SIDs
+# (5f00::/16, RFC 9602) and documentation (3fff::/20, RFC 9637), which the
+# IANA registry marks not globally reachable but Python 3.12 reads as global.
 _V6_REFUSED = (
     ipaddress.ip_network("::/96"),
     ipaddress.ip_network("::ffff:0:0:0/96"),
     ipaddress.ip_network("fec0::/10"),
+    ipaddress.ip_network("5f00::/16"),
+    ipaddress.ip_network("3fff::/20"),
 )
 
 

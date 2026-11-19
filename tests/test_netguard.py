@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import ipaddress
 import json
 import logging
 import socket
@@ -384,3 +385,22 @@ def test_ipv6_forms_that_reach_inside_are_not_public(address):
 
 def test_public_ipv6_still_public():
     assert netguard.ip_is_public("2606:4700:4700::1111") is True
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "5f00::1",  # SRv6 SIDs (5f00::/16, RFC 9602)
+        "5f00:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+        "3fff::1",  # documentation (3fff::/20, RFC 9637)
+        "3fff:fff:ffff::1",
+    ],
+)
+def test_ipv6_ranges_not_globally_reachable_are_not_public(address):
+    """PLU-171 (I1): two recent IANA ranges Python 3.12 reads as global."""
+    assert netguard.ip_is_public(address) is False
+
+
+@pytest.mark.parametrize("address", ["5eff::1", "5f01::1", "3ffe:ffff::1", "4000::1"])
+def test_ipv6_next_to_those_ranges_is_judged_as_before(address):
+    assert netguard.ip_is_public(address) is ipaddress.ip_address(address).is_global

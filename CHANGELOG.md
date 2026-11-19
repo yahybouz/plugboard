@@ -24,6 +24,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **The egress refusal log names each port, sums up on time and escapes hosts** (PLU-167, I3 of the 4.15.1 security review): refusals were logged once per host and minute, so a second port of a refused host went unlogged; they are now logged once per host, port and minute. Past 256 hosts and ports in a minute, the shared `<other hosts>` line now names a sample of at most 8 (`sample=host:port,...`). The web tools' egress now logs the counts of repeated refusals every minute, not only when a later refusal of the same host comes or when the egress stops. A logged host is escaped (control characters, ANSI sequences and non-ASCII shown as `\x..` escapes) and cut to 253 characters, so a `CONNECT` cannot write terminal sequences into the gateway log. The log stays bounded as in 4.15.1 (BUG-156).
 
+- **The egress guard refuses two more IPv6 ranges** (PLU-171, I1 of the 4.15.1 security review): Python 3.12 reads `5f00::/16` (SRv6 segment identifiers, RFC 9602) and `3fff::/20` (documentation, RFC 9637) as global, although the IANA registry marks them not globally reachable. Both are now refused whole by `ip_is_public`, for the web tools' egress guard, agy's egress and the protected providers alike.
+
 ## [4.15.1] — 2026-11-19
 
 ### Security
