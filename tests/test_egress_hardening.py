@@ -16,6 +16,7 @@ import time
 import pytest
 
 from plugboard import web_egress
+from tests.test_agy_cage import open_unix
 from tests.tls_helpers import build_client_hello, sni_extension
 from tests.tls_helpers import client_hello as _client_hello
 
@@ -366,7 +367,7 @@ async def test_agy_tunnel_passes_a_client_hello_naming_its_host(
     try:
         hello = _client_hello("OAuth2.googleapis.com.")
         back = await _tunnel_once(
-            lambda: asyncio.open_unix_connection(agy_egress_path),
+            lambda: open_unix(agy_egress_path),
             f"oauth2.googleapis.com:{up_port}",
             hello,
         )
@@ -391,7 +392,7 @@ async def test_agy_tunnel_closes_on_another_tls_name(
     try:
         with caplog.at_level(logging.INFO, logger="plugboard.web_egress"):
             back = await _tunnel_once(
-                lambda: asyncio.open_unix_connection(agy_egress_path),
+                lambda: open_unix(agy_egress_path),
                 f"www.googleapis.com:{up_port}",
                 payload,
             )
@@ -434,7 +435,7 @@ async def test_a_big_client_hello_in_many_segments_is_accepted(
     hello = _client_hello("cloudcode-pa.googleapis.com", alpn=["p" * 200] * 7)
     assert 1700 <= len(hello) <= 2000, len(hello)
     try:
-        reader, writer = await asyncio.open_unix_connection(agy_egress_path)
+        reader, writer = await open_unix(agy_egress_path)
         writer.write(
             f"CONNECT cloudcode-pa.googleapis.com:{up_port} HTTP/1.1\r\n\r\n".encode()
         )
@@ -474,7 +475,7 @@ async def test_a_cancelled_sni_check_leaves_no_transport_open(
     monkeypatch.setattr(web_egress, "_TLS_PORT", up_port)
     egress = await agy_egress.start(str(tmp_path / "e.sock"))
     try:
-        reader, writer = await asyncio.open_unix_connection(egress.path)
+        reader, writer = await open_unix(egress.path)
         writer.write(
             f"CONNECT oauth2.googleapis.com:{up_port} HTTP/1.1\r\n\r\n".encode()
         )

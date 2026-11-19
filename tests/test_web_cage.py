@@ -32,6 +32,7 @@ import pytest
 
 from plugboard import agy_cage, net_cage, netguard, web_access, web_egress
 from plugboard import cli_subprocess as cs
+from tests.test_agy_cage import open_unix
 from tests.test_agy_cage import real_bwrap  # noqa: F401 - pytest fixture
 from tests.test_cli_launch_unchanged import (  # noqa: F401 - pytest fixture
     CLAUDE_4141,
@@ -417,7 +418,7 @@ async def _wait_for(predicate, what: str) -> None:
 
 
 async def _ask(path: str, target: str) -> bytes:
-    reader, writer = await asyncio.open_unix_connection(path)
+    reader, writer = await open_unix(path)
     writer.write(f"CONNECT {target} HTTP/1.1\r\n\r\n".encode())
     await writer.drain()
     head = await asyncio.wait_for(reader.read(200), 5)
@@ -432,10 +433,10 @@ async def test_a_run_never_takes_the_connections_of_another(tmp_path, monkeypatc
     held = []
     try:
         for _ in range(3):
-            held.append(await asyncio.open_unix_connection(first.path))
+            held.append(await open_unix(first.path))
         await _wait_for(lambda: first.active_connections == 3, "the first run full")
         # The first run is at its cap: 503 at once.
-        reader, writer = await asyncio.open_unix_connection(first.path)
+        reader, writer = await open_unix(first.path)
         head = await asyncio.wait_for(reader.read(100), 5)
         writer.close()
         assert head.startswith(b"HTTP/1.1 503"), head
@@ -460,7 +461,7 @@ async def test_a_web_egress_has_no_list_of_hosts(tmp_path, fake_dns, monkeypatch
     egress = await net_cage.start_web_egress(str(tmp_path / "w.sock"))
     try:
         before = web_egress.stats()["egress_tunnels"]
-        reader, writer = await asyncio.open_unix_connection(egress.path)
+        reader, writer = await open_unix(egress.path)
         writer.write(f"CONNECT any.example.test:{up_port} HTTP/1.1\r\n\r\n".encode())
         await writer.drain()
         head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
