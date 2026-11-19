@@ -130,6 +130,31 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         chat_billing.record(client_id, key_id, charge, hold=hold)
         return charge.billing_info()
 
+    def _bill_web_exhausted(
+        client_id: str,
+        key_id: str,
+        body: Dict[str, Any],
+        exc: BaseException,
+        hold: Optional[chat_billing.BudgetHold] = None,
+    ) -> Dict[str, Any]:
+        """Record a web run that spent its turns without answering (502
+        web_budget_exhausted, BUG-159): the tokens claude reported, at the
+        price of the route that ran it, as a served answer is; without a
+        valid report, the prompt's estimate. Returns the billing dict."""
+        reported = getattr(exc, "reported_usage", None)
+        result = {
+            "choices": [{"message": {"role": "assistant", "content": ""}}],
+            "usage": dict(reported or {}),
+        }
+        provider, real_model = getattr(exc, "billing_target", None) or (
+            _billing_target(body)
+        )
+        charge = chat_billing.charge_completion(
+            body, result, provider, real_model, reported=reported is not None
+        )
+        chat_billing.record(client_id, key_id, charge, hold=hold)
+        return charge.billing_info()
+
     async def _charge_answer(
         request: Request,
         client_id: Optional[str],
@@ -137,25 +162,38 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         spending_total: float,
         body: Dict[str, Any],
         result: Dict[str, Any],
+        *,
+        web_exhausted: Optional[BaseException] = None,
     ) -> Dict[str, Any]:
         """Bill a whole answer (a non-streamed chat, or one a CLI route answered
         for a stream) and check the spending alert; {} when nothing was billed.
         A billing error does not fail the answer: it is logged. The usage write
-        runs off the event loop (PLU-27)."""
+        runs off the event loop (PLU-27). With ``web_exhausted`` (the error of
+        a web run stopped by its turns, BUG-159), that run is billed instead."""
         if not client_id:
             return {}
         hold = getattr(request.state, "budget_hold", None)
         if hold is not None:
             hold.settling = True  # never given back while it is billed
         try:
-            billing_info = await _asyncio.to_thread(
-                _bill_completion,
-                client_id,
-                getattr(request.state, "key_id", ""),
-                body,
-                result,
-                hold=getattr(request.state, "budget_hold", None),
-            )
+            if web_exhausted is not None:
+                billing_info = await _asyncio.to_thread(
+                    _bill_web_exhausted,
+                    client_id,
+                    getattr(request.state, "key_id", ""),
+                    body,
+                    web_exhausted,
+                    hold=hold,
+                )
+            else:
+                billing_info = await _asyncio.to_thread(
+                    _bill_completion,
+                    client_id,
+                    getattr(request.state, "key_id", ""),
+                    body,
+                    result,
+                    hold=getattr(request.state, "budget_hold", None),
+                )
         except Exception as exc:
             log.warning("Billing error (non-fatal): %s", exc)
             _keep_hold(getattr(request.state, "budget_hold", None))
@@ -226,6 +264,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
     return SimpleNamespace(
         _bill_streaming=_bill_streaming,
         _bill_completion=_bill_completion,
+        _bill_web_exhausted=_bill_web_exhausted,
         _charge_answer=_charge_answer,
         _billing_target=_billing_target,
         _send_spending_alert=_send_spending_alert,

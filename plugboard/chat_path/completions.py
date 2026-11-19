@@ -383,6 +383,22 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
             with tools emulated, the text the CLI got (ADR-039)."""
             return _cli_tools.to_text_body(body) if emulated else body
 
+        async def failed(exc: Exception, where: str):
+            """The error answer of a call that failed before its first word. A
+            web run stopped by its turns (502 web_budget_exhausted) is billed
+            first, as a served answer is (BUG-159); the answer is unchanged."""
+            if getattr(exc, "web_exhausted", False):
+                await core._charge_answer(
+                    request,
+                    client_id,
+                    key_record,
+                    spending_total,
+                    billed(),
+                    {},
+                    web_exhausted=exc,
+                )
+            return core._chat_error_response(exc, client_id, where)
+
         # A budget cannot hold a call whose price is unknown (402, nothing called)
         if client_id and client_id != "admin":
             core._check_price_known(
@@ -568,9 +584,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                 except HTTPException:
                     raise
                 except Exception as exc:
-                    return core._chat_error_response(
-                        exc, client_id, "subprocess stream"
-                    )
+                    return await failed(exc, "subprocess stream")
 
                 # Billed as a plain chat; the replay ends with what was billed.
                 reported_usage = dict(result.get("usage") or {})
@@ -657,7 +671,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
             except HTTPException:
                 raise
             except Exception as exc:
-                return core._chat_error_response(exc, client_id, "stream")
+                return await failed(exc, "stream")
 
             _key_id = getattr(request.state, "key_id", "")
             _hold = getattr(request.state, "budget_hold", None)
@@ -714,16 +728,25 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                             try:
                                 # On the loop: a cancelled request cannot await
                                 # here (the rare path; PLU-27 moves the others).
-                                core._bill_streaming(
-                                    cid,
-                                    req_body,
-                                    bytes(accumulated),
-                                    key_id=kid,
-                                    hold=_hold,
-                                    # Counts only when the usage event came before
-                                    # the cut; without it this changes nothing.
-                                    reported=_usage_reported(),
-                                )
+                                if getattr(cut, "reported_usage", None) is not None:
+                                    # A web run stopped by its turns after its
+                                    # first words: the tokens claude reported,
+                                    # which hold those words (BUG-159).
+                                    core._bill_web_exhausted(
+                                        cid, kid, req_body, cut, hold=_hold
+                                    )
+                                else:
+                                    core._bill_streaming(
+                                        cid,
+                                        req_body,
+                                        bytes(accumulated),
+                                        key_id=kid,
+                                        hold=_hold,
+                                        # Counts only when the usage event came
+                                        # before the cut; without it this
+                                        # changes nothing.
+                                        reported=_usage_reported(),
+                                    )
                                 log.info(
                                     "Stream interrupted: billed the partial answer "
                                     "(%d bytes)",
@@ -838,7 +861,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         except HTTPException:
             raise
         except Exception as exc:
-            return core._chat_error_response(exc, client_id, "forward")
+            return await failed(exc, "forward")
         elapsed = time.perf_counter() - t0
         log.info("<- OK | model=%s | %.2fs", body.get("model", "?"), elapsed)
 

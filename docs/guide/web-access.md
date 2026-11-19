@@ -74,6 +74,32 @@ A web answer is never read from nor written to the response cache: it depends
 on the live web. Its usage entry is marked (`web`, `web_uses`), and the month's
 summaries (`/v1/me`, `/usage/me`) count `web_requests` and `web_uses`.
 
+### What a web request costs
+
+A web run takes several turns, reads pages and calls a helper model for the
+page summaries, so it is billed on the tokens claude reports for the run,
+not on an estimate of the question and the answer:
+
+- every model of the run is counted, the helper (`claude-sonnet-5-5`)
+  included, from the `modelUsage` of claude's `result` event;
+- `prompt_tokens` = input + cache writes + cache reads, `completion_tokens` =
+  output; the cache reads are also shown as
+  `prompt_tokens_details.cached_tokens`;
+- the whole is priced at the price of the model you asked for, with this
+  month's grid, as any other call; there is no separate web price, and a
+  grid without a cache price bills cache reads as input.
+
+A `502 web_budget_exhausted` is billed too: the run did spend those tokens.
+Its usage entry (`web`, `web_uses`, the tokens reported) counts against the
+key's monthly budget like a served answer; the `502` you get is unchanged. A
+stream that had already sent words when the run stopped is billed once, on
+the tokens reported.
+
+When claude reports no usable counts (no `result` event, a counter that is
+not a non-negative integer), the call is billed on the estimate, as before,
+and the answer is served; the gateway logs a warning, without any content.
+A request without the web is billed as before.
+
 ## Providers that support it
 
 Only the **claude CLI** routes (`claude-code:...`, providers with

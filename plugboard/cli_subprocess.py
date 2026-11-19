@@ -142,6 +142,9 @@ class CliSubprocessError(RuntimeError):
         self.tool_refused = tool_refused
         # PLU-158: a web run that spent its turns without answering.
         self.web_exhausted = False
+        # BUG-159: the tokens such a run used, as claude reported them
+        # (claude_reported_usage), or None; the chat route bills them.
+        self.reported_usage: Optional[Dict[str, Any]] = None
         self.exit_code = exit_code
         self.stderr = stderr
         self.pid = pid
@@ -1725,6 +1728,93 @@ def agy_reported_usage(payload: Any) -> Optional[Dict[str, Any]]:
     return out
 
 
+# claude's per-model counters (``modelUsage``) and those of its ``usage``
+# block: (prompt counters, completion counter, cache-read counter).
+_CLAUDE_MODEL_COUNTERS = (
+    ("inputTokens", "cacheCreationInputTokens", "cacheReadInputTokens"),
+    "outputTokens",
+    "cacheReadInputTokens",
+)
+_CLAUDE_USAGE_COUNTERS = (
+    ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"),
+    "output_tokens",
+    "cache_read_input_tokens",
+)
+
+
+def _claude_counts(entry: Any, names: tuple, required: bool) -> Optional[tuple]:
+    """(prompt, completion, cache reads) of one claude counter block, or None
+    when a counter is not a non-negative int (missing ones too, ``required``;
+    otherwise a missing cache counter reads 0)."""
+    if not isinstance(entry, dict):
+        return None
+    prompt_names, completion_name, cached_name = names
+    optional = () if required else prompt_names[1:]  # the cache counters
+    values: Dict[str, int] = {}
+    for name in (*prompt_names, completion_name):
+        if name in optional and name not in entry:
+            values[name] = 0
+            continue
+        value = _usage_count(entry.get(name))
+        if value is None:
+            return None
+        values[name] = value
+    prompt = sum(values[name] for name in prompt_names)
+    return prompt, values[completion_name], values[cached_name]
+
+
+def claude_reported_usage(stdout_text: str) -> Optional[Dict[str, Any]]:
+    """OpenAI usage from claude's stream-json ``result`` event (BUG-159), or
+    None when there is none or it cannot be trusted.
+
+    ``modelUsage`` has one entry per model the run called, the page-summary
+    helper included: claude adds every API call's tokens to its model's
+    entry (read in the claude 2.1.328 binary). ``usage`` holds the main
+    model's only, so ``modelUsage`` is summed and ``usage`` is read only
+    when ``modelUsage`` is absent; never both. prompt = input + cache
+    creation + cache reads, completion = output, cache reads also as
+    ``prompt_tokens_details.cached_tokens`` (as agy_reported_usage). Any
+    counter that is not a non-negative int rejects the whole report.
+    """
+    evt: Any = None
+    for line in reversed(stdout_text.splitlines()):
+        line = line.strip()
+        if not line.startswith("{") or '"result"' not in line:
+            continue
+        try:
+            candidate = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(candidate, dict) and candidate.get("type") == "result":
+            evt = candidate
+            break
+    if evt is None:
+        return None
+    if "modelUsage" in evt:
+        per_model = evt["modelUsage"]
+        if not isinstance(per_model, dict) or not per_model:
+            return None
+        counts = [
+            _claude_counts(entry, _CLAUDE_MODEL_COUNTERS, required=True)
+            for entry in per_model.values()
+        ]
+    else:
+        counts = [_claude_counts(evt.get("usage"), _CLAUDE_USAGE_COUNTERS, False)]
+    if any(c is None for c in counts):
+        return None
+    prompt = sum(c[0] for c in counts)
+    completion = sum(c[1] for c in counts)
+    cached = sum(c[2] for c in counts)
+    out: Dict[str, Any] = {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+    }
+    if cached:
+        out["prompt_tokens_details"] = {"cached_tokens": cached}
+    return out
+
+
 def _extract_text_from_codex_jsonl(lines: List[str]) -> str:
     """Parse Codex CLI JSONL events and extract the final assistant message.
 
@@ -2336,7 +2426,19 @@ async def complete(
         stdout_text = _agy_stream_to_json(stdout_text)
     stderr_text = (stderr or b"").decode("utf-8", "replace")
     rate_limited = kind == "claude" and _claude_rate_limited(stdout_text)
+    # A web run is billed on the tokens claude reports, every model it called
+    # counted (BUG-159); without a valid report, on the estimate as before.
+    web_usage: Optional[Dict[str, Any]] = None
     if web is not None:
+        try:
+            web_usage = claude_reported_usage(stdout_text)
+        except Exception:  # noqa: BLE001 - malformed usage never fails a reply
+            web_usage = None
+        if web_usage is None:
+            # Counters only, never the output: it holds the prompt and pages.
+            log.warning(
+                "web billing: no valid reported usage from claude; tokens estimated"
+            )
         web_access.count_tool_uses(stdout_text, web)
         log.info(
             "web run: model=%s uses=%d tools=%s models_used=%s",
@@ -2357,6 +2459,7 @@ async def complete(
                 tool_refused=True,
             )
             exhausted.web_exhausted = True  # 502 web_budget_exhausted
+            exhausted.reported_usage = web_usage  # billed all the same
             raise exhausted
 
     if proc.returncode != 0:
@@ -2516,9 +2619,10 @@ async def complete(
         )
         text = sent
 
-    # Only agy reports token counts; the other CLIs keep usage=0 and the
-    # router estimates. agy errors raise above, so this is a success payload.
-    reported: Optional[Dict[str, Any]] = None
+    # agy reports token counts, and claude on a web run (BUG-159); the other
+    # runs keep usage=0 and the router estimates. Errors raise above, so this
+    # is a success payload.
+    reported: Optional[Dict[str, Any]] = web_usage
     if kind == "agy":
         try:
             reported = agy_reported_usage(_parse_gemini_json_stdout(stdout_text))

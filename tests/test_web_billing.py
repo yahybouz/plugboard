@@ -1,0 +1,451 @@
+"""A web run is billed on the tokens claude reports (BUG-159, D-84).
+
+claude's stream-json ``result`` event carries ``modelUsage``: one entry per
+model the run called, the page-summary helper included, fed on every API
+call (read in the claude 2.1.328 binary: the cost ledger adds each call's
+input, output, cache-read and cache-creation tokens to its model's entry).
+Its ``usage`` block is the main model's only, so a web run is billed on the
+sum of ``modelUsage``, at the price of the model asked; a run stopped by
+``error_max_turns`` (502 web_budget_exhausted) is billed too. A run without
+web keeps its estimate.
+
+Only the subprocess boundary is faked (no CLI starts, no inference, nothing
+leaves the machine): the real claude wrapper, router, billing and SQLite
+usage store run. The web keys are those of tests/test_web_access.py.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from pathlib import Path
+
+import pytest
+
+from plugboard import apikeys, cli_subprocess, router, usage, web_access, web_egress
+from plugboard.tokenizer import estimate_completion_tokens, estimate_prompt_tokens
+from tests import test_web_access as _base
+from tests.test_agy_usage import _FakeProc, _sse_events
+from tests.test_router_admission import CLI
+from tests.test_web_access import MODEL, _auth
+
+keys = _base.keys  # a key without the web, one with it (web_max_uses=4)
+
+MONTH = "2026_03"
+INPUT_PRICE = 3.0
+OUTPUT_PRICE = 15.0
+PROMPT_MARK = "question-marker-159"
+MESSAGES = [{"role": "user", "content": f"{PROMPT_MARK} prix de l'essence ?"}]
+ANSWER = "Le prix est de 14 dirhams, source https://example.com"
+
+# What claude 2.1.328 writes per model in modelUsage (field names read in the
+# binary); the helper is the Sonnet the web run is given.
+MODEL_USAGE = {
+    "claude-opus-5-5": {
+        "inputTokens": 1200,
+        "outputTokens": 800,
+        "cacheReadInputTokens": 30000,
+        "cacheCreationInputTokens": 5000,
+        "cacheCreationEphemeral5mInputTokens": 5000,
+        "thinkingTokens": 100,
+        "webSearchRequests": 2,
+        "costUSD": 0.25,
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000,
+    },
+    "claude-sonnet-5-5": {
+        "inputTokens": 9000,
+        "outputTokens": 400,
+        "cacheReadInputTokens": 0,
+        "cacheCreationInputTokens": 2000,
+        "webSearchRequests": 0,
+        "costUSD": 0.04,
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000,
+    },
+}
+# The main model only, as claude reports it next to modelUsage.
+MAIN_USAGE = {
+    "input_tokens": 1200,
+    "cache_creation_input_tokens": 5000,
+    "cache_read_input_tokens": 30000,
+    "output_tokens": 800,
+    "server_tool_use": {"web_search_requests": 2, "web_fetch_requests": 1},
+    "service_tier": "standard",
+}
+PROMPT = 1200 + 5000 + 30000 + 9000 + 2000 + 0
+COMPLETION = 800 + 400
+CACHED = 30000
+
+
+def _cost(prompt: int, completion: int) -> float:
+    return round(prompt / 1e6 * INPUT_PRICE + completion / 1e6 * OUTPUT_PRICE, 8)
+
+
+def _tool_use_events() -> list:
+    return [
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {"type": "tool_use", "name": "WebSearch", "input": {"query": "q"}},
+                    {"type": "tool_use", "name": "WebFetch", "input": {"url": "u"}},
+                ]
+            },
+        }
+    ]
+
+
+def _delta(text: str) -> dict:
+    return {
+        "type": "stream_event",
+        "event": {
+            "type": "content_block_delta",
+            "delta": {"type": "text_delta", "text": text},
+        },
+    }
+
+
+def _result(subtype: str = "success", **fields) -> dict:
+    evt = {
+        "type": "result",
+        "subtype": subtype,
+        "is_error": subtype != "success",
+        "num_turns": 3,
+        "total_cost_usd": 0.29,
+        "usage": MAIN_USAGE,
+        "modelUsage": MODEL_USAGE,
+    }
+    if subtype == "success":
+        evt["result"] = ANSWER
+    evt.update(fields)
+    return {k: v for k, v in evt.items() if v is not None}
+
+
+def _stdout(*events: dict) -> bytes:
+    return "".join(json.dumps(e) + "\n" for e in events).encode()
+
+
+def _answered(result: dict = None) -> bytes:
+    """A web run that answers: tool calls, the answer streamed, its result."""
+    return _stdout(
+        *_tool_use_events(),
+        _delta("Le prix est de 14 dirhams, "),
+        _delta("source https://example.com"),
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "text", "text": ANSWER}]},
+        },
+        _result() if result is None else result,
+    )
+
+
+# ── fixtures ─────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _billing_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Private SQLite usage store and a price for the model asked."""
+    import plugboard.billing as b
+
+    store = tmp_path / "usage-store"
+    monkeypatch.setattr(usage, "_DATA_DIR", store)
+    monkeypatch.setattr(usage, "_DB_PATH", store / "usage.db")
+    monkeypatch.setattr(b, "_PRICING_DIR", tmp_path / "pricing")
+    monkeypatch.setattr(b, "current_pricing_month", lambda: MONTH)
+    price = {"input_price": INPUT_PRICE, "output_price": OUTPUT_PRICE}
+    b.save_pricing(
+        MONTH, {"models": {}, "models_by_provider": {CLI["id"]: {"model-x": price}}}
+    )
+
+
+class _FakeClaude:
+    def __init__(self) -> None:
+        self.stdout = b""
+        self.runs = 0
+
+    async def exec(self, *argv, **kwargs):
+        self.runs += 1
+        return _FakeProc(self.stdout)
+
+
+@pytest.fixture
+async def claude(_providers_file, tmp_path, monkeypatch):
+    """The claude CLI route alone; its process is a fake writing ``stdout``."""
+    _providers_file.write_text(json.dumps({"providers": [CLI]}))
+    router.invalidate_models_cache()
+    fake = _FakeClaude()
+    monkeypatch.setattr(cli_subprocess, "_resolve_binary", lambda c: f"/fake/bin/{c}")
+    monkeypatch.setattr(cli_subprocess.asyncio, "create_subprocess_exec", fake.exec)
+    spawn = tmp_path / "spawn"
+    spawn.mkdir()
+    monkeypatch.setenv("PLUGBOARD_SUBPROCESS_CWD", str(spawn))
+    monkeypatch.setattr(web_access, "_active", 0)
+    yield fake
+    await web_egress.stop()
+
+
+async def _chat(client, key, *, web=True, stream=False):
+    return await client.post(
+        "/v1/chat/completions",
+        headers=_auth(key, web),
+        json={"model": MODEL, "messages": MESSAGES, "stream": stream, "cache": False},
+    )
+
+
+def _rows(key) -> list:
+    return usage.get_usage_by_key(MONTH, key["key_id"])
+
+
+def _only_row(key) -> dict:
+    rows = _rows(key)
+    assert len(rows) == 1, rows
+    return rows[0]
+
+
+def _estimates() -> tuple:
+    prompt = estimate_prompt_tokens(MESSAGES)
+    completion = estimate_completion_tokens(
+        {"choices": [{"message": {"content": ANSWER}}]}
+    )
+    return prompt, completion
+
+
+# ── 1, 2. a web run is billed on what claude reports, every model counted ────
+
+
+def test_reported_usage_sums_every_model_of_model_usage():
+    stdout = _answered().decode()
+    assert cli_subprocess.claude_reported_usage(stdout) == {
+        "prompt_tokens": PROMPT,
+        "completion_tokens": COMPLETION,
+        "total_tokens": PROMPT + COMPLETION,
+        "prompt_tokens_details": {"cached_tokens": CACHED},
+    }
+
+
+async def test_web_run_is_billed_on_the_reported_tokens(client, keys, claude):
+    claude.stdout = _answered()
+    resp = await _chat(client, keys["web"])
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["choices"][0]["message"]["content"] == ANSWER
+    row = _only_row(keys["web"])
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (PROMPT, COMPLETION)
+    assert (row["web"], row["web_uses"]) == (1, 2)
+    assert row["model"] == "model-x"
+    assert row["cost_usd"] == pytest.approx(_cost(PROMPT, COMPLETION))
+    assert body["usage"]["prompt_tokens"] == PROMPT
+    assert body["usage"]["completion_tokens"] == COMPLETION
+    assert body["usage"]["prompt_tokens_details"] == {"cached_tokens": CACHED}
+    assert body["billing"]["cost_usd"] == pytest.approx(_cost(PROMPT, COMPLETION))
+
+
+async def test_streamed_web_run_is_billed_on_the_reported_tokens(client, keys, claude):
+    claude.stdout = _answered()
+    resp = await _chat(client, keys["web"], stream=True)
+    assert resp.status_code == 200, resp.text
+    events = _sse_events(resp.text)
+    text = "".join(
+        e["choices"][0]["delta"].get("content", "") for e in events if e.get("choices")
+    )
+    assert text == ANSWER
+    (last,) = [e["usage"] for e in events if e.get("usage")]
+    assert (last["prompt_tokens"], last["completion_tokens"]) == (PROMPT, COMPLETION)
+    row = _only_row(keys["web"])
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (PROMPT, COMPLETION)
+    assert (row["web"], row["web_uses"]) == (1, 2)
+    assert row["cost_usd"] == pytest.approx(_cost(PROMPT, COMPLETION))
+
+
+# ── 3. a claude run without web keeps its estimate ───────────────────────────
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+async def test_claude_run_without_web_keeps_its_estimate(client, keys, claude, stream):
+    claude.stdout = _answered()
+    resp = await _chat(client, keys["web"], web=False, stream=stream)
+    assert resp.status_code == 200, resp.text
+    row = _only_row(keys["web"])
+    assert (row["prompt_tokens"], row["completion_tokens"]) == _estimates()
+    assert (row["web"], row["web_uses"]) == (0, 0)
+
+
+# ── 4. usage absent or malformed: the estimate, the answer served ────────────
+
+_BAD_MODEL_USAGE = {
+    "negative": {**MODEL_USAGE, "claude-sonnet-5-5": {"inputTokens": -1}},
+    "string": {
+        **MODEL_USAGE,
+        "claude-sonnet-5-5": {**MODEL_USAGE["claude-sonnet-5-5"], "outputTokens": "4"},
+    },
+    "float": {
+        "claude-opus-5-5": {**MODEL_USAGE["claude-opus-5-5"], "inputTokens": 1.5}
+    },
+    "bool": {
+        "claude-opus-5-5": {**MODEL_USAGE["claude-opus-5-5"], "outputTokens": True}
+    },
+    "not_an_object": ["claude-opus-5-5"],
+    "entry_not_an_object": {"claude-opus-5-5": 12},
+    "empty": {},
+}
+
+
+@pytest.mark.parametrize("case", sorted(_BAD_MODEL_USAGE))
+async def test_malformed_reported_usage_falls_back_to_the_estimate(
+    client, keys, claude, caplog, case
+):
+    claude.stdout = _answered(_result(modelUsage=_BAD_MODEL_USAGE[case]))
+    caplog.set_level(logging.DEBUG)
+    resp = await _chat(client, keys["web"])
+    assert resp.status_code == 200, resp.text
+    row = _only_row(keys["web"])
+    assert (row["prompt_tokens"], row["completion_tokens"]) == _estimates()
+    assert row["web"] == 1
+    warned = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "reported usage" in r.getMessage()
+    ]
+    assert warned, "a warning says the usage was not used"
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert PROMPT_MARK not in logged and "dirhams" not in logged
+
+
+async def test_without_result_event_the_web_run_is_estimated(client, keys, claude):
+    claude.stdout = _answered(
+        {"type": "assistant", "message": {"content": [{"type": "text", "text": ""}]}}
+    )
+    resp = await _chat(client, keys["web"])
+    assert resp.status_code == 200, resp.text
+    row = _only_row(keys["web"])
+    assert (row["prompt_tokens"], row["completion_tokens"]) == _estimates()
+
+
+async def test_main_usage_alone_is_used_when_model_usage_is_absent(
+    client, keys, claude
+):
+    claude.stdout = _answered(_result(modelUsage=None))
+    resp = await _chat(client, keys["web"])
+    assert resp.status_code == 200, resp.text
+    row = _only_row(keys["web"])
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (36200, 800)
+
+
+# ── 5. 502 web_budget_exhausted is billed, its answer unchanged ──────────────
+
+
+def _exhausted(*before: dict) -> bytes:
+    return _stdout(
+        *_tool_use_events(),
+        *before,
+        _result("error_max_turns", errors=["Reached maximum number of turns (6)"]),
+    )
+
+
+@pytest.fixture
+def budget_key(keys):
+    rec = apikeys.create_key(
+        "webby-budget",
+        "web, budget",
+        monthly_limit_usd=50.0,
+        web_access=True,
+        web_max_uses=4,
+    )
+    apikeys._invalidate_cache()
+    return rec
+
+
+async def test_web_budget_exhausted_is_billed_and_counted_on_the_budget(
+    client, budget_key, claude
+):
+    claude.stdout = _exhausted()
+    resp = await _chat(client, budget_key)
+    assert resp.status_code == 502, resp.text
+    body = resp.json()
+    assert body["code"] == "web_budget_exhausted"
+    assert set(body) == {"detail", "error_ref", "provider_name", "model_id", "code"}
+    assert "web tool calls without a final answer" in body["detail"]
+    row = _only_row(budget_key)
+    assert row["key_id"] == budget_key["key_id"]
+    assert (row["web"], row["web_uses"]) == (1, 2)
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (PROMPT, COMPLETION)
+    assert row["cost_usd"] == pytest.approx(_cost(PROMPT, COMPLETION))
+    cost = _cost(PROMPT, COMPLETION)
+    assert usage.get_total_cost_by_key(MONTH, budget_key["key_id"]) == pytest.approx(
+        cost
+    )
+    # The hold became the entry: nothing left held, the cost is on the budget.
+    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
+    assert usage.get_committed_cost(
+        MONTH, key_id=budget_key["key_id"]
+    ) == pytest.approx(cost)
+    assert claude.runs == 1
+
+
+async def test_streamed_web_budget_exhausted_before_any_text_is_billed_once(
+    client, budget_key, claude
+):
+    claude.stdout = _exhausted()
+    resp = await _chat(client, budget_key, stream=True)
+    assert resp.status_code == 502, resp.text
+    assert resp.json()["code"] == "web_budget_exhausted"
+    row = _only_row(budget_key)
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (PROMPT, COMPLETION)
+    assert (row["web"], row["web_uses"]) == (1, 2)
+    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
+
+
+async def test_streamed_web_budget_exhausted_after_text_bills_the_reported_tokens(
+    client, budget_key, claude
+):
+    """Text already sent, then error_max_turns: one entry, the tokens claude
+    reported, not the estimate of the partial answer added to them."""
+    claude.stdout = _exhausted(_delta("Je cherche encore, "))
+    resp = await _chat(client, budget_key, stream=True)
+    assert resp.status_code == 200, resp.text  # the stream had begun
+    assert "Je cherche encore" in resp.text
+    row = _only_row(budget_key)
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (PROMPT, COMPLETION)
+    assert (row["web"], row["web_uses"]) == (1, 2)
+    assert row["cost_usd"] == pytest.approx(_cost(PROMPT, COMPLETION))
+    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
+
+
+async def test_web_budget_exhausted_without_reported_usage_is_estimated(
+    client, keys, claude
+):
+    claude.stdout = _stdout(
+        *_tool_use_events(), _result("error_max_turns", modelUsage=None, usage=None)
+    )
+    resp = await _chat(client, keys["web"])
+    assert resp.status_code == 502, resp.text
+    assert resp.json()["code"] == "web_budget_exhausted"
+    row = _only_row(keys["web"])
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (
+        estimate_prompt_tokens(MESSAGES),
+        0,
+    )
+    assert (row["web"], row["web_uses"]) == (1, 2)
+
+
+# ── 6. never counted twice ───────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+async def test_web_run_is_recorded_once(client, budget_key, claude, stream):
+    claude.stdout = _answered()
+    resp = await _chat(client, budget_key, stream=stream)
+    assert resp.status_code == 200, resp.text
+    assert len(_rows(budget_key)) == 1
+    cost = _cost(PROMPT, COMPLETION)
+    assert usage.get_committed_cost(
+        MONTH, key_id=budget_key["key_id"]
+    ) == pytest.approx(cost)
+
+
+def test_main_usage_is_not_added_to_model_usage():
+    """``usage`` repeats the main model's entry of ``modelUsage``: never summed."""
+    got = cli_subprocess.claude_reported_usage(_answered().decode())
+    assert got["prompt_tokens"] == PROMPT  # not PROMPT + 36200
+    assert got["completion_tokens"] == COMPLETION  # not COMPLETION + 800

@@ -606,6 +606,15 @@ def _request_caused(exc: BaseException) -> bool:
     )
 
 
+def _mark_web_run(
+    exc: BaseException, provider: Dict[str, Any], real_model: str
+) -> None:
+    """A web run stopped by its turns (502 web_budget_exhausted) is billed by
+    the chat route (BUG-159): its exception names the route that ran it."""
+    if getattr(exc, "web_exhausted", False):
+        exc.billing_target = (provider, real_model)  # type: ignore[attr-defined]
+
+
 def _tool_refused(exc: BaseException) -> bool:
     """Whether headless agy refused a tool the answer needed (BUG-104).
 
@@ -1145,9 +1154,10 @@ def served_by() -> Optional[tuple]:
 
 
 # True when the last forward() in this context returned token counts the CLI
-# itself reported and complete() validated (agy). Set only from the
-# subprocess path, never from a request body or an upstream HTTP payload, so
-# billing can keep a reported 0 instead of replacing it by an estimate.
+# itself reported and complete() validated (agy, a claude web run). Set only
+# from the subprocess path, never from a request body or an upstream HTTP
+# payload, so billing can keep a reported 0 instead of replacing it by an
+# estimate.
 _usage_reported: ContextVar[bool] = ContextVar(
     "plugboard_usage_reported", default=False
 )
@@ -1573,6 +1583,7 @@ async def forward(
                     raise
                 except Exception as exc:
                     last_err = exc
+                    _mark_web_run(exc, provider, real_model)
                     log.warning(
                         "Subprocess provider %s failed: %s", provider["id"], exc
                     )
@@ -2157,6 +2168,7 @@ async def _stream_route(
         except ModelNotServedError:
             raise  # nothing was started (BUG-120): not the route's failure
         except Exception as exc:
+            _mark_web_run(exc, provider, real_model)
             # The request's own error does not lower the score (review MIN-5).
             if not _request_caused(exc):
                 metrics.record(
