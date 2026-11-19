@@ -91,13 +91,14 @@ not on an estimate of the question and the answer:
   reads are billed at the input price.
 
 A run that spends its turns without answering is billed too: it did spend
-those tokens. Its usage entry (`web`, its own `web_uses`, the tokens
-reported, at the price of the route that ran it) counts against the key's
-monthly budget like a served answer, whatever the request's outcome: the
-`502 web_budget_exhausted` you get (unchanged), another route's error, or
-the answer another claude route then gave (billed on its own entry). A
-stream that had already sent words when the run stopped is billed once, on
-the tokens reported.
+those tokens. It is final: the request ends with `502 web_budget_exhausted`
+and no other claude route runs the same search again (it would be billed a
+second time). Its usage entry (`web`, its own `web_uses`, the tokens
+reported, at the price of the route that ran it) counts once against the
+key's monthly budget like a served answer; the route that ran it is not
+counted as failing (no circuit, no error metric, no `provider_down` alert).
+A stream that had already sent words when the run stopped is billed once,
+on the tokens reported.
 
 When claude reports no usable counts (no `result` event, a counter that is
 not a non-negative integer), the call is billed on the estimate, as before,

@@ -602,8 +602,18 @@ def _request_caused(exc: BaseException) -> bool:
     if isinstance(exc, ModelNotServedError):
         return True  # refused before the CLI started (BUG-120)
     return isinstance(exc, CliSubprocessError) and bool(
-        exc.request_too_long or exc.model_unsupported or _tool_refused(exc)
+        exc.request_too_long
+        or exc.model_unsupported
+        or _tool_refused(exc)
+        or _web_exhausted(exc)
     )
+
+
+def _web_exhausted(exc: BaseException) -> bool:
+    """Whether a web run spent its turns without answering (PLU-158): the
+    request's limit, final (BUG-160). Another claude route would run the
+    same web search again and be billed again: no route takes it over."""
+    return bool(getattr(exc, "web_exhausted", False))
 
 
 def _mark_web_run(
@@ -611,8 +621,8 @@ def _mark_web_run(
 ) -> None:
     """A web run stopped by its turns is kept on the request's web policy,
     with the route that ran it and the tokens claude reported: the chat
-    route bills it whatever the request's outcome (BUG-159), the next
-    route's error or answer included."""
+    route bills it whatever the request's outcome (BUG-159). Such a run is
+    final: no other route runs it again (BUG-160)."""
     policy = web_access.current()
     if policy is None or not getattr(exc, "web_exhausted", False):
         return
@@ -1393,7 +1403,9 @@ async def forward(
     would fail again. From an HTTP provider it goes straight to the next
     provider; from a CLI subscription route (``request_too_long``) it is
     raised at once, and no other provider is tried, like a model the
-    route's subscription does not serve (``model_unsupported``, BUG-78).
+    route's subscription does not serve (``model_unsupported``, BUG-78),
+    or a web run that spent its turns without answering (``web_exhausted``,
+    BUG-160: another claude route would search and bill again).
     Neither is a
     timeout: the request already waited its whole timeout (BUG-47).
     A request with a field a CLI route cannot serve (``unsupported_on_cli``)
@@ -1595,6 +1607,11 @@ async def forward(
                 except Exception as exc:
                     last_err = exc
                     _mark_web_run(exc, provider, real_model)
+                    if _web_exhausted(exc):
+                        # BUG-160: final, the route not penalised (no circuit,
+                        # metric, alert, pause, quarantine); the chat route
+                        # bills the run once and answers 502.
+                        raise
                     log.warning(
                         "Subprocess provider %s failed: %s", provider["id"], exc
                     )
@@ -1993,9 +2010,11 @@ def _stream_hands_over(exc: Exception) -> bool:
     over to the next one (PLU-26): the provider's failures, as in forward().
     Never the request's own refusal: a prompt a CLI found too long, a model
     the route's subscription does not serve (BUG-78), a route the key
-    refuses, the global cap."""
+    refuses, the global cap, a web run that spent its turns (BUG-160)."""
     if isinstance(exc, CliSubprocessError):
-        return not (exc.request_too_long or exc.model_unsupported)
+        return not (
+            exc.request_too_long or exc.model_unsupported or _web_exhausted(exc)
+        )
     return isinstance(
         exc,
         (

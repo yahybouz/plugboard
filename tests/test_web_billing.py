@@ -6,9 +6,9 @@ call (read in the claude 2.1.328 binary: the cost ledger adds each call's
 input, output, cache-read and cache-creation tokens to its model's entry).
 Its ``usage`` block is the main model's only, so a web run is billed on the
 sum of ``modelUsage``, at the price of the route that served the model
-asked; a run stopped by ``error_max_turns`` is billed too, whatever the
-request's outcome (502 web_budget_exhausted, another route's error or
-answer). A run without web keeps its estimate.
+asked; a run stopped by ``error_max_turns`` is billed too, and is final:
+502 web_budget_exhausted, no other claude route runs it again (BUG-160).
+A run without web keeps its estimate.
 
 Only the subprocess boundary is faked (no CLI starts, no inference, nothing
 leaves the machine): the real claude wrapper, router, billing and SQLite
@@ -491,7 +491,13 @@ def test_counters_up_to_10_12_are_kept():
     assert got["prompt_tokens"] == 10**12
 
 
-# ── 7. several claude routes: every run that spent its turns is billed ──────
+# ── 7. several claude routes: a run that spent its turns is final (BUG-160) ──
+#
+# A web run that used its turns without answering ends the request with 502
+# web_budget_exhausted: the next claude route would run the same web search
+# again, billed again. The run is billed once, at the price of the route that
+# ran it, and that route is not penalised (no circuit count, no error metric,
+# no provider_down alert, no pause).
 
 ROUTE_A = {**CLI, "id": "pbtest-claude-a", "name": "claude A"}
 ROUTE_B = {**CLI, "id": "pbtest-claude-b", "name": "claude B"}
@@ -505,7 +511,6 @@ B_USAGE = {
         "cacheCreationInputTokens": 0,
     }
 }
-B_PROMPT, B_COMPLETION = 1700, 300
 
 
 def _priced(price: tuple, prompt: int, completion: int) -> float:
@@ -538,80 +543,72 @@ def two_routes(claude, _providers_file, monkeypatch):
     return claude
 
 
-def _by_provider(key) -> dict:
-    return {r["provider_id"]: r for r in _rows(key)}
+@pytest.fixture
+def penalties(monkeypatch):
+    """What would penalise a route, recorded: circuit failures, error
+    metrics, provider_down alerts, route pauses; fresh circuits."""
+    from plugboard import circuit_breaker, metrics, route_pauses
+
+    monkeypatch.setattr(circuit_breaker, "_circuits", {})
+    seen: dict = {"circuit": [], "errors": [], "alerts": [], "pauses": []}
+    real_failure = circuit_breaker.record_failure
+    real_record = metrics.record
+
+    def failure(model, *, transient=False):
+        seen["circuit"].append(model)
+        return real_failure(model, transient=transient)
+
+    def record(provider_id, latency, *, error=False):
+        if error:
+            seen["errors"].append(provider_id)
+        return real_record(provider_id, latency, error=error)
+
+    async def alert(provider_id):
+        seen["alerts"].append(provider_id)
+
+    def pause(key, *args, **kwargs):
+        seen["pauses"].append(key)
+
+    monkeypatch.setattr(circuit_breaker, "record_failure", failure)
+    monkeypatch.setattr(metrics, "record", record)
+    monkeypatch.setattr(router, "record_provider_failure", alert)
+    monkeypatch.setattr(route_pauses, "pause", pause)
+    return seen
 
 
-@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
-async def test_exhausted_run_is_billed_when_the_next_route_fails(
-    client, budget_key, two_routes, stream
-):
-    two_routes.queue = [
-        (_exhausted(), 0, b""),
-        (b"", 1, b"API Error: 529 overloaded"),
-    ]
-    resp = await _chat(client, budget_key, stream=stream, model="model-x")
-    assert resp.status_code != 200, resp.text
-    assert two_routes.runs == 2
-    row = _only_row(budget_key)
+_NEXT_ROUTE = {
+    "fails": (b"", 1, b"API Error: 529 overloaded"),
+    "answers": (_answered(_result(modelUsage=B_USAGE)), 0, b""),
+    "exhausts": (_exhausted(), 0, b""),
+}
+
+
+def _billed_once_on_a(key) -> None:
+    """One entry, route A's, on the tokens claude reported; nothing held."""
+    row = _only_row(key)
     assert row["provider_id"] == ROUTE_A["id"]
     assert (row["prompt_tokens"], row["completion_tokens"]) == (PROMPT, COMPLETION)
     assert (row["web"], row["web_uses"]) == (1, 2)
     cost = _priced(PRICE_A, PROMPT, COMPLETION)
     assert row["cost_usd"] == pytest.approx(cost)
-    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
-    assert usage.get_committed_cost(
-        MONTH, key_id=budget_key["key_id"]
-    ) == pytest.approx(cost)
+    assert usage.get_held_cost(MONTH, key_id=key["key_id"]) == 0.0
+    assert usage.get_committed_cost(MONTH, key_id=key["key_id"]) == pytest.approx(cost)
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
-async def test_exhausted_run_is_billed_besides_the_answer_of_the_next_route(
-    client, budget_key, two_routes, stream
+@pytest.mark.parametrize("next_route", sorted(_NEXT_ROUTE))
+async def test_exhausted_run_is_final_and_billed_once(
+    client, budget_key, two_routes, penalties, stream, next_route
 ):
-    two_routes.queue = [
-        (_exhausted(), 0, b""),
-        (_answered(_result(modelUsage=B_USAGE)), 0, b""),
-    ]
-    resp = await _chat(client, budget_key, stream=stream, model="model-x")
-    assert resp.status_code == 200, resp.text
-    assert two_routes.runs == 2
-    rows = _by_provider(budget_key)
-    assert sorted(rows) == [ROUTE_A["id"], ROUTE_B["id"]]
-    a, b = rows[ROUTE_A["id"]], rows[ROUTE_B["id"]]
-    assert (a["prompt_tokens"], a["completion_tokens"]) == (PROMPT, COMPLETION)
-    assert (b["prompt_tokens"], b["completion_tokens"]) == (B_PROMPT, B_COMPLETION)
-    assert a["web"] == b["web"] == 1
-    cost_a = _priced(PRICE_A, PROMPT, COMPLETION)
-    cost_b = _priced(PRICE_B, B_PROMPT, B_COMPLETION)
-    assert a["cost_usd"] == pytest.approx(cost_a)
-    assert b["cost_usd"] == pytest.approx(cost_b)
-    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
-    assert usage.get_committed_cost(
-        MONTH, key_id=budget_key["key_id"]
-    ) == pytest.approx(cost_a + cost_b)
-
-
-@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
-async def test_two_exhausted_runs_are_each_billed_once(
-    client, budget_key, two_routes, stream
-):
-    two_routes.queue = [
-        (_exhausted(), 0, b""),
-        (_exhausted(), 0, b""),
-    ]
+    """Whatever route B would do (fail, answer, spend its turns too), it never
+    runs: the 502 is the answer and route A's run is the only entry."""
+    two_routes.queue = [(_exhausted(), 0, b""), _NEXT_ROUTE[next_route]]
     resp = await _chat(client, budget_key, stream=stream, model="model-x")
     assert resp.status_code == 502, resp.text
     assert resp.json()["code"] == "web_budget_exhausted"
-    rows = _by_provider(budget_key)
-    assert len(_rows(budget_key)) == 2
-    cost_a = _priced(PRICE_A, PROMPT, COMPLETION)
-    cost_b = _priced(PRICE_B, PROMPT, COMPLETION)
-    assert rows[ROUTE_A["id"]]["cost_usd"] == pytest.approx(cost_a)
-    assert rows[ROUTE_B["id"]]["cost_usd"] == pytest.approx(cost_b)
-    assert usage.get_committed_cost(
-        MONTH, key_id=budget_key["key_id"]
-    ) == pytest.approx(cost_a + cost_b)
+    assert two_routes.runs == 1
+    _billed_once_on_a(budget_key)
+    assert penalties == {"circuit": [], "errors": [], "alerts": [], "pauses": []}
 
 
 def _answer_billing_fails(monkeypatch):
@@ -635,28 +632,26 @@ async def test_exhausted_run_is_billed_when_the_answer_billing_fails(
     ]
     _answer_billing_fails(monkeypatch)
     resp = await _chat(client, budget_key, stream=stream, model="model-x")
-    assert resp.status_code == 200, resp.text
-    row = _only_row(budget_key)
-    assert row["provider_id"] == ROUTE_A["id"]
-    assert (row["prompt_tokens"], row["completion_tokens"]) == (PROMPT, COMPLETION)
+    assert resp.status_code == 502, resp.text
+    assert resp.json()["code"] == "web_budget_exhausted"
+    assert two_routes.runs == 1
     # The hold was settled into A's entry, not kept.
-    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
+    _billed_once_on_a(budget_key)
 
 
 async def test_exhausted_run_is_billed_when_a_cut_stream_billing_fails(
     client, budget_key, two_routes, monkeypatch
 ):
-    """A spent its turns, B's stream is cut after its first words and the
-    partial answer's billing raises: A is billed all the same."""
+    """A sends its first words, then spends its turns: the stream had begun,
+    so it ends there (no other route) and the partial answer's billing
+    raising never drops A's entry."""
     two_routes.queue = [
-        (_exhausted(), 0, b""),
-        (_stdout(_delta("Le prix est ")), 1, b"API Error: 529 overloaded"),
+        (_exhausted(_delta("Le prix est ")), 0, b""),
+        (_answered(_result(modelUsage=B_USAGE)), 0, b""),
     ]
     _answer_billing_fails(monkeypatch)
     resp = await _chat(client, budget_key, stream=True, model="model-x")
     assert resp.status_code == 200, resp.text
     assert "Le prix est" in resp.text
-    row = _only_row(budget_key)
-    assert row["provider_id"] == ROUTE_A["id"]
-    assert (row["prompt_tokens"], row["completion_tokens"]) == (PROMPT, COMPLETION)
-    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
+    assert two_routes.runs == 1
+    _billed_once_on_a(budget_key)
