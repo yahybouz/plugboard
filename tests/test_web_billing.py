@@ -23,7 +23,8 @@ from pathlib import Path
 
 import pytest
 
-from plugboard import apikeys, cli_subprocess, router, usage, web_access, web_egress
+from plugboard import agy_cage, apikeys, cli_subprocess, router, usage, web_access
+from plugboard import web_egress
 from plugboard.tokenizer import estimate_completion_tokens, estimate_prompt_tokens
 from tests import test_web_access as _base
 from tests.test_agy_usage import _FakeProc, _sse_events
@@ -184,6 +185,9 @@ async def claude(_providers_file, tmp_path, monkeypatch):
     fake = _FakeClaude()
     monkeypatch.setattr(cli_subprocess, "_resolve_binary", lambda c: f"/fake/bin/{c}")
     monkeypatch.setattr(cli_subprocess.asyncio, "create_subprocess_exec", fake.exec)
+    # The web run's cage (PLU-162) is built, its process is the fake: no
+    # bwrap of the host needed.
+    monkeypatch.setattr(agy_cage, "_bwrap", lambda: "/fake/bin/bwrap")
     spawn = tmp_path / "spawn"
     spawn.mkdir()
     monkeypatch.setenv("PLUGBOARD_SUBPROCESS_CWD", str(spawn))

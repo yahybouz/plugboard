@@ -17,9 +17,14 @@ For a web request, the claude CLI gets ``--tools WebSearch,WebFetch`` and
 the same ``--allowedTools``, nothing else (no shell, no file, no MCP); its
 permission mode stays ``default``. Its turns are bounded (``--max-turns``,
 web_max_uses + 2), it has its own timeout (``PLUGBOARD_WEB_TIMEOUT_S``),
-its connections go through the egress guard (web_egress: public addresses
-only) and its helper model (page summaries) is never Haiku
-(``PLUGBOARD_WEB_HELPER_MODEL``, default claude-sonnet-5-5).
+and its helper model (page summaries) is never Haiku
+(``PLUGBOARD_WEB_HELPER_MODEL``, default claude-sonnet-5-5). It runs with
+no network but its own egress (PLU-162, :mod:`plugboard.net_cage`): a
+bubblewrap cage with a network of its own, whose only way out is the relay
+its ``HTTPS_PROXY`` names, then the run's CONNECT proxy (web_egress: port
+443 of public addresses only). A client that ignores ``HTTPS_PROXY`` has no
+route at all; without the cage (no bwrap...), the run is refused (503
+``provider_sandbox_unavailable``), never started.
 
 The request's web policy travels in a context variable: the router reads it
 to keep only claude CLI routes, cli_subprocess to build the command line,
@@ -335,7 +340,9 @@ def check_web_args(args: List[str]) -> None:
 
 
 def child_env(proxy_port: int) -> Dict[str, str]:
-    """Env entries of a web run: egress guard, and no Haiku helper."""
+    """Env entries of a web run: every proxy variable naming
+    ``127.0.0.1:proxy_port`` (the relay of its cage, ``net_cage.RELAY_PORT``)
+    or empty, and no Haiku helper."""
     from plugboard import web_egress
 
     env = web_egress.proxy_env(proxy_port)

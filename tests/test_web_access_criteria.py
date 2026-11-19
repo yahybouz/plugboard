@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from plugboard import apikeys, cli_subprocess, usage, web_access, web_egress
+from plugboard import agy_cage, apikeys, cli_subprocess, usage, web_access, web_egress
 from plugboard.cli_subprocess import CliSubprocessError
 from tests import test_web_access as _base
 from tests.test_web_access import MODEL, MSG, _auth, _chat
@@ -433,6 +433,9 @@ def fake_claude(monkeypatch):
             "create_subprocess_exec",
             AsyncMock(return_value=proc),
         )
+        # A web run's cage (PLU-162) is built around the fake process: no
+        # bwrap of the host needed.
+        monkeypatch.setattr(agy_cage, "_bwrap", lambda: "/fake/bin/bwrap")
         procs.append(proc)
         return proc
 

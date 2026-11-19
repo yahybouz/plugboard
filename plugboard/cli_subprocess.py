@@ -45,9 +45,19 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import (
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Tuple,
+)
 
-from plugboard import agy_cage, agy_egress, agy_store, envcompat, web_access, web_egress
+from plugboard import agy_cage, agy_egress, agy_store, envcompat, net_cage, web_access
 from plugboard.circuit_breaker import (
     is_model_unsupported_by_subscription,
     is_request_too_long,
@@ -818,6 +828,57 @@ async def agy_caged(
             await stack.enter_async_context(slot)
         await _off_loop(agy_cage.fill_private_store, env, store)
         yield argv, env
+
+
+def web_sandbox_error(cause: str, model: str = "") -> CliSubprocessError:
+    """The error of a claude web run whose network cage could not start
+    (claude not run): ``503 provider_sandbox_unavailable``, as for agy.
+
+    ``cause`` is for the gateway log and the admin only.
+    """
+    return CliSubprocessError(
+        f"claude web sandbox (bubblewrap) could not start, claude was not run: {cause}",
+        stderr=cause[:500],
+        provider_name="claude",
+        model_id=model,
+        sandbox_failed=True,
+    )
+
+
+@contextlib.asynccontextmanager
+async def web_caged(
+    command: List[str], spawn_cwd: str, env: Mapping[str, str]
+) -> AsyncIterator[List[str]]:
+    """Yield the command line running a claude web run ``command`` (claude
+    and its arguments, unchanged) in its network cage (PLU-162), with an
+    egress of its own; keep the context open until the child is dead and
+    reaped.
+
+    The run's folder (``web-run-*``, 0700, in the launch directory) holds
+    only the egress socket, served here by the run's own proxy
+    (``net_cage.start_web_egress``: port 443 of public addresses, its own
+    connection cap); the cage has no other network, its relay on the cage's
+    loopback is what ``HTTPS_PROXY`` names. Socket, proxy and folder are
+    removed afterwards. Raises :class:`net_cage.CageUnavailable` before
+    anything is launched: no bwrap, no socket, no relay, no web run.
+    """
+    spawn = os.path.realpath(spawn_cwd)
+    async with contextlib.AsyncExitStack() as stack:
+        bwrap = agy_cage._bwrap()
+        folder = tempfile.mkdtemp(prefix="web-run-", dir=spawn)
+        stack.callback(shutil.rmtree, folder, True)
+        try:
+            egress = await net_cage.start_web_egress(
+                os.path.join(folder, net_cage.EGRESS_SOCKET)
+            )
+        except OSError as exc:
+            raise net_cage.CageUnavailable(
+                f"web egress socket cannot be created ({type(exc).__name__})"
+            ) from None
+        stack.push_async_callback(egress.close)
+        yield net_cage.web_cage_argv(
+            bwrap, command, env=env, cwd=spawn_cwd, folder=folder
+        )
 
 
 def gemini_isolation_env(home: str) -> Dict[str, str]:
@@ -2278,8 +2339,10 @@ async def complete(
             anything is run once more without it, without callbacks (BUG-93).
         web: the request's web policy (PLU-158), claude only: the CLI gets
             the two web tools and nothing else, bounded turns, its own
-            timeout, the egress guard as proxy and no Haiku helper. None:
-            no tool at all, as always.
+            timeout, no Haiku helper, and it runs in a network cage whose
+            only way out is the run's egress (PLU-162, ``web_caged``):
+            without the cage it is never started. None: no tool at all, no
+            cage, as always.
 
     Returns:
         OpenAI-style response dict.
@@ -2361,9 +2424,10 @@ async def complete(
     env = build_child_env(kind)
     if web is not None:
         deadline = web_access.TIMEOUT_S
-        # Every connection of the run goes through the egress guard (public
-        # addresses only); the page-summary helper is never Haiku.
-        env.update(web_access.child_env(await web_egress.ensure_started()))
+        # The run has no network but its relay, which goes out through the
+        # run's own egress (public addresses only, PLU-162); the
+        # page-summary helper is never Haiku.
+        env.update(web_access.child_env(net_cage.RELAY_PORT))
 
     async with contextlib.AsyncExitStack() as cleanup:
         if kind == "gemini":
@@ -2394,6 +2458,15 @@ async def complete(
             except agy_cage.CageUnavailable as exc:
                 raise agy_sandbox_error(str(exc), model) from None
             slot = contextlib.nullcontext()
+        if web is not None:
+            # A web run in its network cage, or not at all (PLU-162): no
+            # bwrap, no egress, no relay, and claude is never started.
+            try:
+                argv = await cleanup.enter_async_context(
+                    web_caged(argv, spawn_cwd, env)
+                )
+            except net_cage.CageUnavailable as exc:
+                raise web_sandbox_error(str(exc), model) from None
         async with slot:
             try:
                 proc = await asyncio.create_subprocess_exec(
@@ -2411,6 +2484,11 @@ async def complete(
                     start_new_session=True,
                 )
             except FileNotFoundError as exc:
+                if web is not None:
+                    # bwrap itself vanished between the cage and the launch.
+                    raise web_sandbox_error(
+                        f"{os.path.basename(argv[0])} could not be executed", model
+                    ) from exc
                 if kind == "agy" and argv[0] != binary_path:
                     # bwrap itself vanished between the cage and the launch.
                     raise agy_sandbox_error(
@@ -2464,6 +2542,11 @@ async def complete(
         failure = agy_cage.setup_failure(proc.returncode, stdout, stderr)
         if failure:
             raise agy_sandbox_error(failure, model)
+    if web is not None:
+        # Nor claude, when its web cage or its relay could not start.
+        failure = net_cage.setup_failure(proc.returncode, stdout, stderr)
+        if failure:
+            raise web_sandbox_error(failure, model)
     if (
         read_delta is not None
         and not streamed

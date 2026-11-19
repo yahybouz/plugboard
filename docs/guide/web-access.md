@@ -155,9 +155,31 @@ page found by a search engine: check the cited sources before acting on it.
 
 `WebFetch` runs inside the gateway's container, which can reach private
 addresses (the Docker host, the other services, the tailnet, a cloud metadata
-address). Every connection of a web run therefore goes through a small proxy
-of the gateway, bound to `127.0.0.1` (`HTTPS_PROXY` of the run, `NO_PROXY`
-empty). It tunnels only to **public** addresses: each destination is resolved
+address). A web run therefore has **no network but its egress** (since
+4.15.2, PLU-162): claude runs in a bubblewrap cage with a network of its own
+(`--unshare-user --unshare-net`), holding nothing but its own loopback. Its
+`HTTPS_PROXY` and `HTTP_PROXY` name a small relay on that loopback
+(`127.0.0.1:3128` of the cage; `ALL_PROXY` and `NO_PROXY` empty), which
+forwards each connection to a unix socket of the run, served by the run's
+own CONNECT proxy in the gateway. That is the only way out: a client that
+ignores `HTTPS_PROXY` (a direct connection to the gateway's port, the
+internal network, the metadata address or any public address) finds no route
+(`ECONNREFUSED` on the cage's loopback, `ENETUNREACH` elsewhere). Until
+4.15.1 the guard was a proxy on the gateway's loopback that held only for a
+client honouring `HTTPS_PROXY`.
+
+The cage is a network cage only: claude's files are the same as before (the
+whole root as it is, `/dev`, `/proc`, `HOME`, `~/.claude`, node, the launch
+directory), the same uid, the same command line and environment but the proxy
+variables. It is not a file sandbox: a web run has no shell nor file tool,
+only `WebSearch` and `WebFetch`. **No cage, no web run**: when bwrap is
+missing (the image's `/usr/libexec/plugboard/bwrap`, else one on `PATH`), the
+run's socket cannot be made, or the cage or its relay cannot start, claude is
+not started and the request gets `503 provider_sandbox_unavailable`, as an
+agy call without its cage; there is no setting that runs it without. A
+request without the web is started exactly as before, outside any cage.
+
+The run's proxy tunnels only to **public** addresses: each destination is resolved
 by the proxy, every address is checked (`netguard.ip_is_public`) and the
 tunnel connects to the checked address, so a second resolution cannot point
 elsewhere. Each tunnel and each refusal is logged with the host and port
@@ -181,10 +203,17 @@ DNS does not answer in time is refused (`403`, logged as `did not resolve in
 A tunnel is closed after 120 seconds without a byte in one way, and in any
 case once it is `PLUGBOARD_EGRESS_TUNNEL_MAX_SECONDS` old (default `600`,
 since 4.15.2), even with bytes still flowing: a page trickled byte by byte
-cannot hold a connection forever. The guard serves at most 64 connections at
-once (`503` beyond); that cap and the tunnel's length are per egress, not per
-key: the cap per run comes with the cage of the claude web run, which gives
-each run an egress of its own.
+cannot hold a connection forever. Each web run's proxy serves at most 64
+connections at once (`503` beyond): the cap is per run, so a run cannot take
+the connections of another (since 4.15.2; until then one proxy served every
+run). The proxy on the gateway's loopback of 4.15.1 (`web_egress.ensure_started`)
+is no longer used by the web runs.
+
+What the run's proxy reports, tunnels and refusals, is logged as before
+(`web egress tunnel: host=...`, `web egress refused: host=...`) and counted
+in the same figures (`GET /admin/web`, `/metrics`): the hosts a claude web run
+contacts, its own start-up included (`api.anthropic.com`, and whatever
+claude reaches for its sign-in or telemetry), show there.
 
 ## Load
 

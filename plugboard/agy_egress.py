@@ -77,13 +77,7 @@ agy turns out to need is refused and named in the gateway log
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import os
-import socket
-from typing import Set
-
-from plugboard import web_egress
+from plugboard import net_cage
 
 ALLOWED_HOSTS = frozenset(
     {
@@ -104,100 +98,21 @@ def host_allowed(host: str) -> bool:
     return host.lower().removesuffix(".") in ALLOWED_HOSTS
 
 
-class Egress:
-    """The proxy of one agy call, on its unix socket."""
+class Egress(net_cage.UnixEgress):
+    """The proxy of one agy call, on its unix socket: the list of hosts and
+    the TLS name of each tunnel checked (PLU-171), on top of the web tools'
+    filter (plugboard.net_cage.UnixEgress)."""
 
     def __init__(self, path: str) -> None:
-        self.path = path
-        self._server: asyncio.AbstractServer | None = None
-        self._tasks: Set[asyncio.Task] = set()
-        # At most web_egress.MAX_CONNECTIONS at once, refusals logged once
-        # per host and window: agy, or a prompt driving it, cannot flood
-        # the gateway nor its log through its egress.
-        self._cap = web_egress.ConnectionCap(_LABEL)
-        self._refusals = web_egress.RefusalLog(_LABEL)
-
-    @property
-    def active_connections(self) -> int:
-        return self._cap.active
-
-    async def _handle(
-        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
-        if not self._cap.enter():
-            await web_egress.reply_busy(writer)
-            return
-        task = asyncio.current_task()
-        if task is not None:
-            self._tasks.add(task)
-        try:
-            await web_egress.serve_connect(
-                reader,
-                writer,
-                host_allowed=host_allowed,
-                label=_LABEL,
-                refusals=self._refusals,
-                match_sni=True,
-            )
-        finally:
-            self._cap.leave()
-            if task is not None:
-                self._tasks.discard(task)
-
-    async def close(self) -> None:
-        """Stop listening, end the tunnels still open and remove the socket.
-
-        Called once agy's cage is dead: nothing is left to serve.
-        """
-        if self._server is not None:
-            self._server.close()
-        for task in list(self._tasks):
-            task.cancel()
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(self.path)
-        self._refusals.flush()
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
+        super().__init__(path, label=_LABEL, host_allowed=host_allowed, match_sni=True)
 
 
-# A unix socket's name holds at most 107 bytes (sun_path).
-_SUN_PATH_MAX = 107
-
-
-def _bind(path: str) -> socket.socket:
-    """A unix socket bound at ``path``. A path longer than a socket's name
-    (a long launch directory) is reached through the folder's descriptor,
-    ``/proc/self/fd/<fd>/<name>``: the socket is made in that folder all the
-    same."""
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-        if len(os.fsencode(path)) <= _SUN_PATH_MAX:
-            sock.bind(path)
-        else:
-            folder = os.open(
-                os.path.dirname(path), os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC
-            )
-            try:
-                sock.bind(f"/proc/self/fd/{folder}/{os.path.basename(path)}")
-            finally:
-                os.close(folder)
-    except BaseException:
-        sock.close()
-        raise
-    return sock
+# A unix socket bound at a path of any length (net_cage.bind_unix).
+_bind = net_cage.bind_unix
 
 
 async def start(path: str) -> Egress:
     """Listen on a new unix socket at ``path`` (raises ``OSError``)."""
     egress = Egress(path)
-    sock = _bind(path)
-    try:
-        egress._server = await asyncio.start_unix_server(
-            egress._handle, sock=sock, limit=web_egress._MAX_HEAD * 2
-        )
-    except BaseException:
-        sock.close()
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(path)
-        raise
+    await egress.listen()
     return egress

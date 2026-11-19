@@ -1,7 +1,13 @@
 """Egress guard for the web tools of a CLI (PLU-158).
 
-A small HTTP CONNECT proxy, bound to the loopback, that the claude CLI is
-pointed at (HTTPS_PROXY) when a request asks for the web. It tunnels only to
+The CONNECT proxy a claude web run goes out through. Since PLU-162 each web
+run has its own, on a unix socket of the run reached through the relay of
+its network cage (:mod:`plugboard.net_cage`, ``start_web_egress``): the run
+has no other network. The proxy bound to the loopback that this module
+starts (:func:`ensure_started`, the run's HTTPS_PROXY until 4.15.1, which a
+client ignoring that variable could go around) is no longer used by the
+gateway's web runs; both serve :func:`serve_connect`, the same filter, and
+count in the same figures (:func:`stats`). It tunnels only to
 public addresses: every destination is resolved here, each address is checked
 with ``netguard.ip_is_public`` and the tunnel connects to the checked address
 (no second resolution, so no DNS rebinding). Loopback, private ranges, the
@@ -63,8 +69,9 @@ _lock: Optional[asyncio.Lock] = None
 refused_total = 0
 tunnels_total = 0
 
-# Connections one egress serves at once (each proxy: the web tools' one, and
-# one per agy call, BUG-156); past it, 503 at once, nothing read.
+# Connections one egress serves at once (each proxy: the loopback one, one
+# per agy call, BUG-156, and one per claude web run, PLU-162: the cap is per
+# run); past it, 503 at once, nothing read.
 MAX_CONNECTIONS = 64
 # Refusals are logged once per host and port and window (PLU-167), then
 # summed up (how many more) at the latest REFUSAL_LOG_WINDOW_S later; past
@@ -385,7 +392,6 @@ _web_refusals = RefusalLog("web egress")
 
 
 async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-    global refused_total
     cap = _web_cap
     if not cap.enter():
         await reply_busy(writer)
@@ -397,7 +403,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
     finally:
         cap.leave()
     if outcome is False:
-        refused_total += 1
+        count_refused()
 
 
 def active_connections() -> int:
@@ -405,9 +411,19 @@ def active_connections() -> int:
     return _web_cap.active
 
 
-def _count_tunnel() -> None:
+def count_tunnel() -> None:
+    """One more tunnel opened for the web tools (:func:`stats`)."""
     global tunnels_total
     tunnels_total += 1
+
+
+def count_refused() -> None:
+    """One more destination refused for the web tools (:func:`stats`)."""
+    global refused_total
+    refused_total += 1
+
+
+_count_tunnel = count_tunnel
 
 
 async def serve_connect(

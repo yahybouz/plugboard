@@ -51,6 +51,7 @@
    "plugboard.logging_config",
    "plugboard.metrics",
    "plugboard.model_identity",
+   "plugboard.net_cage",
    "plugboard.netguard",
    "plugboard.provider_admission",
    "plugboard.ratelimit",

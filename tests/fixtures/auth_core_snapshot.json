@@ -1072,6 +1072,7 @@
   "plugboard.cli_auth",
   "plugboard.cli_limits",
   "plugboard.web_egress",
+  "plugboard.net_cage",
   "plugboard.agy_store",
   "plugboard.agy_cage",
   "plugboard.agy_egress",
