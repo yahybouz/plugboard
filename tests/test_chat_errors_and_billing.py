@@ -346,9 +346,16 @@ async def test_a_timeout_names_the_provider_only(client, keys, monkeypatch):
             json=_body("test-provider:fake:model-v1", cache=False),
         )
     assert resp.status_code == 503 and resp.headers["Retry-After"] == "10"
-    detail = resp.json()["detail"]
-    assert detail.startswith("The test-provider provider did not answer in time")
-    assert "model=" not in detail and "900" not in detail
+    # The whole sentence, not a substring search: the random reference may
+    # itself contain "900" (BUG-155). Nothing else is in it: neither the model
+    # nor the 900 s timeout.
+    body = resp.json()
+    ref = body["error_ref"]
+    assert len(ref) == 8 and all(c in "0123456789abcdef" for c in ref)
+    assert body["detail"] == (
+        "The test-provider provider did not answer in time "
+        f"(reference {ref} in the gateway log)."
+    )
 
 
 async def test_the_router_cli_stream_raises_before_its_first_chunk(keys):
