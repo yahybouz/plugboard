@@ -725,3 +725,38 @@ def test_web_run_env_overrides_every_proxy_variable():
         assert env[name] == "http://127.0.0.1:40000", name
     for name in ("ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"):
         assert env[name] == "", name
+
+
+@pytest.mark.parametrize("web", [False, True], ids=["no_web", "web"])
+async def test_web_run_clears_an_inherited_all_proxy(fake_claude, monkeypatch, web):
+    """PLU-160: an ALL_PROXY / all_proxy the gateway inherited reaches a claude
+    run (build_child_env forwards proxy variables), but a web run's env
+    (build_child_env, then web_access.child_env) empties both."""
+    socks = "socks5://10.9.8.7:1080"
+    monkeypatch.setenv("ALL_PROXY", socks)
+    monkeypatch.setenv("all_proxy", socks)
+    stdout = "".join(
+        json.dumps(e) + "\n"
+        for e in (
+            {
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "ok"}]},
+            },
+            {"type": "result", "subtype": "success", "is_error": False, "result": "ok"},
+        )
+    ).encode()
+    fake_claude(stdout=stdout)
+    try:
+        await cli_subprocess.complete(
+            "claude",
+            {"model": "m-1", "messages": MSG},
+            **({"web": web_access.WebPolicy(max_uses=3)} if web else {}),
+        )
+    finally:
+        await web_egress.stop()
+    env = cli_subprocess.asyncio.create_subprocess_exec.call_args.kwargs["env"]
+    expected = "" if web else socks
+    assert env["ALL_PROXY"] == expected
+    assert env["all_proxy"] == expected
+    if web:
+        assert env["HTTPS_PROXY"].startswith("http://127.0.0.1:")
