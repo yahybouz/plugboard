@@ -17,7 +17,9 @@ from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, Optional, Tuple
 
 from plugboard import billing as _billing
+from plugboard import trace_context as _trace
 from plugboard import usage as _usage
+from plugboard.logging_config import _request_id_var
 from plugboard.tokenizer import estimate_completion_tokens, estimate_prompt_tokens
 
 log = logging.getLogger(__name__)
@@ -175,7 +177,13 @@ def record(
     With a ``hold``, the entry replaces it in one transaction. When that
     write fails, the hold is kept: the call's estimate stays counted on the
     budget until the hold lapses, rather than the call counting nothing.
+
+    The entry keeps the request's X-Request-ID (PLU-106) and the trace id of
+    its valid traceparent (PLU-107), read from the request context: run in a
+    worker thread, the call must carry that context (asyncio.to_thread does).
     """
+    request_id = _request_id_var.get()
+    trace = _trace.current.get()
     fields = dict(
         client_id=client_id,
         model=charge.model,
@@ -187,6 +195,8 @@ def record(
         key_id=key_id,
         price_key=charge.price_key,
         price_source=charge.price_source,
+        request_id=None if request_id == "-" else request_id,
+        trace_id=trace.trace_id if trace is not None else None,
     )
     if hold is not None and not hold.done:
         hold.done = True

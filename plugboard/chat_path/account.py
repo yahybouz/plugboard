@@ -19,6 +19,25 @@ from plugboard import billing as _billing
 from plugboard import live_requests as _live
 from plugboard.apikeys import get_keys_by_client, load_keys, mask_key
 
+# The usage entry fields /usage/me answers (contract 3.0.1), named one by one:
+# a column added to usage_entries stays out until it is named here. Left out
+# on purpose: price_key and price_source (they reveal provider routing) and
+# request_id and trace_id (PLU-106, not in the client contract).
+_CLIENT_USAGE_FIELDS = (
+    "id",
+    "ts",
+    "month",
+    "client_id",
+    "key_id",
+    "model",
+    "provider_id",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "pricing_month",
+    "cost_usd",
+)
+
 
 def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
     @app.get("/v1/inflight")
@@ -45,9 +64,8 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         if client_id is None:
             return {"entries": [], "summary": {}}
         m = month or _billing.current_pricing_month()
-        # Which grid entry priced a call reveals provider routing: admin only.
         entries = [
-            {k: v for k, v in e.items() if k not in ("price_key", "price_source")}
+            {k: e[k] for k in _CLIENT_USAGE_FIELDS if k in e}
             for e in core._usage.get_usage_by_client(m, client_id)
         ]
         return {
