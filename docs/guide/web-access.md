@@ -173,6 +173,14 @@ DNS does not answer in time is refused (`403`, logged as `did not resolve in
 5 s`), so slow names cannot delay billing writes or the other requests
 (since 4.15.2).
 
+A tunnel is closed after 120 seconds without a byte in one way, and in any
+case once it is `PLUGBOARD_EGRESS_TUNNEL_MAX_SECONDS` old (default `600`,
+since 4.15.2), even with bytes still flowing: a page trickled byte by byte
+cannot hold a connection forever. The guard serves at most 64 connections at
+once (`503` beyond); that cap and the tunnel's length are per egress, not per
+key: the cap per run comes with the cage of the claude web run, which gives
+each run an egress of its own.
+
 ## Load
 
 Web requests have their own cap, separate from the chat cap:

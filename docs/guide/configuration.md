@@ -60,6 +60,7 @@ A completed rotation also signs out every dashboard session and forgets the brow
 | `PLUGBOARD_WEB_TIMEOUT_S` | `900` | Deadline of one web run, at least 30 s. |
 | `PLUGBOARD_WEB_HELPER_MODEL` | `claude-sonnet-5-5` | The claude CLI's helper model during a web run; a value naming Haiku falls back to the default. |
 | `PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN` | `20000` | Input tokens a web request on a budgeted key holds per turn of its run (`web_max_uses` + 2), on top of its prompt, until it is billed (BUG-161). `0` holds the prompt's estimate only; a value that is not a whole number from 0 to 1,000,000 gives the default with one warning ([what a web request costs](web-access.md#what-a-web-request-costs)). |
+| `PLUGBOARD_EGRESS_TUNNEL_MAX_SECONDS` | `600` | Longest life of one tunnel of the egress guard (web tools and agy's egress), on top of the 120 s idle delay of each way; a value that is not a number above 0 gives the default (PLU-169). It caps each tunnel, not a key nor a run. |
 | `PLUGBOARD_INFLIGHT_WAIT_S` | `10` | How long a request waits for a free slot before `503`. `0` fails immediately. A request's waits (slot, session turn, provider) share one budget, the longer of this and `PLUGBOARD_PROVIDER_WAIT_S`; with both at `0`, a session turn sent while the previous one runs gets `503` at once ([one wait per request](clients-and-keys.md#how-limits-are-enforced)). |
 | `PLUGBOARD_LOG_FILE` | empty | Also write logs to this file, with rotation. |
 | `PLUGBOARD_LOG_MAX_BYTES` | `20971520` | Size of one log file before rotation. |

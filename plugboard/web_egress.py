@@ -29,7 +29,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Dict, List, Optional, Tuple
 
-from plugboard import netguard
+from plugboard import envcompat, netguard
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +46,9 @@ _BUF = 65536
 _DNS_THREADS = 8
 _DNS_TIMEOUT_S = 5.0
 _dns_pool: Optional[ThreadPoolExecutor] = None
+# A tunnel's whole life (PLU-169), on top of the idle delay of each way:
+# bytes trickled in both directions never keep a connection forever.
+_TUNNEL_MAX_S = 600.0
 
 _server: Optional[asyncio.AbstractServer] = None
 _port: Optional[int] = None
@@ -168,6 +171,14 @@ def _parse_target(line: str) -> Optional[Tuple[str, int]]:
     if not 0 < port < 65536:
         return None
     return host, port
+
+
+def tunnel_max_seconds() -> float:
+    """How long a tunnel may last, ``PLUGBOARD_EGRESS_TUNNEL_MAX_SECONDS``
+    (default 600; a value that is not a number above 0 gives the default)."""
+    return envcompat.get_float(
+        "PLUGBOARD_EGRESS_TUNNEL_MAX_SECONDS", default=_TUNNEL_MAX_S, above=0
+    )
 
 
 def _getaddrinfo(host: str, port: int) -> list:
@@ -359,10 +370,28 @@ async def serve_connect(
     try:
         writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         await writer.drain()
-        await asyncio.gather(_pipe(reader, up_writer), _pipe(up_reader, writer))
     except (ConnectionError, OSError):
         writer.close()  # the client left before the 200
+        up_writer.close()
+        return True
+    limit = tunnel_max_seconds()
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(_pipe(reader, up_writer), _pipe(up_reader, writer)),
+            limit,
+        )
+    except TimeoutError:
+        log.info(
+            "%s tunnel: host=%s port=%d closed at its max duration (%g s)",
+            label,
+            host[:253],
+            port,
+            limit,
+        )
+    except (ConnectionError, OSError):
+        pass
     finally:
+        writer.close()
         up_writer.close()
     return True
 

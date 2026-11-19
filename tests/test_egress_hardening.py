@@ -86,3 +86,101 @@ async def test_slow_resolution_spares_the_default_executor_and_times_out(
         assert any("did not resolve" in line for line in lines), lines
     finally:
         release.set()
+
+
+# ── PLU-169: a tunnel lasts at most PLUGBOARD_EGRESS_TUNNEL_MAX_SECONDS ──────
+
+
+@pytest.fixture
+def fake_dns(monkeypatch):
+    answers: dict = {}
+
+    def getaddrinfo(host, port):
+        if host not in answers:
+            raise socket.gaierror(socket.EAI_NONAME, "not known")
+        return [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, port))
+            for a in answers[host]
+        ]
+
+    monkeypatch.setattr(web_egress, "_getaddrinfo", getaddrinfo)
+    return answers
+
+
+async def _echo_server():
+    async def echo(reader, writer):
+        try:
+            while data := await reader.read(1024):
+                writer.write(data)
+                await writer.drain()
+        except (ConnectionError, OSError):
+            pass
+        finally:
+            writer.close()
+
+    server = await asyncio.start_server(echo, "127.0.0.1", 0)
+    return server, server.sockets[0].getsockname()[1]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (None, 600.0),
+        ("", 600.0),
+        ("abc", 600.0),
+        ("0", 600.0),
+        ("-5", 600.0),
+        ("nan", 600.0),
+        ("30", 30.0),
+        ("1.5", 1.5),
+    ],
+)
+def test_tunnel_max_seconds_setting(monkeypatch, value, expected):
+    if value is None:
+        monkeypatch.delenv("PLUGBOARD_EGRESS_TUNNEL_MAX_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("PLUGBOARD_EGRESS_TUNNEL_MAX_SECONDS", value)
+    assert web_egress.tunnel_max_seconds() == expected
+
+
+async def test_a_busy_tunnel_is_closed_past_its_max_duration(
+    guard, fake_dns, monkeypatch, caplog
+):
+    """Bytes keep flowing both ways (no idle delay ever runs out), yet the
+    tunnel is closed once it is older than the max duration."""
+    monkeypatch.setenv("PLUGBOARD_EGRESS_TUNNEL_MAX_SECONDS", "0.5")
+    upstream, up_port = await _echo_server()
+    fake_dns["busy.example.test"] = ["127.0.0.1"]
+    monkeypatch.setattr(web_egress.netguard, "ip_is_public", lambda _ip: True)
+    monkeypatch.setattr(web_egress, "_TLS_PORT", up_port)
+    try:
+        reader, writer = await asyncio.open_connection("127.0.0.1", guard)
+        writer.write(f"CONNECT busy.example.test:{up_port} HTTP/1.1\r\n\r\n".encode())
+        await writer.drain()
+        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+        assert head.startswith(b"HTTP/1.1 200"), head
+        started = time.monotonic()
+        closed = False
+        with caplog.at_level(logging.INFO, logger="plugboard.web_egress"):
+            while time.monotonic() - started < 5:
+                try:
+                    writer.write(b"ping")
+                    await writer.drain()
+                    data = await asyncio.wait_for(reader.read(1024), 1)
+                except TimeoutError:
+                    pytest.fail("the echo stopped answering, yet the tunnel is open")
+                except (ConnectionError, OSError):
+                    closed = True
+                    break
+                if not data:
+                    closed = True
+                    break
+                await asyncio.sleep(0.05)
+        elapsed = time.monotonic() - started
+        writer.close()
+        assert closed, "the tunnel outlived its max duration"
+        assert 0.4 <= elapsed < 3, elapsed
+        assert any("max duration" in r.getMessage() for r in caplog.records)
+    finally:
+        upstream.close()
+        await upstream.wait_closed()
