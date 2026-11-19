@@ -25,9 +25,11 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from plugboard import chat_billing
+from plugboard import cli_tools as _cli_tools
 from plugboard import live_requests as _live
 from plugboard import request_wait as _request_wait
 from plugboard.api_contract import CHAT_ROLES, MAX_OUTPUT_TOKENS_CAP
+from plugboard.apikeys import allows_cli_tools
 from plugboard.chat_path.billing import _keep_hold
 from plugboard.chat_path.limits import _check_client_rpm
 from plugboard.chat_path.responses import (
@@ -67,6 +69,17 @@ def _shown_role(role: str) -> str:
     unprintable (a line break, a control character) as ?."""
     shown = "".join(c if c.isprintable() else "?" for c in role[:40])
     return shown + ("..." if len(role) > 40 else "")
+
+
+def _cli_tools_right(
+    client_id: Optional[str], key_record: Optional[Dict[str, Any]]
+) -> bool:
+    """Whether the call may have tools emulated on CLI routes (ADR-039): the
+    instance option is on and the calling key holds ``allow_cli_tools``. The
+    admin, who has no key record, never may."""
+    if not client_id or client_id == "admin":
+        return False
+    return _cli_tools.emulation_enabled() and allows_cli_tools(key_record)
 
 
 def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
@@ -322,9 +335,33 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         # After the 404, before the 402 and the rpm count, the session turn and
         # the cache: a request only CLI routes serve, asking for what a CLI cannot
         # (tools, structured output, images), is refused with nothing counted.
-        refusal = core.cli_refusal(body)
+        # ADR-039: with the option and the key right, tools on CLI routes only
+        # are emulated as text; without both, the refusal is unchanged.
+        cli_tools_right = _cli_tools_right(client_id, key_record)
+        if cli_tools_right:
+            refusal = core.cli_refusal(body, cli_tools=True)
+        else:
+            refusal = core.cli_refusal(body)
         if refusal is not None:
             return _unsupported_on_cli_response(refusal)
+        emulated = (
+            cli_tools_right
+            and _cli_tools.engaged(body)
+            and core.cli_refusal(body) is not None
+        )
+        forward_options = dict(route_options)
+        if emulated:
+            # Checked here, before anything is counted: a session cannot
+            # replay tool calls (v1), and the bounds hold before any call.
+            if in_session:
+                raise core._InvalidChatRequest(
+                    "session_id cannot be used with tools on a CLI subscription route"
+                )
+            try:
+                _cli_tools.to_text_body(body)
+            except _cli_tools.CliToolsRequestError as exc:
+                raise core._InvalidChatRequest(str(exc)) from None
+            forward_options["cli_tools"] = True
 
         # A budget cannot hold a call whose price is unknown (402, nothing called)
         if client_id and client_id != "admin":
@@ -466,7 +503,12 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         # provider is called (429 when it does not fit, 503 when usage cannot be
         # written); the hold is settled when the call is billed, else released
         # once the response is sent (_session_turn_dep).
-        await core._hold_budget(request, client_id, key_record, body)
+        if emulated:
+            await core._hold_budget(
+                request, client_id, key_record, body, cli_tools=True
+            )
+        else:
+            await core._hold_budget(request, client_id, key_record, body)
 
         if body.get("stream") is True:
             # Fast path: subprocess providers execute synchronously (CLI returns
@@ -490,12 +532,15 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                 )
             except Exception:
                 _stream_bypass = False
+            # ADR-039: tools emulated on a CLI route are read from the whole
+            # answer, so even a CLI that streams (claude, agy) is run whole.
+            _stream_bypass = _stream_bypass or emulated
 
             if _stream_bypass:
                 try:
                     result = await _unless_client_gone(
                         request,
-                        core.forward({**body, "stream": False}, **route_options),
+                        core.forward({**body, "stream": False}, **forward_options),
                     )
                 except _ClientGone:
                     return _client_gone_response(body.get("model", "?"))
@@ -765,7 +810,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         t0 = time.perf_counter()
         try:
             result = await _unless_client_gone(
-                request, core.forward(body, **route_options)
+                request, core.forward(body, **forward_options)
             )
         except _ClientGone:
             return _client_gone_response(body.get("model", "?"))

@@ -9,6 +9,10 @@ non-text content part: these used to be dropped silently.
 that a caller can refuse the request with the reason ``UNSUPPORTED_ON_CLI``.
 It is a pure function: it imports neither the router nor the app, and it never
 raises, whatever the shape of the body.
+
+With ``cli_tools`` (the instance option and the key right of ADR-039, both
+held) a body with tools no longer lists ``tools`` and ``tool_choice``: they
+are emulated as text (``plugboard.cli_tools``). Everything else stays refused.
 """
 
 from __future__ import annotations
@@ -50,21 +54,23 @@ def _structured_response_format(response_format: Any) -> bool:
     return response_format.get("type", "text") != "text"
 
 
-def unsupported_on_cli(body: Mapping[str, Any]) -> List[str]:
+def unsupported_on_cli(body: Mapping[str, Any], cli_tools: bool = False) -> List[str]:
     """Fields of ``body`` a CLI subscription route cannot serve.
 
     The list has no duplicates and keeps this order: ``tools``,
     ``tool_choice``, ``functions``, ``function_call``, ``response_format``,
     then the ``content:<type>`` entries sorted (``content:unknown`` for a part
     that is not an object or has no type). An empty list means the body is
-    text only.
+    text only. With ``cli_tools`` and a non-empty ``tools``, neither ``tools``
+    nor ``tool_choice`` is listed (ADR-039).
     """
     if not isinstance(body, Mapping):
         return []
     refused: List[str] = []
-    if body.get("tools"):
+    emulated = cli_tools and bool(body.get("tools"))
+    if body.get("tools") and not emulated:
         refused.append("tools")
-    if body.get("tool_choice") not in _NO_CALL_CHOICES:
+    if body.get("tool_choice") not in _NO_CALL_CHOICES and not emulated:
         refused.append("tool_choice")
     if body.get("functions"):
         refused.append("functions")

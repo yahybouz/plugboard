@@ -320,3 +320,33 @@ async def test_a_refusal_raised_by_forward_stream_answers_the_same_400(
     assert resp.json() == _refusal(["tools"])
     assert received == []
     assert completed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("option", [None, "", "0", "true"])
+async def test_a_key_with_the_cli_tools_right_gets_the_same_400_with_the_option_off(
+    client, isolated, tmp_path, monkeypatch, option
+):
+    """ADR-039 case 1: the key right alone changes nothing."""
+    import plugboard.apikeys as ak
+    from plugboard import app as app_mod
+
+    completed, _ = isolated
+    monkeypatch.setattr(ak, "_DATA_DIR", tmp_path)
+    monkeypatch.setattr(ak, "KEYS_FILE", tmp_path / "api_keys.json")
+    monkeypatch.setattr(ak, "KEYS_LOCK", tmp_path / "api_keys.json.lock")
+    monkeypatch.setattr(app_mod, "_check_price_known", lambda *a, **k: None)
+    monkeypatch.delenv("PLUGBOARD_CLI_TOOLS_EMULATION", raising=False)
+    if option is not None:
+        monkeypatch.setenv("PLUGBOARD_CLI_TOOLS_EMULATION", option)
+    rec = ak.create_key("cli-tools-agent", "test", allow_cli_tools=True)
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": f"Bearer {rec['key']}"},
+        json=_chat(CLI_ROUTE, tools=TOOLS),
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert resp.json() == _refusal(["tools"])
+    assert completed == []

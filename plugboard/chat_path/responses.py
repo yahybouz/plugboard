@@ -22,6 +22,7 @@ from plugboard import chat_billing
 from plugboard.metrics import record_busy_refusal
 from plugboard.cli_auth import AuthError
 from plugboard.cli_limits import UNSUPPORTED_ON_CLI
+from plugboard.cli_tools import CLI_TOOL_CALL_INVALID, CliToolCallError
 from plugboard.cli_subprocess import CliSubprocessError, ModelNotServedError
 from plugboard.router import (
     ProviderDisabledError,
@@ -141,6 +142,31 @@ def _unsupported_on_cli_response(exc: UnsupportedOnCliError) -> JSONResponse:
             "hint": "Send plain text messages, or pick a model served by an API "
             "or Ollama provider from GET /v1/models.",
         },
+    )
+
+
+def _cli_tool_call_response(exc: CliToolCallError) -> JSONResponse:
+    """502 ``cli_tool_call_invalid``: the CLI answered a request with tools
+    emulated as text (ADR-039) off the protocol. Not retried, not billed, not
+    counted against the route; ``x-should-retry: false`` tells the SDKs that
+    read it. The detail is written here: the reason and, when there is one,
+    the tool name (shortened, printable), never the model's text. The log
+    gets the reason only.
+    """
+    ref = secrets.token_hex(4)
+    log.warning("cli tool call invalid ref=%s reason=%s", ref, exc.reason)
+    detail = f"The CLI subscription route answered off the tool protocol ({exc.reason}"
+    if exc.tool:
+        shown = "".join(c if c.isprintable() else "?" for c in exc.tool[:64])
+        detail += f", tool '{shown}'"
+    detail += (
+        "); nothing was billed and the request was not retried "
+        f"(reference {ref} in the gateway log)."
+    )
+    return JSONResponse(
+        status_code=502,
+        content={"detail": detail, "code": CLI_TOOL_CALL_INVALID, "error_ref": ref},
+        headers={"x-should-retry": "false"},
     )
 
 
@@ -412,6 +438,8 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
             return _unsupported_on_cli_response(exc)
         if isinstance(exc, ModelNotServedError):
             return _model_not_served_response()  # nothing was started (BUG-120)
+        if isinstance(exc, CliToolCallError):
+            return _cli_tool_call_response(exc)  # ADR-039, never retried
         # Before the timeout test: a CLI message quotes its stderr.
         if isinstance(exc, CliSubprocessError):
             return _cli_error_response(exc, client_id)

@@ -36,6 +36,7 @@
    "plugboard.cli_auth",
    "plugboard.cli_limits",
    "plugboard.cli_subprocess",
+   "plugboard.cli_tools",
    "plugboard.config",
    "plugboard.decision_api",
    "plugboard.decisions",
