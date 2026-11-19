@@ -391,6 +391,69 @@ provider. What the call does and does not do:
   web run billed on the tokens claude reports; both are checked on the first
   real calls after the switch.
 
+## Switching to 4.15.2
+
+- Image `plugboard:private-full-v4.15.2`. The image recipe does not change
+  since 4.15.0: the [production gate](prod-gate.md) expects the same CLI
+  versions (`0.65.0`, `2.1.325 (Claude Code)`, `codex-cli 0.163.0`, agy
+  `1.4.4`, `gh version 2.104.0 (2026-11-12)`) and still checks the image ID
+  and that no `bwrap` is on the PATH. From an older version, read the
+  sections of the versions in between first.
+- Three settings are new, each with a safe default; set none of them for
+  production to work, except the third if an application uses typed decisions:
+  - `PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN` (BUG-161): the input tokens a web
+    request holds for each turn of its run on a key with a monthly budget.
+    Default `20000`; `0` holds the prompt's estimate only (as before); at most
+    `1000000` (a value that is not a whole number in that range gives the
+    default, with one warning).
+  - `PLUGBOARD_EGRESS_TUNNEL_MAX_SECONDS` (PLU-169): the longest a tunnel of
+    the egress guard (web runs and agy) stays open. Default `600`.
+  - `PLUGBOARD_DECISIONS_ENABLED` (PLU-35): typed decisions are off by
+    default. Set it to `1` **before the switch** if an application uses
+    `POST /v1/decisions`; off, `GET /v1/decisions/models` answers
+    `data: []` and `POST /v1/decisions` the documented `403`.
+- Changes of behaviour to expect:
+  - agy runs on a private store per call (BUG-157): the shared sign-in token is
+    no longer refreshed by the calls. If its access token has expired, each
+    call refreshes it in its own copy, lost with the call. Check the shared
+    `bin/` and `builtin/` once, as in
+    [the check after switching to 4.15.2](#check-agys-shared-bin-and-builtin-once-after-switching-to-4152).
+  - The private folders of agy and of the web runs are made beside the CLIs'
+    launch directory, no longer in it. A `PLUGBOARD_SUBPROCESS_CWD` that
+    holds the gateway's temporary directory refuses agy and the web runs
+    (`503 provider_sandbox_unavailable`): leave it unset or point it elsewhere.
+  - A claude web run runs in a network cage (PLU-162): when `bwrap` or its
+    network namespace is refused, it answers
+    `503 provider_sandbox_unavailable` and claude is not started.
+  - A web run that spent its turns ends with `502 web_budget_exhausted`
+    without trying the next claude route (BUG-160).
+  - agy's egress closes a tunnel whose TLS server name is not the host of its
+    `CONNECT` (PLU-171).
+- After the switch, run `deploy/ovh/verify-agy-sandbox.py` as in
+  [agy cage](#agy-cage): the line must show `"store_private": true`, then
+  `exit 0`. Watch the gateway log for `agy egress refused` with
+  `sent another TLS name`, and, during a first web run, for
+  `web egress refused` and `web egress tunnel`.
+- After the switch, `GET /health` answers `{"ok": true, "version": "4.15.2"}`
+  and a chat request without the web answers as before.
+- Rolling back to 4.15.1 works: nothing written changes shape. agy then runs
+  on the shared store again and the web runs lose their cage.
+- Not checked by these steps: each of the following is shown by a real call on
+  the UAT, before production:
+  - two real agy calls in a row: the private store, the shared token
+    unchanged (compare its fingerprint before and after);
+  - real ClientHellos to `oauth2.googleapis.com` and
+    `cloudcode-pa.googleapis.com` accepted by agy's TLS-name check;
+  - a real web run of claude in its cage, plain and streamed, that answers,
+    with the hosts it contacts noted;
+  - that claude 2.1.x writes its `tool_use` before running it (PLU-159);
+  - a spent web run with two claude routes: `502 web_budget_exhausted`, one
+    run only;
+  - the hold of BUG-161 compared with the real cost of a web request;
+  - `/v1/decisions/models` answers `data: []` with decisions off;
+  - `bwrap --bind / /` and its network namespace under the AppArmor profile
+    `plugboard-userns`.
+
 ## PID 1 of the container: tini
 
 From 4.14.4 the image starts `tini` as PID 1 (BUG-113, BUG-123), whatever the
