@@ -1,26 +1,24 @@
 """What the operator and integrators read for 4.14.5 (release 4.14.5).
 
-The version is 4.14.5 or a later release in ``VERSION`` and
-``plugboard.__version__``, and the compose image tag and the health examples
-name that version (4.14.6 pins its own in its test); the dated CHANGELOG
-entry names every
-ticket of the release with its commit on the release branch (never the
-commit of a work branch), says that the API contracts are unchanged (3.0.1),
-says that BUG-106 stays open, and lists what was not verified; the production
-runbook has a "Switching to 4.14.5" section that says what to check after the
+The dated CHANGELOG entry appears once, under Unreleased, and attributes
+every change of the release to its ticket and to its commit on the release
+branch, and to no other (never the commit of a work branch); it says that
+the API contracts are unchanged (3.0.1), says that BUG-106 stays open, and
+lists what was not verified; the production runbook has a "Switching to
+4.14.5" section that names the 4.14.5 image and says what to check after the
 switch (PID 1 by ``deploy/check-pid1.py``, the Claude quota watch).
 
-The release note keeps the contract 4.14.5 published (3.0.1); the files in
-``docs/api/`` are not pinned here, since a later change may publish a newer
-contract (3.1.0, ADR-039), as 4.14.3 and 4.14.4 allow for theirs.
+These are the facts of 4.14.5 only: the current version, the compose image
+tag and the health examples are pinned by the test of the current release,
+not here. The release note keeps the contract 4.14.5 published (3.0.1); the
+files in ``docs/api/`` are not pinned here, since a later change may publish
+a newer contract (3.1.0, ADR-039), as 4.14.3 and 4.14.4 allow for theirs.
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
-
-import plugboard
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -80,34 +78,24 @@ def _flat(text: str) -> str:
     return " ".join(text.split())
 
 
-def _release_tuple(version: str) -> tuple[int, ...]:
-    return tuple(int(part) for part in version.split("."))
+# A change of the entry: "(TICKET, `sha`)" after its bold title.
+ATTRIBUTION = re.compile(r"\*\* \(([A-Z]+(?:-[A-Z]+)?-\d+), `([0-9a-f]{7,40})`\)")
 
 
-def _current_version() -> str:
-    return (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-
-
-def test_the_version_is_4_14_5_or_later():
-    version = _current_version()
-    assert _release_tuple(version) >= (4, 14, 5)
-    assert plugboard.__version__ == version
-
-
-def test_the_compose_file_and_the_health_examples_name_the_current_version():
-    version = _current_version()
-    compose = (ROOT / "deploy" / "ovh" / "compose.yml").read_text(encoding="utf-8")
-    assert f"${{PLUGBOARD_IMAGE:-plugboard:private-full-v{version}}}" in compose
-    monitoring = (ROOT / "docs" / "guide" / "monitoring.md").read_text(encoding="utf-8")
-    assert f'{{"ok": true, "version": "{version}"}}' in monitoring
-    assert f'{{"ready": true, "version": "{version}"}}' in monitoring
-    assert '"version": "4.14.4"' not in monitoring
-
-
-def test_the_entry_sits_under_unreleased():
+def test_one_entry_under_unreleased():
+    # Changes made after the release go under Unreleased, above this entry.
     text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert text.count("## [4.14.5]") == 1
     assert text.index("## [Unreleased]") < text.index("## [4.14.5] — 2026-11-16")
     assert text.index("## [4.14.5] — 2026-11-16") < text.index("## [4.14.4]")
+
+
+def test_every_change_is_attributed_to_its_ticket_and_release_commit():
+    # Exactly the tickets of the release, each with its own commit: no change
+    # is missing, none is added, none cites another ticket's commit.
+    pairs = ATTRIBUTION.findall(_release())
+    assert len(pairs) == len(COMMITS)
+    assert dict(pairs) == COMMITS
 
 
 def test_each_ticket_cites_its_release_commit():
