@@ -365,3 +365,22 @@ async def test_egress_alert_without_webhook_sends_nothing(monkeypatch):
     with aioresponses() as m:
         await alerts.send_egress_refused_alert("acme", "api.acme.test")
         assert m.requests == {}
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "::127.0.0.1",  # IPv4-compatible (::/96, deprecated)
+        "::a00:1",  # ::10.0.0.1
+        "::ffff:0:7f00:1",  # IPv4-translated (SIIT, ::ffff:0:0:0/96)
+        "::ffff:0:a9fe:a9fe",  # ::ffff:0:169.254.169.254
+        "fec0::1",  # site-local (fec0::/10, deprecated)
+    ],
+)
+def test_ipv6_forms_that_reach_inside_are_not_public(address):
+    """PLU-161: no IPv6 form that carries or reaches an internal address."""
+    assert netguard.ip_is_public(address) is False
+
+
+def test_public_ipv6_still_public():
+    assert netguard.ip_is_public("2606:4700:4700::1111") is True

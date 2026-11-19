@@ -38,13 +38,22 @@ _CGNAT = ipaddress.ip_network("100.64.0.0/10")
 _METADATA = ipaddress.ip_address("169.254.169.254")
 _NAT64 = ipaddress.ip_network("64:ff9b::/96")
 _NAT64_LOCAL = ipaddress.ip_network("64:ff9b:1::/48")
+# IPv6 ranges refused whole (PLU-161): IPv4-compatible (::/96, deprecated),
+# IPv4-translated (SIIT, ::ffff:0:0:0/96) and site-local (fec0::/10,
+# deprecated). Python reads some of them as global; a stack or a translator
+# may still route them inside.
+_V6_REFUSED = (
+    ipaddress.ip_network("::/96"),
+    ipaddress.ip_network("::ffff:0:0:0/96"),
+    ipaddress.ip_network("fec0::/10"),
+)
 
 
 def ip_is_public(address: str) -> bool:
     ip = ipaddress.ip_address(address.split("%", 1)[0])
     if isinstance(ip, ipaddress.IPv6Address):
         # IPv6 forms that carry an IPv4 address are judged by that address.
-        if ip in _NAT64_LOCAL:
+        if ip in _NAT64_LOCAL or any(ip in net for net in _V6_REFUSED):
             return False
         embedded = (
             ip.ipv4_mapped or ip.sixtofour or (ip.teredo[1] if ip.teredo else None)
