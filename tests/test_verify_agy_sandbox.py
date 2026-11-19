@@ -239,9 +239,12 @@ def test_the_cage_passes_every_check(world, real_bwrap):
     assert report["env"]["secret_names"] == []
     assert report["env"]["AGY_CLI_DISABLE_AUTO_UPDATE"] == "1"
     assert report["token"] == "readable, rewritable, unchanged"
+    # The call's store is its own (BUG-157): what the probe left there on
+    # purpose never reached the shared store.
+    assert report["store_private"] is True
     # The token is the same file, byte for byte, and no witness is left.
     assert _token_state(world["token"]) == before
-    assert not [p for p in world["store"].iterdir() if ".plugboard-verify-" in p.name]
+    assert not [p for p in world["store"].rglob("*") if ".plugboard-verify-" in p.name]
     # The private launch directory and its TMPDIR are gone.
     assert list(world["tmp"].iterdir()) == []
     _assert_gemini_config_checked(report, world)
@@ -341,10 +344,12 @@ _WRITABLE_SETTINGS = """real = agy_cage.cage_argv
 
 
 def leaky(binary, args, **kw):
-    # agy's settings in its store left writable (as before 4.14.4): what
-    # the check must catch.
+    # agy's shared store bound writable and its settings in it left
+    # writable (as before 4.14.4): what the check must catch.
     argv = real(binary, args, **kw)
     store = kw["env"]["HOME"] + "/.gemini/antigravity-cli/"
+    first = argv.index("--bind")
+    argv[first + 1] = argv[first + 2]
     out = []
     i = 0
     while i < len(argv):
@@ -381,9 +386,42 @@ def test_writable_agy_settings_fail_the_check(world, real_bwrap):
         "jetski_state.pbtxt": "opened",
     }
     assert sorted(report["failures"]) == sorted(
-        f"agy's {name} not read-only in the cage ({state})"
-        for name, state in report["store_settings_writes_denied"].items()
+        [
+            f"agy's {name} not read-only in the cage ({state})"
+            for name, state in report["store_settings_writes_denied"].items()
+        ]
+        + ["agy's writes reach the shared store (BUG-157)"]
     )
+    assert _store_snapshot(world["store"]) == before
+    _no_secret_in(proc)
+
+
+_SHARED_STORE = """real = agy_cage.cage_argv
+
+
+def shared(binary, args, **kw):
+    # agy's shared store bound writable instead of the call's own (as up to
+    # 4.15.1): what the check must catch.
+    argv = real(binary, args, **kw)
+    first = argv.index("--bind")
+    argv[first + 1] = argv[first + 2]
+    return argv
+
+
+agy_cage.cage_argv = shared
+"""
+
+
+def test_a_shared_store_fails_the_check(world, real_bwrap):
+    """BUG-157, not vacuous: the cage with the shared store bound writable
+    fails, and the check leaves nothing behind in it."""
+    before = _store_snapshot(world["store"])
+    proc = _run(world, patch=_SHARED_STORE)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    report = _report(proc)
+    assert report["result"] == "fail"
+    assert report["store_private"] is False
+    assert report["failures"] == ["agy's writes reach the shared store (BUG-157)"]
     assert _store_snapshot(world["store"]) == before
     _no_secret_in(proc)
 
@@ -523,9 +561,10 @@ def test_without_projects_json_the_check_passes(world, real_bwrap):
 
 
 def test_a_visible_path_fails_the_check(world, real_bwrap):
-    """The check is not vacuous: an app root inside agy's store (which the
-    cage shows) is reported readable and fails the run."""
-    leaky = world["store"] / "app"
+    """The check is not vacuous: an app root inside agy's bin/ (which the
+    cage copies into the call's store, BUG-157) is reported readable and
+    fails the run."""
+    leaky = world["store"] / "bin" / "app"
     (leaky / "data").mkdir(parents=True)
     (leaky / "data" / "canary.txt").write_text("app-secret")
     (leaky / "logs").mkdir()

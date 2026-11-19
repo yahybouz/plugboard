@@ -26,6 +26,7 @@ import logging
 import os
 import socket
 import sys
+import tempfile
 
 import pytest
 
@@ -58,6 +59,11 @@ def _listening_unix(path: str) -> socket.socket:
     return sock
 
 
+def _store(setup) -> str:
+    """A fresh private store of the call (BUG-157), in the launch folder."""
+    return tempfile.mkdtemp(prefix="agy-store-", dir=setup["spawn"])
+
+
 @pytest.fixture
 def fake_agy(tmp_path):
     binary = tmp_path / "opt" / "agy"
@@ -76,7 +82,9 @@ def test_cage_has_no_network_but_the_egress_socket(setup, fake_agy):
     listener = _listening_unix(egress)
     try:
         env = {"HOME": str(setup["home"]), "TMPDIR": tmpdir, **agy_cage.proxy_env()}
-        argv = agy_cage.cage_argv(fake_agy, ["models"], env=env, tmpdir=tmpdir)
+        argv = agy_cage.cage_argv(
+            fake_agy, ["models"], env=env, tmpdir=tmpdir, private_store=_store(setup)
+        )
     finally:
         listener.close()
 
@@ -121,11 +129,15 @@ def test_no_egress_socket_no_cage(setup, fake_agy):
     tmpdir = _tmpdir(setup)
     env = {"HOME": str(setup["home"]), "TMPDIR": tmpdir}
     with pytest.raises(agy_cage.CageUnavailable, match="egress"):
-        agy_cage.cage_argv(fake_agy, ["models"], env=env, tmpdir=tmpdir)
+        agy_cage.cage_argv(
+            fake_agy, ["models"], env=env, tmpdir=tmpdir, private_store=_store(setup)
+        )
     # A regular file where the socket should be is no socket either.
     (setup["spawn"] / "agy-tmp-net" / agy_cage.EGRESS_SOCKET).write_text("x")
     with pytest.raises(agy_cage.CageUnavailable, match="egress"):
-        agy_cage.cage_argv(fake_agy, ["models"], env=env, tmpdir=tmpdir)
+        agy_cage.cage_argv(
+            fake_agy, ["models"], env=env, tmpdir=tmpdir, private_store=_store(setup)
+        )
 
 
 async def test_agy_caged_serves_the_socket_and_sets_the_proxy(setup, fake_agy):

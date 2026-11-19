@@ -37,8 +37,18 @@ writable; its environment holds no server secret and has
 ``AGY_CLI_DISABLE_AUTO_UPDATE=1``; agy's sign-in token is readable and
 rewritable without being changed (opened ``r+b`` without writing,
 ``os.access(W_OK)``, a witness file created then renamed in the store, then
-removed). The token's content is never printed nor copied anywhere; the
-script checks, in memory, that it is unchanged afterwards.
+removed). The token's content is never printed nor copied anywhere by the
+script (the cage itself copies it into the call's own store, see below); the
+script checks, in memory, that the shared token is unchanged afterwards.
+
+Since 4.15.2 the store the cage shows is the call's own (BUG-157): a fresh
+folder beside the ``TMPDIR``, holding copies of the token, ``bin/`` and
+``builtin/``, bound at the store's path instead of the shared store, and
+removed after the call. The probe leaves a witness on purpose in that store
+and in its ``bin/`` (``store_kept``); afterwards the script looks for them in
+the shared store, outside the cage: ``"store_private": true`` when neither is
+there. One found there (removed at once) fails the check: agy's writes, a
+forged token or a program in ``bin/`` included, would reach the next calls.
 
 agy 1.4.4 cannot start without ``~/.gemini/config``, beside its store (UAT,
 15/11: every call failed when the cage did not show it). The cage also shows
@@ -57,16 +67,16 @@ and the check fails (exit 1, ``agy_setup``: ``missing``), saying to run agy
 once.
 
 agy's settings in its store (``agy_cage.STORE_READ_ONLY``: ``settings.json``,
-``installation_id``, ``jetski_state.pbtxt``) are bound read-only over the
-writable store (BUG-108): the probe opens each file for writing (nothing
+``installation_id``, ``jetski_state.pbtxt``) are bound read-only, from the
+shared store, over the call's writable one (BUG-108): the probe opens each file for writing (nothing
 created nor truncated); each must fail with ``EROFS``
 (``store_settings_writes_denied``), or be ``absent`` (not in the store: not a
 failure). It also creates, then removes, a witness in ``conversations/``
 (``store_conversation_write``) and in what agy unpacks,
 ``agy_cage.STORE_UNPACKED``: ``bin/`` and ``builtin/``, which agy rewrites
-after its install (``store_unpacked_write``). Each must be ``written``, or
-``absent`` when agy never made the folder; ``EROFS`` there fails the check:
-agy would fail.
+after its install (``store_unpacked_write``), all in the call's own store.
+Each must be ``written``, or ``absent`` when agy never made the folder;
+``EROFS`` there fails the check: agy would fail.
 
 The cage has no network of its own (``--unshare-net``, BUG-156): its only
 way out is the egress socket in its ``TMPDIR``, served by the gateway's
@@ -272,11 +282,23 @@ for name in p["store_read_only"]:
     else:
         store_settings[name] = open_for_writing(path)
 out["store_settings_writes"] = store_settings
+# In the call's own store (BUG-157) the folder starts absent: agy makes it.
 conversations = os.path.join(store, "conversations")
-out["store_conversation_write"] = (
-    write_state(conversations) if os.path.isdir(conversations) else "absent"
-)
-# What agy unpacks (bin/, builtin/): writable, agy rewrites it (review M2).
+made = False
+if not os.path.lexists(conversations):
+    try:
+        os.mkdir(conversations)
+        made = True
+    except OSError as exc:
+        out["store_conversation_write"] = why(exc)
+if os.path.isdir(conversations):
+    out["store_conversation_write"] = write_state(conversations)
+    if made:
+        os.rmdir(conversations)
+elif "store_conversation_write" not in out:
+    out["store_conversation_write"] = "absent"
+# What agy unpacks (bin/, builtin/): writable in the call's copy, agy
+# rewrites it (review M2).
 out["store_unpacked_write"] = {
     name: (
         write_state(os.path.join(store, name))
@@ -389,6 +411,20 @@ else:
     except OSError as exc:
         steps["witness_renamed"] = why(exc)
 out["token"] = steps
+
+# The call's store is its own (BUG-157): a witness left on purpose in it and
+# in its bin/ must never be found in the shared store afterwards (the script
+# looks, outside the cage, and removes it if it is there).
+kept = {}
+for folder in (store, os.path.join(store, "bin")):
+    if os.path.isdir(folder):
+        try:
+            with open(os.path.join(folder, p["witness"] + "kept"), "xb") as handle:
+                handle.write(b"witness")
+            kept[folder] = "written"
+        except OSError as exc:
+            kept[folder] = why(exc)
+out["store_kept"] = kept
 print(json.dumps(out))
 """
 
@@ -692,6 +728,23 @@ def main() -> None:
         failures.append("a server secret reached the cage's environment")
     if seen["env"]["AGY_CLI_DISABLE_AUTO_UPDATE"] != "1":
         failures.append("AGY_CLI_DISABLE_AUTO_UPDATE=1 missing")
+
+    # The call's store is its own (BUG-157): what the probe left in it on
+    # purpose never reaches the shared store (removed here if it did).
+    reached = []
+    for folder in seen["store_kept"]:
+        path = os.path.join(folder, params["witness"] + "kept")
+        if os.path.lexists(path):
+            reached.append(os.path.relpath(path, store))
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+    # (A read-only bin/ is reported by store_unpacked_write.)
+    report["store_private"] = not reached and bool(seen["store_kept"])
+    if reached:
+        failures.append("agy's writes reach the shared store (BUG-157)")
+    elif seen["store_kept"].get(store) != "written":
+        report["store_private"] = False
+        failures.append("agy cannot write in its own store in the cage")
 
     steps = seen["token"]
     after = _token_fingerprint(token)

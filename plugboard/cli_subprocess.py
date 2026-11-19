@@ -297,9 +297,8 @@ _PROVIDER_ENV_ALLOWLIST: Dict[str, frozenset] = {
         }
     ),
     # agy keeps its Google sign-in under ~/.gemini/antigravity-cli
-    # (antigravity-oauth-token): HOME is enough. It records each conversation
-    # in the same directory, which must therefore never be deleted: only what
-    # each call created is removed after it (BUG-97, see agy_store).
+    # (antigravity-oauth-token): HOME is enough. Each call runs on a private
+    # copy of that store, thrown away after it (BUG-157, see agy_store).
     "agy": frozenset(),
     "claude": frozenset(
         {
@@ -715,9 +714,9 @@ def agy_private_tmp(spawn_cwd: str) -> Iterator[str]:
     its own: a fresh directory under the launch directory of the CLIs
     (``mkdtemp``, mode 0700), holding nothing of the server or of another
     request, gone when the request ends. This bounds the writes a prompt can
-    make through agy's file tool; it is not a sandbox, and agy still keeps
-    its own record of each conversation under its home, removed after each
-    call by agy_store (BUG-97).
+    make through agy's file tool; it is not a sandbox. agy keeps its own
+    record of each conversation in its store, the call's private one
+    (agy_store, BUG-157), gone with the request too.
     """
     path = tempfile.mkdtemp(prefix="agy-tmp-", dir=spawn_cwd)
     try:
@@ -746,21 +745,33 @@ async def agy_caged(
     binary: str, args: List[str], spawn_cwd: str
 ) -> AsyncIterator[tuple]:
     """Yield ``(argv, env)`` running agy ``args`` in its cage, with a private
-    ``TMPDIR`` and the cage's egress removed afterwards (keep the context
-    open until the child is dead and reaped).
+    ``TMPDIR``, a private store (BUG-157) and the cage's egress, all removed
+    afterwards (keep the context open until the child is dead and reaped).
 
     The cage has no network (BUG-156): its only way out is the unix socket
     served here, in the TMPDIR, by agy's proxy (agy_egress), which agy
-    reaches through the relay its proxy variables name.
+    reaches through the relay its proxy variables name. agy's store is a
+    folder of this call only, beside the TMPDIR (agy_store.private_store),
+    which the cage fills with copies of the token, ``bin/`` and ``builtin/``
+    and shows at the store's path: what agy writes there never reaches the
+    shared store.
 
     Raises :class:`agy_cage.CageUnavailable` before anything is launched when
-    the cage or its egress cannot be built.
+    the cage, its store or its egress cannot be built.
     """
     env = build_child_env("agy")
     # Every connection through the cage's relay, never an inherited proxy.
     env.update(agy_cage.proxy_env())
-    # Resolved: the cage binds the TMPDIR by its real path.
-    with agy_private_tmp(os.path.realpath(spawn_cwd)) as tmpdir:
+    # Resolved: the cage binds the TMPDIR and the store by their real path.
+    spawn = os.path.realpath(spawn_cwd)
+    with contextlib.ExitStack() as folders:
+        tmpdir = folders.enter_context(agy_private_tmp(spawn))
+        try:
+            store = folders.enter_context(agy_store.private_store(spawn))
+        except OSError as exc:
+            raise agy_cage.CageUnavailable(
+                f"agy private store cannot be created ({type(exc).__name__})"
+            ) from None
         env["TMPDIR"] = tmpdir
         try:
             egress = await agy_egress.start(
@@ -771,7 +782,12 @@ async def agy_caged(
                 f"agy egress socket cannot be created ({type(exc).__name__})"
             ) from None
         try:
-            yield agy_cage.cage_argv(binary, args, env=env, tmpdir=tmpdir), env
+            yield (
+                agy_cage.cage_argv(
+                    binary, args, env=env, tmpdir=tmpdir, private_store=store
+                ),
+                env,
+            )
         finally:
             await egress.close()
 
@@ -2333,9 +2349,10 @@ async def complete(
             argv.append(backend.stdin_arg)
         if kind == "agy":
             # Inside its bubblewrap cage, or not at all (BUG-86, agy_cage);
-            # raised before anything is launched. Its TMPDIR is private, never
-            # the server's nor /tmp (see agy_private_tmp()); like the gemini
-            # home, removed once the child is dead and reaped.
+            # raised before anything is launched. Its TMPDIR and its store are
+            # private, never the server's, /tmp nor the shared store (see
+            # agy_private_tmp(), agy_store); like the gemini home, removed once
+            # the child is dead and reaped.
             try:
                 argv, env = await cleanup.enter_async_context(
                     agy_caged(argv[0], argv[1:], spawn_cwd)
@@ -2347,14 +2364,6 @@ async def complete(
         # so a burst of requests can't fork-bomb the host (TM-001 mitigation).
         _live.update(phase="cli_queue")
         async with _get_semaphore(kind):
-            store_call: Optional[agy_store.AgyCall] = None
-            if kind == "agy":
-                # agy records each conversation, prompt in clear, under its
-                # home (BUG-97): what this call created is removed once the
-                # child is dead and reaped, however the call ends. Registered
-                # right before the launch, see agy_store.
-                store_call = agy_store.begin(env)
-                cleanup.callback(store_call.end)
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *argv,
@@ -2394,18 +2403,12 @@ async def complete(
                 # code is reported below.
                 if read_delta is not None and on_delta is not None:
                     pending_io = _communicate_streaming(
-                        proc,
-                        prompt.encode("utf-8"),
-                        # agy's first event already names the conversation.
-                        store_call.watching(read_delta) if store_call else read_delta,
-                        relay,
+                        proc, prompt.encode("utf-8"), read_delta, relay
                     )
                 else:
                     pending_io = proc.communicate(prompt.encode("utf-8"))
                 stdout, stderr = await asyncio.wait_for(pending_io, timeout=deadline)
                 finished = True
-                if store_call is not None:
-                    store_call.see_output(stdout)
             except asyncio.TimeoutError:
                 raise CliSubprocessError(
                     f"CLI {backend.command!r} timed out after {deadline:.0f}s",

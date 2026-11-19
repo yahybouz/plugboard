@@ -23,15 +23,22 @@ Each call is split into:
 
 Variants (``--variants``, ``;`` between variants, ``,`` between settings):
 
-* ``purge=full``           as in service: the store purge of BUG-97 (the
-                           call's entries, then the shared summaries);
-* ``purge=keep-summaries`` the call's entries only, the shared summaries kept
-                           (for the real agy: does agy start slower without
-                           them?);
-* ``purge=off``            no purge during the call (as before 4.14.1); the
-                           bench removes what the call left once it is timed;
 * ``cage=on`` / ``cage=off`` agy inside its bubblewrap cage, as in service, or
                            bare (fake only: the real agy always runs caged).
+                           Since 4.15.2 the cage runs each call on a private
+                           store of its own, thrown away after it (BUG-157):
+                           ``cage=on`` times its copy (token, ``bin/``,
+                           ``builtin/``) and its removal too;
+* ``purge=full``           trees from 4.14.1 to 4.15.1 only (``--root``): the
+                           store purge of BUG-97 (the call's entries, then the
+                           shared summaries), as in service then;
+* ``purge=keep-summaries`` same trees: the call's entries only, the shared
+                           summaries kept;
+* ``purge=off``            the default, and the only value for a tree without
+                           the purge (before 4.14.1, and since 4.15.2, where
+                           the private store replaced it); on a tree with the
+                           purge, the bench removes what the call left once it
+                           is timed.
 
 Calls alternate between the variants (A B A B ...), so a slower host affects
 them alike; a first round per variant warms it up and is not counted. The
@@ -39,7 +46,7 @@ load average is printed with the figures: compare runs made under a similar
 load only. ``--root DIR`` measures the ``plugboard/`` of another tree, for
 instance a release exported with ``git archive v4.14.0 plugboard | tar -x
 -C DIR`` (a tree without the cage takes ``cage=off``, one without the purge
-``purge=off``).
+``purge=off``, the default).
 
 THE REAL AGY (the operator only, never in the CI): ``--real-agy PATH`` runs
 that binary instead of the fake, with the caller's HOME (agy's sign-in),
@@ -47,11 +54,11 @@ inside its cage, with a short prompt per call: that is real inference on the
 subscription. Without event times from inside agy, ``startup`` is empty;
 ``agy_word`` and ``relay`` remain. Run it as the gateway's user, with its
 HOME, where the gateway serves no agy call meanwhile (a quiet UAT): the
-bench's purge does not see the gateway's own agy calls::
+bench's purge (older trees) does not see the gateway's own agy calls::
 
     python scripts/bench_agy_first_token.py --real-agy "$(command -v agy)" \\
-        --model gemini-3.8-flash-low --rounds 8 \\
-        --variants "purge=full;purge=keep-summaries;purge=off" --json agy-ttfw.json
+        --model gemini-3.8-flash-low --rounds 8 --variants "cage=on" \\
+        --json agy-ttfw.json
 
 Conclusion of the code measure (16/11, fake agy, host load 6 to 13; BUG-106
 stays open): from the request to the client's first word the gateway adds
@@ -143,13 +150,14 @@ exit 0
 
 
 def parse_variants(spec: str) -> List[Dict[str, str]]:
-    """``purge=full,cage=on;purge=off`` -> settings, defaults filled in."""
+    """``purge=full,cage=on;cage=off`` -> settings, defaults filled in
+    (``purge=off``, ``cage=on``)."""
     out: List[Dict[str, str]] = []
     for part in spec.split(";"):
         part = part.strip()
         if not part:
             continue
-        settings = {"purge": "full", "cage": "on"}
+        settings = {"purge": "off", "cage": "on"}
         for item in part.split(","):
             name, _, value = item.strip().partition("=")
             if name == "purge" and value in PURGES:
@@ -352,7 +360,7 @@ def _load() -> str:
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--rounds", type=int, default=5, help="calls per variant")
-    ap.add_argument("--variants", default="purge=full;purge=off")
+    ap.add_argument("--variants", default="cage=on")
     ap.add_argument("--fake-timings", default=DEFAULT_TIMINGS)
     ap.add_argument(
         "--store-leftovers",
@@ -473,8 +481,9 @@ async def _bench(args, variants, timings, work: Path) -> int:
     from plugboard import live_requests, ratelimit, tokenizer
     from plugboard.app import app
 
-    # Older trees (--root) have no cage (before 4.14.2) or no purge (before
-    # 4.14.1).
+    # Older trees (--root) have no cage (before 4.14.2); the purge is in the
+    # trees from 4.14.1 to 4.15.1 only (since 4.15.2 each call has a private
+    # store instead, BUG-157).
     try:
         agy_cage: Any = importlib.import_module("plugboard.agy_cage")
     except ImportError:
@@ -483,6 +492,8 @@ async def _bench(args, variants, timings, work: Path) -> int:
         agy_store: Any = importlib.import_module("plugboard.agy_store")
     except ImportError:
         agy_store = None
+    if agy_store is not None and not hasattr(agy_store, "begin"):
+        agy_store = None  # a private store per call, no purge
     if agy_cage is None and any(v["cage"] == "on" for v in variants):
         print("error: this tree has no agy cage: use cage=off", file=sys.stderr)
         return 2

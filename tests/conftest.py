@@ -144,21 +144,6 @@ def _restore_process_state():
         decision_api._usage_down_since = None
 
 
-@pytest.fixture(autouse=True)
-def _no_real_agy_store():
-    """complete("agy") purges agy's store under the HOME given to agy
-    (BUG-97), and fake agy binaries run with the developer's HOME: the purge
-    finds no store, so the suite never touches a real ~/.gemini. The tests of
-    the purge (test_agy_store_purge.py) give agy a throwaway HOME and put the
-    real lookup back. Without ``monkeypatch``, see _reset_load_state."""
-    from plugboard import agy_store
-
-    real = agy_store.store_dir
-    agy_store.store_dir = lambda home: None
-    yield
-    agy_store.store_dir = real
-
-
 @pytest.fixture
 def agy_without_cage(monkeypatch):
     """TESTS ONLY, never autouse: replaces agy's bubblewrap cage (BUG-86,
@@ -167,9 +152,10 @@ def agy_without_cage(monkeypatch):
 
     For the tests written before the cage whose fake agy is a shell script
     run outside bwrap (it needs /bin/sh, which the cage does not hold), or
-    whose fake process stands in for agy itself: what they check (purge,
-    private TMPDIR, stream, usage, process group...) does not depend on the
-    cage. The cage itself, and agy run inside it, are tested in
+    whose fake process stands in for agy itself: what they check (private
+    TMPDIR, stream, usage, process group...) does not depend on the cage.
+    Without the cage, agy also runs on the store of the HOME it is given,
+    not on a private copy of it (BUG-157). The cage itself, and agy run inside it, are tested in
     tests/test_agy_cage.py. The gateway has no such switch."""
     from plugboard import agy_cage
 

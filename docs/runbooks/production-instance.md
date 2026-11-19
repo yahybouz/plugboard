@@ -478,13 +478,20 @@ completed by the operator.
   logins volume of the container.
 - **Never delete that directory, nor `antigravity-oauth-token`**: they hold
   agy's sign-in.
-- From 4.14.1 the gateway cleans it itself. After each agy call it deletes
-  that call's files in `conversations/`, `brain/`, `annotations/` and
-  `presence/`. When no agy call is running, it also deletes the shared
-  summaries, `conversation_summaries.db` and `jetbox_summaries_proto.pb`.
-- It does not touch `implicit/`, `log/`, `cache/` and `crashes/`. These may
-  keep other traces; what to do with them is still open (BUG-97).
-- A backup taken before a purge keeps the conversations of before, in clear.
+- Since 4.15.2 agy's calls no longer write there (BUG-157): each call runs on
+  a private copy of the store (token, `bin/`, `builtin/`), in a folder of its
+  own beside its `TMPDIR`, removed when the call ends; its conversation goes
+  with it. The purge of 4.14.1 to 4.15.1 (BUG-97), which deleted each call's
+  files in `conversations/`, `brain/`, `annotations/` and `presence/` after
+  it, is gone with it.
+- What the gateway's calls left there before 4.15.2 stays: `implicit/`,
+  `log/`, `cache/`, `crashes/`, and conversations of calls cut before the
+  purge. No call sees them any more; delete them by hand if you wish, never
+  `antigravity-oauth-token`, `settings.json`, `installation_id`,
+  `jetski_state.pbtxt`, `bin/` nor `builtin/`. Look once at `bin/`: a program
+  a call left there before 4.15.2 would be copied into every call.
+- agy run by hand in the container (its sign-in) still writes there.
+- A backup taken before 4.15.2 may keep conversations of before, in clear.
 
 ## agy cage
 

@@ -33,6 +33,7 @@ import socket
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -221,9 +222,13 @@ def _egress(tmpdir: Path) -> str:
 
 
 def _argv(setup, binary: str = "/opt/agy/bin/agy", **kw):
+    """The cage's command line, with a private TMPDIR and, unless given, a
+    fresh private store of the call (BUG-157), both in the launch folder."""
     tmpdir = setup["spawn"] / "agy-tmp-x"
     tmpdir.mkdir(mode=0o700, exist_ok=True)
     _egress(tmpdir)
+    if "private_store" not in kw:
+        kw["private_store"] = tempfile.mkdtemp(prefix="agy-store-", dir=setup["spawn"])
     env = {"HOME": str(setup["home"]), "TMPDIR": str(tmpdir), **kw.pop("env", {})}
     return (
         agy_cage.cage_argv(
@@ -287,8 +292,11 @@ def test_cage_argv_isolates_agy(setup, fake_binary):
         argv[argv.index("--proc") : argv.index("--proc") + 2]
     )
     assert argv[argv.index("--dev") + 1] == "/dev"
-    # Writable: the store and the private TMPDIR, nothing else.
-    assert _pairs(argv, "--bind") == [(store, store), (tmpdir, tmpdir)]
+    # Writable: the call's own store at the store's path (BUG-157) and the
+    # private TMPDIR, nothing else.
+    private = argv[argv.index("--bind") + 1]
+    assert os.path.basename(private).startswith("agy-store-")
+    assert _pairs(argv, "--bind") == [(private, store), (tmpdir, tmpdir)]
     # The binary read-only, after the store; then the root read-only.
     assert (binary, binary) in _pairs(argv, "--ro-bind")
     i_store = argv.index("--bind")
@@ -423,7 +431,7 @@ def test_store_is_created_private_when_missing(setup, fake_binary):
     store = setup["store"]
     assert store.is_dir()
     assert stat.S_IMODE(store.stat().st_mode) == 0o700
-    assert (str(store), str(store)) in _pairs(argv, "--bind")
+    assert [dest for _, dest in _pairs(argv, "--bind")][0] == str(store)
 
 
 @pytest.mark.parametrize("where", ["store", "gemini", "home"])
@@ -480,7 +488,8 @@ def test_cage_argv_shows_agy_its_config_read_only(setup, fake_binary):
     i_projects = next(
         i for i, a in enumerate(argv) if a == "--ro-bind" and argv[i + 1] == projects
     )
-    assert argv[i_store + 1] == store
+    # The call's own store, at the store's path (BUG-157).
+    assert argv[i_store + 2] == store
     assert i_store < i_config < i_projects < argv.index("--remount-ro")
     assert argv[i_config : i_projects + 3] == [
         *("--ro-bind", config, config),
@@ -492,10 +501,10 @@ def test_cage_argv_shows_agy_its_config_read_only(setup, fake_binary):
     under_home = [
         tuple(argv[i : i + 3])
         for i, a in enumerate(argv[:sep])
-        if a in _BIND_OPTIONS and argv[i + 1].startswith(home)
+        if a in _BIND_OPTIONS and argv[i + 2].startswith(home)
     ]
     assert under_home == [
-        ("--bind", store, store),
+        ("--bind", argv[i_store + 1], store),
         ("--ro-bind", config, config),
         ("--ro-bind", projects, projects),
     ]
@@ -1057,9 +1066,13 @@ async def test_streamed_sandbox_failure_is_never_quarantined(monkeypatch):
 
 
 def _probe_script(setup) -> str:
-    """Shell run as agy inside the cage; one ``name=yes|no`` line per check,
-    written to the store (one of the two places it may write)."""
+    """Shell run as agy inside the cage: one ``name=yes|no`` word per check,
+    sent back as its answer (the cage's store and TMPDIR are the call's own,
+    gone once it is over, BUG-157)."""
     home = setup["home"]
+    secrets = " ".join(
+        f"-e {word}" for name, value in _SECRETS.items() for word in (value, name + "=")
+    )
     checks = {
         "see_app_data": f"ls {setup['app_data']}",
         "see_claude": f"ls {home}/.claude",
@@ -1087,38 +1100,43 @@ def _probe_script(setup) -> str:
         "token_rewrite": (
             "cp antigravity-oauth-token token.tmp && echo refreshed >> token.tmp"
             " && mv token.tmp antigravity-oauth-token"
+            " && grep -q refreshed antigravity-oauth-token"
         ),
+        # None of the server's secrets in agy's environment, nor in the one
+        # /proc/1 shows.
+        "secret_in_env": f"env | grep -q {secrets}",
+        "secret_in_proc1": f"tr '\\0' '\\n' < /proc/1/environ | grep -q {secrets}",
+        "plugboard_variable": "env | grep -q ^PLUGBOARD_",
     }
-    lines = ['START="$PWD"', f'cd "{setup["store"]}"', "{"]
+    lines = ['START="$PWD"', f'cd "{setup["store"]}"', "R="]
     for name, cmd in checks.items():
         lines.append(
-            f"if {cmd} >/dev/null 2>&1; then echo {name}=yes; else echo {name}=no; fi"
+            f'if ( {cmd} ) >/dev/null 2>&1; then R="$R {name}=yes"; '
+            f'else R="$R {name}=no"; fi'
         )
-    lines.append('echo "cwd=$START"')
-    lines.append("} > report.part")
-    lines.append("env > env.txt")
-    lines.append("cat /proc/1/environ > proc1-environ.txt 2>/dev/null")
-    lines.append("mv report.part report.txt")
+    lines.append('R="$R cwd=$START"')
     return "\n".join(lines) + "\n"
 
 
 async def test_agy_in_the_real_cage(setup, real_bwrap, shell_in_cage, monkeypatch):
     for name, value in _SECRETS.items():
         monkeypatch.setenv(name, value)
-    ran = _fake_agy_recording(setup, _probe_script(setup))
-    binary = setup["bin"] / "agy"
+    ran = setup["tmp"] / "agy-ran"
+    binary = _install(
+        setup["bin"],
+        "agy",
+        f"touch {ran} 2>/dev/null\ncat >/dev/null\n"
+        + _probe_script(setup)
+        + _answer("$R"),
+    )
     before = binary.read_bytes()
     token = setup["store"] / "antigravity-oauth-token"
     token_inode = token.stat().st_ino
 
     result = await cs.complete("agy", dict(_BODY))
 
-    assert result["choices"][0]["message"]["content"] == "OK"
     assert not ran.exists(), "the test's tmp dir is out of the cage"
-    report = dict(
-        line.split("=", 1)
-        for line in (setup["store"] / "report.txt").read_text().splitlines()
-    )
+    report = dict(word.split("=", 1) for word in _content(result).split())
     assert report.pop("cwd").startswith(str(setup["spawn"] / "agy-tmp-"))
     assert report == {
         "see_app_data": "no",
@@ -1143,6 +1161,9 @@ async def test_agy_in_the_real_cage(setup, real_bwrap, shell_in_cage, monkeypatc
         "write_gemini": "no",
         "token_read": "yes",
         "token_rewrite": "yes",
+        "secret_in_env": "no",
+        "secret_in_proc1": "no",
+        "plugboard_variable": "no",
     }
     assert (setup["config"] / "mcp_config.json").read_text() == "{}\n"
     assert setup["projects"].read_text() == "{}\n"
@@ -1151,24 +1172,15 @@ async def test_agy_in_the_real_cage(setup, real_bwrap, shell_in_cage, monkeypatc
         "projects",
     ]
     assert list((setup["config"] / "projects").iterdir()) == []
-    # The token was rewritten by rename, in the real store.
-    assert token.read_text() == "old-token\nrefreshed\n"
-    assert token.stat().st_ino != token_inode
+    # The token was rewritten in the call's copy only (BUG-157): the shared
+    # one is the same file, unchanged.
+    assert token.read_text() == "old-token\n"
+    assert token.stat().st_ino == token_inode
     # Nothing written outside: the binary, HOME, the launch directory.
     assert binary.read_bytes() == before
     assert not (setup["bin"] / "agy.new").exists()
     assert not (setup["home"] / "x").exists()
     assert list(setup["spawn"].iterdir()) == []
-    # The child's environment holds none of the server's secrets.
-    child_env = (setup["store"] / "env.txt").read_text()
-    proc1_env = (
-        (setup["store"] / "proc1-environ.txt").read_bytes().decode("utf-8", "replace")
-    )
-    for name, value in _SECRETS.items():
-        for seen in (child_env, proc1_env):
-            assert value not in seen, name
-            assert f"{name}=" not in seen, name
-    assert "PLUGBOARD_" not in child_env
 
 
 async def test_list_models_and_version_run_in_the_cage(
@@ -1627,26 +1639,30 @@ async def test_agy_records_its_update_state_in_its_store(
         "cat >/dev/null\n"
         'u="$HOME/.gemini/antigravity-cli/updater"\n'
         f"mkdir -p \"$u\" && printf '%s' '{state}' > \"$u/update_status.json\" "
-        '&& touch "$u/last_check.timestamp"\n' + _answer("OK"),
+        '&& touch "$u/last_check.timestamp"\n'
+        + 'if [ -s "$u/update_status.json" ]; then R=written; else R=missing; fi\n'
+        + _answer("$R"),
     )
 
     result = await cs.complete("agy", dict(_BODY))
 
-    assert _content(result) == "OK"
-    updater = setup["store"] / "updater"
-    assert (updater / "update_status.json").read_text() == state
-    assert (updater / "last_check.timestamp").exists()
+    # Written in the call's own store, thrown away with it (BUG-157).
+    assert _content(result) == "written"
+    assert not (setup["store"] / "updater").exists()
+    assert list(setup["spawn"].iterdir()) == []
 
 
 # ── agy's settings in its store are read-only (BUG-108) ─────────────────────
 #
-# The store stays writable (conversations, summaries, caches, logs, the
-# sign-in token agy refreshes), but what agy keeps there and never changes
-# at a call is shown read-only, each entry at its own path when it exists:
-# its settings (``settings.json``: permission rules) and its identity
+# The call's store is writable (conversations, summaries, caches, logs, the
+# copy of the sign-in token agy refreshes, BUG-157), but what agy keeps in
+# the shared store and never changes at a call is shown read-only over it,
+# each entry at its own path when it exists: its settings
+# (``settings.json``: permission rules) and its identity
 # (``installation_id``, ``jetski_state.pbtxt``). The programs and skills it
-# unpacks (``bin/``, ``builtin/``) stay writable: agy rewrites them after
-# its install (review M2 of 4.14.4). The gateway creates none of them.
+# unpacks (``bin/``, ``builtin/``) are copied, writable in the call's store:
+# agy rewrites them after its install (review M2 of 4.14.4). The gateway
+# creates none of them in the shared store.
 
 _STORE_SETTINGS = {
     "settings.json": "{}\n",
@@ -1673,11 +1689,13 @@ def test_the_read_only_entries_of_the_store_are_named():
         "installation_id",
         "jetski_state.pbtxt",
     )
-    # The sign-in token stays writable: agy refreshes it.
-    assert "antigravity-oauth-token" not in agy_cage.STORE_READ_ONLY
-    # What agy unpacks stays writable: it rewrites it after its install
-    # (bin/ and builtin/ dated after installation_id on a real store), and a
-    # read-only folder would make agy fail (review M2).
+    # The sign-in token is copied into the call's store: agy refreshes it
+    # there (BUG-157).
+    assert agy_cage.STORE_TOKEN == "antigravity-oauth-token"
+    assert agy_cage.STORE_TOKEN not in agy_cage.STORE_READ_ONLY
+    # What agy unpacks is copied too, writable in the call's store: agy
+    # rewrites it after its install (bin/ and builtin/ dated after
+    # installation_id on a real store, review M2).
     assert agy_cage.STORE_UNPACKED == ("bin", "builtin")
     assert not set(agy_cage.STORE_UNPACKED) & set(agy_cage.STORE_READ_ONLY)
 
@@ -1688,8 +1706,9 @@ def test_cage_argv_shows_agy_its_settings_read_only(setup, fake_binary):
     store = str(setup["store"])
     token = os.path.join(store, "antigravity-oauth-token")
 
-    # Still writable: the store and the private TMPDIR only.
-    assert _pairs(argv, "--bind") == [(store, store), (tmpdir, tmpdir)]
+    # Still writable: the call's own store and the private TMPDIR only.
+    private = argv[argv.index("--bind") + 1]
+    assert _pairs(argv, "--bind") == [(private, store), (tmpdir, tmpdir)]
     i_store = argv.index("--bind")
     i_remount = argv.index("--remount-ro")
     expected = []
@@ -1700,7 +1719,7 @@ def test_cage_argv_shows_agy_its_settings_read_only(setup, fake_binary):
     assert argv[i_first : i_first + len(expected)] == expected
     assert i_first + len(expected) < i_remount
     # The token is never bound by itself (read-only or otherwise), nor
-    # what agy unpacks: both stay writable with the store.
+    # what agy unpacks: both are copied into the call's store (BUG-157).
     sep = argv.index("--")
     assert token not in argv[:sep]
     for name in agy_cage.STORE_UNPACKED:
@@ -1790,14 +1809,13 @@ def _settings_probe(store: Path) -> str:
             " && mv token.tmp antigravity-oauth-token"
         ),
     }
-    lines = [f'cd "{store}"', "cat >/dev/null", "{"]
+    lines = [f'cd "{store}"', "cat >/dev/null", "R="]
     for name, cmd in checks.items():
         lines.append(
-            f"if ( {cmd} ) >/dev/null 2>&1; then echo {name}=yes; else echo {name}=no; fi"
+            f'if ( {cmd} ) >/dev/null 2>&1; then R="$R {name}=yes"; '
+            f'else R="$R {name}=no"; fi'
         )
-    lines.append("} > report.part")
-    lines.append("mv report.part report.txt")
-    return "\n".join(lines) + "\n" + _answer("OK")
+    return "\n".join(lines) + "\n" + _answer("$R")
 
 
 async def test_agy_cannot_change_its_settings_in_the_real_cage(
@@ -1816,11 +1834,7 @@ async def test_agy_cannot_change_its_settings_in_the_real_cage(
 
     result = await cs.complete("agy", dict(_BODY))
 
-    assert _content(result) == "OK"
-    report = dict(
-        line.split("=", 1)
-        for line in (setup["store"] / "report.txt").read_text().splitlines()
-    )
+    report = dict(word.split("=", 1) for word in _content(result).split())
     assert report == {
         "append_settings": "no",
         "replace_settings": "no",
@@ -1844,13 +1858,10 @@ async def test_agy_cannot_change_its_settings_in_the_real_cage(
         )
         for name, path in paths.items()
     }
-    unpacked = set(agy_cage.STORE_UNPACKED)
-    assert {k: v for k, v in after.items() if k not in unpacked} == {
-        k: v for k, v in before.items() if k not in unpacked
-    }
-    # What agy unpacks, rewritten in place, as agy does after its install.
-    assert after["bin"] == ["agentapi", "agentapi.new"]
-    assert after["builtin"] == [".checksum", ".manifest"]
+    # What agy unpacks was rewritten in the call's copy, as agy does after
+    # its install; the token too: the shared store is unchanged (BUG-157).
+    assert after == before
     token = setup["store"] / "antigravity-oauth-token"
-    assert token.read_text() == "old-token\nrefreshed\n"
+    assert token.read_text() == "old-token\n"
     assert not (setup["store"] / "settings.link").exists()
+    assert list(setup["spawn"].iterdir()) == []

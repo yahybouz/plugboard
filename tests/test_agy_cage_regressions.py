@@ -1,12 +1,14 @@
 """What agy's calls already guaranteed still holds inside the cage (BUG-86).
 
-The purge of agy's store (BUG-97), the private ``TMPDIR``, the answer read as
-it is written, a call cut by a timeout or a cancellation, and the usage agy
-reports were tested with a fake agy run outside bwrap (``agy_without_cage``,
-see conftest). Here the same behaviours go through ``cli_subprocess.complete``
-with the host's real ``bwrap`` around a fake agy (a shell script): agy's store
-and ``TMPDIR`` are bound into the cage at their real paths, so what the fake
-agy writes there is what the gateway finds, purges and removes afterwards.
+agy's store left as it was after each call (BUG-157: the call's own store,
+thrown away; before, the purge of BUG-97), the private ``TMPDIR``, the answer
+read as it is written, a call cut by a timeout or a cancellation, and the
+usage agy reports were tested with a fake agy run outside bwrap
+(``agy_without_cage``, see conftest). Here the same behaviours go through
+``cli_subprocess.complete`` with the host's real ``bwrap`` around a fake agy
+(a shell script): what the fake agy writes in its store lands in the call's
+own (``agy-store-*`` beside the ``TMPDIR``), never in the shared one, and is
+removed with its ``TMPDIR`` afterwards.
 The HOME is a realistic ``~/.gemini`` (agy's ``config/`` and
 ``projects.json`` beside its store, gemini's files next to them): with the
 store alone, the real agy 1.4.4 did not start in the cage (UAT, 15/11).
@@ -29,7 +31,7 @@ from pathlib import Path
 
 import pytest
 
-from plugboard import agy_cage, agy_store
+from plugboard import agy_cage
 from plugboard import cli_subprocess as cs
 from tests.test_agy_cage import (
     _SHELL_RO,
@@ -38,9 +40,6 @@ from tests.test_agy_cage import (
     _processes_with,
 )
 
-# The real one, before conftest turns the purge off for the other tests.
-_REAL_STORE_DIR = agy_store.store_dir
-
 _OLD = "0b7c3a1e-5f00-4d2e-9a11-000000000000"  # a conversation already there
 _A = "6c1d2e3f-0a4b-4c5d-8e9f-a0b1c2d3e4f5"
 _BODY = {
@@ -48,6 +47,7 @@ _BODY = {
     "messages": [{"role": "user", "content": "prompt-in-clear-91c2"}],
 }
 # Per conversation, where agy 1.4.4 writes (see agy_store).
+_CONVERSATION_DIRS = ("conversations", "brain", "annotations", "presence")
 _ENTRIES = (
     "conversations/{cid}.db",
     "conversations/{cid}.db-wal",
@@ -112,13 +112,12 @@ def _outside_store(home: Path) -> dict:
 
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
-    """The real bwrap around a fake agy, agy's real store lookup, a throwaway
-    HOME with a realistic ``~/.gemini`` whose store holds a sign-in token and
-    an older conversation."""
+    """The real bwrap around a fake agy, a throwaway HOME with a realistic
+    ``~/.gemini`` whose store holds a sign-in token and an older
+    conversation."""
     reason = _bwrap_unusable_reason()
     if reason:
         pytest.skip(f"bwrap unusable: {reason}")
-    monkeypatch.setattr(agy_store, "store_dir", _REAL_STORE_DIR)
     monkeypatch.setattr(
         agy_cage,
         "cage_argv",
@@ -186,24 +185,27 @@ fi
 def _entries_of(store: Path, cid: str) -> list:
     return sorted(
         f"{sub}/{name}"
-        for sub in agy_store.CONVERSATION_DIRS
+        for sub in _CONVERSATION_DIRS
         if (store / sub).is_dir()
         for name in os.listdir(store / sub)
         if name == cid or name.startswith(cid + ".")
     )
 
 
-def _assert_purged(setup) -> None:
-    """``_A`` and the shared summaries gone; the token refreshed by agy, the
-    older conversation and agy's own files left as they were."""
+def _assert_store_untouched(setup) -> None:
+    """Nothing of the call in the shared store (BUG-157): neither ``_A`` nor
+    the summaries, the token as it was (agy refreshed its copy only), the
+    older conversation and agy's own files left as they were; and no
+    private store left."""
     store = setup["store"]
     assert _entries_of(store, _A) == []
     assert [n for n in _SHARED if (store / n).exists()] == []
     assert len(_entries_of(store, _OLD)) == len(_ENTRIES)
     for rel in _ENTRIES:
         assert (store / rel.format(cid=_OLD)).read_text() == "old"
-    assert (store / "antigravity-oauth-token").read_text() == "refreshed-token\n"
+    assert (store / "antigravity-oauth-token").read_text() == "old-token\n"
     assert (store / "installation_id").read_text() == "install"
+    assert list(setup["spawn"].glob("agy-store-*")) == []
 
 
 def _content(result) -> str:
@@ -218,10 +220,10 @@ async def _until(check, what: str, timeout: float = 10.0) -> None:
         await asyncio.sleep(0.02)
 
 
-# ── 1. Purge of agy's store (BUG-97) ────────────────────────────────────────
+# ── 1. agy's store after a call (BUG-157, before: the purge of BUG-97) ──────
 
 
-async def test_the_store_is_purged_under_the_cage(setup):
+async def test_the_store_is_left_as_it_was_under_the_cage(setup):
     _fake_agy(setup)
     token = setup["store"] / "antigravity-oauth-token"
     token_inode = token.stat().st_ino
@@ -229,11 +231,11 @@ async def test_the_store_is_purged_under_the_cage(setup):
 
     result = await cs.complete("agy", dict(_BODY))
 
-    # Written through the cage into the real store, there until agy ended.
+    # Written through the cage into the call's store, there until agy ended.
     assert _content(result) == "files=yes"
-    _assert_purged(setup)
-    assert token.stat().st_ino != token_inode, "rewritten by rename"
-    # The purge stays in the store: the rest of ~/.gemini is as it was.
+    _assert_store_untouched(setup)
+    assert token.stat().st_ino == token_inode, "the shared token untouched"
+    # The rest of ~/.gemini is as it was.
     assert _outside_store(setup["home"]) == outside
 
 
@@ -279,7 +281,7 @@ async def test_the_answer_streams_through_the_cage(setup):
     )
 
     plain = await cs.complete("agy", dict(_BODY))
-    _assert_purged(setup)
+    _assert_store_untouched(setup)
 
     pieces: list = []
     t0 = time.perf_counter()
@@ -294,7 +296,7 @@ async def test_the_answer_streams_through_the_cage(setup):
     assert pieces[0][0] < total - 0.4, "first piece long before the end"
     assert _content(streamed) == _content(plain) == "Bonjour tout le monde"
     assert streamed["usage"] == plain["usage"] == _EXPECTED_USAGE
-    _assert_purged(setup)
+    _assert_store_untouched(setup)
     assert os.listdir(setup["spawn"]) == []
 
 
@@ -306,7 +308,7 @@ async def test_the_answer_streams_through_the_cage(setup):
 async def test_a_cut_call_leaves_no_process_no_entry_no_tmpdir(setup, stream, cut):
     """agy writes its conversation (and, streamed, its first event naming it),
     leaves a program in the background, then sleeps: cut, nothing of it is
-    left, neither in /proc, nor in its store, nor its TMPDIR."""
+    left, neither in /proc, nor in a store, nor its TMPDIR."""
     marker = f"{uuid.uuid4().int % 10**9:09d}"
     binary = _fake_agy(
         setup,
@@ -334,7 +336,10 @@ async def test_a_cut_call_leaves_no_process_no_entry_no_tmpdir(setup, stream, cu
         tmpdir = ready[0].parent
         if stream:
             await _until(lambda: pieces == ["started"], "first event read")
-        assert len(_entries_of(setup["store"], _A)) == len(_ENTRIES)
+        # Its conversation is in the call's own store, not the shared one.
+        (private,) = setup["spawn"].glob("agy-store-*")
+        assert len(_entries_of(private, _A)) == len(_ENTRIES)
+        assert _entries_of(setup["store"], _A) == []
         assert all(_processes_with(m) for m in markers), "agy runs in its cage"
 
         if cut == "cancel":
@@ -353,7 +358,7 @@ async def test_a_cut_call_leaves_no_process_no_entry_no_tmpdir(setup, stream, cu
             await asyncio.sleep(0.1)
             left = {m: _processes_with(m) for m in markers}
         assert left == {m: [] for m in markers}, "no process of agy left"
-        _assert_purged(setup)
+        _assert_store_untouched(setup)
         assert not tmpdir.exists()
         assert os.listdir(setup["spawn"]) == []
     finally:
@@ -385,12 +390,14 @@ async def test_reported_usage_is_the_same_with_and_without_the_cage(
     on_delta = (lambda text: None) if stream else None
 
     caged = await cs.complete("agy", dict(_BODY), on_delta=on_delta)
-    request.getfixturevalue("agy_without_cage")  # from here on, no bwrap
+    _assert_store_untouched(setup)
+    # From here on, no bwrap: the fake agy writes in the shared store itself
+    # (tests only, the gateway has no such switch).
+    request.getfixturevalue("agy_without_cage")
     bare = await cs.complete("agy", dict(_BODY), on_delta=on_delta)
 
     assert (_content(caged), _content(bare)) == ("caged=yes", "caged=no")
     assert caged["usage"] == bare["usage"] == _EXPECTED_USAGE
-    _assert_purged(setup)
 
 
 # ── 6. agy's ~/.gemini outside its store ────────────────────────────────────

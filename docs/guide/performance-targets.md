@@ -41,7 +41,9 @@ its first word and the relay to the client, with the store purge and the cage on
 fake agy (16 November) the gateway adds 7 to 19 ms before the spawn and 2 to 5 ms of relay, with or
 without the purge, in 4.14.0, 4.14.1 and 4.14.4 alike; the cage adds 35 to 55 ms. Whether agy
 starts slower once the purge has removed its shared summaries is measured only with the real agy
-(`--real-agy`, run by the operator).
+(`--real-agy`, run by the operator). Since 4.15.2 there is no purge (BUG-157): the cage copies
+agy's token, `bin/` and `builtin/` into a store of the call's own and removes it afterwards, which
+`cage=on` measures with the rest; `purge=` applies to the trees from 4.14.1 to 4.15.1 (`--root`).
 
 ## Calls at the same time
 

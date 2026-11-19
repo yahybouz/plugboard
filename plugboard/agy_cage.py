@@ -39,11 +39,24 @@ This module builds the gateway's only command line that launches agy
   name resolution and TLS need, the CA bundles (and the system CA paths
   ``SSL_CERT_FILE`` / ``SSL_CERT_DIR`` name) and the time zones; ``/proc`` of
   the new pid namespace (see below) and a minimal ``/dev``.
-- Writable: agy's store (``$HOME/.gemini/antigravity-cli``, where its sign-in
-  token is refreshed) and the request's private ``TMPDIR``. Nothing else.
-- Read-only over the store, each when it exists: agy's settings and
-  identity (:data:`STORE_READ_ONLY`, BUG-108). What it unpacks (``bin/``,
-  ``builtin/``, :data:`STORE_UNPACKED`) stays writable: agy rewrites it.
+- Writable: a store of the call's own (BUG-157), bound at the path of agy's
+  store (``$HOME/.gemini/antigravity-cli``) instead of it, and the request's
+  private ``TMPDIR``. Nothing else. The shared store is never bound
+  writable: the call's store is a fresh folder
+  (:func:`plugboard.agy_store.private_store`, 0700, beside the ``TMPDIR``,
+  removed with it after the call) which :func:`cage_argv` fills with
+  copies, never links, of the
+  sign-in token (:data:`STORE_TOKEN`, which agy may refresh: the copy is
+  thrown away, never copied back) and of what agy unpacks from its binary,
+  ``bin/`` and ``builtin/`` (:data:`STORE_UNPACKED`, which agy may rewrite:
+  the same). Everything else (conversations, summaries, ``cache/``,
+  ``log/``, ``mcp/``, ``updater/``, ``plugin_data/``...) starts empty. So a
+  prompt can neither put another account's token in place for the next
+  calls, nor leave a program in ``bin/`` that a later call runs, nor read
+  the conversation of another call in progress: none of it is in its store.
+- Read-only, from the shared store, at their path in the call's store, each
+  when it exists: agy's settings and identity (:data:`STORE_READ_ONLY`,
+  BUG-108).
 - Read-only, right after the store: agy's own config beside it,
   ``$HOME/.gemini/config`` (its MCP servers' ``mcp_config.json`` included),
   which agy 1.4.4 cannot start without, and gemini's
@@ -72,13 +85,25 @@ the gateway's environment (same uid).
 The environment reaches agy through execve (the caller's ``env=``), never the
 command line nor ``--setenv``: a proxy URL can hold a password.
 
+Limit (R8 of the P0-5 replay): agy must read its sign-in token, so a prompt
+can read the call's copy of it. Taking it out of the cage (agy fed through a
+TLS-intercepting proxy holding the token) is out of reach of this release;
+what the token can reach from the cage is bounded by its egress, the Google
+hosts agy needs (BUG-156). A refresh agy makes in its copy is lost with it:
+when the stored access token has expired, every call refreshes it again
+(one more round trip to Google per call, until the shared token is renewed
+outside the cage, by agy run in a shell of the gateway's user).
+
 No cage, no agy: there is no variable, option or fallback that launches agy
 without it. :class:`CageUnavailable` is raised before anything starts when
 bwrap is missing, the platform is not Linux, the egress socket is missing
 or not a socket, the relay's interpreter is missing, the store, ``TMPDIR``, agy's
 config or ``projects.json`` path goes through a symbolic link, a read-only
-entry of the store is a link, of the wrong type or hard-linked, or agy was
-never run on the account (:class:`AgyNotSetUp`); :func:`setup_failure` recognises a bwrap that
+entry of the store is a link, of the wrong type or hard-linked, the token,
+``bin/`` or ``builtin/`` is a link or of the wrong type, the call's store
+is not an empty private folder or cannot be filled (or made, see
+``cli_subprocess.agy_caged``), or agy was never run on the account
+(:class:`AgyNotSetUp`); :func:`setup_failure` recognises a bwrap that
 started but could not build the cage, and a relay that stopped before agy
 (it then never runs).
 """
@@ -122,14 +147,14 @@ _CONFIG_DIR = (".gemini", "config")
 _PROJECTS_FILE = (".gemini", "projects.json")
 
 # What agy keeps in its store and never changes at a call (BUG-108), shown
-# read-only over the writable store, each file at its own path when it
-# exists: its settings (``settings.json``, where permission rules would give
-# every later prompt a tool) and its identity (``installation_id``,
-# ``jetski_state.pbtxt``: written at its first run, unchanged since on the
-# UAT and on a host). Writable, because agy writes them at every call: the
-# sign-in token it refreshes (``antigravity-oauth-token``), the
-# conversations and their summaries, ``cache/``, ``log/`` and ``cli.log``,
-# ``implicit/``, ``crashes/``, ``mcp/``, ``updater/``.
+# read-only from the shared store over the call's own, each file at its own
+# path when it exists: its settings (``settings.json``, where permission
+# rules would give every later prompt a tool) and its identity
+# (``installation_id``, ``jetski_state.pbtxt``: written at its first run,
+# unchanged since on the UAT and on a host). What agy writes at every call
+# (the conversations and their summaries, ``cache/``, ``log/`` and
+# ``cli.log``, ``implicit/``, ``crashes/``, ``mcp/``, ``updater/``) starts
+# empty in the call's store and is thrown away with it (BUG-157).
 STORE_READ_ONLY = (
     "settings.json",
     "installation_id",
@@ -137,13 +162,20 @@ STORE_READ_ONLY = (
 )
 
 # What agy unpacks from its own binary, ``bin/`` (programs it runs) and
-# ``builtin/`` (skills it loads, with a ``.checksum``): writable, not
-# settings. agy writes there after its install (on a real store, files dated
-# days after ``installation_id``: at a new version or on demand), and a
-# read-only folder would fail that write with EROFS and agy with it (review
-# M2 of 4.14.4). A call can therefore leave content there that a later call
-# runs or loads: a limit of the cage, documented with BUG-108.
+# ``builtin/`` (skills it loads, with a ``.checksum``): copied into the
+# call's store, writable there, thrown away after it (BUG-157), never bound
+# from the shared store. agy writes there after its install (on a real
+# store, files dated days after ``installation_id``: at a new version or on
+# demand, review M2 of 4.14.4). Read-only, agy 1.4.4 only logs "failed to
+# populate builtins" when its ``builtin/.checksum`` differs (offline run,
+# 19/11); what it does with a read-only ``bin/`` once signed in could not be
+# shown without a real call: a copy keeps both writable, at the cost of
+# copying them at each call, and a program left there by a call is gone
+# with it.
 STORE_UNPACKED = ("bin", "builtin")
+# agy's sign-in token: copied into the call's store (agy reads it, may
+# refresh it there), never bound from the shared store, never copied back.
+STORE_TOKEN = "antigravity-oauth-token"
 
 
 # System files agy (a dynamic Go binary: glibc, its loader, DNS, TLS) needs,
@@ -477,6 +509,129 @@ def _store_read_only(store: str) -> List[str]:
     return found
 
 
+def _private_store(path: str, store: str) -> str:
+    """``path``, the call's own store, when it is what the gateway made: an
+    empty real folder (no link on its path), owned by the gateway, closed to
+    others (0700), neither the shared store nor inside it nor holding it.
+    Else :class:`CageUnavailable`."""
+    if not _plain_path(path):
+        raise CageUnavailable("agy private store path goes through a symbolic link")
+    try:
+        info = os.lstat(path)
+        empty = not os.listdir(path)
+    except OSError as exc:
+        raise CageUnavailable(
+            f"agy private store is missing ({type(exc).__name__})"
+        ) from None
+    norm = os.path.normpath(path)
+    if (
+        norm == store
+        or norm.startswith(store + os.sep)
+        or store.startswith(norm + os.sep)
+    ):
+        raise CageUnavailable("agy private store is not apart from the shared one")
+    if not stat.S_ISDIR(info.st_mode):
+        raise CageUnavailable("agy private store is not a directory")
+    if info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077:
+        raise CageUnavailable("agy private store is not private (0700)")
+    if not empty:
+        raise CageUnavailable("agy private store is not empty")
+    return norm
+
+
+_OPEN_FLAGS = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+
+
+def _copy_file(src_dir: int, name: str, target: str, mode: int) -> None:
+    """Copy the regular file ``name`` of the folder ``src_dir`` (a
+    descriptor) to the new file ``target``, never through a link."""
+    source = os.open(name, _OPEN_FLAGS, dir_fd=src_dir)
+    try:
+        if not stat.S_ISREG(os.fstat(source).st_mode):
+            return  # replaced meanwhile by something else: skipped
+        out = os.open(
+            target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode
+        )
+        try:
+            while True:
+                chunk = os.read(source, 1 << 20)
+                if not chunk:
+                    break
+                view = memoryview(chunk)
+                while view:
+                    view = view[os.write(out, view) :]
+        finally:
+            os.close(out)
+    finally:
+        os.close(source)
+
+
+def _copy_tree(src_dir: int, target: str) -> None:
+    """Copy the folder ``src_dir`` (a descriptor) to the new folder
+    ``target``: its folders and regular files, the owner's rights only; its
+    links and special files are skipped, never followed nor opened."""
+    os.mkdir(target, stat.S_IRWXU)
+    with os.scandir(src_dir) as entries:
+        for entry in entries:
+            info = entry.stat(follow_symlinks=False)
+            path = os.path.join(target, entry.name)
+            if stat.S_ISDIR(info.st_mode):
+                sub = os.open(entry.name, _OPEN_FLAGS | os.O_DIRECTORY, dir_fd=src_dir)
+                try:
+                    _copy_tree(sub, path)
+                finally:
+                    os.close(sub)
+            elif stat.S_ISREG(info.st_mode):
+                mode = stat.S_IMODE(info.st_mode) & stat.S_IRWXU | 0o600
+                _copy_file(src_dir, entry.name, path, mode)
+
+
+def _fill_private_store(store: str, private: str) -> None:
+    """Copy into the call's store what agy needs of the shared one and may
+    change: its token (:data:`STORE_TOKEN`) and what it unpacks
+    (:data:`STORE_UNPACKED`), each when it exists. Nothing is linked, and
+    nothing ever goes back the other way.
+
+    The token or one of those folders through a symbolic link, or of the
+    wrong type: :class:`CageUnavailable` (as for :data:`STORE_READ_ONLY`).
+    A link or a special file inside a folder is skipped. A missing token is
+    not refused: agy then says it is not signed in, as before.
+    """
+    wanted = [(STORE_TOKEN, "a regular file", stat.S_ISREG)]
+    wanted += [(name, "a directory", stat.S_ISDIR) for name in STORE_UNPACKED]
+    found = []
+    for name, kind, check in wanted:
+        path = os.path.join(store, name)
+        if not os.path.lexists(path):
+            continue
+        if not _plain_path(path):
+            raise CageUnavailable(
+                f"agy's store entry {name} goes through a symbolic link"
+            )
+        if not check(os.lstat(path).st_mode):
+            raise CageUnavailable(f"agy's store entry {name} is not {kind}")
+        found.append(name)
+    try:
+        folder = os.open(store, _OPEN_FLAGS | os.O_DIRECTORY)
+        try:
+            for name in found:
+                target = os.path.join(private, name)
+                if name == STORE_TOKEN:
+                    _copy_file(folder, name, target, 0o600)
+                    continue
+                sub = os.open(name, _OPEN_FLAGS | os.O_DIRECTORY, dir_fd=folder)
+                try:
+                    _copy_tree(sub, target)
+                finally:
+                    os.close(sub)
+        finally:
+            os.close(folder)
+    except OSError as exc:
+        raise CageUnavailable(
+            f"agy private store cannot be filled ({type(exc).__name__})"
+        ) from None
+
+
 def _system_args(env: Mapping[str, str]) -> List[str]:
     args: List[str] = []
     for path in _SYSTEM_DIRS:
@@ -595,6 +750,7 @@ def cage_argv(
     *,
     env: Mapping[str, str],
     tmpdir: str,
+    private_store: str,
     _extra_ro_for_tests: Sequence[str] = (),
 ) -> List[str]:
     """The command line that runs ``binary args...`` inside the cage.
@@ -602,7 +758,12 @@ def cage_argv(
     ``env`` is the child's environment (its ``HOME`` locates the store, its
     CA variables are bound); the caller passes the same ``env`` to execve.
     ``tmpdir`` is the request's private ``TMPDIR``, writable and the working
-    directory. ``_extra_ro_for_tests`` is for the test suite only (a fake agy
+    directory. ``private_store`` is the call's own store, an empty 0700
+    folder the caller made and removes after the call
+    (:func:`plugboard.agy_store.private_store`): once every check has
+    passed, it is filled here (:func:`_fill_private_store`), then bound at
+    the store's path, writable, instead of the store (BUG-157); it has no
+    default. ``_extra_ro_for_tests`` is for the test suite only (a fake agy
     written in shell needs ``/usr/bin`` and ``/bin``): the gateway never
     passes it.
 
@@ -622,6 +783,9 @@ def cage_argv(
         raise CageUnavailable("agy binary not found")
     egress = _egress_socket(tmpdir)
     python = _relay_python()
+    private = _private_store(private_store, store)
+    # Last: the only check that writes (in the call's own store).
+    _fill_private_store(store, private)
 
     argv = [bwrap, *_NAMESPACES, *_system_args(env)]
     for path in _extra_ro_for_tests:
@@ -635,13 +799,15 @@ def cage_argv(
     argv += [
         "--dev",
         "/dev",
+        # The call's own store at the store's path: the shared store itself
+        # is never bound writable (BUG-157).
         "--bind",
-        store,
+        private,
         store,
     ]
-    # agy's settings in its store, then its own config beside the store
-    # (and gemini's projects.json when it exists): read-only, each at its
-    # path.
+    # agy's settings, from the shared store, over the call's own; then its
+    # config beside the store (and gemini's projects.json when it exists):
+    # read-only, each at its path.
     for path in (*settings, *config):
         argv += ["--ro-bind", path, path]
     argv += [

@@ -1,330 +1,91 @@
-"""What agy keeps of each conversation, removed once the call is over (BUG-97).
+"""agy's store, private to each call and thrown away after it (BUG-157).
 
-agy (Antigravity CLI 1.4.4) records every conversation, prompt in clear, in
-its store ``$HOME/.gemini/antigravity-cli``, outside any retention: about 8
-files and 450 KB per call (real store of the UAT, 14/11). Per conversation
-``<id>``:
+agy (Antigravity CLI 1.4.4) keeps everything in its store
+``$HOME/.gemini/antigravity-cli``: its sign-in token
+(``antigravity-oauth-token``, refreshed and rewritten by agy), its settings
+and identity, what it unpacks from its own binary (``bin/``, ``builtin/``),
+and every conversation, prompt in clear (``conversations/``, ``brain/``,
+``annotations/``, ``presence/``, the shared summaries), plus ``cache/``,
+``log/``, ``implicit/``, ``crashes/``, ``mcp/``, ``updater/``...
 
-- ``conversations/<id>.db`` (and its ``-wal`` / ``-shm`` neighbours);
-- ``brain/<id>/`` (transcripts);
-- ``annotations/<id>.pbtxt``;
-- ``presence/<id>.lock``.
+Up to 4.15.1 the cage bound that store writable, shared by every call (P0-5
+replay, 18/11): a prompt could rewrite the token with the one of another
+Google account (the next calls of every tenant then ran on it), leave a
+program in ``bin/`` for a later call, and read the conversation of another
+call in progress; the gateway removed each call's conversation afterwards
+(BUG-97), too late for a neighbour still running.
 
-After each agy call launched by ``cli_subprocess.complete()`` (answered,
-failed, timed out or cancelled, streamed or not), the gateway removes the
-entries of that call: in those four folders only, the entry named ``<id>`` or
-``<id>.<something>``.
+Now each call gets a folder of its own, :func:`private_store` (``mkdtemp``,
+mode 0700, under the CLIs' launch directory, beside the call's ``TMPDIR``,
+never inside the shared store), which the cage binds at the store's path
+instead of the store (:mod:`plugboard.agy_cage` fills it). Whatever agy
+writes during the call, a refreshed or forged token included, stays there
+and is removed with it once the call is over, however it ends (answered,
+failed, timed out, cancelled), after the child is dead and reaped. Nothing
+is ever copied back to the shared store: agy's writes never reach it, so
+there is nothing left to purge there (the BUG-97 purge is gone with it), and
+the conversations of other calls are never in sight.
 
-Where ``<id>`` comes from: agy's own output (``conversation_id`` of its JSON
-payload; in ``stream-json`` already in the first event, ``init``). It is
-checked against a strict pattern before any path is built. A call cut before
-agy said it (timeout, cancellation, crash) falls back on the ids that appeared
-in the four folders during its run: removed at once when no other agy call of
-this process ran at any time in that window, otherwise set aside until no agy
-call is in flight, so a call never removes the files of a neighbour still
-running. A call that knows its id takes it out of that set and removes its own.
-
-``conversation_summaries.db`` (``-wal``, ``-shm``) and
-``jetbox_summaries_proto.pb`` summarise the conversations of every caller and
-cannot be split per call: they are removed whole, only when no agy call of
-this process is in flight. The manual purge of 14/11 removed them and agy
-answered 200 afterwards, on the UAT and in production.
-
-Never touched: the store itself, the four folders themselves, the sign-in
-(``antigravity-oauth-token``), ``installation_id``, ``jetski_state.pbtxt``,
-``bin/``, ``builtin/``, ``cache/``, ``implicit/``, ``log/``, ``cli.log`` and
-``crashes/``. ``implicit/``, ``log/`` and ``crashes/`` do not carry the call's
-id, so their entries cannot be attributed to a call; two known prompts looked
-for in the whole store were found only in ``conversations/`` and ``brain/``
-(which is no proof for every content); and the logs serve diagnosis.
-
-Paths: the store is the one of the ``HOME`` given to the agy process; when it
-does not exist nothing is done. A removed path always sits in one of the four
-folders, directly inside the store; a folder that is a link is skipped; a link
-is removed as a link, never its target (``rmtree`` does not follow links).
-
-A purge that fails (permission, lock, anything) logs a warning with the error
-type and the number of entries left, never a path, the id nor the prompt; the
-answer to the client is not affected and no exception leaves this module.
+The removal never follows a link (``rmtree``) and gives the owner back its
+rights on a folder agy made read-only, so that the copy of the token does not
+stay behind. What still cannot be removed is logged with the error type only,
+never a path, an id nor a prompt; the answer to the client is not affected.
 """
 
 from __future__ import annotations
 
-import json
+import contextlib
 import logging
 import os
-import re
 import shutil
 import stat
-from pathlib import Path
-from typing import Any, Callable, List, Optional, Set, Tuple
+import tempfile
+from typing import Iterator
 
 log = logging.getLogger(__name__)
 
 STORE_PARTS = (".gemini", "antigravity-cli")
-CONVERSATION_DIRS = ("conversations", "brain", "annotations", "presence")
-SHARED_FILES = (
-    "conversation_summaries.db",
-    "conversation_summaries.db-wal",
-    "conversation_summaries.db-shm",
-    "jetbox_summaries_proto.pb",
-)
-# Documented, and checked again before any removal.
-NEVER_TOUCHED = frozenset(
-    {
-        "antigravity-oauth-token",
-        "installation_id",
-        "jetski_state.pbtxt",
-        "bin",
-        "builtin",
-        "cache",
-        "implicit",
-        "log",
-        "cli.log",
-        "crashes",
-        *CONVERSATION_DIRS,
-    }
-)
-
-# agy's ids are UUIDs; any [0-9A-Za-z_-] name up to 128 characters is
-# accepted, which can hold neither a separator, nor "..", nor a leading dot.
-_ID_RE = re.compile(r"[0-9A-Za-z_-]{1,128}")
-
-
-def valid_conversation_id(value: Any) -> Optional[str]:
-    """``value`` when it is a safe conversation id, else None."""
-    if isinstance(value, str) and _ID_RE.fullmatch(value):
-        return value
-    return None
-
-
-def _id_of_event(evt: Any) -> Optional[str]:
-    """The id of a ``json`` payload or of a ``stream-json`` event (``init``
-    carries it at the top, ``step_update`` and ``result`` inside)."""
-    if not isinstance(evt, dict):
-        return None
-    for holder in (evt, evt.get("result"), evt.get("step_update")):
-        if isinstance(holder, dict):
-            cid = valid_conversation_id(holder.get("conversation_id"))
-            if cid:
-                return cid
-    return None
-
-
-def conversation_id_from_line(line: bytes) -> Optional[str]:
-    """The conversation id of one line of agy's output, else None."""
-    if b"conversation_id" not in line:
-        return None
-    try:
-        return _id_of_event(json.loads(line))
-    except ValueError:
-        return None
-
-
-def conversation_id_from_output(stdout_text: str) -> Optional[str]:
-    """The conversation id of agy's whole output (``json`` or ``stream-json``)."""
-    try:
-        cid = _id_of_event(json.loads(stdout_text))
-    except ValueError:
-        cid = None
-    if cid:
-        return cid
-    for line in stdout_text.splitlines():
-        cid = conversation_id_from_line(line.encode("utf-8", "replace"))
-        if cid:
-            return cid
-    return None
-
-
-def store_dir(home: Optional[str]) -> Optional[Path]:
-    """agy's store under ``home``, or None without a home."""
-    if not home:
-        return None
-    return Path(home).joinpath(*STORE_PARTS)
-
-
-def _real_store(store: Optional[Path]) -> Optional[str]:
-    if store is None:
-        return None
-    real = os.path.realpath(store)
-    return real if os.path.isdir(real) else None
-
-
-def _folders(real_store: str) -> List[str]:
-    """The four conversation folders that really are folders of the store."""
-    out = []
-    for sub in CONVERSATION_DIRS:
-        folder = os.path.join(real_store, sub)
-        if os.path.islink(folder) or not os.path.isdir(folder):
-            continue  # a link may lead out of the store: never followed
-        if os.path.dirname(os.path.realpath(folder)) != real_store:
-            continue
-        out.append(folder)
-    return out
-
-
-def _ids_in(real_store: Optional[str]) -> Set[str]:
-    """Ids that have an entry in one of the four folders."""
-    ids: Set[str] = set()
-    if real_store is None:
-        return ids
-    for folder in _folders(real_store):
-        for name in os.listdir(folder):
-            cid = valid_conversation_id(name.split(".", 1)[0])
-            if cid:
-                ids.add(cid)
-    return ids
+PRIVATE_PREFIX = "agy-store-"
 
 
 def _remove(path: str) -> None:
-    """Remove one entry: a folder with what it holds, anything else (a link
-    included) as itself."""
-    if stat.S_ISDIR(os.lstat(path).st_mode):
-        shutil.rmtree(path)  # unlinks the links inside, never follows them
-    else:
-        os.unlink(path)
+    """Remove the folder ``path`` whole, links as links (never their
+    targets), even where agy took its own rights off a folder; never
+    raises."""
+    root = path.rstrip(os.sep) + os.sep
 
+    def retry(function, failed, exc):
+        if not isinstance(exc, PermissionError) or not failed.startswith(root):
+            raise exc
+        # A folder of the call made read-only or unreadable by agy: its
+        # owner (the gateway) gives itself its rights back, then removes it.
+        with contextlib.suppress(OSError):
+            os.chmod(os.path.dirname(failed), stat.S_IRWXU)
+        if os.path.isdir(failed) and not os.path.islink(failed):
+            os.chmod(failed, stat.S_IRWXU)
+            shutil.rmtree(failed, onexc=retry)
+        else:
+            function(failed)
 
-def _removable(real_store: str, path: str) -> bool:
-    folder, name = os.path.split(path)
-    return (
-        os.path.dirname(folder) == real_store
-        and os.path.basename(folder) in CONVERSATION_DIRS
-        and name not in ("", ".", "..")
-        and name not in NEVER_TOUCHED
-        and not name.startswith(".")
-    )
-
-
-def _attempt(paths: List[str], failures: List[BaseException]) -> None:
-    for path in paths:
+    for _ in range(2):
         try:
-            _remove(path)
+            shutil.rmtree(path, onexc=retry)
         except FileNotFoundError:
             pass
-        except Exception as exc:  # noqa: BLE001 - logged by the caller
-            failures.append(exc)
-
-
-def _entries(real_store: str, cid: str) -> List[str]:
-    out = []
-    for folder in _folders(real_store):
-        for name in os.listdir(folder):
-            if name == cid or name.startswith(cid + "."):
-                path = os.path.join(folder, name)
-                if _removable(real_store, path):
-                    out.append(path)
-    return out
-
-
-def _purge_conversation(
-    real_store: str, cid: str, failures: List[BaseException]
-) -> None:
-    if valid_conversation_id(cid) is None:
-        return
-    _attempt(_entries(real_store, cid), failures)
-
-
-def _purge_shared(real_store: str, failures: List[BaseException]) -> None:
-    paths = []
-    for name in SHARED_FILES:
-        path = os.path.join(real_store, name)
-        if os.path.lexists(path) and not os.path.isdir(path):
-            paths.append(path)
-    _attempt(paths, failures)
-
-
-def _report(failures: List[BaseException]) -> None:
-    if failures:
-        log.warning(
-            "agy store purge: %d entr%s left in place (%s)",
-            len(failures),
-            "y" if len(failures) == 1 else "ies",
-            ", ".join(sorted({type(exc).__name__ for exc in failures})),
-        )
-
-
-# Bookkeeping of this process's agy calls. Every change happens without an
-# await in between, so the event loop sees each one whole.
-_active: Set["AgyCall"] = set()
-# Ids seen appearing during the run of a call cut without its id while
-# another call was in flight: (real store, id), removed once none is.
-_orphans: Set[Tuple[str, str]] = set()
-
-
-class AgyCall:
-    """One agy run: what the store held before it, and its id once known."""
-
-    def __init__(self, home: Optional[str]):
-        self.alone = True
-        self.conversation_id: Optional[str] = None
-        self._store = store_dir(home)
-        self._before: Optional[Set[str]] = None
-        try:
-            self._before = _ids_in(_real_store(self._store))
-        except Exception as exc:  # noqa: BLE001 - the call goes on
-            log.warning("agy store snapshot failed (%s)", type(exc).__name__)
-
-    def see_line(self, line: bytes) -> None:
-        if self.conversation_id is None:
-            self.conversation_id = conversation_id_from_line(line)
-
-    def see_output(self, stdout: Optional[bytes]) -> None:
-        if self.conversation_id is None and stdout:
-            self.conversation_id = conversation_id_from_output(
-                stdout.decode("utf-8", "replace")
-            )
-
-    def watching(self, read_delta: Callable[[bytes], str]) -> Callable[[bytes], str]:
-        """``read_delta`` that also notes the id from agy's first event."""
-
-        def read(line: bytes) -> str:
-            self.see_line(line)
-            return read_delta(line)
-
-        return read
-
-    def end(self) -> None:
-        """Remove what this call left; never raises."""
-        _active.discard(self)
-        failures: List[BaseException] = []
-        try:
-            self._purge(failures)
-        except Exception as exc:  # noqa: BLE001 - never fails the answer
-            failures.append(exc)
-        _report(failures)
-
-    def _purge(self, failures: List[BaseException]) -> None:
-        real_store = _real_store(self._store)
-        if real_store is not None:
-            if self.conversation_id is not None:
-                _orphans.discard((real_store, self.conversation_id))
-                _purge_conversation(real_store, self.conversation_id, failures)
-            elif self._before is not None:
-                appeared = _ids_in(real_store) - self._before
-                if self.alone:
-                    for cid in appeared:
-                        _purge_conversation(real_store, cid, failures)
-                else:
-                    _orphans.update((real_store, cid) for cid in appeared)
-        if _active:
+        except Exception:  # noqa: BLE001 - tried once more, then logged
+            pass
+        if not os.path.lexists(path):
             return
-        stores = {store for store, _ in _orphans}
-        while _orphans:
-            store, cid = _orphans.pop()
-            _purge_conversation(store, cid, failures)
-        if real_store is not None:
-            stores.add(real_store)
-        for store in stores:
-            _purge_shared(store, failures)
+    log.warning("agy private store left in place after the call")
 
 
-def begin(env: dict) -> AgyCall:
-    """Register an agy call about to be launched with ``env``."""
-    call = AgyCall(env.get("HOME"))
-    if _active:
-        call.alone = False
-        for other in _active:
-            other.alone = False
-    _active.add(call)
-    return call
+@contextlib.contextmanager
+def private_store(parent: str) -> Iterator[str]:
+    """Yield a new empty folder (mode 0700) under ``parent`` for one agy
+    call's store, and remove it afterwards. Raises :class:`OSError` when it
+    cannot be made: the caller then launches nothing."""
+    path = tempfile.mkdtemp(prefix=PRIVATE_PREFIX, dir=parent)
+    try:
+        yield path
+    finally:
+        _remove(path)
