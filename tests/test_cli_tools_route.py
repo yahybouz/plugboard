@@ -377,6 +377,39 @@ async def test_prompt_tokens_count_the_instruction(client, cli, agent, option_on
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["json", "stream"])
+async def test_billing_counts_the_instruction_when_the_router_estimate_fails(
+    client, cli, agent, option_on, monkeypatch, stream
+):
+    """The router's estimate failed: billing estimates on the translated body."""
+    import plugboard.tokenizer as tokenizer
+    from plugboard import cli_tools
+
+    real = tokenizer.estimate_prompt_tokens
+
+    def broken(messages):
+        raise RuntimeError("estimate failed")
+
+    monkeypatch.setattr(tokenizer, "estimate_prompt_tokens", broken)
+
+    resp = await client.post(
+        "/v1/chat/completions", headers=agent, json=_chat(stream=stream)
+    )
+
+    assert resp.status_code == 200, resp.text
+    sent = cli_tools.to_text_body(_chat())["messages"]
+    if stream:
+        usage = [
+            json.loads(line[len("data: ") :])
+            for line in resp.text.splitlines()
+            if line.startswith("data: ") and '"usage"' in line
+        ][-1]["usage"]
+    else:
+        usage = resp.json()["billing"]  # what was billed
+    assert usage["prompt_tokens"] == real(sent)
+
+
+@pytest.mark.asyncio
 async def test_the_budget_hold_counts_the_instruction(
     client, cli, keys, option_on, monkeypatch
 ):

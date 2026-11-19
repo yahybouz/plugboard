@@ -363,6 +363,11 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                 raise core._InvalidChatRequest(str(exc)) from None
             forward_options["cli_tools"] = True
 
+        def billed() -> Dict[str, Any]:
+            """The body billing estimates on when the answer has no counts:
+            with tools emulated, the text the CLI got (ADR-039)."""
+            return _cli_tools.to_text_body(body) if emulated else body
+
         # A budget cannot hold a call whose price is unknown (402, nothing called)
         if client_id and client_id != "admin":
             core._check_price_known(
@@ -554,7 +559,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                 # Billed as a plain chat; the replay ends with what was billed.
                 reported_usage = dict(result.get("usage") or {})
                 _billing_for_cache = await core._charge_answer(
-                    request, client_id, key_record, spending_total, body, result
+                    request, client_id, key_record, spending_total, billed(), result
                 )
                 if _billing_for_cache:
                     result["billing"] = _billing_for_cache
@@ -823,7 +828,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
 
         # -- Billing --------------------------------------------------------------
         billing_info = await core._charge_answer(
-            request, client_id, key_record, spending_total, body, result
+            request, client_id, key_record, spending_total, billed(), result
         )
 
         # Inject billing into response + headers
