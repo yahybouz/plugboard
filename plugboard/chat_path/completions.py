@@ -737,24 +737,26 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                         # read error: the provider has already generated these
                         # tokens, so record them before letting the error through.
                         if cid:
-                            try:
-                                # On the loop: a cancelled request cannot await
-                                # here (the rare path; PLU-27 moves the others).
-                                # BUG-159: the request's web runs stopped by
-                                # their turns. One stopped after its first
-                                # words is the cut: billed on the tokens
-                                # claude reported, which hold those words;
-                                # without them, on its partial answer.
-                                runs = core._take_web_runs()
-                                cut_run = (
-                                    runs[-1]
-                                    if runs and getattr(cut, "web_exhausted", False)
-                                    else None
-                                )
-                                if cut_run is not None and cut_run.usage is None:
-                                    runs.pop()
-                                    cut_run = None
-                                if cut_run is None:
+                            # BUG-159: the request's web runs stopped by their
+                            # turns. One stopped after its first words is the
+                            # cut: billed on the tokens claude reported, which
+                            # hold those words; without them, on its partial
+                            # answer, as before.
+                            runs = core._take_web_runs()
+                            cut_run = (
+                                runs[-1]
+                                if runs and getattr(cut, "web_exhausted", False)
+                                else None
+                            )
+                            if cut_run is not None and cut_run.usage is None:
+                                runs.pop()
+                                cut_run = None
+                            billing_failed = False
+                            if cut_run is None:
+                                try:
+                                    # On the loop: a cancelled request cannot
+                                    # await here (the rare path; PLU-27 moves
+                                    # the others).
                                     core._bill_streaming(
                                         cid,
                                         req_body,
@@ -766,18 +768,31 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                                         # changes nothing.
                                         reported=_usage_reported(),
                                     )
-                                if runs:
+                                    log.info(
+                                        "Stream interrupted: billed the partial "
+                                        "answer (%d bytes)",
+                                        len(accumulated),
+                                    )
+                                except Exception as exc:
+                                    log.warning(
+                                        "Stream billing error (non-fatal): %s", exc
+                                    )
+                                    billing_failed = True
+                            if runs:
+                                # On their own: never dropped by the partial
+                                # answer's billing; the first settles the hold
+                                # that billing left open.
+                                try:
                                     core._bill_web_runs(
                                         cid, kid, req_body, runs, hold=_hold
                                     )
-                                log.info(
-                                    "Stream interrupted: billed the partial answer "
-                                    "(%d bytes)",
-                                    len(accumulated),
-                                )
-                            except Exception as exc:
-                                log.warning("Stream billing error (non-fatal): %s", exc)
-                                _keep_hold(_hold)
+                                except Exception as exc:
+                                    log.warning(
+                                        "Web run billing error (non-fatal): %s", exc
+                                    )
+                                    billing_failed = True
+                            if billing_failed:
+                                _keep_hold(_hold)  # nothing when a run settled it
                         await core._aclose_quietly(rest)
                 if cut is not None:
                     # What came, in whole events, then a readable end: an error
@@ -790,6 +805,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                 # by a read, `[DONE]` and what follows) and has NOT been yielded.
 
                 bill = None
+                billing_failed = False
                 cancelled: Optional[BaseException] = None
                 if cid:
                     if _hold is not None:
@@ -813,9 +829,10 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                         )
                     except Exception as exc:
                         log.warning("Stream billing error (non-fatal): %s", exc)
-                        _keep_hold(_hold)
+                        billing_failed = True
                 # BUG-159: a web run stopped by its turns before the route that
-                # answered is billed too, on its own entry.
+                # answered is billed too, on its own entry, in its own try: the
+                # first settles the hold the answer's billing left open.
                 runs = core._take_web_runs()
                 spent_cost = 0.0
                 if cid and runs:
@@ -834,7 +851,9 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
                         cancelled = cancelled or late_cancel
                     except Exception as exc:
                         log.warning("Web run billing error (non-fatal): %s", exc)
-                        _keep_hold(_hold)
+                        billing_failed = True
+                if billing_failed:
+                    _keep_hold(_hold)  # nothing when a run settled it
                 if bill is not None and cid and cid != "admin":
                     # As a whole answer is: the spending alert follows its billing
                     # (a CLI stream used to be billed through forward() and had it).

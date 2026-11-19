@@ -193,20 +193,29 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
             hold.settling = True  # never given back while it is billed
         billing_info: Dict[str, Any] = {}
         spent: Dict[str, Any] = {}
-        try:
-            if answered:
+        failed = False
+        if answered:
+            try:
                 billing_info = await _asyncio.to_thread(
                     _bill_completion, client_id, key_id, body, result, hold=hold
                 )
-            if runs:
+            except Exception as exc:
+                log.warning("Billing error (non-fatal): %s", exc)
+                failed = True
+        if runs:
+            # On their own: the answer's billing failing never drops them, and
+            # the first settles the hold that billing left open.
+            try:
                 spent = await _asyncio.to_thread(
                     _bill_web_runs, client_id, key_id, body, runs, hold=hold
                 )
-        except Exception as exc:
-            log.warning("Billing error (non-fatal): %s", exc)
-            _keep_hold(hold)
-            if not billing_info:
-                return {}
+            except Exception as exc:
+                log.warning("Web run billing error (non-fatal): %s", exc)
+                failed = True
+        if failed:
+            _keep_hold(hold)  # nothing when a run settled it
+        if not billing_info and not spent:
+            return {}
         billed_cost = billing_info.get("cost_usd", 0.0) + spent.get("cost_usd", 0.0)
         month = billing_info.get("pricing_month") or spent.get("pricing_month")
         if client_id != "admin" and month:

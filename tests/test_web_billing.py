@@ -612,3 +612,51 @@ async def test_two_exhausted_runs_are_each_billed_once(
     assert usage.get_committed_cost(
         MONTH, key_id=budget_key["key_id"]
     ) == pytest.approx(cost_a + cost_b)
+
+
+def _answer_billing_fails(monkeypatch):
+    """The answer's billing raises (its route cannot be read back); the web
+    runs' billing does not use it."""
+    import plugboard.app as app_module
+
+    def boom():
+        raise RuntimeError("served_by unreadable")
+
+    monkeypatch.setattr(app_module, "_served_by", boom)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+async def test_exhausted_run_is_billed_when_the_answer_billing_fails(
+    client, budget_key, two_routes, monkeypatch, stream
+):
+    two_routes.queue = [
+        (_exhausted(), 0, b""),
+        (_answered(_result(modelUsage=B_USAGE)), 0, b""),
+    ]
+    _answer_billing_fails(monkeypatch)
+    resp = await _chat(client, budget_key, stream=stream, model="model-x")
+    assert resp.status_code == 200, resp.text
+    row = _only_row(budget_key)
+    assert row["provider_id"] == ROUTE_A["id"]
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (PROMPT, COMPLETION)
+    # The hold was settled into A's entry, not kept.
+    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
+
+
+async def test_exhausted_run_is_billed_when_a_cut_stream_billing_fails(
+    client, budget_key, two_routes, monkeypatch
+):
+    """A spent its turns, B's stream is cut after its first words and the
+    partial answer's billing raises: A is billed all the same."""
+    two_routes.queue = [
+        (_exhausted(), 0, b""),
+        (_stdout(_delta("Le prix est ")), 1, b"API Error: 529 overloaded"),
+    ]
+    _answer_billing_fails(monkeypatch)
+    resp = await _chat(client, budget_key, stream=True, model="model-x")
+    assert resp.status_code == 200, resp.text
+    assert "Le prix est" in resp.text
+    row = _only_row(budget_key)
+    assert row["provider_id"] == ROUTE_A["id"]
+    assert (row["prompt_tokens"], row["completion_tokens"]) == (PROMPT, COMPLETION)
+    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
