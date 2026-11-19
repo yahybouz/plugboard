@@ -195,4 +195,4 @@ other. A refused request costs nothing.
 | `PLUGBOARD_MAX_INFLIGHT_WEB` | `2` | Concurrent web requests; `0` turns the web off. |
 | `PLUGBOARD_WEB_TIMEOUT_S` | `900` | Deadline of one web run (at least 30 s). |
 | `PLUGBOARD_WEB_HELPER_MODEL` | `claude-sonnet-5-5` | The CLI's helper model during a web run; never Haiku. |
-| `PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN` | `20000` | Input tokens a budgeted web request holds for each turn of its run, on top of its prompt; `0` holds the prompt's estimate only. A value that is not a whole number from 0 up gives the default, with one warning. |
+| `PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN` | `20000` | Input tokens a budgeted web request holds for each turn of its run, on top of its prompt; `0` holds the prompt's estimate only. A value that is not a whole number from 0 to 1,000,000 gives the default, with one warning. |

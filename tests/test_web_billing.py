@@ -623,9 +623,14 @@ def _answer_billing_fails(monkeypatch):
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
-async def test_exhausted_run_is_billed_when_the_answer_billing_fails(
+async def test_spent_run_billing_never_reads_the_route_that_served(
     client, budget_key, two_routes, monkeypatch, stream
 ):
+    """No answer is billed here (B never runs): what this proves is that the
+    spent run's billing, on the error exit of forward() (plain) and of
+    forward_stream() (stream), never reads the route that served the
+    request (served_by raising): the run carries route A and its price.
+    Reading it would raise, drop the entry and keep the hold."""
     two_routes.queue = [
         (_exhausted(), 0, b""),
         (_answered(_result(modelUsage=B_USAGE)), 0, b""),
@@ -876,3 +881,139 @@ async def test_a_web_request_its_budget_cannot_hold_is_refused_before_any_run(
     resp = await _chat(client, rec, web=False)
     assert resp.status_code == 200, resp.text
     assert claude.runs == 1
+
+
+@pytest.mark.parametrize(
+    "raw", ["1000001", str(10**300), str(10**400)], ids=["1e6+1", "1e300", "1e400"]
+)
+async def test_web_hold_setting_above_a_million_gives_the_default_with_one_warning(
+    client, budget_key, claude, holds, monkeypatch, caplog, raw
+):
+    """A per-turn count past 1,000,000 is a mistake: priced, 10**400 tokens
+    would raise OverflowError; the default is held, with one warning."""
+    from plugboard import envcompat
+
+    monkeypatch.setattr(envcompat, "_bad_numbers", set())
+    monkeypatch.setenv("PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN", raw)
+    caplog.set_level(logging.WARNING)
+    claude.stdout = _answered()
+    for _ in range(2):
+        resp = await _chat(client, budget_key)
+        assert resp.status_code == 200, resp.text
+    assert holds == [pytest.approx(_hold_for(TURNS * PER_TURN))] * 2
+    warned = [
+        r.getMessage()
+        for r in caplog.records
+        if "PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN" in r.getMessage()
+    ]
+    assert len(warned) == 1, warned
+
+
+async def test_web_hold_setting_of_a_million_is_kept(
+    client, keys, claude, holds, monkeypatch
+):
+    monkeypatch.setenv("PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN", "1000000")
+    rec = apikeys.create_key(
+        "webby-rich", "web, large budget", monthly_limit_usd=1000.0, web_access=True
+    )
+    apikeys._invalidate_cache()
+    claude.stdout = _answered()
+    resp = await _chat(client, rec)
+    assert resp.status_code == 200, resp.text
+    turns = rec["web_max_uses"] + web_access.EXTRA_TURNS
+    assert holds == [pytest.approx(_hold_for(turns * 1_000_000))]
+
+
+# The enlarged hold is given back when the request ends without a run billed:
+# a client gone mid-call, an unexpected error (BUG-161).
+
+
+async def test_enlarged_web_hold_is_given_back_on_an_error(
+    client, budget_key, claude, holds, monkeypatch
+):
+    import plugboard.app as app_module
+
+    monkeypatch.delenv("PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN", raising=False)
+
+    async def forward(body, *args, **kwargs):
+        assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) > 0
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(app_module, "forward", forward)
+    resp = await _chat(client, budget_key)
+    assert resp.status_code >= 500, resp.text
+    assert holds == [pytest.approx(_hold_for(TURNS * PER_TURN))]
+    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
+    assert _rows(budget_key) == []
+
+
+async def _hang_up_mid_call(key: dict, stream: bool) -> None:
+    """One web chat through the ASGI app; the client hangs up while the
+    call runs (the call waits for it), as in test_budget_holds."""
+    import asyncio
+
+    import plugboard.app as app_module
+
+    started = asyncio.Event()
+
+    async def forward(body, *args, **kwargs):
+        started.set()
+        await asyncio.sleep(30)
+
+    async def forward_stream(body, *args, **kwargs):
+        started.set()
+        await asyncio.sleep(30)
+        yield b""  # pragma: no cover - an async generator
+
+    raw = json.dumps(
+        {"model": MODEL, "messages": MESSAGES, "stream": stream, "cache": False}
+    ).encode()
+    delivered = False
+
+    async def receive():
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": raw, "more_body": False}
+        await started.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        pass
+
+    headers = [(k.lower().encode(), v.encode()) for k, v in _auth(key, True).items()]
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/v1/chat/completions",
+        "raw_path": b"/v1/chat/completions",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [
+            (b"host", b"test"),
+            (b"content-type", b"application/json"),
+            (b"content-length", str(len(raw)).encode()),
+            *headers,
+        ],
+        "client": ("127.0.0.1", 50000),
+        "server": ("test", 80),
+    }
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(app_module, "forward", forward)
+        mp.setattr(app_module, "forward_stream", forward_stream)
+        await asyncio.wait_for(app_module.app(scope, receive, send), timeout=10)
+    assert started.is_set()
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+async def test_enlarged_web_hold_is_given_back_when_the_client_hangs_up(
+    client, budget_key, claude, holds, monkeypatch, stream
+):
+    monkeypatch.delenv("PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN", raising=False)
+    await _hang_up_mid_call(budget_key, stream)
+    assert holds == [pytest.approx(_hold_for(TURNS * PER_TURN))]
+    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
+    assert _rows(budget_key) == []

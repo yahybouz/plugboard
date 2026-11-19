@@ -108,6 +108,7 @@ def _number(
     cast: Callable[[str], N],
     minimum: Optional[Union[int, float]],
     above: Optional[Union[int, float]],
+    maximum: Optional[Union[int, float]] = None,
 ) -> N:
     raw = get(name, *legacy)
     if not raw:
@@ -117,7 +118,7 @@ def _number(
     except ValueError:
         problem = "is not a whole number" if cast is int else "is not a number"
     else:
-        problem = _why_unusable(value, minimum, above)
+        problem = _why_unusable(value, minimum, above, maximum)
         if problem is None:
             return value
     _report(name, raw, problem, default)
@@ -156,13 +157,14 @@ def get_int(
     *legacy: str,
     default: int,
     minimum: Optional[int] = None,
+    maximum: Optional[int] = None,
 ) -> int:
     """Whole number from ``name`` (or a legacy name), else ``default``.
 
-    A value that is not a whole number or is below ``minimum`` gives the
-    default, with one warning per value.
+    A value that is not a whole number, is below ``minimum`` or above
+    ``maximum`` gives the default, with one warning per value.
     """
-    return _number(name, legacy, default, int, minimum, None)
+    return _number(name, legacy, default, int, minimum, None, maximum)
 
 
 def get_float(

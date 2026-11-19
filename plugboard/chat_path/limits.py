@@ -106,21 +106,24 @@ def _prompt_estimate(body: Dict[str, Any]) -> int:
 
 
 # BUG-161: input tokens a web run may use per turn, held on top of the
-# prompt for each of its --max-turns; 0 turns it off.
+# prompt for each of its --max-turns; 0 turns it off. Past the maximum the
+# setting is a mistake (10**400 tokens cannot be priced: OverflowError).
 _WEB_HOLD_TOKENS_PER_TURN = 20000
+_WEB_HOLD_TOKENS_PER_TURN_MAX = 1_000_000
 
 
 def _web_hold_tokens(policy: Optional[_web_access.WebPolicy]) -> int:
     """Input tokens a web request holds for its run's turns (BUG-161): its
     max_turns times PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN (default 20000;
-    0 = off; a value that is not a whole number >= 0 gives the default,
-    with one warning). 0 for a request without the web."""
+    0 = off; a value that is not a whole number from 0 to 1,000,000 gives
+    the default, with one warning). 0 for a request without the web."""
     if policy is None:
         return 0
     per_turn = envcompat.get_int(
         "PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN",
         default=_WEB_HOLD_TOKENS_PER_TURN,
         minimum=0,
+        maximum=_WEB_HOLD_TOKENS_PER_TURN_MAX,
     )
     return policy.max_turns * per_turn
 
