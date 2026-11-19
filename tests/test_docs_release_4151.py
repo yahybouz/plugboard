@@ -108,3 +108,20 @@ def test_the_runbook_says_how_to_switch_to_4_15_1():
     assert "agy egress refused" in switching
     assert '{"ok": true, "version": "4.15.1"}' in switching
     assert "Rolling back to 4.15.0 works" in switching
+
+
+def test_the_docs_name_every_host_agy_may_reach():
+    # The guide and the release note follow the code's list: six names since
+    # agy's eligibility check needs its profile picture (BUG-156).
+    from plugboard import agy_egress
+
+    guide = (ROOT / "docs" / "guide" / "providers-and-subscriptions.md").read_text(
+        encoding="utf-8"
+    )
+    (egress,) = [line for line in guide.splitlines() if "agy_egress.py" in line]
+    for host in agy_egress.ALLOWED_HOSTS:
+        assert f"`{host}`" in egress, host
+    release = _flat(_release())
+    assert len(agy_egress.ALLOWED_HOSTS) == 6
+    assert "five Google hosts" not in release and "the five hosts" not in release
+    assert "six Google hosts" in release and "`lh3.googleusercontent.com`" in release
