@@ -9,11 +9,14 @@ commit of a work branch), says that the API contracts are unchanged (3.0.1),
 says that BUG-106 stays open, and lists what was not verified; the production
 runbook has a "Switching to 4.14.5" section that says what to check after the
 switch (PID 1 by ``deploy/check-pid1.py``, the Claude quota watch).
+
+The release note keeps the contract 4.14.5 published (3.0.1); the files in
+``docs/api/`` are not pinned here, since a later change may publish a newer
+contract (3.1.0, ADR-039), as 4.14.3 and 4.14.4 allow for theirs.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
@@ -125,16 +128,12 @@ def test_no_work_branch_commit_is_cited():
         assert sha not in release, sha
 
 
-def test_the_contracts_are_unchanged():
+def test_the_release_note_says_the_contract_is_unchanged():
     release = _release()
     (note,) = [
         line for line in release.splitlines() if line.startswith("**API contract**")
     ]
     assert "3.0.1" in note and "unchanged" in note
-    openapi = json.loads((ROOT / "docs" / "api" / "openapi.json").read_text("utf-8"))
-    mcp = json.loads((ROOT / "docs" / "api" / "mcp.json").read_text("utf-8"))
-    assert openapi["info"]["version"] == "3.0.1"
-    assert mcp["contract_version"] == "3.0.1"
 
 
 def test_bug_106_is_a_bench_and_stays_open():

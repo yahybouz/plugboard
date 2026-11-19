@@ -207,6 +207,7 @@ def _new_key(
     rpm_limit: int = 0,
     org_id: str = "",
     allowed_decision_models: Optional[List[str]] = None,
+    allow_cli_tools: bool = False,
 ) -> tuple[Dict[str, Any], str]:
     """A new key record and its plaintext key; nothing is written."""
     if allowed_decision_models is not None:
@@ -230,6 +231,8 @@ def _new_key(
         "allowed_models": allowed_models or [],
         "rpm_limit": rpm_limit,
         "allowed_decision_models": allowed_decision_models,
+        # ADR-039: tools emulated on CLI routes; only the boolean true grants it.
+        "allow_cli_tools": allow_cli_tools is True,
     }
     return record, raw_key
 
@@ -242,6 +245,7 @@ def create_key(
     rpm_limit: int = 0,
     org_id: str = "",
     allowed_decision_models: Optional[List[str]] = None,
+    allow_cli_tools: bool = False,
 ) -> Dict[str, Any]:
     """Generate a new random key, persist its hash, return record with plaintext key.
 
@@ -256,6 +260,7 @@ def create_key(
         rpm_limit,
         org_id,
         allowed_decision_models,
+        allow_cli_tools,
     )
     with _lock():
         data = _read()
@@ -323,6 +328,13 @@ def get_orgs() -> List[Dict[str, Any]]:
     ]
 
 
+def allows_cli_tools(record: Optional[Dict[str, Any]]) -> bool:
+    """Whether a key record holds the right to tools emulated on CLI routes
+    (ADR-039). Only ``allow_cli_tools`` set to the boolean true grants it; the
+    admin has no record and never holds it."""
+    return isinstance(record, dict) and record.get("allow_cli_tools") is True
+
+
 class KeyRevoked(Exception):
     """Rotation asked for a key that is already revoked (BUG-80)."""
 
@@ -354,6 +366,7 @@ def rotate_key(key_id: str) -> Optional[Dict[str, Any]]:
             rpm_limit=old.get("rpm_limit", 0),
             org_id=old.get("org_id", ""),
             allowed_decision_models=old.get("allowed_decision_models"),
+            allow_cli_tools=allows_cli_tools(old),
         )
         keys = [{**k, "is_active": False} if k is old else k for k in keys]
         keys.append(record)

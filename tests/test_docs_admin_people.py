@@ -34,4 +34,11 @@ def test_unreleased_names_the_feature_and_the_contract():
     unreleased = (
         _read("CHANGELOG.md").split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
     )
-    assert "PB-AUTH-01" in unreleased and "3.1.0" not in unreleased
+    # Only PB-AUTH-01's own bullets: another change may bump the contract.
+    bullets = [
+        line
+        for line in unreleased.splitlines()
+        if line.startswith("- ") and "PB-AUTH-01" in line
+    ]
+    assert bullets
+    assert not any("3.1.0" in bullet for bullet in bullets)

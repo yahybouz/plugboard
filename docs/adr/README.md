@@ -26,6 +26,7 @@ Numbers are not contiguous: gaps correspond to records that were never published
 | [ADR-034](ADR-034-remove-legacy-api-key-fallback.md) | Remove the synthetic client key built from API_KEY | Accepted | 2026-04-26 |
 | [ADR-036](ADR-036-auth-mode-derived-constant.md) | AUTH_MODE as a derived constant | Accepted | 2026-05-04 |
 | [ADR-037](ADR-037-openai-direct-provider.md) | Direct OpenAI provider with an API key | Accepted | 2026-05-04 |
+| [ADR-039](ADR-039-outils-routes-cli.md) | Tools emulated as text on CLI subscription routes (opt-in) | Accepted | 2026-11-19 |
 
 ## When to write an ADR
 

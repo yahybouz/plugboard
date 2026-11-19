@@ -41,7 +41,7 @@ from plugboard.decisions import DecisionRequest
 # Not embeddings_api: it imports FastAPI, absent from the MCP environment.
 from plugboard.embeddings_schema import EmbeddingRequest
 
-CONTRACT_VERSION = "3.0.1"
+CONTRACT_VERSION = "3.1.0"
 _JSON = "application/json"
 
 
@@ -123,7 +123,13 @@ class ChatCompletionRequest(_Open):
             "OpenAI tool definitions. A CLI subscription route (subprocess "
             "provider) does not serve them: a non-empty list gets 400 "
             "unsupported_on_cli, unless another provider of the same model "
-            "serves the request."
+            "serves the request. Exception (3.1.0): when the instance sets "
+            "PLUGBOARD_CLI_TOOLS_EMULATION=1 and the key has allow_cli_tools, "
+            "the tools are emulated as text on CLI routes: 32 function tools at "
+            "most (32 KiB), 64 KiB per tool message and 256 KiB in all, no "
+            "session_id (else 400 invalid_request); the call is answered whole "
+            "(a stream is replayed), and an answer off the protocol is a 502 "
+            "cli_tool_call_invalid."
         ),
     )
     tool_choice: Optional[Union[str, Dict[str, Any]]] = Field(
@@ -132,7 +138,20 @@ class ChatCompletionRequest(_Open):
             "OpenAI tool choice. A CLI subscription route (subprocess provider) "
             "does not serve a value other than none or auto: 400 "
             "unsupported_on_cli, unless another provider of the same model "
-            "serves the request."
+            "serves the request. With tools emulated on CLI routes "
+            "(PLUGBOARD_CLI_TOOLS_EMULATION=1 and allow_cli_tools on the key): "
+            "none, auto, required or a function by name, which must be in tools "
+            "(else 400 invalid_request)."
+        ),
+    )
+    parallel_tool_calls: Optional[bool] = Field(
+        default=None,
+        description=(
+            "OpenAI: false allows one tool call at most. Passed to the provider "
+            "that serves tools natively. With tools emulated on CLI routes "
+            "(PLUGBOARD_CLI_TOOLS_EMULATION=1 and allow_cli_tools on the key), "
+            "false makes an answer with several calls a 502 "
+            "cli_tool_call_invalid."
         ),
     )
     response_format: Optional[Dict[str, Any]] = Field(
@@ -621,6 +640,8 @@ class ErrorResponse(_Open):
         "invalid_request (chat, 400; messages, a role or an output cap no "
         "provider can answer), "
         "unsupported_on_cli (chat, 400), context_length_exceeded (chat, 400), "
+        "cli_tool_call_invalid (chat, 502; tools emulated on a CLI route and "
+        "the model answered off the protocol: do not retry), "
         "model_not_supported_by_subscription (chat, 400), "
         "model_not_found (chat, 404), providers_busy (chat, 503), "
         "server_busy (chat and preflight, 503; also a preflight item's error), "
@@ -751,7 +772,15 @@ _CHAT_ERRORS = {
     " for every caller, the admin key included, and the detail is generic."
     " code is model_not_found, hint says what to send; nothing was called.",
     "413": "Request body larger than MAX_BODY_BYTES (10 MB by default).",
-    "502": "The provider failed or answered with an error.",
+    "502": "The provider failed or answered with an error (error_ref)."
+    " code cli_tool_call_invalid: tools were emulated as text on a CLI"
+    " subscription route (PLUGBOARD_CLI_TOOLS_EMULATION=1 and allow_cli_tools"
+    " on the key) and the model's answer was not one protocol object, called a"
+    " tool not declared (or not the one tool_choice names), gave arguments that"
+    " do not match the tool's parameters, made several calls with"
+    " parallel_tool_calls false, or no call when one was required; detail gives"
+    " the reason (and the tool name), error_ref the log entry; header"
+    " x-should-retry: false; no other provider was tried, nothing was billed.",
     "503": "Provider timeout (code provider_timeout, retry_after), the agy provider's sandbox"
     " unable to start, agy not run (code provider_sandbox_unavailable, no Retry-After),"
     " the global cap of concurrent chat"

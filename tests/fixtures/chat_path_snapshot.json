@@ -320,6 +320,19 @@
        "title": "Model",
        "type": "string"
       },
+      "parallel_tool_calls": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "OpenAI: false allows one tool call at most. Passed to the provider that serves tools natively. With tools emulated on CLI routes (PLUGBOARD_CLI_TOOLS_EMULATION=1 and allow_cli_tools on the key), false makes an answer with several calls a 502 cli_tool_call_invalid.",
+       "title": "Parallel Tool Calls"
+      },
       "response_format": {
        "anyOf": [
         {
@@ -398,7 +411,7 @@
         }
        ],
        "default": null,
-       "description": "OpenAI tool choice. A CLI subscription route (subprocess provider) does not serve a value other than none or auto: 400 unsupported_on_cli, unless another provider of the same model serves the request.",
+       "description": "OpenAI tool choice. A CLI subscription route (subprocess provider) does not serve a value other than none or auto: 400 unsupported_on_cli, unless another provider of the same model serves the request. With tools emulated on CLI routes (PLUGBOARD_CLI_TOOLS_EMULATION=1 and allow_cli_tools on the key): none, auto, required or a function by name, which must be in tools (else 400 invalid_request).",
        "title": "Tool Choice"
       },
       "tools": {
@@ -415,7 +428,7 @@
         }
        ],
        "default": null,
-       "description": "OpenAI tool definitions. A CLI subscription route (subprocess provider) does not serve them: a non-empty list gets 400 unsupported_on_cli, unless another provider of the same model serves the request.",
+       "description": "OpenAI tool definitions. A CLI subscription route (subprocess provider) does not serve them: a non-empty list gets 400 unsupported_on_cli, unless another provider of the same model serves the request. Exception (3.1.0): when the instance sets PLUGBOARD_CLI_TOOLS_EMULATION=1 and the key has allow_cli_tools, the tools are emulated as text on CLI routes: 32 function tools at most (32 KiB), 64 KiB per tool message and 256 KiB in all, no session_id (else 400 invalid_request); the call is answered whole (a stream is replayed), and an answer off the protocol is a 502 cli_tool_call_invalid.",
        "title": "Tools"
       },
       "top_p": {
@@ -1446,7 +1459,7 @@
         }
        ],
        "default": null,
-       "description": "Stable reason for programs, when the route gives one: invalid_request (chat, 400; messages, a role or an output cap no provider can answer), unsupported_on_cli (chat, 400), context_length_exceeded (chat, 400), model_not_supported_by_subscription (chat, 400), model_not_found (chat, 404), providers_busy (chat, 503), server_busy (chat and preflight, 503; also a preflight item's error), session_busy (chat, 503), provider_disabled (chat, 503), provider_timeout (chat, 503; a provider gave no answer in time), provider_sandbox_unavailable (chat, 503; the agy provider's sandbox could not start, so agy was not run), quota_exhausted (chat, 429; the provider's subscription or API quota is exhausted), forbidden_model (chat, 403; the key may not use the model), usage_unavailable (a key with a monthly budget while usage cannot be recorded: chat, preflight, embeddings and decisions, 503).",
+       "description": "Stable reason for programs, when the route gives one: invalid_request (chat, 400; messages, a role or an output cap no provider can answer), unsupported_on_cli (chat, 400), context_length_exceeded (chat, 400), cli_tool_call_invalid (chat, 502; tools emulated on a CLI route and the model answered off the protocol: do not retry), model_not_supported_by_subscription (chat, 400), model_not_found (chat, 404), providers_busy (chat, 503), server_busy (chat and preflight, 503; also a preflight item's error), session_busy (chat, 503), provider_disabled (chat, 503), provider_timeout (chat, 503; a provider gave no answer in time), provider_sandbox_unavailable (chat, 503; the agy provider's sandbox could not start, so agy was not run), quota_exhausted (chat, 429; the provider's subscription or API quota is exhausted), forbidden_model (chat, 403; the key may not use the model), usage_unavailable (a key with a monthly budget while usage cannot be recorded: chat, preflight, embeddings and decisions, 503).",
        "title": "Code"
       },
       "detail": {
@@ -2661,7 +2674,7 @@
   "info": {
    "description": "OpenAI-compatible gateway API for client keys. Integration guide: docs/api/README.md.",
    "title": "Plugboard client API",
-   "version": "3.0.1"
+   "version": "3.1.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -2907,7 +2920,7 @@
          }
         }
        },
-       "description": "The provider failed or answered with an error."
+       "description": "The provider failed or answered with an error (error_ref). code cli_tool_call_invalid: tools were emulated as text on a CLI subscription route (PLUGBOARD_CLI_TOOLS_EMULATION=1 and allow_cli_tools on the key) and the model's answer was not one protocol object, called a tool not declared (or not the one tool_choice names), gave arguments that do not match the tool's parameters, made several calls with parallel_tool_calls false, or no call when one was required; detail gives the reason (and the tool name), error_ref the log entry; header x-should-retry: false; no other provider was tried, nothing was billed."
       },
       "503": {
        "content": {
@@ -3774,7 +3787,7 @@
          }
         }
        },
-       "description": "The provider failed or answered with an error."
+       "description": "The provider failed or answered with an error (error_ref). code cli_tool_call_invalid: tools were emulated as text on a CLI subscription route (PLUGBOARD_CLI_TOOLS_EMULATION=1 and allow_cli_tools on the key) and the model's answer was not one protocol object, called a tool not declared (or not the one tool_choice names), gave arguments that do not match the tool's parameters, made several calls with parallel_tool_calls false, or no call when one was required; detail gives the reason (and the tool name), error_ref the log entry; header x-should-retry: false; no other provider was tried, nothing was billed."
       },
       "503": {
        "content": {

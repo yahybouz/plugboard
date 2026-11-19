@@ -52,6 +52,7 @@ from plugboard import (
 from plugboard.alerts import record_provider_failure, record_provider_success
 from plugboard.circuit_breaker import is_request_too_long
 from plugboard.cli_auth import AuthError
+from plugboard import cli_tools as cli_tools_mod
 from plugboard.cli_limits import unsupported_on_cli
 from plugboard.cli_subprocess import (
     MAX_RETRY_AFTER_S,
@@ -226,20 +227,29 @@ def is_cli_provider(provider: Mapping[str, Any]) -> bool:
 
 
 def _drop_cli_routes(
-    body: Mapping[str, Any], candidates: List[tuple[Dict[str, Any], str]]
+    body: Mapping[str, Any],
+    candidates: List[tuple[Dict[str, Any], str]],
+    cli_tools: bool = False,
 ) -> List[tuple[Dict[str, Any], str]]:
     """``candidates`` without the CLI routes when ``body`` asks what they cannot serve.
 
     Raise ``UnsupportedOnCliError`` (naming the first candidate) when only
     CLI routes were candidates. A text-only body keeps every candidate.
+    With ``cli_tools`` (ADR-039), a list of CLI routes only keeps them for a
+    body whose tools are its only refused fields: they emulate the tools as
+    text. A mixed list still leaves the CLI routes out, so a native route
+    serves the tools.
     """
     unsupported = unsupported_on_cli(body)
     if not unsupported or not candidates:
         return candidates
     kept = [route for route in candidates if not is_cli_provider(route[0])]
-    if not kept:
-        raise UnsupportedOnCliError(candidates[0][0]["id"], unsupported)
-    return kept
+    if kept:
+        return kept
+    left = unsupported_on_cli(body, cli_tools=cli_tools)
+    if left:
+        raise UnsupportedOnCliError(candidates[0][0]["id"], left)
+    return candidates
 
 
 # OpenAI-style error type that blames the request (unsupported parameter...);
@@ -1088,8 +1098,13 @@ def _resolve_all_providers(model_str: str) -> List[tuple[Dict[str, Any], str]]:
     return results
 
 
-def cli_refusal(body: Dict[str, Any]) -> Optional[UnsupportedOnCliError]:
+def cli_refusal(
+    body: Dict[str, Any], cli_tools: bool = False
+) -> Optional[UnsupportedOnCliError]:
     """The ``UnsupportedOnCliError`` forward() would raise for ``body``, or None.
+
+    ``cli_tools`` is forward()'s: with it, tools on CLI routes only are
+    emulated (ADR-039) instead of refused.
 
     None when the body asks for nothing a CLI route cannot serve; when only a
     disabled provider serves the model (forward() raises
@@ -1108,7 +1123,7 @@ def cli_refusal(body: Dict[str, Any]) -> Optional[UnsupportedOnCliError]:
     except ValueError:
         return None
     try:
-        _drop_cli_routes(body, candidates)
+        _drop_cli_routes(body, candidates, cli_tools)
     except UnsupportedOnCliError as exc:
         return exc
     return None
@@ -1147,6 +1162,34 @@ def _pop_reported_usage(result: Dict[str, Any]) -> bool:
     from plugboard.cli_subprocess import USAGE_REPORTED_KEY
 
     return result.pop(USAGE_REPORTED_KEY, None) is True
+
+
+def _read_tool_answer(
+    provider: Dict[str, Any], result: Dict[str, Any], body: Dict[str, Any]
+) -> Dict[str, Any]:
+    """The CLI's answer read by the tool protocol (ADR-039), with one log
+    line that names neither a tool, an argument, a tool output nor the
+    model's text. Raises ``CliToolCallError`` for an answer off the protocol.
+    """
+    tools = body.get("tools")
+    count = len(tools) if isinstance(tools, list) else 0
+    try:
+        read = cli_tools_mod.read_answer(result, body)
+    except cli_tools_mod.CliToolCallError as exc:
+        log.info(
+            "cli tools: provider=%s tools=%d outcome=invalid:%s",
+            provider["id"],
+            count,
+            exc.reason,
+        )
+        raise
+    message = (read.get("choices") or [{}])[0].get("message") or {}
+    calls = message.get("tool_calls")
+    outcome = f"calls:{len(calls)}" if calls else "final"
+    log.info(
+        "cli tools: provider=%s tools=%d outcome=%s", provider["id"], count, outcome
+    )
+    return read
 
 
 def _circuit_key(provider: Dict[str, Any], real_model: str) -> str:
@@ -1190,6 +1233,7 @@ def _order_routes(candidates: List[tuple], open_routes: Set[str]) -> List[tuple]
 def _candidates_for(
     body: Dict[str, Any],
     route_guard: Optional[Callable[[Dict[str, Any], str], None]],
+    cli_tools: bool = False,
 ) -> Tuple[List[tuple], Optional[Exception]]:
     """The routes a chat request may use, in the order to try them, and the
     key's refusal of the first route it may not use (None when it may use
@@ -1201,7 +1245,7 @@ def _candidates_for(
     # A CLI route would drop tools, a structured format or an image: it is
     # left out, before any circuit read, guard or slot, and the request is
     # refused when nothing else is left.
-    candidates = _drop_cli_routes(body, candidates)
+    candidates = _drop_cli_routes(body, candidates, cli_tools)
 
     # Read each route's circuit under the key its outcomes are recorded under:
     # an open circuit past its cooldown goes half-open, so a success closes
@@ -1277,6 +1321,7 @@ async def forward(
     timeout: float = _TIMEOUT,
     *,
     route_guard: Optional[Callable[[Dict[str, Any], str], None]] = None,
+    cli_tools: bool = False,
 ) -> Dict[str, Any]:
     """
     Forward a /v1/chat/completions request to the resolved provider.
@@ -1294,6 +1339,11 @@ async def forward(
     A provider at its concurrency cap is skipped; when every candidate left
     is, the request waits up to ``PLUGBOARD_PROVIDER_WAIT_S`` for the first
     freed slot, then raises ``ProvidersBusyError``.
+    With ``cli_tools`` (the option and the key right, set by the chat path
+    only), tools on CLI routes only are emulated as text (ADR-039): the CLI
+    gets ``cli_tools.to_text_body(body)`` and its answer is read back into
+    ``tool_calls``. An answer off the protocol raises ``CliToolCallError`` at
+    once: no other route, no circuit count, no alert, no quarantine.
     """
     from plugboard.call_outcome import is_transient
     from plugboard.circuit_breaker import (
@@ -1306,7 +1356,12 @@ async def forward(
     _usage_reported.set(False)
     model_str = body.get("model", "")
     _refuse_if_disabled(model_str)
-    candidates, refused = _candidates_for(body, route_guard)
+    candidates, refused = _candidates_for(body, route_guard, cli_tools)
+    # ADR-039: the text a CLI route gets in place of the tools; pure, so the
+    # same as the one the budget hold estimated.
+    text_body: Optional[Dict[str, Any]] = None
+    if cli_tools and cli_tools_mod.engaged(body):
+        text_body = cli_tools_mod.to_text_body(body)
 
     last_err: Optional[Exception] = None
     # PERF-2: reuse the app-wide pooled sessions (keepalive + DNS cache)
@@ -1410,7 +1465,8 @@ async def forward(
                     kind = auth_source.removeprefix("subprocess:")
                     from plugboard import cli_subprocess
 
-                    sub_body = {**body, "model": real_model}
+                    sent = text_body if text_body is not None else body
+                    sub_body = {**sent, "model": real_model}
                     _t_cli = _time.perf_counter()
                     try:
                         result = await cli_subprocess.complete(
@@ -1443,7 +1499,7 @@ async def forward(
                                 estimate_prompt_tokens as _est_p,
                             )
 
-                            p_tok = _est_p(body.get("messages", []))
+                            p_tok = _est_p(sent.get("messages", []))
                             c_tok = _est_c(result)
                             result["usage"] = {
                                 "prompt_tokens": p_tok,
@@ -1452,6 +1508,8 @@ async def forward(
                             }
                     except Exception as _exc:
                         log.debug("subprocess usage estimation failed: %s", _exc)
+                    if text_body is not None:
+                        result = _read_tool_answer(provider, result, body)
                     try:
                         record_provider_success(provider["id"])
                         cb_success(_circuit_key(provider, real_model))
@@ -1465,6 +1523,10 @@ async def forward(
                 except ModelNotServedError:
                     # The CLI wrapper refused the name before starting it
                     # (BUG-120): the request's error, final, never counted.
+                    raise
+                except cli_tools_mod.CliToolCallError:
+                    # ADR-039: an answer off the tool protocol is final, as
+                    # above: no other route, no circuit count, no alert.
                     raise
                 except Exception as exc:
                     last_err = exc

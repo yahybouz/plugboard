@@ -25,6 +25,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 from plugboard import billing as _billing
 from plugboard import chat_billing
+from plugboard import cli_tools as _cli_tools
 from plugboard.apikeys import load_keys
 from plugboard.cli_subprocess import ModelNotServedError
 from plugboard.ratelimit import check_client_rate_limit
@@ -251,10 +252,15 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         client_id: Optional[str],
         key_record: Optional[Dict[str, Any]],
         body: Dict[str, Any],
+        cli_tools: bool = False,
     ) -> None:
         """The chat's hold (_take_budget_hold), kept on the request: billing
-        settles it, _session_turn_dep gives back one that was not billed."""
+        settles it, _session_turn_dep gives back one that was not billed.
+        With ``cli_tools`` (tools emulated on a CLI route, ADR-039) the cost is
+        estimated on the text the CLI gets, the instruction included."""
         request.state.budget_hold = None
+        if cli_tools:
+            body = _cli_tools.to_text_body(body)
 
         def keep(hold: Optional[chat_billing.BudgetHold]) -> None:
             request.state.budget_hold = hold

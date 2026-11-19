@@ -36,6 +36,7 @@
    "plugboard.cli_auth",
    "plugboard.cli_limits",
    "plugboard.cli_subprocess",
+   "plugboard.cli_tools",
    "plugboard.config",
    "plugboard.decision_api",
    "plugboard.decisions",
@@ -283,6 +284,11 @@
     },
     "KeyCreate": {
      "properties": {
+      "allow_cli_tools": {
+       "default": false,
+       "title": "Allow Cli Tools",
+       "type": "boolean"
+      },
       "allowed_decision_models": {
        "anyOf": [
         {

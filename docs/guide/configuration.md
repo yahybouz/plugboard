@@ -98,6 +98,7 @@ A completed rotation also signs out every dashboard session and forgets the brow
 
 | Variable | Default | Description |
 |---|---|---|
+| `PLUGBOARD_CLI_TOOLS_EMULATION` | empty | `1` lets a client key with `allow_cli_tools` (set by the admin when issuing it, `POST /admin/keys`) send `tools` to a model only CLI subscription routes serve: the tools are emulated as text and the answer read back into `tool_calls` ([tools emulated as text](providers-and-subscriptions.md#what-a-cli-subscription-route-does-not-do), ADR-039). Empty, or any other value: off, and such a request gets `400 unsupported_on_cli` as before. Read at each request. Leave it empty in production: it is meant for UAT and internal agents. |
 | `PLUGBOARD_SUBPROCESS_LIMIT` | `4` | Concurrent CLI processes per CLI (the Docker image sets 10). |
 | `PLUGBOARD_SUBPROCESS_CWD` | a private temporary directory (mode `0700`) | Working directory of CLI processes. Everything in it becomes readable by client prompts. |
 | `PLUGBOARD_SUBPROCESS_ENV_PASSTHROUGH` | empty | Extra environment variable names passed to CLI processes, comma-separated. CLI processes otherwise get an allowlist; server secrets and `PLUGBOARD_*` names are always refused. |

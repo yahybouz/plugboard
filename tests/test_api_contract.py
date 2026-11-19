@@ -13,6 +13,7 @@ and each body is validated with the Pydantic model the contract publishes.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -345,3 +346,88 @@ def test_committed_contract_names_the_provider_credentials_401_and_403():
             text = responses[status]["description"]
             assert "provider's own credentials" in text, (path, status)
             assert "error_ref" in text, (path, status)
+
+
+def test_committed_contract_states_the_tools_emulated_on_cli_routes():
+    """ADR-039 (contract 3.1.0): tools may be emulated as text on CLI routes
+    for a key the admin allowed, when the instance option is on; an answer
+    off the protocol is a 502 cli_tool_call_invalid, not to be retried."""
+    assert api_contract.CONTRACT_VERSION == "3.1.0"
+    doc = json.loads((ROOT / "docs" / "api" / "openapi.json").read_text("utf-8"))
+    assert doc["info"]["version"] == "3.1.0"
+    schemas = doc["components"]["schemas"]
+    fields = schemas["ChatCompletionRequest"]["properties"]
+    assert "parallel_tool_calls" in fields
+    for name in ("tools", "tool_choice", "parallel_tool_calls"):
+        description = fields[name].get("description", "")
+        assert "PLUGBOARD_CLI_TOOLS_EMULATION" in description, name
+        assert "allow_cli_tools" in description, name
+    code = schemas["ErrorResponse"]["properties"]["code"]["description"]
+    assert "cli_tool_call_invalid" in code
+    for path in ("/v1/chat/completions", "/v2/chat/completions"):
+        bad_gateway = doc["paths"][path]["post"]["responses"]["502"]["description"]
+        assert "cli_tool_call_invalid" in bad_gateway, path
+        assert "x-should-retry: false" in bad_gateway, path
+    mcp = json.loads((ROOT / "docs" / "api" / "mcp.json").read_text("utf-8"))
+    assert mcp["contract_version"] == "3.1.0"
+
+
+_SEMVER = r"\d+\.\d+\.\d+"
+# A past move ("from 3.0.1 to 3.1.0", "3.0.1 → 3.1.0") is history, not the
+# version a section names as its own.
+_CONTRACT_MOVE = re.compile(
+    rf"(?:from\W{{0,4}})?{_SEMVER}\W{{0,4}}(?:to|→)\W{{0,4}}{_SEMVER}"
+)
+# "contract 3.1.0", "still **3.0.1**", "publishes **3.0.1**", "publishes one
+# contract version, **3.0.0**": the version a section says is current.
+_CURRENT_CONTRACT = re.compile(
+    rf"(?:contract|still|publishes(?: one contract version,)?)\W{{0,4}}({_SEMVER})"
+)
+
+
+def _current_contract_versions(changelog: str) -> set:
+    """The contract versions the newest CHANGELOG section that names one
+    gives as current: Unreleased, else the last release that names one."""
+    for section in changelog.split("\n## [")[1:]:
+        cited = set(_CURRENT_CONTRACT.findall(_CONTRACT_MOVE.sub("", section)))
+        if cited:
+            return cited
+    return set()
+
+
+@pytest.mark.parametrize(
+    ("changelog", "expected"),
+    [
+        ("# C\n## [Unreleased]\n- x (contract 3.1.0)\n## [1.0.0]\n- y", {"3.1.0"}),
+        (
+            "# C\n## [Unreleased]\n- x (contract 3.1.0)\n\n"
+            "**API contract**: unchanged, still **3.0.1**\n## [1.0.0]\n",
+            {"3.1.0", "3.0.1"},
+        ),
+        (
+            "# C\n## [Unreleased]\n**API contract**: moves from **3.0.1** to "
+            "**3.1.0**; this version publishes **3.1.0**\n## [1.0.0]\n",
+            {"3.1.0"},
+        ),
+        (
+            "# C\n## [Unreleased]\n- a fix\n## [1.0.1]\n- nothing\n"
+            "## [1.0.0]\n**API contract**: this release publishes **3.0.1**",
+            {"3.0.1"},
+        ),
+    ],
+    ids=["one", "another-current-version", "a-past-move", "after-a-release"],
+)
+def test_the_changelog_rule_reads_the_current_contract(changelog, expected):
+    assert _current_contract_versions(changelog) == expected
+
+
+def test_the_contract_version_is_the_same_everywhere():
+    """D-81: the code, both committed documents and the newest CHANGELOG
+    section that names a contract version name one and the same version."""
+    version = api_contract.CONTRACT_VERSION
+    doc = json.loads((ROOT / "docs" / "api" / "openapi.json").read_text("utf-8"))
+    mcp = json.loads((ROOT / "docs" / "api" / "mcp.json").read_text("utf-8"))
+    assert doc["info"]["version"] == version
+    assert mcp["contract_version"] == version
+    changelog = (ROOT / "CHANGELOG.md").read_text("utf-8")
+    assert _current_contract_versions(changelog) == {version}
