@@ -1021,3 +1021,70 @@ async def test_enlarged_web_hold_is_given_back_when_the_client_hangs_up(
     assert holds == [pytest.approx(_hold_for(TURNS * PER_TURN))]
     assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
     assert _rows(budget_key) == []
+
+
+# ── 8. parallel web calls past web_max_uses stop the run (PLU-159) ───────────
+
+
+def _parallel(n: int) -> dict:
+    """One assistant message asking for ``n`` web tool calls at once."""
+    return {
+        "type": "assistant",
+        "message": {
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": f"toolu_{i}",
+                    "name": "WebFetch",
+                    "input": {"url": f"https://example.com/{i}"},
+                }
+                for i in range(n)
+            ]
+        },
+    }
+
+
+@pytest.fixture
+def stopped(monkeypatch):
+    """The signals sent to the run's group, recorded (the fake process has no
+    group: nothing is sent for real)."""
+    sent: list = []
+    monkeypatch.setattr(
+        cli_subprocess, "_signal_group", lambda pgid, sig: sent.append((pgid, sig))
+    )
+    return sent
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+async def test_parallel_calls_past_the_limit_stop_the_run(
+    client, budget_key, two_routes, penalties, stopped, stream
+):
+    """web_max_uses bounded the turns, not the calls: five WebFetch in one
+    message (the key allows 4) were served. The run is stopped as soon as
+    the fifth call is written, ends as a spent run (502 web_budget_exhausted,
+    final, billed once) and route B never runs."""
+    two_routes.queue = [
+        (_stdout(_parallel(5), _result()), 0, b""),
+        _NEXT_ROUTE["answers"],
+    ]
+    resp = await _chat(client, budget_key, stream=stream, model="model-x")
+    assert resp.status_code == 502, resp.text
+    assert resp.json()["code"] == "web_budget_exhausted"
+    assert ANSWER not in resp.text
+    assert two_routes.runs == 1
+    assert stopped and stopped[0][0] == 424242
+    row = _only_row(budget_key)
+    assert row["provider_id"] == ROUTE_A["id"]
+    assert (row["web"], row["web_uses"]) == (1, 5)
+    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
+    assert penalties == {"circuit": [], "errors": [], "alerts": [], "pauses": []}
+
+
+async def test_parallel_calls_within_the_limit_are_served(
+    client, budget_key, claude, stopped
+):
+    claude.stdout = _stdout(_parallel(4), _result())
+    resp = await _chat(client, budget_key)
+    assert resp.status_code == 200, resp.text
+    assert stopped == []
+    assert _only_row(budget_key)["web_uses"] == 4

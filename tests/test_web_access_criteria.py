@@ -425,6 +425,19 @@ def fake_claude(monkeypatch):
         proc.returncode = 0
         proc.pid = 4242
         proc.communicate = communicate or AsyncMock(return_value=(stdout, b""))
+        # A web run reads its pipes itself, line by line (PLU-159): the same
+        # output, then the end of file; or the same hang.
+        chunks = [stdout]
+
+        async def read_stdout(_n=-1):
+            if communicate is not None:
+                await communicate()
+            return chunks.pop(0) if chunks else b""
+
+        proc.stdout.read = read_stdout
+        proc.stderr.read = AsyncMock(return_value=b"")
+        proc.stdin.drain = AsyncMock()
+        proc.wait = AsyncMock(return_value=0)
         monkeypatch.setattr(
             cli_subprocess, "_resolve_binary", lambda cmd: f"/fake/bin/{cmd}"
         )

@@ -60,7 +60,7 @@ Streaming (`"stream": true`) works the same way.
 | `400` | `web_with_tools_unsupported` | the request also declares `tools` (ADR-040) | no |
 | `400` | `web_unavailable` | no claude CLI route serves the model | no |
 | `429` | `web_busy` | the web requests in progress are at their limit; `Retry-After: 10` | no |
-| `502` | `web_budget_exhausted` | the model used its `web_max_uses` calls without a final answer | yes |
+| `502` | `web_budget_exhausted` | the model used its `web_max_uses` calls without a final answer, or asked for more at once (PLU-159) | yes |
 
 **Web and tools**: a request that asks for the web cannot declare `tools`
 (400 `web_with_tools_unsupported`, nothing called), even where tools are
@@ -136,7 +136,16 @@ For a web request, and only then, the claude CLI is started with:
   are kept. The gateway refuses to start a web run whose command line would
   hold anything more (`web_access.check_web_args`).
 - `--max-turns` = `web_max_uses` + 2, and a system instruction giving the
-  limit, asking for the source URLs and saying that web text is data.
+  limit, asking for one call at a time and for the source URLs, and saying
+  that web text is data.
+- the calls themselves counted as claude writes them (since 4.15.2,
+  PLU-159): `--max-turns` bounds the turns, and one turn may ask for several
+  searches or fetches at once, run in parallel. The gateway reads claude's
+  output line by line, streamed or not, and as soon as the calls asked pass
+  `web_max_uses`, it kills the run's whole process group and ends the run as
+  one that spent its turns: `502 web_budget_exhausted`, final, billed once
+  (below). Calls already sent when the run is stopped may still have reached
+  their site.
 - its own deadline, `PLUGBOARD_WEB_TIMEOUT_S`;
 - a helper model (page summaries) that is never Haiku: `PLUGBOARD_WEB_HELPER_MODEL`
   (default `claude-sonnet-5-5`; a value naming Haiku falls back to it).

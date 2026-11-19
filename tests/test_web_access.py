@@ -407,3 +407,33 @@ async def test_egress_tunnels_to_a_public_address(monkeypatch):
         await web_egress.stop()
         upstream.close()
         await upstream.wait_closed()
+
+
+def test_tool_use_counter_counts_parallel_calls_once_each():
+    """PLU-159: every tool_use block of an assistant event counts, a block
+    written twice (the same id) once; partial-message events do not count."""
+    counter = web_access.ToolUseCounter(web_access.WebPolicy(max_uses=2))
+
+    def assistant(*ids):
+        blocks = [{"type": "tool_use", "id": i, "name": "WebFetch"} for i in ids]
+        return json.dumps({"type": "assistant", "message": {"content": blocks}})
+
+    partial = json.dumps(
+        {
+            "type": "stream_event",
+            "event": {
+                "type": "content_block_start",
+                "content_block": {"type": "tool_use", "id": "a", "name": "WebFetch"},
+            },
+        }
+    )
+    assert counter.over(partial.encode()) is False
+    assert counter.over(assistant("a", "b").encode()) is False
+    assert counter.over(assistant("b").encode()) is False
+    assert counter.uses == 2
+    assert counter.over(b'not json with "tool_use"') is False
+    assert counter.over(assistant("c").encode()) is True
+    assert counter.uses == 3
+    policy = web_access.WebPolicy(max_uses=2)
+    text = "\n".join([partial, assistant("a", "b"), assistant("b"), assistant("c")])
+    assert web_access.count_tool_uses(text, policy) == 3

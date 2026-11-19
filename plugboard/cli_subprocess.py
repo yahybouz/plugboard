@@ -2266,11 +2266,19 @@ def can_stream(kind: str) -> bool:
 async def _communicate_streaming(
     proc: "asyncio.subprocess.Process",
     data: bytes,
-    read_delta: Callable[[bytes], str],
-    on_delta: Callable[[str], None],
+    read_delta: Optional[Callable[[bytes], str]],
+    on_delta: Optional[Callable[[str], None]],
+    stop_when: Optional[Callable[[bytes], bool]] = None,
 ) -> Tuple[bytes, bytes]:
     """``proc.communicate(data)`` that also reports the text deltas of stdout
-    line by line as they are written. stdout and stderr are returned whole."""
+    line by line as they are written. stdout and stderr are returned whole.
+
+    ``stop_when``, when given, sees each line of stdout first: once it says
+    so, the CLI's whole process group is killed at once (no grace: what it
+    was doing must not go on) and no delta is reported any more; the output
+    written until then is returned as usual (PLU-159, a web run past its
+    tool calls)."""
+    stopped = False
 
     async def feed() -> None:
         try:
@@ -2284,6 +2292,7 @@ async def _communicate_streaming(
                 proc.stdin.close()  # type: ignore[union-attr]
 
     async def read_stdout() -> bytes:
+        nonlocal stopped
         assert proc.stdout is not None
         chunks: List[bytes] = []
         pending = b""
@@ -2298,6 +2307,14 @@ async def _communicate_streaming(
                 if end == -1:
                     break
                 line, pending = pending[:end], pending[end + 1 :]
+                if stopped:
+                    continue
+                if stop_when is not None and stop_when(line):
+                    stopped = True
+                    _signal_group(proc.pid, signal.SIGKILL)
+                    continue
+                if read_delta is None or on_delta is None:
+                    continue
                 text = read_delta(line)
                 if text:
                     try:
@@ -2396,6 +2413,8 @@ async def complete(
         if on_delta is not None:
             on_delta(text)
 
+    # A web run's tool calls, counted as claude writes them (PLU-159).
+    web_calls = web_access.ToolUseCounter(web) if web is not None else None
     base_args = backend.args
     if web is not None:
         # Only WebSearch and WebFetch, checked (web_access.check_web_args).
@@ -2511,7 +2530,18 @@ async def complete(
                 # A CLI that exits without reading its stdin is not an error
                 # here: communicate() ignores the broken pipe and the exit
                 # code is reported below.
-                if read_delta is not None and on_delta is not None:
+                if web_calls is not None:
+                    # A web run is read line by line, streamed or not: its
+                    # tool calls are counted as claude writes them, and the
+                    # run is stopped past web_max_uses (PLU-159).
+                    pending_io = _communicate_streaming(
+                        proc,
+                        prompt.encode("utf-8"),
+                        read_delta,
+                        relay if read_delta is not None else None,
+                        stop_when=web_calls.over,
+                    )
+                elif read_delta is not None and on_delta is not None:
                     pending_io = _communicate_streaming(
                         proc, prompt.encode("utf-8"), read_delta, relay
                     )
@@ -2590,9 +2620,20 @@ async def complete(
             ",".join(web.tools_seen) or "-",
             ",".join(web_access.models_used(stdout_text, web)) or "-",
         )
-        if web_access.max_turns_reached(stdout_text):
-            # The model spent its turns on the web without answering: the
-            # request's limit, not the route's fault (no circuit, no alert).
+        past_uses = web_calls is not None and web_calls.uses > web.max_uses
+        if past_uses:
+            # Parallel calls in one message passed web_max_uses: the run was
+            # stopped as soon as they were written (PLU-159).
+            log.warning(
+                "web run stopped: model=%s asked for %d web tool calls, %d allowed",
+                model,
+                web_calls.uses,
+                web.max_uses,
+            )
+        if past_uses or web_access.max_turns_reached(stdout_text):
+            # The model spent its turns (or its calls) on the web without
+            # answering: the request's limit, not the route's fault (no
+            # circuit, no alert).
             exhausted = CliSubprocessError(
                 f"web: the model used its {web.max_uses} web tool calls without "
                 "a final answer; ask a narrower question or raise web_max_uses",
