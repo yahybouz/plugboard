@@ -53,7 +53,9 @@ from plugboard.legacy_connectors import (
     require_supported_model,
     require_supported_provider,
 )
+from plugboard.cli_limits import unsupported_on_cli
 from plugboard.router import (
+    UnsupportedOnCliError,
     disabled_route,
     is_unknown_model,
     is_unserved_cli_model,
@@ -337,18 +339,22 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         # (tools, structured output, images), is refused with nothing counted.
         # ADR-039: with the option and the key right, tools on CLI routes only
         # are emulated as text; without both, the refusal is unchanged.
-        cli_tools_right = _cli_tools_right(client_id, key_record)
-        if cli_tools_right:
-            refusal = core.cli_refusal(body, cli_tools=True)
-        else:
-            refusal = core.cli_refusal(body)
+        # The routes are resolved once: the refusal names the fields left once
+        # the tools are emulated.
+        refusal = core.cli_refusal(body)
+        emulated = False
+        if (
+            refusal is not None
+            and _cli_tools.engaged(body)
+            and _cli_tools_right(client_id, key_record)
+        ):
+            left = unsupported_on_cli(body, cli_tools=True)
+            if left:
+                refusal = UnsupportedOnCliError(refusal.provider_id, left)
+            else:
+                refusal, emulated = None, True
         if refusal is not None:
             return _unsupported_on_cli_response(refusal)
-        emulated = (
-            cli_tools_right
-            and _cli_tools.engaged(body)
-            and core.cli_refusal(body) is not None
-        )
         forward_options = dict(route_options)
         if emulated:
             # Checked here, before anything is counted: a session cannot
