@@ -531,8 +531,14 @@ async def test_a_web_run_starts_as_in_4151_but_in_its_cage(
     assert cage[3:9] == ["--bind", "/", "/", "--dev-bind", "/dev", "/dev"]
     egress = argv[sep + 7]
     assert os.path.basename(egress) == net_cage.EGRESS_SOCKET
-    assert cage[9:12] == ["--ro-bind", egress, egress]
-    assert cage[12:] == ["--chdir", server["spawn"]]
+    # The relay interpreter's packages hidden (PLU-171, none on most hosts).
+    hidden = []
+    for path in net_cage.relay_site_packages(net_cage.relay_python()):
+        hidden += ["--tmpfs", path, "--remount-ro", path]
+    n = len(hidden)
+    assert cage[9 : 9 + n] == hidden
+    assert cage[9 + n : 12 + n] == ["--ro-bind", egress, egress]
+    assert cage[12 + n :] == ["--chdir", server["spawn"]]
     assert "--unshare-pid" not in cage
     # The relay, then claude exactly as 4.15.1 started it.
     assert argv[sep + 1 : sep + 5] == [

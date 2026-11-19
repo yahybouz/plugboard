@@ -229,10 +229,10 @@ def relay_python() -> List[str]:
 
     agy's cage shows them read-only to the relay. The standard library's
     folder is mounted whole: in the image (``/usr/local/lib/python3.12``) it
-    holds ``site-packages``, the gateway's third-party dependencies, which
-    agy can therefore read (never write). They hold no secret (published
-    packages; the gateway's own code is in ``/app``, not mounted); ``-S``
-    keeps them off the relay's path."""
+    holds ``site-packages``, the gateway's third-party dependencies, hidden
+    under an empty read-only tmpfs in both cages
+    (:func:`relay_site_packages`, PLU-171); ``-S`` keeps them off the
+    relay's path anyway."""
     executable = os.path.realpath(sys.executable) if sys.executable else ""
     if not executable or not os.path.isfile(executable):
         raise CageUnavailable("the relay's Python interpreter is missing")
@@ -252,6 +252,34 @@ def relay_python() -> List[str]:
         if path not in paths and not any(path.startswith(p + os.sep) for p in paths):
             paths.append(path)
     return paths
+
+
+# The folders of third-party packages an interpreter may hold (PLU-171, I4).
+_PACKAGES = ("site-packages", "dist-packages")
+
+
+def relay_site_packages(within: Sequence[str]) -> List[str]:
+    """The relay interpreter's folders of third-party packages that lie in
+    ``within`` (what :func:`relay_python` shows), each a real folder
+    reached through no link: ``site-packages`` and ``dist-packages`` of
+    each folder of ``within``, and the interpreter's own ``purelib`` and
+    ``platlib``. A cage hides each under an empty read-only tmpfs
+    (PLU-171, I4): the relay (``-S``) never imports them, and the CLI has no
+    business reading the gateway's dependencies."""
+    candidates = [os.path.join(path, name) for path in within for name in _PACKAGES]
+    paths = sysconfig.get_paths()
+    candidates += [paths.get("purelib") or "", paths.get("platlib") or ""]
+    roots = [os.path.normpath(path) for path in within]
+    found: List[str] = []
+    for candidate in candidates:
+        path = os.path.normpath(candidate) if candidate else ""
+        if not path or path in found:
+            continue
+        if not (plain_path(path) and os.path.isdir(path)):
+            continue
+        if any(path.startswith(root.rstrip(os.sep) + os.sep) for root in roots):
+            found.append(path)
+    return found
 
 
 def setup_failure(
@@ -307,6 +335,11 @@ def web_cage_argv(
     egress = egress_socket(folder, "web")
     python = relay_python()
     given = [env.get(name) for name in _GIVEN_BACK]
+    # The relay interpreter's third-party packages, under an empty
+    # read-only tmpfs (PLU-171, I4).
+    hidden: List[str] = []
+    for path in relay_site_packages(python):
+        hidden += ["--tmpfs", path, "--remount-ro", path]
     return [
         bwrap,
         *WEB_NAMESPACES,
@@ -318,6 +351,7 @@ def web_cage_argv(
         "--dev-bind",
         "/dev",
         "/dev",
+        *hidden,
         # The egress socket, over itself: the CLI can neither remove nor
         # replace a mount point (EBUSY).
         "--ro-bind",

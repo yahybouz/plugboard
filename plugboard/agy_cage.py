@@ -65,8 +65,10 @@ This module builds the gateway's only command line that launches agy
   see :func:`_agy_config`).
 - The binary, by its real path, read-only, bound after the store, and the
   relay's interpreter (the gateway's Python by its real path, its standard
-  library, ``libpython`` when shared; in the image, under ``/usr/local``);
-  then the whole root is remounted read-only (HOME, the binary's folder...).
+  library, ``libpython`` when shared; in the image, under ``/usr/local``),
+  its third-party packages (``site-packages`` of that standard library in
+  the image) hidden under an empty tmpfs (PLU-171); then the whole root is
+  remounted read-only (HOME, the binary's folder...).
 
 Not in the cage: ``/usr/bin`` and ``/usr/local`` but for that interpreter,
 ``/app``, the rest of HOME (``~/.claude``, ``~/.codex``, the rest of
@@ -234,8 +236,8 @@ RELAY_PORT = net_cage.RELAY_PORT
 RELAY_ERROR_PREFIX = net_cage.RELAY_ERROR_PREFIX
 # The relay (net_cage.AGY_RELAY), run by the gateway's own Python (-I -S: no
 # site, no variable, no folder of the cage on its path), its code using the
-# standard library only (the folder mounted with it also holds
-# site-packages, see _relay_python). It checks the egress is a socket,
+# standard library only (the site-packages of the folder mounted with it are
+# hidden, see _relay_python). It checks the egress is a socket,
 # listens on the cage's loopback, forks the relay itself (its standard
 # streams on /dev/null: agy's output stays agy's), then becomes agy by
 # execv: agy keeps the cage's pid 1 and the environment the gateway passed
@@ -743,10 +745,14 @@ def cage_argv(
         real_binary,
         real_binary,
     ]
-    # The relay's interpreter and its standard library (site-packages
-    # included, read-only: see _relay_python).
+    # The relay's interpreter and its standard library, read-only; its
+    # third-party packages (site-packages in the image's standard library
+    # folder) hidden under an empty read-only tmpfs (PLU-171; the root's
+    # remount below does not reach a tmpfs).
     for path in python:
         argv += ["--ro-bind", path, path]
+    for path in net_cage.relay_site_packages(python):
+        argv += ["--tmpfs", path, "--remount-ro", path]
     argv += [
         "--remount-ro",
         "/",
