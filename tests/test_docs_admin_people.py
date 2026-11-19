@@ -30,10 +30,9 @@ def test_the_todo_entry_is_gone():
     assert "### Per-person dashboard keys" not in _read("TODOS.md")
 
 
-def test_unreleased_names_the_feature_and_the_contract():
-    unreleased = (
-        _read("CHANGELOG.md").split("## [Unreleased]", 1)[1].split("\n## [", 1)[0]
-    )
+def test_the_release_names_the_feature_and_the_contract():
+    # PB-AUTH-01 was released in 4.15.0.
+    unreleased = _read("CHANGELOG.md").split("## [4.15.0]", 1)[1].split("\n## [", 1)[0]
     # Only PB-AUTH-01's own bullets: another change may bump the contract.
     bullets = [
         line

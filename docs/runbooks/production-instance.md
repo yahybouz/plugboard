@@ -322,6 +322,41 @@ provider. What the call does and does not do:
   image (the GitHub Copilot and GitHub Models providers read their token
   through it).
 
+## Switching to 4.15.0
+
+- Image `plugboard:private-full-v4.15.0`. The image recipe does not change
+  since 4.14.6: the [production gate](prod-gate.md) expects the same CLI
+  versions (`0.65.0`, `2.1.325 (Claude Code)`, `codex-cli 0.163.0`, agy
+  `1.4.4`, `gh version 2.104.0 (2026-11-12)`) and still checks the image ID
+  and that no `bwrap` is on the PATH. From an older version, read the
+  sections of the versions in between first (4.14.4, 4.14.5, 4.14.6).
+- Nothing to set for production to work as before. The four new variables
+  keep their safe default: leave `PLUGBOARD_CLI_TOOLS_EMULATION` empty (tools
+  emulated on CLI routes are for UAT and internal agents, ADR-039);
+  `PLUGBOARD_MAX_INFLIGHT_WEB` (`2`), `PLUGBOARD_WEB_TIMEOUT_S` (`900`) and
+  `PLUGBOARD_WEB_HELPER_MODEL` (`claude-sonnet-5-5`, never Haiku) only act on
+  a key that holds `web_access`, and no key holds it after the switch.
+- Turning the web on for one key is a separate gesture, after the switch:
+  `PUT /admin/keys/{key_id}/web` with `{"web_access": true}` (and
+  `web_max_uses` from 1 to 10, default 3), then `GET /admin/web` to watch it
+  ([web access](../guide/web-access.md)). `PUT ... {"web_access": false}`
+  turns it off again, without changing the key.
+- The usage database gets four columns on start (`request_id`, `trace_id`,
+  `web`, `web_uses`), the key store two fields (`allow_cli_tools`,
+  `web_access`/`web_max_uses` when set) and the personal dashboard keys
+  their own store (PB-AUTH-01): no migration to run.
+- After the switch, `GET /health` answers `{"ok": true, "version": "4.15.0"}`
+  and a chat request without the web answers as before (no `plugboard` field,
+  no `X-Plugboard-Web` header).
+- Rolling back to 4.14.6 works: it ignores the new columns and fields. Keys
+  with `web_access` then lose the web (4.14.6 knows neither
+  `X-Plugboard-Web` nor the `plugboard` field; its answer to a request that
+  still sends them was not checked), and personal dashboard keys stop
+  working (use **Log out everywhere** first).
+- Not checked by these steps: a real web run in production (search, fetch,
+  egress guard on the production network); it is checked on the first key
+  given `web_access`.
+
 ## PID 1 of the container: tini
 
 From 4.14.4 the image starts `tini` as PID 1 (BUG-113, BUG-123), whatever the

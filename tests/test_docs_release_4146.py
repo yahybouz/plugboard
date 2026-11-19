@@ -1,7 +1,6 @@
 """What the operator and integrators read for 4.14.6 (release 4.14.6).
 
-The version is 4.14.6 in ``VERSION``, ``plugboard.__version__``, the compose
-image tag and the health examples; the dated CHANGELOG entry names every
+The dated CHANGELOG entry names every
 ticket of the release with its commit on the release branch, says that the
 API contracts are unchanged (3.0.1), says why gh is built from its sources
 and that it is temporary, and lists what was not verified; the production
@@ -10,15 +9,15 @@ switch (the gh version, the health version).
 
 The release note keeps the contract 4.14.6 published (3.0.1); the files in
 ``docs/api/`` are not pinned here, since a later change may publish a newer
-contract (3.1.0, ADR-039), as 4.14.3 and 4.14.4 allow for theirs.
+contract (3.2.0 in 4.15.0), as 4.14.3 and 4.14.4 allow for theirs. The
+current version is pinned by the test of the current release (4.15.0), not
+here.
 """
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
-
-import plugboard
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -56,20 +55,6 @@ def _switching() -> str:
 
 def _flat(text: str) -> str:
     return " ".join(text.split())
-
-
-def test_the_version_is_4_14_6():
-    assert (ROOT / "VERSION").read_text(encoding="utf-8").strip() == "4.14.6"
-    assert plugboard.__version__ == "4.14.6"
-
-
-def test_the_compose_file_and_the_health_examples_name_4_14_6():
-    compose = (ROOT / "deploy" / "ovh" / "compose.yml").read_text(encoding="utf-8")
-    assert "${PLUGBOARD_IMAGE:-plugboard:private-full-v4.14.6}" in compose
-    monitoring = (ROOT / "docs" / "guide" / "monitoring.md").read_text(encoding="utf-8")
-    assert '{"ok": true, "version": "4.14.6"}' in monitoring
-    assert '{"ready": true, "version": "4.14.6"}' in monitoring
-    assert '"version": "4.14.5"' not in monitoring
 
 
 def test_the_entry_sits_under_unreleased():
