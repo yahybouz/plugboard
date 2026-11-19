@@ -162,10 +162,11 @@ async def test_agy_caged_serves_the_socket_and_sets_the_proxy(setup, fake_agy):
 
 @pytest.fixture
 async def fake_dns(monkeypatch):
+    """The egress' name resolution replaced (still on its own resolver
+    threads, PLU-170); a name not in ``answers`` fails (OSError)."""
     answers: dict = {}
-    loop = asyncio.get_running_loop()
 
-    async def getaddrinfo(host, port, *args, **kwargs):
+    def getaddrinfo(host, port):
         if host not in answers:
             raise socket.gaierror(socket.EAI_NONAME, "not known")
         return [
@@ -173,7 +174,7 @@ async def fake_dns(monkeypatch):
             for a in answers[host]
         ]
 
-    monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(web_egress, "_getaddrinfo", getaddrinfo)
     return answers
 
 

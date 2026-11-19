@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - **Typed decisions are off by default** (PLU-35): no application uses them, so they are now served only when `PLUGBOARD_DECISIONS_ENABLED` is on (new setting, default off; `1`, `true`, `yes` or `on` turns them on; a value that is not on/off keeps them off with one warning). Off, `GET /v1/decisions/models` lists no engine and `POST /v1/decisions` answers the documented `403 Decision model not permitted`, as for a key that holds no decision engine, and the MCP tools relay the same answers; the routes and the published contract are unchanged. Chat still refuses a decision model with its `400`, on or off. On, decisions work as in 4.15.1. Detaching decisions from the router, the billing and the keys is not done yet; it is the rest of the ticket ([turning decisions on](docs/guide/decisions.md#turning-decisions-on)).
+- **The egress guard resolves names on its own threads, 5 seconds at most** (PLU-170): the web tools' egress and agy's egress resolved each `CONNECT` host with `loop.getaddrinfo`, on the event loop's default executor, which also writes billing (`asyncio.to_thread`), with no delay: names whose DNS hangs (an authority the asker controls) could hold every worker thread and delay billing. Resolution now runs on a dedicated pool of 8 threads and is given up after 5 seconds: the name is refused (`403`, logged `did not resolve in 5 s`) and the connection closed; a lookup still queued at the deadline never runs.
 
 ## [4.15.1] — 2026-11-19
 

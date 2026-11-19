@@ -4,7 +4,7 @@ Completes tests/test_web_access.py, whose fixtures it reuses. No CLI runs,
 no inference, nothing leaves the machine: ``cli_subprocess.complete`` is a
 recorder, or ``create_subprocess_exec`` returns a fake process; the egress
 guard is tried against local sockets only and every name resolution is a
-fake (``loop.getaddrinfo`` replaced). Settings read at import time
+fake (``web_egress._getaddrinfo`` replaced). Settings read at import time
 (PLUGBOARD_WEB_HELPER_MODEL, PLUGBOARD_WEB_TIMEOUT_S) are read by a private
 copy of plugboard/web_access.py, never by the module the app uses.
 """
@@ -89,13 +89,13 @@ async def _connect(port: int, target: str) -> bytes:
 
 @pytest.fixture
 async def fake_dns(monkeypatch):
-    """Name resolution of the running loop replaced: ``answers`` maps a name
-    to the addresses it resolves to; a name not there fails (OSError)."""
+    """The egress guard's name resolution replaced (it still runs on the
+    guard's own resolver threads, PLU-170): ``answers`` maps a name to the
+    addresses it resolves to; a name not there fails (OSError)."""
     answers: dict = {}
     asked: list = []
-    loop = asyncio.get_running_loop()
 
-    async def getaddrinfo(host, port, *args, **kwargs):
+    def getaddrinfo(host, port):
         asked.append(host)
         if host not in answers:
             raise socket.gaierror(socket.EAI_NONAME, "not known")
@@ -110,7 +110,7 @@ async def fake_dns(monkeypatch):
             for a in answers[host]
         ]
 
-    monkeypatch.setattr(loop, "getaddrinfo", getaddrinfo)
+    monkeypatch.setattr(web_egress, "_getaddrinfo", getaddrinfo)
     return {"answers": answers, "asked": asked}
 
 

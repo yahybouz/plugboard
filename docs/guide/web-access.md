@@ -167,6 +167,12 @@ to one non-public address is refused whole. Plain-HTTP proxying is refused too,
 and so is a tunnel to any port but `443` (`403`, since 4.15.0): no plain HTTP
 goes out, inside a tunnel or not.
 
+The proxy resolves names on threads of its own (at most 8 at once), never on
+the gateway's shared worker threads, and gives a name 5 seconds: a name whose
+DNS does not answer in time is refused (`403`, logged as `did not resolve in
+5 s`), so slow names cannot delay billing writes or the other requests
+(since 4.15.2).
+
 ## Load
 
 Web requests have their own cap, separate from the chat cap:
