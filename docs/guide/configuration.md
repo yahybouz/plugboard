@@ -264,6 +264,7 @@ See [typed decisions](decisions.md) and the [local decision runtime](decisions-r
 
 | Variable | Default | Description |
 |---|---|---|
+| `PLUGBOARD_DECISIONS_ENABLED` | `0` (off) | Serves typed decisions (PLU-35). Off, `GET /v1/decisions/models` lists no engine and `POST /v1/decisions` answers `403` (`Decision model not permitted`), for every key, as for a key that holds no decision engine; the MCP tools `list_decision_models` and `decide` relay the same answers, and chat refuses a decision model with its usual `400` either way. `1`, `true`, `yes` or `on` turns them on (restart the server); a value that is not on/off keeps them off with one warning. See [turning decisions on](decisions.md#turning-decisions-on). |
 | `PLUGBOARD_JEV_API_KEY` | empty | TypeSafe credential for the hosted `jev` engine on `POST /v1/decisions`. Without it, `jev` answers 503. The network MCP server drops it from its environment. |
 | `PLUGBOARD_DECISION_PYTHON` | empty | Absolute path to the Python of the isolated environment that runs the local `laya` and `laya-multilingual` engines. Never the gateway's own environment. |
 | `PLUGBOARD_DECISION_ASSETS` | empty | Directory of the pinned assets downloaded with `scripts/decision_download.py`. Without it or `PLUGBOARD_DECISION_PYTHON`, the local engines are unavailable. |

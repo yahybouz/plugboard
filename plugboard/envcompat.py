@@ -7,7 +7,9 @@ deployments keep working. The code itself only reads ``PLUGBOARD_*`` names.
 ``get_int`` and ``get_float`` are the one reader of numeric settings, and
 ``get_floats`` of comma-separated lists of numbers: a value that is not a
 finite number (``nan`` and ``inf`` included), or is outside the bounds the
-caller gives, falls back to the default with one warning.
+caller gives, falls back to the default with one warning. ``get_bool`` reads
+an on/off setting the same way: a value it does not recognise gives the
+default, with one warning.
 """
 
 from __future__ import annotations
@@ -214,3 +216,26 @@ def get_floats(
             return list(default)
         values.append(value)
     return values or list(default)
+
+
+_TRUE = {"1", "true", "yes", "on"}
+_FALSE = {"0", "false", "no", "off"}
+
+
+def get_bool(name: str, *legacy: str, default: bool) -> bool:
+    """On/off setting from ``name`` (or a legacy name), else ``default``.
+
+    ``1``, ``true``, ``yes`` and ``on`` mean on; ``0``, ``false``, ``no`` and
+    ``off`` mean off (any case). Any other value gives the default, with one
+    warning per value.
+    """
+    raw = get(name, *legacy)
+    if not raw:
+        return default
+    value = raw.lower()
+    if value in _TRUE:
+        return True
+    if value in _FALSE:
+        return False
+    _report(name, raw, "is not one of 1, true, yes, on, 0, false, no, off", default)
+    return default

@@ -20,6 +20,9 @@ for _name in list(os.environ):
         del os.environ[_name]
 
 os.environ.setdefault("PLUGBOARD_SKIP_DOTENV", "1")
+# Typed decisions are off by default (PLU-35); the suite proves their 4.15.1
+# behaviour with them on. tests/test_decisions_switch.py checks this line.
+os.environ["PLUGBOARD_DECISIONS_ENABLED"] = "1"
 
 # Give `app.py` a non-empty `API_KEY` at import time so the import-time
 # CORS + auth-disabled banner compute the "prod-like" branch by default.

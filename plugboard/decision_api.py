@@ -13,6 +13,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 
+from plugboard import decisions
 from plugboard.apikeys import get_key_record
 from plugboard.decisions import (
     DECISION_MODELS,
@@ -233,6 +234,10 @@ def require_decision_key(request: Request) -> dict:
 
 
 def _allowed(record: dict) -> list[str]:
+    # Switch off (PLU-35): every key holds no engine, so the catalogue is
+    # empty and a decision gets the documented 403; nothing else changes.
+    if not decisions.enabled():
+        return []
     policy = record.get("allowed_decision_models")
     if not isinstance(policy, list):
         return []

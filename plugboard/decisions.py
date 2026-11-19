@@ -1,4 +1,12 @@
-"""Bounded typed decisions and the official Jev transport; no chat dispatch."""
+"""Bounded typed decisions and the official Jev transport; no chat dispatch.
+
+The feature is off unless ``PLUGBOARD_DECISIONS_ENABLED`` turns it on
+(PLU-35): no application uses it yet. Off, ``/v1/decisions/models`` lists no
+engine and ``POST /v1/decisions`` answers the documented 403, as for a key
+that holds no decision engine; the routes stay mounted and the contract is
+unchanged. ``is_decision_model`` does not depend on the switch: a decision
+name never reaches chat, on or off.
+"""
 
 from __future__ import annotations
 
@@ -11,9 +19,21 @@ from typing import Annotated, Iterable, Literal
 import aiohttp
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
+from plugboard import envcompat
+
 DECISION_MODELS = ("jev", "laya", "laya-multilingual")
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
 MAX_RESPONSE_BYTES = 65_536
+SWITCH = "PLUGBOARD_DECISIONS_ENABLED"
+
+
+def enabled() -> bool:
+    """Whether typed decisions are served; off by default (PLU-35).
+
+    Read at each call; a value that is not on/off keeps them off, with one
+    warning.
+    """
+    return envcompat.get_bool(SWITCH, default=False)
 
 
 def is_decision_model(

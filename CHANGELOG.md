@@ -15,6 +15,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **A spent web run is billed on every exit** (PLU-171): a web run stopped by its turns is billed too when the request ends on an HTTP error raised by the gateway or on an empty stream, the two exits that did not bill it yet; the answer is unchanged.
 - **A web request holds what its turns may cost** (BUG-161): on a key with a monthly budget, a web request held only its prompt's estimate, while its run is billed on every turn's tokens (pages and helper model included), so it could pass the budget by far. It now holds its prompt plus `PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN` input tokens (new setting, default `20000`; `0` holds the prompt's estimate only; a value that is not a whole number from 0 to 1,000,000 gives the default with one warning) for each turn of its run (`web_max_uses` + 2), priced as any hold; a web request the budget left cannot hold gets `429`, nothing run. The billing settles the hold to the real cost. Requests without the web hold as before ([what a web request costs](docs/guide/web-access.md#what-a-web-request-costs)).
 
+### Changed
+
+- **Typed decisions are off by default** (PLU-35): no application uses them, so they are now served only when `PLUGBOARD_DECISIONS_ENABLED` is on (new setting, default off; `1`, `true`, `yes` or `on` turns them on; a value that is not on/off keeps them off with one warning). Off, `GET /v1/decisions/models` lists no engine and `POST /v1/decisions` answers the documented `403 Decision model not permitted`, as for a key that holds no decision engine, and the MCP tools relay the same answers; the routes and the published contract are unchanged. Chat still refuses a decision model with its `400`, on or off. On, decisions work as in 4.15.1. Detaching decisions from the router, the billing and the keys is not done yet; it is the rest of the ticket ([turning decisions on](docs/guide/decisions.md#turning-decisions-on)).
+
 ## [4.15.1] — 2026-11-19
 
 ### Security

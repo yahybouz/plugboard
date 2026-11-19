@@ -10,6 +10,8 @@ The supported IDs are `jev` (the TypeSafe remote API), `laya` (English) and
 - `POST /v1/decisions`: strict named `choice`, `noul` and ordinal `score` questions.
 - MCP tools `list_decision_models` and `decide`; Python SDK sync and async equivalents.
 
+Decisions are **off by default**: see [turning decisions on](#turning-decisions-on).
+
 Only an active client bearer key is accepted. Admin keys, browser sessions,
 legacy environment keys and local auto-login grant no decision access.
 Provision a client key using the existing authenticated `POST /admin/keys` route:
@@ -158,6 +160,26 @@ native connectivity probes refuse decisions without sending inference. Removed
 Kev identifiers remain rejection tombstones in chat guards solely to prevent
 legacy calls from falling through to a generative provider; they grant no
 catalogue, permission, download or runtime capability.
+
+## Turning decisions on
+
+Decisions are **off by default** (PLU-35): no application uses them yet. Set
+`PLUGBOARD_DECISIONS_ENABLED=1` (or `true`, `yes`, `on`) in the server's
+environment and restart it to serve them; a value that is not on/off keeps
+them off and logs one warning.
+
+While they are off, the routes stay in place and the contract does not change:
+every key is treated as a key that holds no decision engine.
+
+- `GET /v1/decisions/models` answers `200` with `{"object":"list","data":[]}`.
+- `POST /v1/decisions` answers `403` with `Decision model not permitted`; no
+  engine is called and nothing is billed. A request without a client key still
+  gets `401`, an invalid body `422`.
+- The MCP tools relay these answers: `list_decision_models` returns the empty
+  list, `decide` a `decision_gateway_error` (HTTP 403).
+- Chat refuses a decision model (`jev`, `laya`, `laya-multilingual`, the retired
+  `kev`) with its usual `400 Use /v1/decisions for decision models`, whether
+  decisions are on or off: a decision name never reaches a chat provider.
 
 ## Historical evidence and remaining limits
 
