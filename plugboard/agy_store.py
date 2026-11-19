@@ -16,9 +16,11 @@ call in progress; the gateway removed each call's conversation afterwards
 (BUG-97), too late for a neighbour still running.
 
 Now each call gets a folder of its own, :func:`create_private_store` (``mkdtemp``,
-mode 0700, under the CLIs' launch directory, beside the call's ``TMPDIR``,
-never inside the shared store), which the cage binds at the store's path
-instead of the store (:mod:`plugboard.agy_cage` fills it). Whatever agy
+mode 0700, beside the call's ``TMPDIR``, never inside the shared store, in
+the gateway's root of call folders: not in the CLIs' launch directory, which
+codex's sandbox shows to a prompt, ``cli_subprocess._private_calls_root``),
+which the cage binds at the store's path instead of the store
+(:mod:`plugboard.agy_cage` fills it). Whatever agy
 writes during the call, a refreshed or forged token included, stays there
 and is removed with it once the call is over, however it ends (answered,
 failed, timed out, cancelled), after the child is dead and reaped. Nothing

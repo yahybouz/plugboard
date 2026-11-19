@@ -180,9 +180,11 @@ client honouring `HTTPS_PROXY`.
 The cage is a network cage: claude's files are the same as before (the
 whole root as it is, `/dev`, `/proc`, `HOME`, `~/.claude`, node), the same
 uid, the same command line and environment but the proxy variables, with one
-exception: the CLIs' launch directory (claude's working directory, which
-holds the private folders of the calls in progress, `web-run-*`, `agy-tmp-*`,
-`agy-store-*`) is shown empty but for the run's own folder. A web run cannot
+exception: the CLIs' launch directory (claude's working directory) is shown
+empty, and so is the gateway's folder of the private folders of the calls in
+progress (`web-run-*`, `agy-tmp-*`, `agy-store-*`, beside the launch
+directory since 4.15.2, out of codex's sight, BUG-157) but for the run's own
+folder. A web run cannot
 reach the egress socket of another web run (and so pass its own connection
 cap) nor that of an agy call, nor read an agy call's store. When that
 directory holds what claude needs (an operator's `PLUGBOARD_SUBPROCESS_CWD`

@@ -37,6 +37,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import sys
 import tempfile
 import time
@@ -196,6 +197,62 @@ def _clean_spawn_cwd() -> str:
     atexit.register(shutil.rmtree, path, True)
     _SPAWN_CWD_CACHE = path
     return path
+
+
+_CALLS_ROOT_CACHE: Optional[str] = None
+
+
+def _private_calls_root() -> str:
+    """Return the gateway's own folder for the private folders of its calls
+    (an agy call's ``TMPDIR`` ``agy-tmp-*`` and store ``agy-store-*``, a web
+    run's ``web-run-*``, each with its egress socket or a copy of agy's
+    sign-in token).
+
+    They were made in the CLIs' launch directory, which codex's sandbox shows
+    to a prompt (read, or write in ``workspace-write``): a prompt on codex
+    could list them and read the token of an agy call in progress (BUG-157,
+    real ``codex sandbox``, 19/11). This root is a fresh ``mkdtemp`` beside
+    the launch directory (mode 0700, unpredictable name), made on first call
+    and reused for the process lifetime, removed at exit; the cages bind
+    their folder by its path, so agy and a web run see what they saw. Raises
+    :class:`OSError` when it is no longer a real folder of the gateway's,
+    closed to others (a link on its path, other rights): it is never used
+    then.
+    """
+    global _CALLS_ROOT_CACHE
+    path = _CALLS_ROOT_CACHE
+    if not path or not os.path.lexists(path):
+        path = os.path.realpath(tempfile.mkdtemp(prefix="plugboard-calls-"))
+        atexit.register(shutil.rmtree, path, True)
+        _CALLS_ROOT_CACHE = path
+    info = os.lstat(path)
+    if (
+        os.path.realpath(path) != path
+        or not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.getuid()
+        or stat.S_IMODE(info.st_mode) != 0o700
+    ):
+        raise OSError("the gateway's root of call folders is not private")
+    return path
+
+
+def _calls_root_apart_from(spawn_cwd: str) -> str:
+    """The private root of call folders (:func:`_private_calls_root`), once
+    checked it is not in the CLIs' launch directory ``spawn_cwd`` (an
+    operator's ``PLUGBOARD_SUBPROCESS_CWD`` on ``/tmp``, say), where codex
+    would see it, nor holding it. Else :class:`net_cage.CageUnavailable`:
+    nothing is made, the CLI is not run."""
+    try:
+        root = _private_calls_root()
+    except OSError as exc:
+        raise net_cage.CageUnavailable(str(exc)) from None
+    spawn = os.path.realpath(spawn_cwd)
+    if net_cage._within(root, spawn) or net_cage._within(spawn, root):
+        raise net_cage.CageUnavailable(
+            "the gateway's private call folders would sit in the CLIs' launch "
+            "directory, in sight of codex's sandbox"
+        )
+    return root
 
 
 # ── Concurrency limit per backend (TM-001 mitigation) ────────────────────────
@@ -715,7 +772,7 @@ def gemini_private_home() -> Iterator[str]:
 
 
 @contextlib.contextmanager
-def agy_private_tmp(spawn_cwd: str) -> Iterator[str]:
+def agy_private_tmp(parent: str) -> Iterator[str]:
     """Yield the ``TMPDIR`` of one agy request and remove it afterwards.
 
     agy 1.4.4 without a terminal refuses every read, every command and every
@@ -723,14 +780,16 @@ def agy_private_tmp(spawn_cwd: str) -> Iterator[str]:
     (real run on the UAT, 14/11). With none set it took ``/tmp``, shared with
     the launch directories of the other requests: it created files there and
     overwrote one in another private directory. Each request therefore gets
-    its own: a fresh directory under the launch directory of the CLIs
-    (``mkdtemp``, mode 0700), holding nothing of the server or of another
-    request, gone when the request ends. This bounds the writes a prompt can
-    make through agy's file tool; it is not a sandbox. agy keeps its own
-    record of each conversation in its store, the call's private one
-    (agy_store, BUG-157), gone with the request too.
+    its own: a fresh directory under ``parent``, the gateway's root of call
+    folders (:func:`_private_calls_root`, out of the CLIs' launch directory
+    that codex's sandbox shows, BUG-157), ``mkdtemp``, mode 0700, holding
+    nothing of the server or of another request, gone when the request ends.
+    This bounds the writes a prompt can make through agy's file tool; it is
+    not a sandbox. agy keeps its own record of each conversation in its
+    store, the call's private one (agy_store, BUG-157), gone with the
+    request too.
     """
-    path = tempfile.mkdtemp(prefix="agy-tmp-", dir=spawn_cwd)
+    path = tempfile.mkdtemp(prefix="agy-tmp-", dir=parent)
     try:
         yield path
     finally:
@@ -793,6 +852,12 @@ async def agy_caged(
     the copy, and held until the context ends: a call still waiting for its
     slot has an empty store, nothing copied.
 
+    The TMPDIR and the store are made under the gateway's root of call
+    folders (:func:`_private_calls_root`), never in the CLIs' launch
+    directory ``spawn_cwd``: codex's sandbox shows that directory to a
+    prompt, which could otherwise read the token of this call (BUG-157). The
+    cage binds both by their path: agy sees what it saw.
+
     Raises :class:`agy_cage.CageUnavailable` before anything is launched when
     the cage, its store or its egress cannot be built.
     """
@@ -800,12 +865,12 @@ async def agy_caged(
     # Every connection through the cage's relay, never an inherited proxy.
     env.update(agy_cage.proxy_env())
     # Resolved: the cage binds the TMPDIR and the store by their real path.
-    spawn = os.path.realpath(spawn_cwd)
+    root = _calls_root_apart_from(spawn_cwd)
     # Left in reverse order: the slot, the egress, the store, the TMPDIR.
     async with contextlib.AsyncExitStack() as stack:
-        tmpdir = stack.enter_context(agy_private_tmp(spawn))
+        tmpdir = stack.enter_context(agy_private_tmp(root))
         try:
-            store = agy_store.create_private_store(spawn)
+            store = agy_store.create_private_store(root)
         except OSError as exc:
             raise agy_cage.CageUnavailable(
                 f"agy private store cannot be created ({type(exc).__name__})"
@@ -854,19 +919,22 @@ async def web_caged(
     egress of its own; keep the context open until the child is dead and
     reaped.
 
-    The run's folder (``web-run-*``, 0700, in the launch directory) holds
-    only the egress socket, served here by the run's own proxy
-    (``net_cage.start_web_egress``: port 443 of public addresses, its own
-    connection cap), and is all the cage shows of the launch directory (the
-    other calls' folders and sockets hidden, PLU-162); the cage has no other network, its relay on the cage's
-    loopback is what ``HTTPS_PROXY`` names. Socket, proxy and folder are
-    removed afterwards. Raises :class:`net_cage.CageUnavailable` before
-    anything is launched: no bwrap, no socket, no relay, no web run.
+    The run's folder (``web-run-*``, 0700) holds only the egress socket,
+    served here by the run's own proxy (``net_cage.start_web_egress``: port
+    443 of public addresses, its own connection cap). It sits under the
+    gateway's root of call folders (:func:`_private_calls_root`), out of the
+    launch directory ``spawn_cwd`` that codex's sandbox shows (BUG-157); the
+    cage shows the launch directory empty and the root empty but for this
+    folder (the other calls' folders and sockets hidden, PLU-162). The cage
+    has no other network, its relay on the cage's loopback is what
+    ``HTTPS_PROXY`` names. Socket, proxy and folder are removed afterwards.
+    Raises :class:`net_cage.CageUnavailable` before anything is launched: no
+    bwrap, no socket, no relay, no web run.
     """
-    spawn = os.path.realpath(spawn_cwd)
+    root = _calls_root_apart_from(spawn_cwd)
     async with contextlib.AsyncExitStack() as stack:
         bwrap = agy_cage._bwrap()
-        folder = tempfile.mkdtemp(prefix="web-run-", dir=spawn)
+        folder = tempfile.mkdtemp(prefix="web-run-", dir=root)
         stack.callback(shutil.rmtree, folder, True)
         try:
             egress = await net_cage.start_web_egress(

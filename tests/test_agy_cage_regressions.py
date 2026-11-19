@@ -140,9 +140,20 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
     monkeypatch.setattr(cs, "_SPAWN_CWD_CACHE", str(spawn))
+    # The gateway's root of call folders, beside the launch directory
+    # (BUG-157).
+    calls_root = tmp_path / "calls"
+    calls_root.mkdir(mode=0o700)
+    monkeypatch.setattr(cs, "_CALLS_ROOT_CACHE", str(calls_root))
     monkeypatch.delenv("PLUGBOARD_SUBPROCESS_CWD", raising=False)
     monkeypatch.setattr(cs, "_binary_path_cache", {})
-    return {"home": home, "store": store, "spawn": spawn, "bin": bin_dir}
+    return {
+        "home": home,
+        "store": store,
+        "spawn": spawn,
+        "calls": calls_root,
+        "bin": bin_dir,
+    }
 
 
 def _fake_agy(setup, body: str = "") -> Path:
@@ -205,7 +216,7 @@ def _assert_store_untouched(setup) -> None:
         assert (store / rel.format(cid=_OLD)).read_text() == "old"
     assert (store / "antigravity-oauth-token").read_text() == "old-token\n"
     assert (store / "installation_id").read_text() == "install"
-    assert list(setup["spawn"].glob("agy-store-*")) == []
+    assert list(setup["calls"].glob("agy-store-*")) == []
 
 
 def _content(result) -> str:
@@ -248,7 +259,7 @@ async def test_each_call_gets_a_private_tmpdir_removed_after_it(setup):
         'touch "$TMPDIR/written-by-agy"\n'
         'ANSWER="tmpdir=$TMPDIR cwd=$(pwd -P) mode=$(stat -c %a "$TMPDIR")"',
     )
-    spawn = str(setup["spawn"])
+    calls = str(setup["calls"])
 
     seen = []
     for _ in range(2):
@@ -256,13 +267,14 @@ async def test_each_call_gets_a_private_tmpdir_removed_after_it(setup):
         seen.append(dict(part.split("=", 1) for part in _content(result).split()))
 
     for one in seen:
-        assert os.path.dirname(one["tmpdir"]) == spawn
+        assert os.path.dirname(one["tmpdir"]) == calls
         assert os.path.basename(one["tmpdir"]).startswith("agy-tmp-")
         assert one["cwd"] == one["tmpdir"], "the cage starts agy in its TMPDIR"
         assert one["mode"] == "700"
         assert not os.path.exists(one["tmpdir"]), "removed after the call"
     assert seen[0]["tmpdir"] != seen[1]["tmpdir"]
-    assert os.listdir(spawn) == []
+    assert os.listdir(calls) == []
+    assert os.listdir(setup["spawn"]) == []
 
 
 # ── 3. The answer read as it is written ─────────────────────────────────────
@@ -298,6 +310,7 @@ async def test_the_answer_streams_through_the_cage(setup):
     assert streamed["usage"] == plain["usage"] == _EXPECTED_USAGE
     _assert_store_untouched(setup)
     assert os.listdir(setup["spawn"]) == []
+    assert os.listdir(setup["calls"]) == []
 
 
 # ── 4. A call cut by a timeout or a cancellation ────────────────────────────
@@ -330,14 +343,14 @@ async def test_a_cut_call_leaves_no_process_no_entry_no_tmpdir(setup, stream, cu
     try:
         ready = []
         await _until(
-            lambda: ready.extend(setup["spawn"].glob("agy-tmp-*/ready")) or ready,
+            lambda: ready.extend(setup["calls"].glob("agy-tmp-*/ready")) or ready,
             "agy ready",
         )
         tmpdir = ready[0].parent
         if stream:
             await _until(lambda: pieces == ["started"], "first event read")
         # Its conversation is in the call's own store, not the shared one.
-        (private,) = setup["spawn"].glob("agy-store-*")
+        (private,) = setup["calls"].glob("agy-store-*")
         assert len(_entries_of(private, _A)) == len(_ENTRIES)
         assert _entries_of(setup["store"], _A) == []
         assert all(_processes_with(m) for m in markers), "agy runs in its cage"
@@ -361,6 +374,7 @@ async def test_a_cut_call_leaves_no_process_no_entry_no_tmpdir(setup, stream, cu
         _assert_store_untouched(setup)
         assert not tmpdir.exists()
         assert os.listdir(setup["spawn"]) == []
+        assert os.listdir(setup["calls"]) == []
     finally:
         if not task.done():
             task.cancel()
@@ -473,3 +487,4 @@ async def test_agy_reads_its_config_and_cannot_change_it(setup, stream, projects
     }
     assert _outside_store(setup["home"]) == outside
     assert os.listdir(setup["spawn"]) == []
+    assert os.listdir(setup["calls"]) == []

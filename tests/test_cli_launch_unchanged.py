@@ -160,6 +160,11 @@ def server(tmp_path, monkeypatch):
     }.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setattr(cs, "_SPAWN_CWD_CACHE", str(spawn))
+    # The gateway's root of call folders, beside the launch directory
+    # (BUG-157).
+    calls_root = tmp_path / "calls"
+    calls_root.mkdir(mode=0o700)
+    monkeypatch.setattr(cs, "_CALLS_ROOT_CACHE", str(calls_root))
     monkeypatch.setattr(cs, "_binary_path_cache", {})
     calls: list = []
 
@@ -168,7 +173,13 @@ def server(tmp_path, monkeypatch):
         raise _Recorded
 
     monkeypatch.setattr(cs.asyncio, "create_subprocess_exec", recorder)
-    return {"bin": bin_dir, "spawn": str(spawn), "path": path, "calls": calls}
+    return {
+        "bin": bin_dir,
+        "spawn": str(spawn),
+        "calls_root": str(calls_root),
+        "path": path,
+        "calls": calls,
+    }
 
 
 async def _launch(server, kind: str, stream: bool) -> dict:
@@ -379,8 +390,9 @@ async def test_agy_starts_in_its_cage_as_in_4142(server, agy_home, stream):
     _env_names(env, "agy", server)
     assert (env["TERM"], env["AGY_CLI_DISABLE_AUTO_UPDATE"]) == ("dumb", "1")
     assert env["HOME"] == str(agy_home)
-    # Its private TMPDIR, under the launch directory, is its cage's cwd.
-    assert os.path.dirname(env["TMPDIR"]) == os.path.realpath(server["spawn"])
+    # Its private TMPDIR, under the gateway's root of call folders (out of
+    # the launch directory, BUG-157), is its cage's cwd.
+    assert os.path.dirname(env["TMPDIR"]) == os.path.realpath(server["calls_root"])
     assert argv[argv.index("--chdir") + 1] == env["TMPDIR"]
     assert call["cwd"] == server["spawn"]
     assert call["start_new_session"] is True

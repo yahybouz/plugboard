@@ -125,6 +125,11 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PATH", f"{bin_dir}:/usr/bin:/bin")
     monkeypatch.setattr(cs, "_SPAWN_CWD_CACHE", str(spawn))
+    # The gateway's root of call folders, beside the launch directory
+    # (BUG-157).
+    calls_root = tmp_path / "calls"
+    calls_root.mkdir(mode=0o700)
+    monkeypatch.setattr(cs, "_CALLS_ROOT_CACHE", str(calls_root))
     monkeypatch.delenv("PLUGBOARD_SUBPROCESS_CWD", raising=False)
     monkeypatch.setattr(cs, "_binary_path_cache", {})
     # bwrap is looked up on PATH, as outside the image: whatever this machine
@@ -138,6 +143,7 @@ def setup(tmp_path, monkeypatch):
         "config": config,
         "projects": home / ".gemini" / "projects.json",
         "spawn": spawn,
+        "calls": calls_root,
         "bin": bin_dir,
         "app_data": app_data,
         "tmp": tmp_path,
@@ -602,6 +608,7 @@ async def test_complete_refuses_agy_not_set_up(setup):
     assert not (setup["tmp"] / "bwrap-ran").exists(), "refused before bwrap runs"
     assert not setup["config"].exists()
     assert list(setup["spawn"].iterdir()) == [], "private TMPDIR removed"
+    assert list(setup["calls"].iterdir()) == [], "private TMPDIR removed"
 
 
 def test_missing_bwrap_refuses(setup, fake_binary, monkeypatch):
@@ -753,6 +760,7 @@ async def test_complete_without_bwrap_launches_nothing(setup, monkeypatch):
     assert "bwrap not found on PATH" in str(info.value)
     assert not ran.exists()
     assert list(setup["spawn"].iterdir()) == [], "private TMPDIR removed"
+    assert list(setup["calls"].iterdir()) == [], "private TMPDIR removed"
 
 
 async def test_complete_refuses_a_store_behind_a_link(setup, tmp_path):
@@ -1137,7 +1145,7 @@ async def test_agy_in_the_real_cage(setup, real_bwrap, shell_in_cage, monkeypatc
 
     assert not ran.exists(), "the test's tmp dir is out of the cage"
     report = dict(word.split("=", 1) for word in _content(result).split())
-    assert report.pop("cwd").startswith(str(setup["spawn"] / "agy-tmp-"))
+    assert report.pop("cwd").startswith(str(setup["calls"] / "agy-tmp-"))
     assert report == {
         "see_app_data": "no",
         "see_claude": "no",
@@ -1181,6 +1189,7 @@ async def test_agy_in_the_real_cage(setup, real_bwrap, shell_in_cage, monkeypatc
     assert not (setup["bin"] / "agy.new").exists()
     assert not (setup["home"] / "x").exists()
     assert list(setup["spawn"].iterdir()) == []
+    assert list(setup["calls"].iterdir()) == []
 
 
 async def test_list_models_and_version_run_in_the_cage(
@@ -1203,6 +1212,7 @@ async def test_list_models_and_version_run_in_the_cage(
 
     assert probe == {"ok": True, "version": "agy 9.9.9", "error": None}
     assert list(setup["spawn"].iterdir()) == []
+    assert list(setup["calls"].iterdir()) == []
 
 
 # ── /proc where the container forbids a new procfs ──────────────────────────
@@ -1441,6 +1451,7 @@ from plugboard import cli_subprocess as cs
 
 p = json.loads(sys.argv[1])
 cs._SPAWN_CWD_CACHE = p["spawn"]
+cs._CALLS_ROOT_CACHE = p["calls"]
 agy_cage.cage_argv = functools.partial(
     agy_cage.cage_argv, _extra_ro_for_tests=tuple(p["shell_ro"])
 )
@@ -1475,6 +1486,7 @@ def test_agy_runs_where_the_container_forbids_a_new_procfs(
     script.write_text(_GATEWAY_IN_CONTAINER, encoding="utf-8")
     params = {
         "spawn": str(setup["spawn"]),
+        "calls": str(setup["calls"]),
         "bin": str(setup["bin"]),
         "shell_ro": list(_SHELL_RO),
         "agy": _AGY_SEEING_PROC,
@@ -1508,6 +1520,7 @@ def test_agy_runs_where_the_container_forbids_a_new_procfs(
     for value in _SECRETS.values():
         assert value not in proc.stdout + proc.stderr
     assert list(setup["spawn"].iterdir()) == []
+    assert list(setup["calls"].iterdir()) == []
 
 
 def test_cage_argv_binds_the_loader_cache(setup, fake_binary):
@@ -1650,6 +1663,7 @@ async def test_agy_records_its_update_state_in_its_store(
     assert _content(result) == "written"
     assert not (setup["store"] / "updater").exists()
     assert list(setup["spawn"].iterdir()) == []
+    assert list(setup["calls"].iterdir()) == []
 
 
 # ── agy's settings in its store are read-only (BUG-108) ─────────────────────
@@ -1865,3 +1879,4 @@ async def test_agy_cannot_change_its_settings_in_the_real_cage(
     assert token.read_text() == "old-token\n"
     assert not (setup["store"] / "settings.link").exists()
     assert list(setup["spawn"].iterdir()) == []
+    assert list(setup["calls"].iterdir()) == []

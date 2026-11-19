@@ -476,6 +476,7 @@ async def test_no_egress_socket_means_agy_is_never_launched(setup, monkeypatch):
     assert launched == []
     assert not ran.exists()
     assert list(setup["spawn"].iterdir()) == []
+    assert list(setup["calls"].iterdir()) == []
 
 
 def test_a_relay_failure_is_a_cage_failure():

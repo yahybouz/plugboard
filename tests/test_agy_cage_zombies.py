@@ -61,6 +61,7 @@ from plugboard import cli_subprocess as cs
 
 p = json.loads(sys.argv[1])
 cs._SPAWN_CWD_CACHE = p["spawn"]
+cs._CALLS_ROOT_CACHE = p["calls"]
 agy_cage.cage_argv = functools.partial(
     agy_cage.cage_argv, _extra_ro_for_tests=tuple(p["shell_ro"])
 )
@@ -142,6 +143,8 @@ def gateway(tmp_path):
     )
     spawn = tmp_path / "spawn"
     spawn.mkdir(mode=0o700)
+    calls = tmp_path / "calls"
+    calls.mkdir(mode=0o700)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _install(bin_dir, "agy", _FAKE_AGY)
@@ -161,12 +164,19 @@ def gateway(tmp_path):
         PLUGBOARD_DATA=str(data),
         PLUGBOARD_SKIP_DOTENV="1",
     )
-    return {"script": script, "env": env, "spawn": spawn, "bin": bin_dir}
+    return {
+        "script": script,
+        "env": env,
+        "spawn": spawn,
+        "calls": calls,
+        "bin": bin_dir,
+    }
 
 
 def _run(gateway, rounds: int = 3, settle_s: float = 1.5) -> dict:
     params = {
         "spawn": str(gateway["spawn"]),
+        "calls": str(gateway["calls"]),
         "shell_ro": list(_SHELL_RO),
         "rounds": rounds,
         "settle_s": settle_s,
@@ -190,3 +200,4 @@ def test_agy_calls_and_probes_leave_no_zombie_to_a_pid_1_gateway(gateway):
     assert out["answers"] == [["OK", "OK", "OK", "agy 9.9.9"]] * 3
     assert out["zombies"] == []
     assert list(gateway["spawn"].iterdir()) == []
+    assert list(gateway["calls"].iterdir()) == []

@@ -44,7 +44,8 @@ This module builds the gateway's only command line that launches agy
   private ``TMPDIR``. Nothing else. The shared store is never bound
   writable: the call's store is a fresh folder
   (:func:`plugboard.agy_store.create_private_store`, 0700, beside the
-  ``TMPDIR``, removed with it after the call) which
+  ``TMPDIR`` in the gateway's root of call folders, out of the CLIs' launch
+  directory, removed with it after the call) which
   :func:`fill_private_store` fills, once the call has its CLI slot and off
   the event loop (``cli_subprocess.agy_caged``), with copies, never links, of the
   sign-in token (:data:`STORE_TOKEN`, which agy may refresh: the copy is

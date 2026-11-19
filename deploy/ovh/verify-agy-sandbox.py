@@ -4,7 +4,8 @@ No model request is made and agy itself is never run. The script builds the
 cage of an agy call with the gateway's own code (``cli_subprocess.agy_caged``:
 the same ``build_child_env("agy")`` environment, the same store
 ``$HOME/.gemini/antigravity-cli``, a private ``TMPDIR`` made by
-``agy_private_tmp`` under the CLIs' launch directory, ``agy_cage.cage_argv``),
+``agy_private_tmp`` under the gateway's root of call folders, beside the
+CLIs' launch directory, ``agy_cage.cage_argv``),
 with one change: the binary is this Python interpreter (by its real path,
 like agy's), which runs a standard-library probe (``-I -S -c``) instead of
 agy.

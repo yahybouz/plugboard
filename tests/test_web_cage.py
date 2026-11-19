@@ -69,12 +69,23 @@ def web_setup(tmp_path, monkeypatch):
     for name in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(cs, "_SPAWN_CWD_CACHE", str(spawn))
+    # The gateway's root of call folders, beside the launch directory
+    # (BUG-157).
+    calls_root = tmp_path / "calls"
+    calls_root.mkdir(mode=0o700)
+    monkeypatch.setattr(cs, "_CALLS_ROOT_CACHE", str(calls_root))
     monkeypatch.delenv("PLUGBOARD_SUBPROCESS_CWD", raising=False)
     monkeypatch.setattr(cs, "_binary_path_cache", {})
     monkeypatch.setattr(
         agy_cage, "GATEWAY_BWRAP", str(tmp_path / "no-gateway-bwrap"), raising=False
     )
-    return {"home": home, "spawn": spawn, "bin": bin_dir, "tmp": tmp_path}
+    return {
+        "home": home,
+        "spawn": spawn,
+        "calls": calls_root,
+        "bin": bin_dir,
+        "tmp": tmp_path,
+    }
 
 
 def _install_claude(bin_dir: Path, body: str) -> Path:
@@ -543,13 +554,24 @@ async def test_a_web_run_starts_as_in_4151_but_in_its_cage(
         hidden += ["--tmpfs", path, "--remount-ro", path]
     n = len(hidden)
     assert cage[9 : 9 + n] == hidden
-    # The launch directory hidden but for the run's own folder (PLU-162).
+    # The launch directory and the root of call folders hidden but for the
+    # run's own folder (PLU-162), which is out of the launch directory
+    # (BUG-157).
     folder = os.path.dirname(egress)
     launch_dir = os.path.realpath(server["spawn"])
-    assert os.path.dirname(folder) == launch_dir
-    assert cage[9 + n : 14 + n] == ["--tmpfs", launch_dir, "--bind", folder, folder]
-    assert cage[14 + n : 17 + n] == ["--ro-bind", egress, egress]
-    assert cage[17 + n :] == ["--chdir", server["spawn"]]
+    calls_root = os.path.realpath(server["calls_root"])
+    assert os.path.dirname(folder) == calls_root
+    assert cage[9 + n : 16 + n] == [
+        "--tmpfs",
+        launch_dir,
+        "--tmpfs",
+        calls_root,
+        "--bind",
+        folder,
+        folder,
+    ]
+    assert cage[16 + n : 19 + n] == ["--ro-bind", egress, egress]
+    assert cage[19 + n :] == ["--chdir", server["spawn"]]
     assert "--unshare-pid" not in cage
     # The relay, then claude exactly as 4.15.1 started it.
     assert argv[sep + 1 : sep + 5] == [
@@ -644,11 +666,13 @@ async def test_a_web_run_cannot_reach_the_egress_of_another_call(
     web_setup, real_bwrap, launches
 ):
     """PLU-162: the web cage binds the whole root, so the egress sockets of
-    the other calls in the launch directory (another web run's, past its own
-    cap; an agy call's, onto Google's hosts) stayed in reach. The cage hides
-    the launch directory but for the run's own folder: HOME, ~/.claude and
-    the working directory are unchanged."""
+    the other calls (another web run's, past its own cap; an agy call's,
+    onto Google's hosts) stayed in reach. The cage hides the launch
+    directory, and the gateway's root of call folders where they now are
+    (BUG-157), but for the run's own folder: HOME, ~/.claude and the working
+    directory are unchanged."""
     spawn = web_setup["spawn"]
+    calls = web_setup["calls"]
     reached: list = []
 
     def accepted(_reader, writer):
@@ -658,14 +682,14 @@ async def test_a_web_run_cannot_reach_the_egress_of_another_call(
     servers = []
     others = {}
     for name in ("web-run-other", "agy-tmp-other"):
-        folder = spawn / name
+        folder = calls / name
         folder.mkdir(mode=0o700)
         path = str(folder / net_cage.EGRESS_SOCKET)
         servers.append(
             await asyncio.start_unix_server(accepted, sock=net_cage.bind_unix(path))
         )
         others[name] = path
-    store = spawn / "agy-store-other"
+    store = calls / "agy-store-other"
     store.mkdir(mode=0o700)
     (store / "antigravity-oauth-token").write_text("other-call-token\n")
     (web_setup["home"] / ".claude" / "settings.json").write_text("{}\n")
@@ -700,7 +724,8 @@ async def test_a_web_run_cannot_reach_the_egress_of_another_call(
         "kept"
     )
     # The other calls' folders are untouched on the host.
-    assert sorted(p.name for p in spawn.iterdir()) == [
+    assert list(spawn.iterdir()) == []
+    assert sorted(p.name for p in calls.iterdir()) == [
         "agy-store-other",
         "agy-tmp-other",
         "web-run-other",
@@ -722,7 +747,7 @@ def _connect_unix(path: str) -> str:
 
 
 async def test_a_launch_directory_holding_home_refuses_the_web_run(
-    web_setup, launches, monkeypatch
+    web_setup, launches, monkeypatch, tmp_path_factory
 ):
     """An operator's launch directory (``PLUGBOARD_SUBPROCESS_CWD``) holding
     claude's HOME cannot be hidden without hiding ``~/.claude``: the web run
@@ -734,13 +759,19 @@ async def test_a_launch_directory_holding_home_refuses_the_web_run(
     )
     monkeypatch.setattr(agy_cage, "_bwrap", lambda: "/usr/bin/bwrap")
     monkeypatch.setenv("PLUGBOARD_SUBPROCESS_CWD", str(web_setup["tmp"]))
+    # The root of call folders out of that launch directory: only HOME is
+    # in the way here.
+    calls = tmp_path_factory.mktemp("calls-elsewhere")
+    calls.chmod(0o700)
+    monkeypatch.setattr(cs, "_CALLS_ROOT_CACHE", str(calls))
     with pytest.raises(cs.CliSubprocessError) as caught:
         await cs.complete("claude", dict(_BODY), web=web_access.WebPolicy(3))
     assert caught.value.sandbox_failed is True
-    assert "launch directory" in str(caught.value)
+    assert "holds what claude needs" in str(caught.value)
     assert launches == []
     assert not ran.exists()
     assert not any(p.name.startswith("web-run-") for p in web_setup["tmp"].iterdir())
+    assert list(calls.iterdir()) == []
 
 
 # ── 6. Parallel web calls past the limit stop the run (PLU-159) ─────────────

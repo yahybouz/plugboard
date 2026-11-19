@@ -35,6 +35,18 @@ def test_spawn_dir_is_removed_when_the_process_exits(tmp_path):
     assert not Path(path).exists()
 
 
+def test_calls_root_is_removed_when_the_process_exits(tmp_path):
+    """The root of the private call folders (BUG-157), with what is in it."""
+    path = _run(
+        "from plugboard import cli_subprocess as c; p = c._private_calls_root(); "
+        "open(p + '/left', 'w').close(); print(p)",
+        tmp_path,
+    )
+    assert Path(path).name.startswith("plugboard-calls-")
+    assert Path(path).parent == tmp_path
+    assert not Path(path).exists()
+
+
 def test_spec_oracle_dir_is_removed_when_the_run_ends(tmp_path):
     path = _run(
         "import tests.test_spec_v7_residuals_parent as m; print(m.TMP)", tmp_path

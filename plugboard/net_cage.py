@@ -19,10 +19,11 @@ The cage of a claude web run (PLU-162) is a network cage:
 bound as it is (``--bind / /``, then the host's ``/dev`` with its devices:
 ``/proc``, ``/tmp``, HOME, ``~/.claude``, node are the gateway's, as
 before), the same uid, but for the CLIs' launch directory (claude's working
-directory): an empty tmpfs holding the run's own folder only, so the
-folders of the other calls (``web-run-*``, ``agy-tmp-*``, ``agy-store-*``)
-and their egress sockets are out of reach; a launch directory holding what
-claude needs is refused (:func:`web_cage_argv`). On the network, a
+directory) and the gateway's root of call folders (out of the launch
+directory, BUG-157): each an empty tmpfs, the root holding the run's own
+folder only, so the folders of the other calls (``web-run-*``,
+``agy-tmp-*``, ``agy-store-*``) and their egress sockets are out of reach; a
+launch directory holding what claude needs is refused (:func:`web_cage_argv`). On the network, a
 client that ignores ``HTTPS_PROXY`` (a direct connection to the gateway's
 port, the internal network, the cloud metadata address, or any public
 address) finds no route, and the egress of the run lets out port 443 of
@@ -371,23 +372,32 @@ def web_cage_argv(
     they are, and its ``HOME`` and ``CLAUDE_CONFIG_DIR``, checked out of the
     launch directory); ``cwd`` the
     launch directory, kept; ``folder`` the run's own folder holding the
-    socket, in the launch directory. The launch directory is hidden under an
-    empty tmpfs but for ``folder`` (PLU-162): the folders of the other calls
-    (``web-run-*``, ``agy-tmp-*``, ``agy-store-*``) and their egress sockets
-    are out of reach. Raises :class:`CageUnavailable` before anything is
-    launched.
+    socket, in the gateway's root of call folders (out of the launch
+    directory, BUG-157). The launch directory and that root are hidden, each
+    under an empty tmpfs, but for ``folder`` (PLU-162): the folders of the
+    other calls (``web-run-*``, ``agy-tmp-*``, ``agy-store-*``) and their
+    egress sockets are out of reach. Raises :class:`CageUnavailable` before
+    anything is launched.
     """
     if not sys.platform.startswith("linux"):
         raise CageUnavailable("the web cage needs Linux")
     egress = egress_socket(folder, "web")
     python = relay_python()
-    launch_dir = _hidden_launch_dir(os.path.dirname(folder), command, env, python)
+    # The launch directory as before, then the root of call folders; the
+    # outer one first when one holds the other, once when they are one.
+    launch_dir = _hidden_launch_dir(cwd, command, env, python)
+    root = _hidden_launch_dir(os.path.dirname(folder), command, env, python)
+    emptied = (
+        [launch_dir] if root == launch_dir else sorted([launch_dir, root], key=len)
+    )
     given = [env.get(name) for name in _GIVEN_BACK]
     # The relay interpreter's third-party packages, under an empty
     # read-only tmpfs (PLU-171, I4).
     hidden: List[str] = []
     for path in relay_site_packages(python):
         hidden += ["--tmpfs", path, "--remount-ro", path]
+    for path in emptied:
+        hidden += ["--tmpfs", path]
     return [
         bwrap,
         *WEB_NAMESPACES,
@@ -399,11 +409,10 @@ def web_cage_argv(
         "--dev-bind",
         "/dev",
         "/dev",
+        # Then the launch directory and the root of call folders, empty
+        # (above), but for the run's own folder: the other calls' folders and
+        # sockets are out of sight (PLU-162, BUG-157).
         *hidden,
-        # The launch directory, empty but for the run's own folder: the
-        # other calls' folders and sockets are out of sight (PLU-162).
-        "--tmpfs",
-        launch_dir,
         "--bind",
         folder,
         folder,

@@ -283,8 +283,9 @@ def _attacks(store: str) -> str:
 
 
 def _no_private_store_left(setup) -> None:
-    assert list(setup["spawn"].glob("agy-store-*")) == []
+    assert list(setup["calls"].glob("agy-store-*")) == []
     assert os.listdir(setup["spawn"]) == []
+    assert os.listdir(setup["calls"]) == []
 
 
 async def test_the_p0_5_attacks_on_the_store_are_blocked(
@@ -364,7 +365,7 @@ async def test_a_call_never_sees_the_conversation_of_a_call_in_progress(
     task_a = asyncio.ensure_future(cs.complete("agy", body_a))
     try:
         deadline = time.monotonic() + 15
-        while not list(setup["spawn"].glob("agy-store-*/conversations/sess-A.db")):
+        while not list(setup["calls"].glob("agy-store-*/conversations/sess-A.db")):
             assert time.monotonic() < deadline, "A never wrote its conversation"
             await asyncio.sleep(0.05)
 
@@ -460,6 +461,7 @@ async def test_a_private_store_that_cannot_be_made_launches_nothing(setup, monke
     assert "agy private store cannot be created (OSError)" in str(info.value)
     assert not ran.exists()
     assert os.listdir(setup["spawn"]) == []
+    assert os.listdir(setup["calls"]) == []
 
 
 # ── The copy never holds the event loop, and waits for the call's slot ──────
@@ -543,7 +545,7 @@ async def test_the_store_is_filled_only_once_the_call_has_its_slot(
             assert time.monotonic() < deadline, "the first call never started"
             await asyncio.sleep(0.02)
         task_b = asyncio.ensure_future(cs.complete("agy", dict(_BODY)))
-        while len(list(setup["spawn"].glob("agy-store-*"))) < 2:
+        while len(list(setup["calls"].glob("agy-store-*"))) < 2:
             assert time.monotonic() < deadline, "the second call never queued"
             await asyncio.sleep(0.02)
         await asyncio.sleep(0.3)
@@ -551,7 +553,7 @@ async def test_the_store_is_filled_only_once_the_call_has_its_slot(
         # The first call has its copy; the second, queued, an empty store.
         assert len(fills) == 1
         stores = sorted(
-            setup["spawn"].glob("agy-store-*"), key=lambda p: len(os.listdir(p))
+            setup["calls"].glob("agy-store-*"), key=lambda p: len(os.listdir(p))
         )
         assert os.listdir(stores[0]) == []
         assert (stores[1] / _TOKEN).read_text() == (store / _TOKEN).read_text()
@@ -644,7 +646,7 @@ async def test_a_failed_removal_is_logged_and_the_answer_still_served(
 
     _fill_shared(setup)
     _install(setup["bin"], "agy", "cat >/dev/null\n" + _answer("OK"))
-    prefix = str(setup["spawn"] / agy_store.PRIVATE_PREFIX)
+    prefix = str(setup["calls"] / agy_store.PRIVATE_PREFIX)
     real_rmdir = os.rmdir
 
     def rmdir(path, *args, **kwargs):
@@ -663,8 +665,8 @@ async def test_a_failed_removal_is_logged_and_the_answer_still_served(
         r.getMessage() for r in caplog.records if r.name == "plugboard.agy_store"
     ]
     assert messages == ["agy private store left in place after the call (OSError)"]
-    assert str(setup["spawn"]) not in " ".join(messages)
-    (left,) = setup["spawn"].glob("agy-store-*")
+    assert str(setup["calls"]) not in " ".join(messages)
+    (left,) = setup["calls"].glob("agy-store-*")
     agy_store.remove_private_store(str(left))
     assert not left.exists()
 

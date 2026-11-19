@@ -36,6 +36,11 @@ def fake_agy(tmp_path, monkeypatch, agy_without_cage):  # outside bwrap, see con
     spawn = tmp_path / "spawn"
     spawn.mkdir(mode=0o700)
     monkeypatch.setattr(cs, "_SPAWN_CWD_CACHE", str(spawn))
+    # The gateway's root of call folders, beside the launch directory
+    # (BUG-157).
+    calls_root = tmp_path / "calls"
+    calls_root.mkdir(mode=0o700)
+    monkeypatch.setattr(cs, "_CALLS_ROOT_CACHE", str(calls_root))
     monkeypatch.delenv("PLUGBOARD_SUBPROCESS_CWD", raising=False)
     monkeypatch.setattr(cs, "_binary_path_cache", {})
     bin_dir = tmp_path / "bin"
@@ -65,8 +70,9 @@ def _assert_private(seen: dict, spawn: Path, server_tmp: Path) -> None:
     tmpdir = seen["TMPDIR"]
     assert tmpdir, "agy must be given a TMPDIR"
     assert seen["cwd"] == str(spawn)
-    # Under the directory the request was launched from, never the shared /tmp.
-    assert os.path.dirname(tmpdir) == str(spawn)
+    # Under the gateway's root of call folders, beside the launch directory
+    # (out of codex's sight, BUG-157), never the shared /tmp.
+    assert os.path.dirname(tmpdir) == str(spawn.parent / "calls")
     assert tmpdir not in ("/tmp", tempfile.gettempdir(), str(server_tmp))
     assert seen["mode"] == "700"
 
@@ -91,6 +97,7 @@ async def test_agy_gets_a_private_tmpdir_removed_with_the_request(
     _assert_private(seen, spawn, server_tmp)
     assert not os.path.exists(seen["TMPDIR"]), "removed when the request ends"
     assert list(spawn.iterdir()) == []
+    assert list((spawn.parent / "calls").iterdir()) == []
 
 
 async def test_agy_tmpdir_is_removed_when_the_cli_times_out(fake_agy, tmp_path):
@@ -104,6 +111,7 @@ async def test_agy_tmpdir_is_removed_when_the_cli_times_out(fake_agy, tmp_path):
     _assert_private(seen, spawn, tmp_path / "server-tmp")
     assert not os.path.exists(seen["TMPDIR"])
     assert list(spawn.iterdir()) == []
+    assert list((spawn.parent / "calls").iterdir()) == []
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
@@ -134,6 +142,7 @@ async def test_agy_tmpdir_is_removed_when_the_request_is_cancelled(
 
     assert not os.path.exists(seen["TMPDIR"])
     assert list(spawn.iterdir()) == []
+    assert list((spawn.parent / "calls").iterdir()) == []
 
 
 @pytest.mark.parametrize("kind", ["claude", "codex", "gemini"])
