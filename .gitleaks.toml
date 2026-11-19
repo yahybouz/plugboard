@@ -92,6 +92,20 @@ condition = "AND"
 paths = ['''(?:^|/)tests/test_run_mcp_legacy_names\.py$''']
 regexes = ['''^synthetic-[a-z-]+$''']
 
+# Synthetic server keys of the PLU-97 decision table (tests/auth_decisions.py)
+# and of the plan that quotes it: fixed, readable placeholders, never real
+# keys. Both rules that read an API_KEY assignment flag them; targetRules
+# keeps this a rule allowlist for those two only, as above.
+[[allowlists]]
+description = "PLU-97 auth decision test keys"
+targetRules = ["plugboard-env-secret", "generic-api-key"]
+condition = "AND"
+paths = [
+  '''(?:^|/)tests/auth_decisions\.py$''',
+  '''(?:^|/)docs/superpowers/plans/2026-11-18-plu-97-auth-core\.md$''',
+]
+regexes = ['''^(?:admin|api)key-decisions-0123456789$''']
+
 # Prose in the OpenClaw migration guide that the generic rule reads as a key.
 [[allowlists]]
 description = "OpenClaw removal guide prose"
