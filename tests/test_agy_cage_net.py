@@ -464,3 +464,179 @@ async def test_real_cage_with_a_long_tmpdir(setup, real_bwrap, fake_dns, tmp_pat
     )
     assert code == 0, stderr
     assert json.loads(stdout)["proxy"].startswith("HTTP/1.1 403")
+
+
+# ── 5. A bounded egress: connections and refusal logs ───────────────────────
+
+
+async def _wait_for(predicate, what: str) -> None:
+    for _ in range(250):
+        if predicate():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"timed out waiting for {what}")
+
+
+async def test_egress_refuses_the_connection_past_its_cap(tmp_path, fake_dns, caplog):
+    path = str(tmp_path / "e.sock")
+    server = await agy_egress.start(path)
+    held = []
+    try:
+        for _ in range(web_egress.MAX_CONNECTIONS):
+            held.append(await asyncio.open_unix_connection(path))
+        await _wait_for(
+            lambda: server.active_connections == web_egress.MAX_CONNECTIONS,
+            "every connection accepted",
+        )
+        with caplog.at_level(logging.INFO, logger="plugboard.web_egress"):
+            for _ in range(5):
+                reader, writer = await asyncio.open_unix_connection(path)
+                head = await asyncio.wait_for(reader.read(100), 5)
+                writer.close()
+                assert head.startswith(b"HTTP/1.1 503"), head
+        full = [r for r in caplog.records if "connections open" in r.getMessage()]
+        assert len(full) == 1, [r.getMessage() for r in full]
+        # A slot freed: the next request is served again.
+        held.pop()[1].close()
+        await _wait_for(
+            lambda: server.active_connections < web_egress.MAX_CONNECTIONS,
+            "a slot freed",
+        )
+        fake_dns["example.com"] = ["93.184.216.34"]
+        assert (await _ask(path, "example.com:443")).startswith(b"HTTP/1.1 403")
+    finally:
+        for _reader, writer in held:
+            writer.close()
+        await server.close()
+
+
+async def test_web_egress_refuses_the_connection_past_its_cap():
+    port = await web_egress.ensure_started()
+    held = []
+    try:
+        for _ in range(web_egress.MAX_CONNECTIONS):
+            held.append(await asyncio.open_connection("127.0.0.1", port))
+        await _wait_for(
+            lambda: web_egress.active_connections() == web_egress.MAX_CONNECTIONS,
+            "every connection accepted",
+        )
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        head = await asyncio.wait_for(reader.read(100), 5)
+        writer.close()
+        assert head.startswith(b"HTTP/1.1 503"), head
+    finally:
+        for _reader, writer in held:
+            writer.close()
+        await web_egress.stop()
+
+
+async def test_refusal_logs_are_one_per_host_and_window(
+    egress, fake_dns, caplog, monkeypatch
+):
+    now = [1000.0]
+    monkeypatch.setattr(web_egress, "_clock", lambda: now[0])
+    fake_dns["example.com"] = ["93.184.216.34"]
+    fake_dns["example.org"] = ["93.184.216.35"]
+    with caplog.at_level(logging.INFO, logger="plugboard.web_egress"):
+        for _ in range(20):
+            assert (await _ask(egress, "example.com:443")).startswith(b"HTTP/1.1 403")
+        assert (await _ask(egress, "example.org:443")).startswith(b"HTTP/1.1 403")
+        refused = [
+            r.getMessage() for r in caplog.records if "refused" in r.getMessage()
+        ]
+        assert len(refused) == 2, refused
+        assert "host=example.com" in refused[0] and "host=example.org" in refused[1]
+        now[0] += web_egress.REFUSAL_LOG_WINDOW_S + 1
+        assert (await _ask(egress, "example.com:443")).startswith(b"HTTP/1.1 403")
+    refused = [r.getMessage() for r in caplog.records if "refused" in r.getMessage()]
+    assert len(refused) == 3, refused
+    assert "host=example.com" in refused[2] and "19 more" in refused[2]
+
+
+async def test_refusal_logs_stay_bounded_with_many_hosts(egress, caplog, monkeypatch):
+    monkeypatch.setattr(web_egress, "_clock", lambda: 1000.0)
+    with caplog.at_level(logging.INFO, logger="plugboard.web_egress"):
+        for i in range(web_egress.REFUSAL_LOG_HOSTS + 50):
+            await _ask(egress, f"h{i}.example.com:443")
+    refused = [r.getMessage() for r in caplog.records if "refused" in r.getMessage()]
+    assert len(refused) <= web_egress.REFUSAL_LOG_HOSTS + 1, len(refused)
+
+
+# ── 6. The host's abstract unix sockets, out of the cage's reach ────────────
+
+
+async def test_real_cage_cannot_reach_an_abstract_socket(setup, real_bwrap):
+    name = "plugboard-test-" + os.urandom(6).hex()
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind("\0" + name)
+    listener.listen()
+    probe = (
+        "import socket, sys\n"
+        "s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n"
+        "try:\n"
+        "    s.connect('\\0' + sys.argv[1])\n"
+        "    print('connected')\n"
+        "except OSError as exc:\n"
+        "    print(type(exc).__name__)\n"
+    )
+    try:
+        # Outside the cage, the same socket answers.
+        outside = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        outside.connect("\0" + name)
+        outside.close()
+        code, stdout, stderr = await _run_caged(
+            sys.executable, ["-I", "-S", "-c", probe, name], str(setup["spawn"])
+        )
+    finally:
+        listener.close()
+    assert code == 0, stderr
+    assert stdout.decode().strip() == "ConnectionRefusedError"
+
+
+# ── 7. A cancelled call leaves no egress behind ─────────────────────────────
+
+
+def _open_sockets() -> int:
+    count = 0
+    for fd in os.listdir("/proc/self/fd"):
+        try:
+            if os.readlink(f"/proc/self/fd/{fd}").startswith("socket:"):
+                count += 1
+        except OSError:
+            pass
+    return count
+
+
+@pytest.mark.parametrize("cancels", [1, 2], ids=["once", "twice"])
+async def test_a_cancelled_call_removes_its_egress(setup, agy_without_cage, cancels):
+    ran = setup["tmp"] / "agy-tmpdir"
+    # Records its TMPDIR, then hangs, deaf to SIGTERM: the gateway's cleanup
+    # takes its grace period, during which a second cancel arrives.
+    _install(
+        setup["bin"],
+        "agy",
+        f"trap '' TERM\necho \"$TMPDIR\" > {ran}.part\nmv {ran}.part {ran}\nsleep 30\n",
+    )
+    before = _open_sockets()
+    task = asyncio.ensure_future(cs.complete("agy", dict(_BODY), timeout_s=30.0))
+    await _wait_for(ran.exists, "agy started")
+    tmpdir = ran.read_text().strip()
+    egress = os.path.join(tmpdir, agy_cage.EGRESS_SOCKET)
+    assert os.path.exists(egress)
+    # A connection open on the egress, as agy's would be.
+    _reader, writer = await asyncio.open_unix_connection(egress)
+    writer.write(b"CONNECT oauth2.googleapis.com:443 HTTP/1.1\r\n")
+    await writer.drain()
+
+    task.cancel()
+    if cancels == 2:
+        await asyncio.sleep(0.2)  # the cleanup is under way
+        task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    writer.close()
+    await asyncio.sleep(0.05)
+
+    assert not os.path.exists(egress)
+    assert not os.path.exists(tmpdir)
+    assert _open_sockets() == before

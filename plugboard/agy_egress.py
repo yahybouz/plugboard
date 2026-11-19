@@ -10,11 +10,28 @@ tunnel opened to the checked address) with, on top, a list of hosts. Any
 other host, an internal address (loopback, private ranges, the tailnet's
 CGNAT range, link-local, the cloud metadata address, internal IPv6), even
 for a listed name that resolves there, and any port but 443: ``403``,
-logged with the host only.
+logged with the host only, once per host and window (a summary line
+then says how many more were refused). At most
+``web_egress.MAX_CONNECTIONS`` connections at once per call, ``503``
+beyond.
 
-The list holds exact names (no suffix: ``storage.googleapis.com`` would be
-a way out to any bucket), each found in the agy 1.4.4 binary the image
-installs (its strings, read offline on 19/11; agy was not run):
+The list holds exact names, each found in the agy 1.4.4 binary the image
+installs (its strings, read offline on 19/11; agy was not run). It filters
+the NAMES asked in ``CONNECT``, not Google's services, and is no guarantee
+that agy only talks to the services named below (known limit, a channel
+to Google remains):
+
+- a listed name serves more than what agy uses it for:
+  ``www.googleapis.com`` also serves, for one, the Cloud Storage JSON API
+  (``/storage/v1``, ``/upload/storage/v1``), which reaches any bucket the
+  credentials in the request can write;
+- the tunnel is opaque (TLS end to end): the proxy never sees the SNI nor
+  the ``Host`` inside it, which may name another Google service than the
+  ``CONNECT`` did, Google's front ends serving many names on the same
+  addresses.
+
+What the list does rule out: any non-Google host, and the other Google
+names by their own (``storage.googleapis.com``...). Each listed name:
 
 - ``oauth2.googleapis.com``: ``https://oauth2.googleapis.com/token``, where
   agy refreshes its sign-in token (``antigravity-oauth-token``).
@@ -73,18 +90,35 @@ class Egress:
         self.path = path
         self._server: asyncio.AbstractServer | None = None
         self._tasks: Set[asyncio.Task] = set()
+        # At most web_egress.MAX_CONNECTIONS at once, refusals logged once
+        # per host and window: agy, or a prompt driving it, cannot flood
+        # the gateway nor its log through its egress.
+        self._cap = web_egress.ConnectionCap(_LABEL)
+        self._refusals = web_egress.RefusalLog(_LABEL)
+
+    @property
+    def active_connections(self) -> int:
+        return self._cap.active
 
     async def _handle(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        if not self._cap.enter():
+            await web_egress.reply_busy(writer)
+            return
         task = asyncio.current_task()
         if task is not None:
             self._tasks.add(task)
         try:
             await web_egress.serve_connect(
-                reader, writer, host_allowed=host_allowed, label=_LABEL
+                reader,
+                writer,
+                host_allowed=host_allowed,
+                label=_LABEL,
+                refusals=self._refusals,
             )
         finally:
+            self._cap.leave()
             if task is not None:
                 self._tasks.discard(task)
 
@@ -97,10 +131,11 @@ class Egress:
             self._server.close()
         for task in list(self._tasks):
             task.cancel()
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
         with contextlib.suppress(FileNotFoundError):
             os.unlink(self.path)
+        self._refusals.flush()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
 
 
 # A unix socket's name holds at most 107 bytes (sun_path).
