@@ -211,4 +211,7 @@ def proxy_env(port: int) -> dict:
         "http_proxy": url,
         "NO_PROXY": "",
         "no_proxy": "",
+        # An inherited SOCKS or catch-all proxy never takes over (PLU-160).
+        "ALL_PROXY": "",
+        "all_proxy": "",
     }

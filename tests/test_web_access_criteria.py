@@ -713,3 +713,15 @@ async def test_c9_web_with_empty_tools_is_served(client, tools_key, calls):
     assert resp.status_code == 200, resp.text
     (call,) = calls
     assert call["web"] is not None
+
+
+def test_web_run_env_overrides_every_proxy_variable():
+    """PLU-160: no inherited proxy setting (ALL_PROXY, all_proxy) can take a
+    web run around the egress guard: every proxy variable is set by the run."""
+    from plugboard import web_access as wa
+
+    env = wa.child_env(40000)
+    for name in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"):
+        assert env[name] == "http://127.0.0.1:40000", name
+    for name in ("ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"):
+        assert env[name] == "", name
