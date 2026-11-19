@@ -184,3 +184,80 @@ async def test_a_busy_tunnel_is_closed_past_its_max_duration(
     finally:
         upstream.close()
         await upstream.wait_closed()
+
+
+# ── PLU-167 (+ I3): the refusal log, per host and port, bounded, escaped ─────
+
+
+async def test_a_second_port_of_a_host_is_logged(guard, monkeypatch, caplog):
+    monkeypatch.setattr(web_egress, "_clock", lambda: 1000.0)
+    with caplog.at_level(logging.INFO, logger="plugboard.web_egress"):
+        for target in ("example.com:80", "example.com:80", "example.com:8080"):
+            assert (await _connect(guard, target)).startswith(b"HTTP/1.1 403")
+    lines = _refused(caplog)
+    assert len(lines) == 2, lines
+    assert "host=example.com port=80 " in lines[0], lines
+    assert "host=example.com port=8080 " in lines[1], lines
+
+
+def test_the_overflow_line_carries_a_sample_of_8_host_ports(monkeypatch, caplog):
+    monkeypatch.setattr(web_egress, "_clock", lambda: 1000.0)
+    refusals = web_egress.RefusalLog("test egress")
+    with caplog.at_level(logging.INFO, logger="plugboard.web_egress"):
+        for i in range(web_egress.REFUSAL_LOG_HOSTS):
+            refusals.refused(f"h{i}.example.com", 443, " is not public")
+        for i in range(20):
+            refusals.refused(f"x{i}.example.com", 8000 + i, " is not 443")
+        refusals.flush()
+    lines = _refused(caplog)
+    assert len(lines) <= web_egress.REFUSAL_LOG_HOSTS + 2, len(lines)
+    other = [line for line in lines if "<other hosts>" in line]
+    assert other, lines[-3:]
+    # The first overflow line names the first host it stands for...
+    assert "sample=x0.example.com:8000" in other[0], other
+    # ...the summary of the rest at most 8 of them, as host:port.
+    assert "19 more" in other[-1], other
+    sample = other[-1].split("sample=", 1)[1].split()[0].split(",")
+    assert len(sample) == web_egress.REFUSAL_LOG_SAMPLE == 8, sample
+    assert all(s.startswith("x") and s.rsplit(":", 1)[1].isdigit() for s in sample)
+
+
+async def test_web_refusal_counts_are_logged_periodically(monkeypatch, caplog):
+    """A host refused many times, then never again, has its count logged
+    within a window, not only when the egress stops."""
+    monkeypatch.setattr(web_egress, "REFUSAL_LOG_WINDOW_S", 0.2)
+    port = await web_egress.ensure_started()
+    try:
+        with caplog.at_level(logging.INFO, logger="plugboard.web_egress"):
+            for _ in range(5):
+                await _connect(port, "flood.example.com:80")
+            await asyncio.sleep(0.7)
+            lines = _refused(caplog)
+            assert any("flood.example.com" in li and "4 more" in li for li in lines), (
+                lines
+            )
+    finally:
+        await web_egress.stop()
+
+
+async def test_refused_hosts_are_logged_escaped_and_bounded(guard, caplog):
+    evil = "\x1b[31mred\x07\x7f‮evil"
+    with caplog.at_level(logging.INFO, logger="plugboard.web_egress"):
+        await _send(
+            guard, f"CONNECT {evil}:80 HTTP/1.1\r\n\r\n".encode("latin-1", "replace")
+        )
+        await _send(
+            guard, f"CONNECT {'\x1b' * 4000}.example:80 HTTP/1.1\r\n\r\n".encode()
+        )
+    lines = _refused(caplog)
+    assert len(lines) == 2, lines
+    for line in lines:
+        assert all(0x20 <= ord(c) < 0x7F for c in line), repr(line)
+    assert "\\x1b[31mred\\x07\\x7f" in lines[0], lines[0]
+    host = lines[1].split("host=", 1)[1].split(" port=")[0]
+    assert len(host) <= 253, len(host)
+
+
+def test_the_log_escapes_what_it_names():
+    refusals = web_egress.RefusalLog("test egress")
+    assert refusals.key("a\x1b[0m‮b", 443) == ("a\\x1b[0m\\u202eb", 443)

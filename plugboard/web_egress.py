@@ -15,13 +15,18 @@ loop's default executor, and a name that does not resolve in 5 s is refused
 (PLU-170).
 
 It runs in the gateway's event loop, started on first use. It reads no body:
-it only moves bytes, and logs nothing of what goes through (host names only
-at debug level when refused).
+it only moves bytes, and logs nothing of what goes through: only the host
+and port asked, escaped (control characters and ANSI sequences shown as
+escapes) and cut to 253 characters. Refusals are logged once per host, port
+and minute, the count of the others every minute (PLU-167). A tunnel is
+closed after 120 s without a byte in one way, and once it is
+``PLUGBOARD_EGRESS_TUNNEL_MAX_SECONDS`` old (default 600, PLU-169).
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import logging
 import socket
@@ -61,61 +66,102 @@ tunnels_total = 0
 # Connections one egress serves at once (each proxy: the web tools' one, and
 # one per agy call, BUG-156); past it, 503 at once, nothing read.
 MAX_CONNECTIONS = 64
-# Refusals are logged once per host and window, then summed up (how many
-# more) at the first refusal of that host after the window; past
-# REFUSAL_LOG_HOSTS hosts in a window, the others share one line.
+# Refusals are logged once per host and port and window (PLU-167), then
+# summed up (how many more) at the latest REFUSAL_LOG_WINDOW_S later; past
+# REFUSAL_LOG_HOSTS hosts and ports in a window, the others share one line,
+# which names a sample of at most REFUSAL_LOG_SAMPLE of them (host:port).
+# A host is logged escaped (control characters, ANSI sequences and
+# non-ASCII shown as \x.. escapes, I3) and cut to _HOST_LOG_MAX characters.
 REFUSAL_LOG_WINDOW_S = 60.0
 REFUSAL_LOG_HOSTS = 256
+REFUSAL_LOG_SAMPLE = 8
+_HOST_LOG_MAX = 253
 _OTHER_HOSTS = "<other hosts>"
+_OTHER = (_OTHER_HOSTS, 0)
 _clock = time.monotonic
 
 
+def printable(host: str) -> str:
+    """``host`` as a log may show it: printable ASCII only, bounded."""
+    return host[:_HOST_LOG_MAX].encode("unicode_escape").decode("ascii")[:_HOST_LOG_MAX]
+
+
 class RefusalLog:
-    """The refusal lines of one egress: one per host and window, each later
-    one saying how many were not logged, so a client that repeats a refused
-    request cannot fill the log."""
+    """The refusal lines of one egress: one per host, port and window, each
+    later one saying how many were not logged, so a client that repeats a
+    refused request cannot fill the log."""
 
     def __init__(self, label: str) -> None:
         self.label = label
-        # host -> [window start, refusals not logged since]
-        self._hosts: Dict[str, List[float]] = {}
+        # (host, port) -> [window start, refusals not logged since]
+        self._hosts: Dict[Tuple[str, int], List[float]] = {}
+        # host:port of the refusals the overflow line stands for, not logged yet
+        self._sample: List[str] = []
 
-    def refused(self, host: str, reason: str) -> None:
+    @staticmethod
+    def key(host: str, port: int) -> Tuple[str, int]:
+        return printable(host), port
+
+    def refused(self, host: str, port: int, reason: str) -> None:
         now = _clock()
-        key = host[:253]
+        key = self.key(host, port)
         if key not in self._hosts and len(self._hosts) >= REFUSAL_LOG_HOSTS:
             self._prune(now)
             if len(self._hosts) >= REFUSAL_LOG_HOSTS:
-                key = _OTHER_HOSTS
+                named = f"{key[0]}:{port}"
+                if len(self._sample) < REFUSAL_LOG_SAMPLE and named not in self._sample:
+                    self._sample.append(named)
+                key = _OTHER
         entry = self._hosts.get(key)
         if entry is not None and now - entry[0] < REFUSAL_LOG_WINDOW_S:
             entry[1] += 1
             return
         more = int(entry[1]) if entry is not None else 0
         self._hosts[key] = [now, 0]
-        self._log(key, reason if key != _OTHER_HOSTS else "", more)
+        self._log(key, reason if key != _OTHER else "", more)
 
     def _prune(self, now: float) -> None:
-        for host, (start, more) in list(self._hosts.items()):
+        for key, (start, more) in list(self._hosts.items()):
             if now - start >= REFUSAL_LOG_WINDOW_S:
-                del self._hosts[host]
+                del self._hosts[key]
                 if more:
-                    self._log(host, "", int(more))
+                    self._log(key, "", int(more))
+
+    def sweep(self) -> None:
+        """Log the counts not logged yet and forget the windows that are
+        over: called every window by the web tools' egress, which lives as
+        long as the gateway (an agy egress flushes when its call ends)."""
+        now = _clock()
+        for key, entry in list(self._hosts.items()):
+            if entry[1]:
+                self._log(key, "", int(entry[1]))
+                entry[1] = 0
+            if now - entry[0] >= REFUSAL_LOG_WINDOW_S:
+                del self._hosts[key]
 
     def flush(self) -> None:
         """Log what was not logged yet (the egress is closing)."""
-        for host, (_start, more) in self._hosts.items():
+        for key, (_start, more) in self._hosts.items():
             if more:
-                self._log(host, "", int(more))
+                self._log(key, "", int(more))
         self._hosts.clear()
+        self._sample.clear()
 
-    def _log(self, host: str, reason: str, more: int) -> None:
+    def _log(self, key: Tuple[str, int], reason: str, more: int) -> None:
         tail = (
             f" ({more} more refused in the last {REFUSAL_LOG_WINDOW_S:.0f} s)"
             if more
             else ""
         )
-        log.info("%s refused: host=%s%s%s", self.label, host, reason, tail)
+        host, port = key
+        if key == _OTHER:
+            where = host
+            if self._sample:
+                where += " sample=" + ",".join(self._sample)
+                self._sample = []
+        else:
+            where = f"{host} port={port}"
+        log.info("%s refused: host=%s%s%s", self.label, where, reason, tail)
 
 
 class ConnectionCap:
@@ -334,22 +380,22 @@ async def serve_connect(
     host, port = target
     if port != _TLS_PORT:
         # No plain HTTP inside a tunnel either: WebFetch speaks HTTPS only.
-        refusals.refused(host, f" port={port} is not 443")
+        refusals.refused(host, port, " is not 443")
         await _reply(writer, "403 Forbidden")
         return False
     if host_allowed is not None and not host_allowed(host):
-        refusals.refused(host, " is not on its list")
+        refusals.refused(host, port, " is not on its list")
         await _reply(writer, "403 Forbidden")
         return False
     try:
         addrs = await _public_addresses(host, port)
     except TimeoutError:
-        refusals.refused(host, f" port={port} did not resolve in {_DNS_TIMEOUT_S:g} s")
+        refusals.refused(host, port, f" did not resolve in {_DNS_TIMEOUT_S:g} s")
         await _reply(writer, "403 Forbidden")
         return False
     if not addrs:
         # The audit trail of a run: the host asked, never a path.
-        refusals.refused(host, f" port={port} is not public")
+        refusals.refused(host, port, " is not public")
         await _reply(writer, "403 Forbidden")
         return False
     up_reader = up_writer = None
@@ -366,7 +412,7 @@ async def serve_connect(
         return None
     if tunnel_opened is not None:
         tunnel_opened()
-    log.info("%s tunnel: host=%s port=%d", label, host[:253], port)
+    log.info("%s tunnel: host=%s port=%d", label, printable(host), port)
     try:
         writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         await writer.drain()
@@ -384,7 +430,7 @@ async def serve_connect(
         log.info(
             "%s tunnel: host=%s port=%d closed at its max duration (%g s)",
             label,
-            host[:253],
+            printable(host),
             port,
             limit,
         )
@@ -396,9 +442,19 @@ async def serve_connect(
     return True
 
 
+_sweeper: Optional[asyncio.Task] = None
+
+
+async def _sweep_refusals() -> None:
+    """The web tools' refusal counts, logged every window (PLU-167)."""
+    while True:
+        await asyncio.sleep(REFUSAL_LOG_WINDOW_S)
+        _web_refusals.sweep()
+
+
 async def ensure_started() -> int:
     """Start the proxy once (loopback, a free port) and return its port."""
-    global _server, _port, _lock, _web_cap, _web_refusals
+    global _server, _port, _lock, _web_cap, _web_refusals, _sweeper
     if _server is not None and _port is not None:
         return _port
     if _lock is None:
@@ -411,13 +467,20 @@ async def ensure_started() -> int:
                 _handle, host="127.0.0.1", port=0, limit=_MAX_HEAD * 2
             )
             _port = _server.sockets[0].getsockname()[1]
+            _sweeper = asyncio.create_task(_sweep_refusals())
             log.info("web egress guard listening on 127.0.0.1:%d", _port)
     assert _port is not None
     return _port
 
 
 async def stop() -> None:
-    global _server, _port, _dns_pool
+    global _server, _port, _dns_pool, _sweeper
+    if _sweeper is not None:
+        if _sweeper.get_loop() is asyncio.get_running_loop():
+            _sweeper.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await _sweeper
+        _sweeper = None
     if _server is not None:
         _server.close()
         await _server.wait_closed()

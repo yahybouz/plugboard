@@ -10,8 +10,9 @@ tunnel opened to the checked address) with, on top, a list of hosts. Any
 other host, an internal address (loopback, private ranges, the tailnet's
 CGNAT range, link-local, the cloud metadata address, internal IPv6), even
 for a listed name that resolves there, and any port but 443: ``403``,
-logged with the host only, once per host and window (a summary line
-then says how many more were refused). At most
+logged with the host and port only, once per host, port and window (a
+summary line then says how many more were refused; past 256 of them, one
+line for the others, naming at most 8). At most
 ``web_egress.MAX_CONNECTIONS`` connections at once per call, ``503``
 beyond.
 

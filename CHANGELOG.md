@@ -22,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **An egress tunnel lasts 10 minutes at most** (PLU-169): a tunnel of the egress guard (web tools and agy's egress) was closed only after 120 s without a byte in one way, so bytes trickled both ways kept it open as long as the asker wanted, holding one of the 64 places. A tunnel is now closed once it is `PLUGBOARD_EGRESS_TUNNEL_MAX_SECONDS` old (new setting, default `600`; a value that is not a number above 0 gives the default), and the closing is logged with the host. The connection cap stays per egress, not per key: the cap per run comes with the cage of the claude web run (one egress per run).
 
+- **The egress refusal log names each port, sums up on time and escapes hosts** (PLU-167, I3 of the 4.15.1 security review): refusals were logged once per host and minute, so a second port of a refused host went unlogged; they are now logged once per host, port and minute. Past 256 hosts and ports in a minute, the shared `<other hosts>` line now names a sample of at most 8 (`sample=host:port,...`). The web tools' egress now logs the counts of repeated refusals every minute, not only when a later refusal of the same host comes or when the egress stops. A logged host is escaped (control characters, ANSI sequences and non-ASCII shown as `\x..` escapes) and cut to 253 characters, so a `CONNECT` cannot write terminal sequences into the gateway log. The log stays bounded as in 4.15.1 (BUG-156).
+
 ## [4.15.1] — 2026-11-19
 
 ### Security

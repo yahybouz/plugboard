@@ -161,7 +161,12 @@ empty). It tunnels only to **public** addresses: each destination is resolved
 by the proxy, every address is checked (`netguard.ip_is_public`) and the
 tunnel connects to the checked address, so a second resolution cannot point
 elsewhere. Each tunnel and each refusal is logged with the host and port
-asked (`web egress tunnel: host=...`), never a path or a page. Loopback, private ranges, the CGNAT range of the tailnet,
+asked (`web egress tunnel: host=...`), never a path or a page; the host is
+escaped (control characters and ANSI sequences shown as `\x..`) and cut to
+253 characters. A refusal is logged once per host, port and minute; the
+count of the repeats follows within the next minute (`N more refused`); past
+256 hosts and ports in a minute, the others share one `<other hosts>` line
+naming a sample of at most 8 (`sample=host:port,...`). Loopback, private ranges, the CGNAT range of the tailnet,
 link-local and the metadata address are refused (`403`); a name that resolves
 to one non-public address is refused whole. Plain-HTTP proxying is refused too,
 and so is a tunnel to any port but `443` (`403`, since 4.15.0): no plain HTTP
