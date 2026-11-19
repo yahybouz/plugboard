@@ -22,6 +22,7 @@ from __future__ import annotations
 import os
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1061,16 +1062,24 @@ async def test_admin_mfa_setup_endpoint_requires_matching_code(
     from plugboard import admin_mfa as _mfa
 
     importlib.reload(_mfa)
+    # The setup accepts the current time-step only: a frozen clock, in the
+    # middle of a 30 s step, keeps the step from turning between the code
+    # computed here and the server's check (BUG-151). The module's clock
+    # only: the rest of the process keeps the real time.
+    frozen = 1_800_000_015.0
+    monkeypatch.setattr(_mfa, "time", SimpleNamespace(time=lambda: frozen))
 
     begin = await admin_client.post("/admin/mfa/begin", headers=ADMIN_AUTH)
     assert begin.status_code == 200
     secret = begin.json()["secret"]
+    code = _mfa._generate_code(secret)
+    wrong = f"{(int(code) + 1) % 1_000_000:06d}"  # never the right code
 
     # Wrong code → 400, nothing enrolled.
     bad = await admin_client.post(
         "/admin/mfa/setup",
         headers=ADMIN_AUTH,
-        json={"secret": secret, "code": "000000"},
+        json={"secret": secret, "code": wrong},
     )
     assert bad.status_code == 400
     assert not _mfa.is_enrolled()
@@ -1079,7 +1088,7 @@ async def test_admin_mfa_setup_endpoint_requires_matching_code(
     ok = await admin_client.post(
         "/admin/mfa/setup",
         headers=ADMIN_AUTH,
-        json={"secret": secret, "code": _mfa._generate_code(secret)},
+        json={"secret": secret, "code": code},
     )
     assert ok.status_code == 204
     assert _mfa.is_enrolled()
