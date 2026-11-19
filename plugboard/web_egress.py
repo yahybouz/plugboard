@@ -148,7 +148,8 @@ def _parse_target(line: str) -> Optional[Tuple[str, int]]:
         port_s = rest.removeprefix(":")
     else:
         host, _, port_s = target.rpartition(":")
-    if not host or not port_s.isdigit():
+    # ASCII digits only: "²" is a digit to isdigit(), not to int().
+    if not host or not (port_s.isascii() and port_s.isdigit()):
         return None
     port = int(port_s)
     if not 0 < port < 65536:
@@ -201,9 +202,12 @@ async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> N
 
 
 async def _reply(writer: asyncio.StreamWriter, status: str) -> None:
+    """Answer and close; a client already gone is not an error."""
     writer.write(f"HTTP/1.1 {status}\r\nContent-Length: 0\r\n\r\n".encode())
     try:
         await writer.drain()
+    except (ConnectionError, OSError):
+        pass
     finally:
         writer.close()
 
@@ -265,6 +269,8 @@ async def serve_connect(
         asyncio.TimeoutError,
         asyncio.IncompleteReadError,
         asyncio.LimitOverrunError,
+        ConnectionError,
+        OSError,
     ):
         writer.close()
         return None
@@ -307,9 +313,14 @@ async def serve_connect(
     if tunnel_opened is not None:
         tunnel_opened()
     log.info("%s tunnel: host=%s port=%d", label, host[:253], port)
-    writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-    await writer.drain()
-    await asyncio.gather(_pipe(reader, up_writer), _pipe(up_reader, writer))
+    try:
+        writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        await writer.drain()
+        await asyncio.gather(_pipe(reader, up_writer), _pipe(up_reader, writer))
+    except (ConnectionError, OSError):
+        writer.close()  # the client left before the 200
+    finally:
+        up_writer.close()
     return True
 
 

@@ -566,6 +566,118 @@ async def test_refusal_logs_stay_bounded_with_many_hosts(egress, caplog, monkeyp
     assert len(refused) <= web_egress.REFUSAL_LOG_HOSTS + 1, len(refused)
 
 
+# A malformed port or a client gone early never escapes as a trace: asyncio
+# would log one per connection, around the bounded refusal log (BUG-156).
+
+
+@pytest.fixture
+async def loop_errors():
+    loop = asyncio.get_running_loop()
+    seen: list = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: seen.append(context))
+    try:
+        yield seen
+    finally:
+        loop.set_exception_handler(previous)
+
+
+def test_a_port_in_unicode_digits_is_malformed():
+    for port in ("²", "³", "¹", "44³", "٤٤٣"):
+        assert web_egress._parse_target(f"CONNECT h.example:{port} HTTP/1.1") is None
+        assert (
+            web_egress._parse_target(f"CONNECT [2001:db8::1]:{port} HTTP/1.1") is None
+        )
+
+
+async def test_a_port_in_unicode_digits_is_refused_without_a_trace(
+    egress, loop_errors, caplog
+):
+    with caplog.at_level(logging.INFO):
+        reader, writer = await open_unix(egress)
+        # The head is read as latin-1: the byte 0xb2 is "²".
+        writer.write("CONNECT example.com:² HTTP/1.1\r\n\r\n".encode("latin-1"))
+        await writer.drain()
+        head = await asyncio.wait_for(reader.read(200), 5)
+        writer.close()
+        await asyncio.sleep(0.05)
+    assert head.startswith(b"HTTP/1.1 405"), head
+    assert loop_errors == []
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+
+
+class _GoneWriter:
+    """A client writer whose peer left: every drain fails, as asyncio's does."""
+
+    def __init__(self) -> None:
+        self.written: list = []
+        self.closed = False
+
+    def write(self, data: bytes) -> None:
+        self.written.append(data)
+
+    async def drain(self) -> None:
+        raise ConnectionResetError("Connection lost")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _request(target: str) -> asyncio.StreamReader:
+    reader = asyncio.StreamReader()
+    reader.feed_data(f"CONNECT {target} HTTP/1.1\r\n\r\n".encode())
+    return reader
+
+
+async def test_a_client_gone_before_the_refusal_raises_nothing():
+    for target, allowed in (
+        ("example.com:443", lambda _h: False),  # 403, off the list
+        ("example.com:80", None),  # 403, not 443
+        ("example.com", None),  # 405, malformed
+    ):
+        writer = _GoneWriter()
+        outcome = await web_egress.serve_connect(
+            _request(target), writer, host_allowed=allowed
+        )
+        assert outcome in (False, None), target
+        assert writer.closed, target
+
+
+async def test_a_client_reset_while_sending_its_request_raises_nothing():
+    reader = asyncio.StreamReader()
+    reader.feed_data(b"CONNECT example.com:443 HT")
+    reader.set_exception(ConnectionResetError("Connection lost"))
+    writer = _GoneWriter()
+    assert await web_egress.serve_connect(reader, writer) is None
+    assert writer.closed
+
+
+async def test_a_client_gone_before_the_200_closes_the_upstream(fake_dns, monkeypatch):
+    upstream_eof = asyncio.Event()
+
+    async def upstream_side(reader, writer):
+        await reader.read()  # until the egress closes its side
+        upstream_eof.set()
+        writer.close()
+
+    upstream = await asyncio.start_server(upstream_side, "127.0.0.1", 0)
+    up_port = upstream.sockets[0].getsockname()[1]
+    fake_dns["example.com"] = ["127.0.0.1"]
+    monkeypatch.setattr(netguard, "ip_is_public", lambda _ip: True)
+    monkeypatch.setattr(web_egress, "_TLS_PORT", up_port)
+    try:
+        writer = _GoneWriter()
+        await web_egress.serve_connect(_request(f"example.com:{up_port}"), writer)
+        assert writer.written == [b"HTTP/1.1 200 Connection Established\r\n\r\n"]
+        assert writer.closed
+        await asyncio.wait_for(upstream_eof.wait(), 5)
+    finally:
+        upstream.close()
+        # wait_closed waits for the upstream connections: bounded, so a
+        # socket left open fails the test instead of hanging it.
+        await asyncio.wait_for(upstream.wait_closed(), 5)
+
+
 # ── 6. The host's abstract unix sockets, out of the cage's reach ────────────
 
 
