@@ -60,6 +60,7 @@
    "plugboard.suivi_api",
    "plugboard.suivi_import",
    "plugboard.tokenizer",
+   "plugboard.trace_context",
    "plugboard.usage",
    "plugboard.webhooks"
   ]
