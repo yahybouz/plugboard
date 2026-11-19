@@ -184,9 +184,16 @@ async def _ask(path: str, target: str) -> bytes:
     return head
 
 
+# The one listed name outside googleapis.com: agy's eligibility check fetches
+# the account's profile picture there at start-up (BUG-156, seen on UAT as
+# "Eligibility check failed: failed to get profile picture: Get
+# https://lh3.googleusercontent.com/...", every agy call a 502).
+_PICTURE_HOST = "lh3.googleusercontent.com"
+
+
 def test_allowlist_is_exact_google_hosts():
     for host in agy_egress.ALLOWED_HOSTS:
-        assert host.endswith(".googleapis.com"), host
+        assert host.endswith(".googleapis.com") or host == _PICTURE_HOST, host
         assert agy_egress.host_allowed(host)
         assert agy_egress.host_allowed(host.upper() + ".")
     for host in (
@@ -199,6 +206,37 @@ def test_allowlist_is_exact_google_hosts():
         "",
     ):
         assert not agy_egress.host_allowed(host), host
+
+
+def test_allowlist_lets_agy_fetch_its_profile_picture():
+    assert agy_egress.host_allowed(_PICTURE_HOST)
+    assert agy_egress.host_allowed("LH3.googleusercontent.com.")
+    # That exact name only: not the rest of Google's user-content domain.
+    for host in (
+        "googleusercontent.com",
+        "lh4.googleusercontent.com",
+        "evil.lh3.googleusercontent.com",
+        "lh3.googleusercontent.com.evil.test",
+        "storage.googleusercontent.com",
+        "x.apps.googleusercontent.com",
+    ):
+        assert not agy_egress.host_allowed(host), host
+
+
+async def test_proxy_tunnels_the_profile_picture_host_on_443_only(
+    egress, fake_dns, monkeypatch
+):
+    upstream, up_port = await _echo_server()
+    fake_dns[_PICTURE_HOST] = ["127.0.0.1"]
+    monkeypatch.setattr(netguard, "ip_is_public", lambda _ip: True)
+    monkeypatch.setattr(web_egress, "_TLS_PORT", up_port)
+    try:
+        assert (await _ask(egress, f"{_PICTURE_HOST}:80")).startswith(b"HTTP/1.1 403")
+        head = await _ask(egress, f"{_PICTURE_HOST}:{up_port}")
+        assert head.startswith(b"HTTP/1.1 200"), head
+    finally:
+        upstream.close()
+        await upstream.wait_closed()
 
 
 async def test_proxy_refuses_a_host_off_the_list(egress, fake_dns, caplog):
