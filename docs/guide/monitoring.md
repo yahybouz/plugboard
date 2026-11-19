@@ -351,6 +351,17 @@ They are only sent for real changes: never for the first model list of a provide
 
 ## Logs
 
-Logs are JSON lines on standard output, one object per line with `ts`, `level`, `logger`, `request_id` and `msg`. The `request_id` matches the `X-Request-ID` response header. Set `PLUGBOARD_LOG_FILE` to also write a rotating file (`PLUGBOARD_LOG_MAX_BYTES`, default 20 MB, `PLUGBOARD_LOG_BACKUPS`, default 5).
+Logs are JSON lines on standard output, one object per line with `ts`, `level`, `logger`, `request_id` and `msg`. The `request_id` matches the `X-Request-ID` response header. When the request carried a valid `traceparent` ([trace context](#trace-context)), the lines of that request also have `trace_id` and `span_id`; otherwise both are left out. Set `PLUGBOARD_LOG_FILE` to also write a rotating file (`PLUGBOARD_LOG_MAX_BYTES`, default 20 MB, `PLUGBOARD_LOG_BACKUPS`, default 5).
 
 Request and response bodies are not written to the logs, but provider and CLI error messages can be. Useful patterns: `auth.auto_login refused reason=...`, `Circuit OPENED for`, `Provider ... failed, trying next`, `PricingScheduler`, `Watchdog:`.
+
+### Trace context
+
+A client that traces its own work (an agent run, for example) can send the W3C [`traceparent`](https://www.w3.org/TR/trace-context/) header, and `tracestate`, with any request. Plugboard reads them; it needs no OpenTelemetry library and no setting.
+
+- **Accepted**: `00-<trace-id>-<parent-id>-<flags>`, lower-case hex, 32 characters for the trace id and 16 for the parent id, neither all zeros. A later version (not `ff`) is read by these four fields, as W3C asks. A header longer than 512 characters, or sent twice, is ignored. `tracestate` is kept only with a valid `traceparent`, as printable ASCII up to 512 characters, and is not stored.
+- **Invalid or missing**: the request is served as usual, never with a `4xx`. There is no trace id: Plugboard does not make one up. The header value is never written to the logs nor sent back.
+- **Logs**: `trace_id` and `span_id` on every line of the request. `span_id` is the caller's span (the W3C parent-id), not a span of Plugboard.
+- **Usage**: each usage entry of a chat call has two more columns in `data/usage.db`, `request_id` (the `X-Request-ID` of the call) and `trace_id` (empty without a valid `traceparent`). The cost of one call, or of a whole trace, can then be read from Plugboard's own records: `sqlite3 data/usage.db "SELECT SUM(cost_usd) FROM usage_entries WHERE trace_id = '<trace-id>'"`. An older `usage.db` gains both columns, empty, when it is opened. They appear in the admin usage routes and exports (`/admin/usage/<month>`, `/export`); `/usage/me` leaves them out, so the client API is unchanged. Only chat calls fill them: the other entries (embeddings, decisions, the gateway's own pricing calls, lapsed budget holds) leave both empty.
+
+Not done yet: Plugboard does not pass `traceparent` on to providers, does not return one in its answers, and records no spans of its own (time waiting for a slot, retries, route fallbacks).

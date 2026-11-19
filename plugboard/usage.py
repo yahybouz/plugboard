@@ -46,7 +46,9 @@ CREATE TABLE IF NOT EXISTS usage_entries (
     pricing_month   TEXT NOT NULL,
     cost_usd        REAL NOT NULL,
     price_key       TEXT NOT NULL DEFAULT '',
-    price_source    TEXT NOT NULL DEFAULT ''
+    price_source    TEXT NOT NULL DEFAULT '',
+    request_id      TEXT,
+    trace_id        TEXT
 );
 """
 
@@ -54,12 +56,19 @@ CREATE TABLE IF NOT EXISTS usage_entries (
 _ADDED_COLUMNS = {
     "price_key": "TEXT NOT NULL DEFAULT ''",
     "price_source": "TEXT NOT NULL DEFAULT ''",
+    # PLU-106: the call's X-Request-ID and the W3C trace id its caller sent,
+    # NULL when unknown (entries written before, lapsed holds, no traceparent).
+    "request_id": "TEXT",
+    "trace_id": "TEXT",
 }
 
 _CREATE_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_usage_month ON usage_entries(month);",
     "CREATE INDEX IF NOT EXISTS idx_usage_client ON usage_entries(month, client_id);",
     "CREATE INDEX IF NOT EXISTS idx_usage_key ON usage_entries(month, key_id);",
+    # Partial: most entries have no trace id, and `trace_id = ?` uses it.
+    "CREATE INDEX IF NOT EXISTS idx_usage_trace ON usage_entries(trace_id) "
+    "WHERE trace_id IS NOT NULL;",
 ]
 
 # BUG-52: the estimated cost of the calls a budgeted key has in progress.
@@ -149,11 +158,14 @@ def append_usage(
     key_id: str = "",
     price_key: str = "",
     price_source: str = "",
+    request_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Append a usage entry. Returns the written entry.
 
     ``provider_id`` is the provider that served the call; ``price_key`` and
-    ``price_source`` say which grid entry priced it.
+    ``price_source`` say which grid entry priced it. ``request_id`` and
+    ``trace_id`` tie the entry to its request (PLU-106); None stores NULL.
     """
     entry = _entry(
         client_id,
@@ -166,6 +178,8 @@ def append_usage(
         key_id,
         price_key,
         price_source,
+        request_id,
+        trace_id,
     )
     conn = _get_conn()
     try:
@@ -187,6 +201,8 @@ def _entry(
     key_id: str = "",
     price_key: str = "",
     price_source: str = "",
+    request_id: Optional[str] = None,
+    trace_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     month = _billing.current_pricing_month()
     return {
@@ -204,6 +220,8 @@ def _entry(
         "cost_usd": cost_usd,
         "price_key": price_key,
         "price_source": price_source,
+        "request_id": request_id,
+        "trace_id": trace_id,
     }
 
 
@@ -212,10 +230,10 @@ def _insert(conn: sqlite3.Connection, entry: Dict[str, Any]) -> None:
         """INSERT INTO usage_entries
                (id, ts, month, client_id, key_id, model, provider_id,
                 prompt_tokens, completion_tokens, total_tokens, pricing_month, cost_usd,
-                price_key, price_source)
+                price_key, price_source, request_id, trace_id)
                VALUES (:id, :ts, :month, :client_id, :key_id, :model, :provider_id,
                        :prompt_tokens, :completion_tokens, :total_tokens, :pricing_month, :cost_usd,
-                       :price_key, :price_source)""",
+                       :price_key, :price_source, :request_id, :trace_id)""",
         entry,
     )
 
