@@ -231,9 +231,11 @@ def test_the_cage_passes_every_check(world, real_bwrap):
     for where in ("HOME", "~/.gemini", "/tmp", "/", "/usr/lib"):
         assert report["writes_denied"][where] != "written", report["writes_denied"]
     assert report["tmpdir_write"] == "pass"
-    # No unix socket file in the cage; the network is the container's.
+    # No unix socket file in the cage, and no network of its own: the
+    # container's is out of reach (BUG-156).
     assert report["socket_files"] == []
-    assert report["network"]["shared_with_container"] is True
+    assert report["network"]["shared_with_container"] is False
+    assert report["network"]["gateway_port_from_cage"] != "connected"
     assert report["env"]["secret_names"] == []
     assert report["env"]["AGY_CLI_DISABLE_AUTO_UPDATE"] == "1"
     assert report["token"] == "readable, rewritable, unchanged"
@@ -706,29 +708,47 @@ def _listener():
         server.close()
 
 
-def test_the_gateway_port_is_reported_reachable_not_failed(world, real_bwrap):
+def test_the_gateway_port_does_not_answer_from_the_cage(world, real_bwrap):
+    # Something listens on the gateway's port outside: not reached (BUG-156).
     with _listener() as port:
         proc = _run(world, port=port)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     report = _report(proc)
     assert report["result"] == "pass"
-    network = report["network"]
-    assert network["shared_with_container"] is True
-    assert network["gateway_port"] == port
-    assert network["gateway_port_from_cage"] == "connected"
-    assert port in network["loopback_listeners"]
-    assert isinstance(network["abstract_unix_sockets"], list)
+    assert report["network"] == {
+        "shared_with_container": False,
+        "gateway_port": port,
+        "gateway_port_from_cage": "refused",
+    }
+    # The egress socket sits in TMPDIR, which the check skips.
     assert report["socket_files"] == []
     _no_secret_in(proc)
 
 
-def test_a_closed_gateway_port_is_reported(world, real_bwrap):
+_SHARED_NETWORK = """real = agy_cage.cage_argv
+
+
+def shared(binary, args, **kw):
+    # The cage of 4.15 and before (BUG-109): the container's network.
+    return [a for a in real(binary, args, **kw) if a != "--unshare-net"]
+
+
+agy_cage.cage_argv = shared
+"""
+
+
+def test_a_cage_sharing_the_network_fails(world, real_bwrap):
     with _listener() as port:
-        pass  # closed again: nothing listens there now
-    proc = _run(world, port=port)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+        proc = _run(world, port=port, patch=_SHARED_NETWORK)
+    assert proc.returncode == 1, proc.stdout + proc.stderr
     report = _report(proc)
-    assert report["network"]["gateway_port_from_cage"] == "refused"
+    assert report["result"] == "fail"
+    assert report["network"]["shared_with_container"] is True
+    assert report["network"]["gateway_port_from_cage"] == "connected"
+    assert report["failures"] == [
+        "the cage shares the container's network",
+        "the gateway's port answers from the cage",
+    ]
 
 
 _RUN_BOUND = """real = agy_cage.cage_argv

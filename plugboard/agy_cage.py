@@ -9,17 +9,30 @@ This module builds the gateway's only command line that launches agy
 
 - ``bwrap`` (the image's at :data:`GATEWAY_BWRAP`, off PATH so that codex
   keeps its own, INC-4; else the one on PATH) with its own user, pid, ipc,
-  uts (and, where possible, cgroup)
+  network, uts (and, where possible, cgroup)
   namespaces, ended with the gateway (``--die-with-parent``). The pid
   namespace keeps ``/proc/<gateway pid>/environ`` (the server's keys) out of
   sight. agy is its pid 1 (``--as-pid-1``): bwrap's own init there would be
   left unreaped, a zombie of the gateway when it is its container's PID 1.
-  The network is shared: agy needs it (BUG-109: ``--unshare-net`` leaves
-  no internet, and bwrap has no unprivileged filter of the loopback; the
-  cage reaches what the container reaches, the gateway's port as any
-  client, but binds no unix socket file: no ``/run``, ``/var/run``,
-  ``/tmp``). No ``--new-session``: bwrap stays in
-  the group the gateway kills on timeout or cancellation.
+  No ``--new-session``: bwrap stays in the group the gateway kills on
+  timeout or cancellation.
+- No network but the cage's own loopback (``--unshare-net``, BUG-156,
+  decision D-85): the internet, the internal network, the cloud metadata
+  address, the host's loopback (the gateway's own port included) and the
+  abstract sockets of other sessions are out of reach. The one way out is
+  the unix socket :data:`EGRESS_SOCKET` the gateway creates in the request's
+  ``TMPDIR`` (one per call, removed with it) and serves with a CONNECT proxy
+  limited to the Google hosts agy needs (:mod:`plugboard.agy_egress`); it
+  is bound read-only over itself, so agy can neither remove nor replace it.
+  agy speaks HTTP(S) through a proxy, not through a unix socket: the
+  command the cage runs is a relay (:data:`_RELAY`, the gateway's own
+  Python, ``-I -S``, standard library only) that listens on
+  ``127.0.0.1:``:data:`RELAY_PORT` of the cage, forwards each connection to
+  the socket, and becomes agy (``execv``: agy stays pid 1, the relay goes on
+  in a child of it and dies with the cage). agy's ``HTTPS_PROXY`` and
+  ``HTTP_PROXY`` name the relay, ``ALL_PROXY`` and ``NO_PROXY`` are empty
+  (:func:`proxy_env`, set by the caller through execve). (BUG-109 had kept
+  the network because ``--unshare-net`` alone left agy no internet.)
 - An empty root holding, read-only, the system libraries (``/usr/lib``,
   ``/usr/lib64``, the ``/lib*`` links), the few ``/etc`` files the loader,
   name resolution and TLS need, the CA bundles (and the system CA paths
@@ -35,12 +48,14 @@ This module builds the gateway's only command line that launches agy
   which agy 1.4.4 cannot start without, and gemini's
   ``$HOME/.gemini/projects.json`` when it exists, never required (BUG-115,
   see :func:`_agy_config`).
-- The binary, by its real path, read-only, bound after the store; then the
-  whole root is remounted read-only (HOME, the binary's folder...).
+- The binary, by its real path, read-only, bound after the store, and the
+  relay's interpreter (the gateway's Python by its real path, its standard
+  library, ``libpython`` when shared; in the image, under ``/usr/local``);
+  then the whole root is remounted read-only (HOME, the binary's folder...).
 
-Not in the cage: ``/usr/bin``, ``/usr/local``, ``/app``, the rest of HOME
-(``~/.claude``, ``~/.codex``, the rest of ``~/.gemini``...), ``/tmp``,
-``/sys``.
+Not in the cage: ``/usr/bin`` and ``/usr/local`` but for that interpreter,
+``/app``, the rest of HOME (``~/.claude``, ``~/.codex``, the rest of
+``~/.gemini``...), ``/tmp``, ``/sys``, any unix socket file but the egress.
 
 ``/proc``: a Docker container masks paths of its ``/proc`` (``/proc/kcore``,
 ``/proc/keys``...) by mounting over them, and the kernel then refuses a new
@@ -58,11 +73,13 @@ command line nor ``--setenv``: a proxy URL can hold a password.
 
 No cage, no agy: there is no variable, option or fallback that launches agy
 without it. :class:`CageUnavailable` is raised before anything starts when
-bwrap is missing, the platform is not Linux, the store, ``TMPDIR``, agy's
+bwrap is missing, the platform is not Linux, the egress socket is missing
+or not a socket, the relay's interpreter is missing, the store, ``TMPDIR``, agy's
 config or ``projects.json`` path goes through a symbolic link, a read-only
 entry of the store is a link, of the wrong type or hard-linked, or agy was
 never run on the account (:class:`AgyNotSetUp`); :func:`setup_failure` recognises a bwrap that
-started but could not build the cage.
+started but could not build the cage, and a relay that stopped before agy
+(it then never runs).
 """
 
 from __future__ import annotations
@@ -75,9 +92,11 @@ import signal
 import stat
 import subprocess
 import sys
+import sysconfig
 import tempfile
-from typing import List, Mapping, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence
 
+from plugboard import web_egress
 from plugboard.agy_store import STORE_PARTS
 
 log = logging.getLogger(__name__)
@@ -157,6 +176,9 @@ _NAMESPACES = (
     "--unshare-user",
     "--unshare-ipc",
     "--unshare-pid",
+    # No network but the cage's own loopback (BUG-156): agy goes out through
+    # the relay and the egress socket only (see EGRESS_SOCKET).
+    "--unshare-net",
     # The command is the pid 1 of the cage, bwrap starts no init of its own:
     # the outer bwrap leaves without reaping that init, which then becomes a
     # zombie of whoever reaps orphans (the gateway, PID 1 of its container on
@@ -168,6 +190,90 @@ _NAMESPACES = (
     "--unshare-cgroup-try",
     "--die-with-parent",
 )
+# The egress of the cage (BUG-156, D-85): the unix socket the gateway serves
+# (plugboard.agy_egress), by this name in the request's TMPDIR, bound
+# read-only over itself; the relay listens on this port of the cage's own
+# loopback, and agy's HTTPS_PROXY names it (proxy_env).
+EGRESS_SOCKET = "egress.sock"
+RELAY_PORT = 3128
+# What the relay writes first on stderr when it stops before agy (agy then
+# never ran): a cage failure, like bwrap's own "bwrap: " (setup_failure).
+RELAY_ERROR_PREFIX = "plugboard-relay: "
+# The relay, run by the gateway's own Python (-I -S: no site, no variable,
+# no folder of the cage on its path), standard library only. It checks the
+# egress is a socket, listens on the cage's loopback, forks the relay
+# itself (its standard streams on /dev/null: agy's output stays agy's), then
+# becomes agy by execv: agy keeps the cage's pid 1 and the environment the
+# gateway passed to execve. The relay dies with the cage (agy, pid 1, gone:
+# the kernel ends the namespace). Argument order: port, socket, agy, args.
+_RELAY = r"""
+import os, signal, socket, stat, sys, threading
+def fail(why):
+    os.write(2, (%(prefix)r + why + "\n").encode())
+    os._exit(70)
+try:
+    port, path, argv = int(sys.argv[1]), sys.argv[2], sys.argv[3:]
+    if not stat.S_ISSOCK(os.lstat(path).st_mode):
+        fail("the egress is not a socket")
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", port))
+    listener.listen(64)
+except Exception as exc:
+    fail("cannot listen on the cage's loopback: " + type(exc).__name__)
+def pump(src, dst):
+    try:
+        while True:
+            data = src.recv(65536)
+            if not data:
+                break
+            dst.sendall(data)
+    except OSError:
+        pass
+    try:
+        dst.shutdown(socket.SHUT_WR)
+    except OSError:
+        pass
+def serve(conn):
+    up = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        up.connect(name)
+    except OSError:
+        conn.close()
+        up.close()
+        return
+    back = threading.Thread(target=pump, args=(up, conn), daemon=True)
+    back.start()
+    pump(conn, up)
+    back.join()
+    conn.close()
+    up.close()
+try:
+    pid = os.fork()
+except OSError as exc:
+    fail("cannot start: " + type(exc).__name__)
+if pid == 0:
+    try:
+        # By its name in its folder: a socket's path holds 107 bytes at most.
+        os.chdir(os.path.dirname(path))
+        name = os.path.basename(path)
+        null = os.open("/dev/null", os.O_RDWR)
+        for fd in (0, 1, 2):
+            os.dup2(null, fd)
+        while True:
+            conn, _ = listener.accept()
+            threading.Thread(target=serve, args=(conn,), daemon=True).start()
+    finally:
+        os._exit(0)
+listener.close()
+for sig in (signal.SIGPIPE, signal.SIGXFSZ):
+    signal.signal(sig, signal.SIG_DFL)
+try:
+    os.execv(argv[0], argv)
+except OSError as exc:
+    fail("cannot run agy: " + type(exc).__name__)
+""" % {"prefix": RELAY_ERROR_PREFIX}
+
 # bwrap's words when the kernel refuses a new procfs (a Docker container).
 _PROC_REFUSED = "Can't mount proc"
 _PROC_CHECK_TIMEOUT_S = 5.0
@@ -213,6 +319,51 @@ def _bwrap() -> str:
         raise CageUnavailable(f"bwrap not found on PATH nor at {GATEWAY_BWRAP}")
     _bwrap_path = os.path.realpath(found)
     return _bwrap_path
+
+
+def proxy_env() -> Dict[str, str]:
+    """agy's proxy variables: every connection to the cage's relay, never an
+    inherited proxy (the caller passes them through execve)."""
+    return web_egress.proxy_env(RELAY_PORT)
+
+
+def _egress_socket(tmpdir: str) -> str:
+    """The egress socket the gateway made in ``tmpdir``, else
+    :class:`CageUnavailable` (no egress, no agy)."""
+    path = os.path.join(tmpdir, EGRESS_SOCKET)
+    try:
+        mode = os.lstat(path).st_mode
+    except OSError:
+        raise CageUnavailable("agy egress socket is missing") from None
+    if not stat.S_ISSOCK(mode):
+        raise CageUnavailable("agy egress socket is not a socket")
+    return path
+
+
+def _relay_python() -> List[str]:
+    """The gateway's Python, by its real path, then what it needs to start
+    with ``-I -S`` (its standard library, ``lib-dynload``, ``libpython``
+    when shared), all shown read-only to the relay. Missing:
+    :class:`CageUnavailable`."""
+    executable = os.path.realpath(sys.executable) if sys.executable else ""
+    if not executable or not os.path.isfile(executable):
+        raise CageUnavailable("the relay's Python interpreter is missing")
+    found = [executable, os.path.realpath(os.path.dirname(os.__file__))]
+    for entry in sys.path:
+        if entry and os.path.basename(entry) == "lib-dynload" and os.path.isdir(entry):
+            found.append(os.path.realpath(entry))
+    if sysconfig.get_config_var("Py_ENABLE_SHARED"):
+        library = os.path.join(
+            sysconfig.get_config_var("LIBDIR") or "",
+            sysconfig.get_config_var("INSTSONAME") or "",
+        )
+        if os.path.isfile(library):
+            found.append(os.path.realpath(library))
+    paths: List[str] = []
+    for path in found:
+        if path not in paths and not any(path.startswith(p + os.sep) for p in paths):
+            paths.append(path)
+    return paths
 
 
 def _plain_path(path: str) -> bool:
@@ -460,6 +611,8 @@ def cage_argv(
     real_binary = os.path.realpath(binary)
     if not os.path.isfile(real_binary):
         raise CageUnavailable("agy binary not found")
+    egress = _egress_socket(tmpdir)
+    python = _relay_python()
 
     argv = [bwrap, *_NAMESPACES, *_system_args(env)]
     for path in _extra_ro_for_tests:
@@ -486,15 +639,32 @@ def cage_argv(
         "--bind",
         tmpdir,
         tmpdir,
+        # The egress socket, over itself in the writable TMPDIR: agy can
+        # neither remove nor replace a mount point (EBUSY).
+        "--ro-bind",
+        egress,
+        egress,
         # After the store: read-only even if the binary sits inside it.
         "--ro-bind",
         real_binary,
         real_binary,
+    ]
+    # The relay's interpreter and its standard library.
+    for path in python:
+        argv += ["--ro-bind", path, path]
+    argv += [
         "--remount-ro",
         "/",
         "--chdir",
         tmpdir,
         "--",
+        python[0],
+        "-I",
+        "-S",
+        "-c",
+        _RELAY,
+        str(RELAY_PORT),
+        egress,
         real_binary,
         *args,
     ]
@@ -504,15 +674,16 @@ def cage_argv(
 def setup_failure(
     returncode: Optional[int], stdout: Optional[bytes], stderr: Optional[bytes]
 ) -> Optional[str]:
-    """bwrap's first error line when it started but could not build the cage
-    (agy then never ran), else None.
+    """bwrap's or the relay's first error line when the cage could not be
+    built or its relay could not start (agy then never ran), else None.
 
     That is a non-zero exit, no output at all, and stderr starting with
-    ``bwrap: `` (bwrap's own prefix; agy's errors come on stdout as JSON).
+    ``bwrap: `` (bwrap's own prefix) or :data:`RELAY_ERROR_PREFIX` (agy's
+    errors come on stdout as JSON).
     """
     if returncode in (0, None) or (stdout or b"").strip():
         return None
     text = (stderr or b"").decode("utf-8", "replace")
-    if not text.startswith("bwrap: "):
+    if not text.startswith(("bwrap: ", RELAY_ERROR_PREFIX)):
         return None
     return text.splitlines()[0][:300]

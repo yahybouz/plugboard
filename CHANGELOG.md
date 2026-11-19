@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **agy's cage has no network but its egress** (BUG-156, D-85): the cage now runs with `--unshare-net`. agy no longer reaches the internet directly, the internal network, the cloud metadata address, nor the gateway's own port on the loopback (where it could exhaust the rate limit and fail the health check). Its only way out is a unix socket per call in its private `TMPDIR`, served by a CONNECT proxy limited to port `443`, public addresses and five Google hosts found in the agy binary; any other host gets `403`, logged with the host only. A relay inside the cage (the gateway's Python, standard library only) gives agy the HTTP proxy it needs; without the socket or the relay, agy is not run (`503`). `verify-agy-sandbox.py` now fails a cage that shares the container's network ([agy's cage](docs/guide/providers-and-subscriptions.md#agys-cage)).
+
 ### Fixed
 
 - **A web request is billed on what it really used** (BUG-159): a web run is now billed on the tokens claude reports for it, every model counted (the page-summary helper included) and cache writes and reads as prompt tokens at the input price, at the price of the route that served the model asked, instead of an estimate of the question and the answer. A run stopped by its turns is billed too, on its own entry, and counts against the key's budget whatever the request's outcome (`502 web_budget_exhausted`, unchanged; another route's error; or another route's answer). Without a usable report (no `result` event, a counter that is not an integer from 0 to 10^12), the estimate as before. Requests without the web are unchanged ([what a web request costs](docs/guide/web-access.md#what-a-web-request-costs)).

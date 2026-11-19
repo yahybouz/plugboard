@@ -29,6 +29,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -176,9 +177,21 @@ def shell_in_cage(monkeypatch):
 # ── Command line ────────────────────────────────────────────────────────────
 
 
+def _egress(tmpdir: Path) -> str:
+    """The egress socket the gateway makes in the TMPDIR (BUG-156): a socket
+    file left by a bound, then closed, unix socket."""
+    path = tmpdir / agy_cage.EGRESS_SOCKET
+    if not path.exists():
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.bind(str(path))
+        sock.close()
+    return str(path)
+
+
 def _argv(setup, binary: str = "/opt/agy/bin/agy", **kw):
     tmpdir = setup["spawn"] / "agy-tmp-x"
     tmpdir.mkdir(mode=0o700, exist_ok=True)
+    _egress(tmpdir)
     env = {"HOME": str(setup["home"]), "TMPDIR": str(tmpdir), **kw.pop("env", {})}
     return (
         agy_cage.cage_argv(
@@ -186,6 +199,21 @@ def _argv(setup, binary: str = "/opt/agy/bin/agy", **kw):
         ),
         str(tmpdir),
     )
+
+
+def _agy_command(argv):
+    """agy's command line, after the relay that becomes agy (BUG-156): the
+    gateway's Python, ``-I -S -c <relay>``, the relay's port and socket."""
+    sep = argv.index("--")
+    assert argv[sep + 1 : sep + 5] == [
+        os.path.realpath(sys.executable),
+        "-I",
+        "-S",
+        "-c",
+    ]
+    assert argv[sep + 6] == str(agy_cage.RELAY_PORT)
+    assert os.path.basename(argv[sep + 7]) == agy_cage.EGRESS_SOCKET
+    return argv[sep + 8 :]
 
 
 def _pairs(argv, option):
@@ -216,11 +244,12 @@ def test_cage_argv_isolates_agy(setup, fake_binary):
         "--unshare-uts",
         "--unshare-cgroup-try",
         "--die-with-parent",
+        # No network but the cage's loopback and the egress socket (BUG-156).
+        "--unshare-net",
     ):
         assert flag in argv, flag
-    # The network stays (agy needs it); no new session: _kill_group reaches
-    # the whole group through bwrap's pid.
-    for absent in ("--unshare-net", "--unshare-all", "--new-session", "--setenv"):
+    # No new session: _kill_group reaches the whole group through bwrap's pid.
+    for absent in ("--unshare-all", "--new-session", "--setenv"):
         assert absent not in argv, absent
     assert ("--proc", "/proc") == tuple(
         argv[argv.index("--proc") : argv.index("--proc") + 2]
@@ -238,7 +267,7 @@ def test_cage_argv_isolates_agy(setup, fake_binary):
     assert i_store < i_bin < i_remount and argv[i_remount + 1] == "/"
     assert argv[argv.index("--chdir") + 1] == tmpdir
     sep = argv.index("--")
-    assert argv[sep + 1 :] == [binary, "--output-format", "json"]
+    assert _agy_command(argv) == [binary, "--output-format", "json"]
     mounted = {argv[i + 2] for i, a in enumerate(argv[:sep]) if "bind" in a}
     for hidden in ("/usr/bin", "/usr/local", "/app", "/home", "/tmp", "/sys", "/"):
         assert hidden not in mounted, hidden
@@ -269,8 +298,7 @@ def test_cage_argv_binds_the_real_binary(setup, fake_binary, tmp_path):
     link = tmp_path / "agy-link"
     link.symlink_to(fake_binary)
     argv, _ = _argv(setup, str(link))
-    sep = argv.index("--")
-    assert argv[sep + 1] == str(fake_binary)
+    assert _agy_command(argv)[0] == str(fake_binary)
     assert str(link) not in argv
 
 

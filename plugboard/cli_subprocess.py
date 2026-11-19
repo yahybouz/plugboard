@@ -43,9 +43,9 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, AsyncIterator, Callable, Dict, Iterator, List, Optional, Tuple
 
-from plugboard import agy_cage, agy_store, envcompat, web_access, web_egress
+from plugboard import agy_cage, agy_egress, agy_store, envcompat, web_access, web_egress
 from plugboard.circuit_breaker import (
     is_model_unsupported_by_subscription,
     is_request_too_long,
@@ -741,20 +741,39 @@ def agy_sandbox_error(cause: str, model: str = "") -> CliSubprocessError:
     )
 
 
-@contextlib.contextmanager
-def agy_caged(binary: str, args: List[str], spawn_cwd: str) -> Iterator[tuple]:
+@contextlib.asynccontextmanager
+async def agy_caged(
+    binary: str, args: List[str], spawn_cwd: str
+) -> AsyncIterator[tuple]:
     """Yield ``(argv, env)`` running agy ``args`` in its cage, with a private
-    ``TMPDIR`` removed afterwards (keep the context open until the child is
-    dead and reaped).
+    ``TMPDIR`` and the cage's egress removed afterwards (keep the context
+    open until the child is dead and reaped).
+
+    The cage has no network (BUG-156): its only way out is the unix socket
+    served here, in the TMPDIR, by agy's proxy (agy_egress), which agy
+    reaches through the relay its proxy variables name.
 
     Raises :class:`agy_cage.CageUnavailable` before anything is launched when
-    the cage cannot be built.
+    the cage or its egress cannot be built.
     """
     env = build_child_env("agy")
+    # Every connection through the cage's relay, never an inherited proxy.
+    env.update(agy_cage.proxy_env())
     # Resolved: the cage binds the TMPDIR by its real path.
     with agy_private_tmp(os.path.realpath(spawn_cwd)) as tmpdir:
         env["TMPDIR"] = tmpdir
-        yield agy_cage.cage_argv(binary, args, env=env, tmpdir=tmpdir), env
+        try:
+            egress = await agy_egress.start(
+                os.path.join(tmpdir, agy_cage.EGRESS_SOCKET)
+            )
+        except OSError as exc:
+            raise agy_cage.CageUnavailable(
+                f"agy egress socket cannot be created ({type(exc).__name__})"
+            ) from None
+        try:
+            yield agy_cage.cage_argv(binary, args, env=env, tmpdir=tmpdir), env
+        finally:
+            await egress.close()
 
 
 def gemini_isolation_env(home: str) -> Dict[str, str]:
@@ -847,7 +866,7 @@ async def list_agy_models(timeout_s: float = 30.0) -> List[str]:
         return []
     spawn_cwd = _clean_spawn_cwd()
     try:
-        with agy_caged(binary, ["models"], spawn_cwd) as (argv, env):
+        async with agy_caged(binary, ["models"], spawn_cwd) as (argv, env):
             proc = await asyncio.create_subprocess_exec(
                 *argv,
                 stdin=asyncio.subprocess.DEVNULL,
@@ -1018,13 +1037,13 @@ async def probe_cli_version(kind: str, timeout_s: float = 5.0) -> Dict[str, Any]
         return {"ok": False, "error": f"{backend.command} not on PATH"}
     spawn_cwd = _clean_spawn_cwd()
     try:
-        with contextlib.ExitStack() as cleanup:
+        async with contextlib.AsyncExitStack() as cleanup:
             argv = [backend.command, "--version"]
             env = build_child_env(kind)
             if kind == "agy":
                 # Like every agy launch: in its cage, or not at all (BUG-86).
                 try:
-                    argv, env = cleanup.enter_context(
+                    argv, env = await cleanup.enter_async_context(
                         agy_caged(binary, ["--version"], spawn_cwd)
                     )
                 except agy_cage.CageUnavailable as exc:
@@ -2302,7 +2321,7 @@ async def complete(
         # addresses only); the page-summary helper is never Haiku.
         env.update(web_access.child_env(await web_egress.ensure_started()))
 
-    with contextlib.ExitStack() as cleanup:
+    async with contextlib.AsyncExitStack() as cleanup:
         if kind == "gemini":
             # Fresh private home: the operator's gemini settings, memory and
             # policies never apply to a tenant prompt (SEC-2026-10).
@@ -2318,7 +2337,7 @@ async def complete(
             # the server's nor /tmp (see agy_private_tmp()); like the gemini
             # home, removed once the child is dead and reaped.
             try:
-                argv, env = cleanup.enter_context(
+                argv, env = await cleanup.enter_async_context(
                     agy_caged(argv[0], argv[1:], spawn_cwd)
                 )
             except agy_cage.CageUnavailable as exc:

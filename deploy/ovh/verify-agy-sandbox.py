@@ -68,15 +68,16 @@ after its install (``store_unpacked_write``). Each must be ``written``, or
 ``absent`` when agy never made the folder; ``EROFS`` there fails the check:
 agy would fail.
 
-The cage shares the container's network (agy needs the internet, BUG-109).
-The report says what it reaches, as information only (``network``): whether
-a TCP connection to the gateway's port (``PORT``, default 8765) from inside
-the cage succeeds (closed at once, nothing sent), and, read outside the cage
-in the same network namespace, the TCP ports listening on the loopback or
-every address and the names of the abstract unix sockets. A unix socket
-file visible in the cage, outside agy's store and its ``TMPDIR``
-(``socket_files``), fails the check: the cage binds no ``/run``,
-``/var/run`` nor ``/tmp``.
+The cage has no network of its own (``--unshare-net``, BUG-156): its only
+way out is the egress socket in its ``TMPDIR``, served by the gateway's
+proxy limited to agy's Google hosts (``plugboard.agy_egress``; the probe
+never uses it). The report (``network``) says whether the cage was built
+without a network of its own (``shared_with_container``) and whether a TCP
+connection to the gateway's port (``PORT``, default 8765) from inside the
+cage succeeds (closed at once, nothing sent): either fails the check. A
+unix socket file visible in the cage, outside agy's store and its
+``TMPDIR`` (``socket_files``), fails the check too: the cage binds no
+``/run``, ``/var/run`` nor ``/tmp``.
 
 ``--app-root`` changes where the application's folders are looked for
 (default ``/app``); it exists for the test suite, which runs on a host
@@ -96,6 +97,7 @@ PATH), 2 when the cage cannot start.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
 import hashlib
 import json
@@ -284,10 +286,10 @@ out["store_unpacked_write"] = {
     for name in p["store_unpacked"]
 }
 
-# The network is the container's (BUG-109): does the gateway's port answer
-# from inside the cage? A TCP connection, closed at once, nothing sent.
-# Information only. No unix socket file may be visible (outside agy's own
-# store and TMPDIR): the cage binds no /run, /var/run nor /tmp.
+# The cage has no network of its own (BUG-156): the gateway's port must not
+# answer from inside it. A TCP connection, closed at once, nothing sent. No
+# unix socket file may be visible (outside agy's own store and TMPDIR, which
+# holds the egress socket): the cage binds no /run, /var/run nor /tmp.
 import socket
 import stat
 
@@ -432,6 +434,25 @@ def _cage_running_this_interpreter(extra: List[str]):
         agy_cage.cage_argv = real
 
 
+async def _probe_in_cage(binary: str, params: Dict, spawn_cwd: str) -> tuple:
+    """``(argv, TMPDIR, result)`` of the probe run as agy is, by the
+    gateway's own ``agy_caged``: its egress is served on this event loop
+    while the probe runs (in a thread)."""
+    probe = ["-I", "-S", "-c", PROBE, json.dumps(params)]
+    async with cs.agy_caged(binary, probe, spawn_cwd) as (argv, env):
+        result = await asyncio.to_thread(
+            subprocess.run,
+            argv,
+            env=env,
+            cwd=spawn_cwd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        return argv, env["TMPDIR"], result
+
+
 def _token_fingerprint(path: str) -> Optional[tuple]:
     """In memory only: digest, size and mtime, never the content itself."""
     try:
@@ -449,53 +470,6 @@ def _gateway_port() -> int:
         return int(os.environ.get("PORT") or 8765)
     except ValueError:
         return 8765
-
-
-# Addresses a listener reaches from the loopback: 127.0.0.1, ::1, any.
-_LOOPBACK_HEX = {
-    "0100007F",
-    "00000000",
-    "00000000000000000000000001000000",
-    "00000000000000000000000000000000",
-}
-
-
-def _loopback_listeners() -> List[int]:
-    """TCP ports listening on the loopback (or every address) in this
-    network namespace, which the cage shares: from ``/proc/net/tcp`` and
-    ``tcp6`` of this process (outside the cage)."""
-    ports = set()
-    for name in ("tcp", "tcp6"):
-        try:
-            with open(f"/proc/net/{name}", encoding="ascii") as handle:
-                lines = handle.read().splitlines()[1:]
-        except OSError:
-            continue
-        for line in lines:
-            fields = line.split()
-            if len(fields) < 4 or fields[3] != "0A":  # LISTEN
-                continue
-            address, _, port = fields[1].partition(":")
-            if address.upper() in _LOOPBACK_HEX:
-                ports.add(int(port, 16))
-    return sorted(ports)
-
-
-def _abstract_unix_sockets() -> List[str]:
-    """Names of the abstract unix sockets of this network namespace (shared
-    with the cage, which binds no socket file but can reach these), from
-    ``/proc/net/unix`` of this process."""
-    names = set()
-    try:
-        with open("/proc/net/unix", encoding="utf-8", errors="replace") as handle:
-            lines = handle.read().splitlines()[1:]
-    except OSError:
-        return []
-    for line in lines:
-        fields = line.split(None, 7)
-        if len(fields) == 8 and fields[7].startswith("@"):
-            names.add(fields[7][:120])
-    return sorted(names)
 
 
 def _emit(report: Dict, code: int) -> None:
@@ -562,21 +536,11 @@ def main() -> None:
         with open(canary, "x", encoding="utf-8") as handle:
             handle.write("outside-canary")
         with _cage_running_this_interpreter(extra):
-            with cs.agy_caged(
-                binary, ["-I", "-S", "-c", PROBE, json.dumps(params)], spawn_cwd
-            ) as (argv, env):
-                # The bwrap agy_cage resolved (its fixed path in the image).
-                report["bwrap"] = argv[0]
-                expected_tmpdir = env["TMPDIR"]
-                result = subprocess.run(
-                    argv,
-                    env=env,
-                    cwd=spawn_cwd,
-                    stdin=subprocess.DEVNULL,
-                    capture_output=True,
-                    timeout=30,
-                    check=False,
-                )
+            argv, expected_tmpdir, result = asyncio.run(
+                _probe_in_cage(binary, params, spawn_cwd)
+            )
+            # The bwrap agy_cage resolved (its fixed path in the image).
+            report["bwrap"] = argv[0]
     except agy_cage.AgyNotSetUp as exc:
         # agy never run on this account: every agy call answers 503.
         report["agy_setup"] = "missing"
@@ -703,16 +667,17 @@ def main() -> None:
     for name, state in seen["store_unpacked_write"].items():
         if state not in ("written", "absent"):
             failures.append(f"agy cannot write its {name}/ in the cage ({state})")
-    # The network (BUG-109): information, not a failure. The cage shares the
-    # container's network (agy needs the internet): it reaches the gateway's
-    # port and whatever listens on the loopback or in abstract unix sockets.
+    # The network (BUG-156): the cage has none of its own, and the gateway's
+    # port does not answer from it.
     report["network"] = {
         "shared_with_container": "--unshare-net" not in argv,
         "gateway_port": params["gateway_port"],
         "gateway_port_from_cage": seen["gateway_port_from_cage"],
-        "loopback_listeners": _loopback_listeners(),
-        "abstract_unix_sockets": _abstract_unix_sockets(),
     }
+    if report["network"]["shared_with_container"]:
+        failures.append("the cage shares the container's network")
+    if seen["gateway_port_from_cage"] == "connected":
+        failures.append("the gateway's port answers from the cage")
     # No unix socket file is visible in the cage (outside agy's store and
     # TMPDIR): no /run, /var/run nor /tmp of the container is bound.
     report["socket_files"] = seen["socket_files"]

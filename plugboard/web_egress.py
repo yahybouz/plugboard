@@ -21,7 +21,7 @@ import asyncio
 import ipaddress
 import logging
 import socket
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 from plugboard import netguard
 
@@ -114,7 +114,34 @@ async def _reply(writer: asyncio.StreamWriter, status: str) -> None:
 
 
 async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-    global refused_total, tunnels_total
+    global refused_total
+    outcome = await serve_connect(reader, writer, tunnel_opened=_count_tunnel)
+    if outcome is False:
+        refused_total += 1
+
+
+def _count_tunnel() -> None:
+    global tunnels_total
+    tunnels_total += 1
+
+
+async def serve_connect(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    *,
+    host_allowed: Optional[Callable[[str], bool]] = None,
+    label: str = "web egress",
+    tunnel_opened: Optional[Callable[[], None]] = None,
+) -> Optional[bool]:
+    """Answer one CONNECT request: tunnel it, or refuse it.
+
+    Port 443 only, public addresses only (resolved once, here), and, when
+    ``host_allowed`` is given, only a host it accepts (agy's cage,
+    BUG-156). Returns False when the destination was refused (403), True
+    once a tunnel ended, None for a malformed request or an upstream that
+    could not be reached. ``label`` starts every log line, which names the
+    host asked, never a path.
+    """
     try:
         head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), _HEAD_TIMEOUT_S)
     except (
@@ -123,29 +150,31 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
         asyncio.LimitOverrunError,
     ):
         writer.close()
-        return
+        return None
     if len(head) > _MAX_HEAD:
         await _reply(writer, "431 Request Header Fields Too Large")
-        return
+        return None
     first = head.split(b"\r\n", 1)[0].decode("latin-1", "replace")
     target = _parse_target(first)
     if target is None:
         await _reply(writer, "405 Method Not Allowed")
-        return
+        return None
     host, port = target
     if port != _TLS_PORT:
         # No plain HTTP inside a tunnel either: WebFetch speaks HTTPS only.
-        refused_total += 1
-        log.info("web egress refused: host=%s port=%d is not 443", host[:253], port)
+        log.info("%s refused: host=%s port=%d is not 443", label, host[:253], port)
         await _reply(writer, "403 Forbidden")
-        return
+        return False
+    if host_allowed is not None and not host_allowed(host):
+        log.info("%s refused: host=%s is not on its list", label, host[:253])
+        await _reply(writer, "403 Forbidden")
+        return False
     addrs = await _public_addresses(host, port)
     if not addrs:
-        refused_total += 1
-        # The audit trail of a web run: the host asked, never a path.
-        log.info("web egress refused: host=%s port=%d is not public", host[:253], port)
+        # The audit trail of a run: the host asked, never a path.
+        log.info("%s refused: host=%s port=%d is not public", label, host[:253], port)
         await _reply(writer, "403 Forbidden")
-        return
+        return False
     up_reader = up_writer = None
     for _fam, addr in addrs:
         try:
@@ -157,12 +186,14 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
             continue
     if up_writer is None:
         await _reply(writer, "502 Bad Gateway")
-        return
-    tunnels_total += 1
-    log.info("web egress tunnel: host=%s port=%d", host[:253], port)
+        return None
+    if tunnel_opened is not None:
+        tunnel_opened()
+    log.info("%s tunnel: host=%s port=%d", label, host[:253], port)
     writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
     await writer.drain()
     await asyncio.gather(_pipe(reader, up_writer), _pipe(up_reader, writer))
+    return True
 
 
 async def ensure_started() -> int:

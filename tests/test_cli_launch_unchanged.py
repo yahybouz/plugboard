@@ -19,7 +19,10 @@ as ``release/4.14.2`` (v4.14.2, 2b4c5ae) launches them: gemini's command
 line (its private home's admin policy), environment and working directory;
 agy's command after its cage's ``--``, its environment and working
 directory, and that it starts inside bwrap. The binds of agy's cage are
-pinned by tests/test_agy_cage.py.
+pinned by tests/test_agy_cage.py. Since BUG-156 agy's command comes after
+the cage's relay (which becomes agy), and its environment adds the proxy
+variables naming that relay (tests/test_agy_cage_net.py); the rest is as in
+4.14.2.
 
 No CLI is run: ``asyncio.create_subprocess_exec`` is replaced by a recorder.
 """
@@ -31,6 +34,7 @@ import os
 
 import pytest
 
+from plugboard import agy_cage
 from plugboard import cli_subprocess as cs
 from tests.test_ci_image_full import _full_stage, bwrap_files_in_image, image_path_dirs
 
@@ -296,6 +300,22 @@ ENV_4142 = {
 AGY_CAGE_FLAGS = ("--unshare-user", "--unshare-pid", "--as-pid-1", "--die-with-parent")
 
 
+def _agy_command(argv) -> list:
+    """agy's command line after the cage's ``--`` and the relay that becomes
+    agy (BUG-156): ``<python> -I -S -c <relay> <port> <socket>``."""
+    sep = argv.index("--")
+    assert argv[sep + 2 : sep + 5] == ["-I", "-S", "-c"]
+    return argv[sep + 8 :]
+
+
+def _agy_env_names(env: dict) -> set:
+    """agy's environment names, without the relay's proxy variables (each
+    checked to hold what the cage sets)."""
+    for name, value in agy_cage.proxy_env().items():
+        assert env.get(name) == value, name
+    return set(env) - set(agy_cage.proxy_env())
+
+
 @pytest.fixture
 def agy_home(server, tmp_path, monkeypatch):
     """agy set up for the server account (its store, ``~/.gemini/config`` and
@@ -316,7 +336,8 @@ def agy_home(server, tmp_path, monkeypatch):
 
 
 def _env_names(env: dict, kind: str, server) -> None:
-    assert set(env) == ENV_4142[kind]
+    names = _agy_env_names(env) if kind == "agy" else set(env)
+    assert names == ENV_4142[kind]
     assert not [
         name
         for name in env
@@ -353,9 +374,8 @@ async def test_agy_starts_in_its_cage_as_in_4142(server, agy_home, stream):
     assert argv[0] == os.path.realpath(server["bin"] / "bwrap")
     for flag in AGY_CAGE_FLAGS:
         assert flag in argv, flag
-    sep = argv.index("--")
     args = AGY_STREAM_4142 if stream else AGY_4142
-    assert argv[sep + 1 :] == [os.path.realpath(server["bin"] / "agy"), *args]
+    assert _agy_command(argv) == [os.path.realpath(server["bin"] / "agy"), *args]
     _env_names(env, "agy", server)
     assert (env["TERM"], env["AGY_CLI_DISABLE_AUTO_UPDATE"]) == ("dumb", "1")
     assert env["HOME"] == str(agy_home)
@@ -388,8 +408,7 @@ async def test_agy_version_probe_runs_in_its_cage_as_in_4142(server, agy_home):
     (call,) = server["calls"]
     argv = call["argv"]
     assert argv[0] == os.path.realpath(server["bin"] / "bwrap")
-    sep = argv.index("--")
-    assert argv[sep + 1 :] == [os.path.realpath(server["bin"] / "agy"), "--version"]
-    assert set(call["env"]) == ENV_4142["agy"]
+    assert _agy_command(argv) == [os.path.realpath(server["bin"] / "agy"), "--version"]
+    assert _agy_env_names(call["env"]) == ENV_4142["agy"]
     assert call["cwd"] == server["spawn"]
     assert call["start_new_session"] is True
