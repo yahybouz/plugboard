@@ -22,6 +22,7 @@
    "plugboard.admin_people_api",
    "plugboard.admin_sessions",
    "plugboard.agy_cage",
+   "plugboard.agy_egress",
    "plugboard.agy_store",
    "plugboard.alerts",
    "plugboard.api_contract",
