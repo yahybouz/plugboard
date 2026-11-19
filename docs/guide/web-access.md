@@ -168,11 +168,20 @@ internal network, the metadata address or any public address) finds no route
 4.15.1 the guard was a proxy on the gateway's loopback that held only for a
 client honouring `HTTPS_PROXY`.
 
-The cage is a network cage only: claude's files are the same as before (the
-whole root as it is, `/dev`, `/proc`, `HOME`, `~/.claude`, node, the launch
-directory), the same uid, the same command line and environment but the proxy
-variables. It is not a file sandbox: a web run has no shell nor file tool,
-only `WebSearch` and `WebFetch`. **No cage, no web run**: when bwrap is
+The cage is a network cage: claude's files are the same as before (the
+whole root as it is, `/dev`, `/proc`, `HOME`, `~/.claude`, node), the same
+uid, the same command line and environment but the proxy variables, with one
+exception: the CLIs' launch directory (claude's working directory, which
+holds the private folders of the calls in progress, `web-run-*`, `agy-tmp-*`,
+`agy-store-*`) is shown empty but for the run's own folder. A web run cannot
+reach the egress socket of another web run (and so pass its own connection
+cap) nor that of an agy call, nor read an agy call's store. When that
+directory holds what claude needs (an operator's `PLUGBOARD_SUBPROCESS_CWD`
+holding its `HOME`, `~/.claude`, its binary or the gateway's Python), it
+cannot be hidden and the web run is refused (`503
+provider_sandbox_unavailable`); the default launch directory, a private
+temporary folder, never holds them. It is not a file sandbox: a web run has
+no shell nor file tool, only `WebSearch` and `WebFetch`. **No cage, no web run**: when bwrap is
 missing (the image's `/usr/libexec/plugboard/bwrap`, else one on `PATH`), the
 run's socket cannot be made, or the cage or its relay cannot start, claude is
 not started and the request gets `503 provider_sandbox_unavailable`, as an

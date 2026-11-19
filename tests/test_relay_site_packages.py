@@ -88,17 +88,20 @@ def test_agy_cage_hides_the_interpreters_packages(setup, fake_agy, stdlib):
 
 
 def test_web_cage_hides_the_interpreters_packages(tmp_path, stdlib):
-    folder = tmp_path / "web-run"
-    folder.mkdir()
+    # The launch directory apart from the interpreter's folder: the cage
+    # hides it too (PLU-162), and refuses to hide the relay's Python.
+    spawn = tmp_path / "spawn"
+    folder = spawn / "web-run"
+    folder.mkdir(parents=True)
     listener = net_cage.bind_unix(str(folder / net_cage.EGRESS_SOCKET))
     try:
         argv = net_cage.web_cage_argv(
-            "/usr/bin/bwrap", ["claude"], env={}, cwd=str(tmp_path), folder=str(folder)
+            "/usr/bin/bwrap", ["claude"], env={}, cwd=str(spawn), folder=str(folder)
         )
     finally:
         listener.close()
     hidden = sorted([str(stdlib / "site-packages"), str(stdlib / "dist-packages")])
-    assert sorted(_tmpfs(argv)) == hidden
+    assert sorted(_tmpfs(argv)) == sorted([*hidden, str(spawn)])
     for path in hidden:
         at = argv.index(path)
         assert argv[at - 1] == "--tmpfs" and argv[at + 1 : at + 3] == [

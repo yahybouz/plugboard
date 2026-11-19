@@ -537,8 +537,13 @@ async def test_a_web_run_starts_as_in_4151_but_in_its_cage(
         hidden += ["--tmpfs", path, "--remount-ro", path]
     n = len(hidden)
     assert cage[9 : 9 + n] == hidden
-    assert cage[9 + n : 12 + n] == ["--ro-bind", egress, egress]
-    assert cage[12 + n :] == ["--chdir", server["spawn"]]
+    # The launch directory hidden but for the run's own folder (PLU-162).
+    folder = os.path.dirname(egress)
+    launch_dir = os.path.realpath(server["spawn"])
+    assert os.path.dirname(folder) == launch_dir
+    assert cage[9 + n : 14 + n] == ["--tmpfs", launch_dir, "--bind", folder, folder]
+    assert cage[14 + n : 17 + n] == ["--ro-bind", egress, egress]
+    assert cage[17 + n :] == ["--chdir", server["spawn"]]
     assert "--unshare-pid" not in cage
     # The relay, then claude exactly as 4.15.1 started it.
     assert argv[sep + 1 : sep + 5] == [
@@ -588,3 +593,145 @@ def test_the_web_cage_is_told_apart_from_claudes_own_errors():
     )
     # claude's own output means claude ran.
     assert net_cage.setup_failure(1, b'{"type":"result"}', line.encode()) is None
+
+
+# ── 5. The other calls' folders out of sight ────────────────────────────────
+
+# Stands for claude: tries the egress sockets of other calls (another web
+# run's, an agy call's) and the store of an agy call, all in the launch
+# directory beside its own run's folder; then its own egress, through
+# HTTPS_PROXY; reports HOME, ~/.claude and the working directory it has.
+_NEIGHBOURS = r"""
+import errno, json, os, socket, sys
+sys.stdin.read()
+here = os.getcwd()
+home = os.environ["HOME"]
+out = {"cwd": here, "home": home}
+out["claude_dir"] = sorted(os.listdir(os.path.join(home, ".claude")))
+with open(os.path.join(home, ".claude", "written-in-the-cage"), "w") as f:
+    f.write("kept")
+def unix(path):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        # By its name in its folder: a socket's path holds 107 bytes at most.
+        os.chdir(os.path.dirname(path))
+        s.connect(os.path.basename(path))
+        return "connected"
+    except OSError as exc:
+        return errno.errorcode.get(exc.errno, type(exc).__name__)
+    finally:
+        os.chdir(here)
+        s.close()
+out["others"] = {name: unix(path) for name, path in p["others"].items()}
+out["store"] = os.path.exists(p["store"])
+host, port = os.environ["HTTPS_PROXY"].split("//", 1)[1].rsplit(":", 1)
+s = socket.create_connection((host, int(port)), timeout=5)
+s.sendall(b"CONNECT 10.0.0.1:443 HTTP/1.1\r\n\r\n")
+out["own"] = s.recv(100).split(b"\r\n")[0].decode()
+s.close()
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                  "result": json.dumps(out)}))
+"""
+
+
+async def test_a_web_run_cannot_reach_the_egress_of_another_call(
+    web_setup, real_bwrap, launches
+):
+    """PLU-162: the web cage binds the whole root, so the egress sockets of
+    the other calls in the launch directory (another web run's, past its own
+    cap; an agy call's, onto Google's hosts) stayed in reach. The cage hides
+    the launch directory but for the run's own folder: HOME, ~/.claude and
+    the working directory are unchanged."""
+    spawn = web_setup["spawn"]
+    reached: list = []
+
+    def accepted(_reader, writer):
+        reached.append(1)
+        writer.close()
+
+    servers = []
+    others = {}
+    for name in ("web-run-other", "agy-tmp-other"):
+        folder = spawn / name
+        folder.mkdir(mode=0o700)
+        path = str(folder / net_cage.EGRESS_SOCKET)
+        servers.append(
+            await asyncio.start_unix_server(accepted, sock=net_cage.bind_unix(path))
+        )
+        others[name] = path
+    store = spawn / "agy-store-other"
+    store.mkdir(mode=0o700)
+    (store / "antigravity-oauth-token").write_text("other-call-token\n")
+    (web_setup["home"] / ".claude" / "settings.json").write_text("{}\n")
+    params = {"others": others, "store": str(store / "antigravity-oauth-token")}
+    _install_claude(web_setup["bin"], f"p = {params!r}" + _NEIGHBOURS)
+    try:
+        # Outside the cage, the sockets answer: the refusal inside is the
+        # cage's doing.
+        for path in others.values():
+            assert _connect_unix(path) == "connected"
+        await asyncio.sleep(0.05)
+        reached.clear()
+        response = await asyncio.wait_for(
+            cs.complete("claude", dict(_BODY), web=web_access.WebPolicy(max_uses=3)),
+            60,
+        )
+    finally:
+        for server in servers:
+            server.close()
+    seen = _answer(response)
+    assert seen["others"] == {name: "ENOENT" for name in others}, seen["others"]
+    assert reached == []
+    assert seen["store"] is False
+    # Its own egress still answers (the guard refuses an internal address).
+    assert seen["own"].startswith("HTTP/1.1 403"), seen["own"]
+    # HOME, ~/.claude and the working directory as before, ~/.claude writable.
+    (call,) = launches
+    assert seen["home"] == call["env"]["HOME"] == str(web_setup["home"])
+    assert seen["cwd"] == str(spawn)
+    assert seen["claude_dir"] == ["settings.json"]
+    assert (web_setup["home"] / ".claude" / "written-in-the-cage").read_text() == (
+        "kept"
+    )
+    # The other calls' folders are untouched on the host.
+    assert sorted(p.name for p in spawn.iterdir()) == [
+        "agy-store-other",
+        "agy-tmp-other",
+        "web-run-other",
+    ]
+
+
+def _connect_unix(path: str) -> str:
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    here = os.getcwd()
+    try:
+        os.chdir(os.path.dirname(path))
+        s.connect(os.path.basename(path))
+        return "connected"
+    except OSError as exc:
+        return type(exc).__name__
+    finally:
+        os.chdir(here)
+        s.close()
+
+
+async def test_a_launch_directory_holding_home_refuses_the_web_run(
+    web_setup, launches, monkeypatch
+):
+    """An operator's launch directory (``PLUGBOARD_SUBPROCESS_CWD``) holding
+    claude's HOME cannot be hidden without hiding ``~/.claude``: the web run
+    is refused, claude never started, rather than run with the other calls'
+    sockets in sight."""
+    ran = web_setup["tmp"] / "claude-ran"
+    _install_claude(
+        web_setup["bin"], f"open({str(ran)!r}, 'w').close()\nprint('{{}}')\n"
+    )
+    monkeypatch.setattr(agy_cage, "_bwrap", lambda: "/usr/bin/bwrap")
+    monkeypatch.setenv("PLUGBOARD_SUBPROCESS_CWD", str(web_setup["tmp"]))
+    with pytest.raises(cs.CliSubprocessError) as caught:
+        await cs.complete("claude", dict(_BODY), web=web_access.WebPolicy(3))
+    assert caught.value.sandbox_failed is True
+    assert "launch directory" in str(caught.value)
+    assert launches == []
+    assert not ran.exists()
+    assert not any(p.name.startswith("web-run-") for p in web_setup["tmp"].iterdir())

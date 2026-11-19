@@ -14,11 +14,15 @@ connection to the socket, and becomes the CLI (``execv``); the CLI's
 ``HTTPS_PROXY`` and ``HTTP_PROXY`` name the relay, ``ALL_PROXY`` and
 ``NO_PROXY`` are empty (:func:`proxy_env`).
 
-The cage of a claude web run (PLU-162) is a network cage only:
+The cage of a claude web run (PLU-162) is a network cage:
 ``bwrap --unshare-user --unshare-net --die-with-parent``, the whole root
 bound as it is (``--bind / /``, then the host's ``/dev`` with its devices:
-``/proc``, ``/tmp``, HOME, ``~/.claude``, node, the working directory are
-the gateway's, as before), the same uid. Only the network changes: a
+``/proc``, ``/tmp``, HOME, ``~/.claude``, node are the gateway's, as
+before), the same uid, but for the CLIs' launch directory (claude's working
+directory): an empty tmpfs holding the run's own folder only, so the
+folders of the other calls (``web-run-*``, ``agy-tmp-*``, ``agy-store-*``)
+and their egress sockets are out of reach; a launch directory holding what
+claude needs is refused (:func:`web_cage_argv`). On the network, a
 client that ignores ``HTTPS_PROXY`` (a direct connection to the gateway's
 port, the internal network, the cloud metadata address, or any public
 address) finds no route, and the egress of the run lets out port 443 of
@@ -318,6 +322,38 @@ WEB_NAMESPACES = ("--unshare-user", "--unshare-net", "--die-with-parent")
 _GIVEN_BACK = ("LC_CTYPE", "PWD")
 
 
+def _within(path: str, folder: str) -> bool:
+    """Whether ``path`` is ``folder`` or lies under it (both real paths)."""
+    return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
+
+
+def _hidden_launch_dir(
+    launch_dir: str, command: Sequence[str], env: Mapping[str, str], python: List[str]
+) -> str:
+    """``launch_dir`` by its real path, once checked that hiding it hides
+    nothing claude needs: its HOME, ``~/.claude`` (or ``CLAUDE_CONFIG_DIR``),
+    its binary and the relay's interpreter stay out of it, else
+    :class:`CageUnavailable` (an operator's ``PLUGBOARD_SUBPROCESS_CWD``
+    holding them: the run is refused rather than run with the other calls'
+    sockets in sight)."""
+    hidden = os.path.realpath(launch_dir)
+    needed = [os.path.realpath(command[0]), *python]
+    home = env.get("HOME")
+    if home:
+        needed += [
+            os.path.realpath(home),
+            os.path.realpath(os.path.join(home, ".claude")),
+        ]
+    if env.get("CLAUDE_CONFIG_DIR"):
+        needed.append(os.path.realpath(env["CLAUDE_CONFIG_DIR"]))
+    if hidden == os.sep or any(_within(path, hidden) for path in needed):
+        raise CageUnavailable(
+            "the CLIs' launch directory holds what claude needs (its HOME, "
+            "~/.claude, its binary or the relay's Python): it cannot be hidden"
+        )
+    return hidden
+
+
 def web_cage_argv(
     bwrap: str,
     command: Sequence[str],
@@ -332,14 +368,20 @@ def web_cage_argv(
     ``bwrap`` is the gateway's bwrap (``agy_cage._bwrap()``); ``env`` the
     CLI's environment, passed by the caller to execve (only its
     ``LC_CTYPE`` and ``PWD`` are read, for the relay to hand them back as
-    they are); ``cwd`` the
+    they are, and its ``HOME`` and ``CLAUDE_CONFIG_DIR``, checked out of the
+    launch directory); ``cwd`` the
     launch directory, kept; ``folder`` the run's own folder holding the
-    socket. Raises :class:`CageUnavailable` before anything is launched.
+    socket, in the launch directory. The launch directory is hidden under an
+    empty tmpfs but for ``folder`` (PLU-162): the folders of the other calls
+    (``web-run-*``, ``agy-tmp-*``, ``agy-store-*``) and their egress sockets
+    are out of reach. Raises :class:`CageUnavailable` before anything is
+    launched.
     """
     if not sys.platform.startswith("linux"):
         raise CageUnavailable("the web cage needs Linux")
     egress = egress_socket(folder, "web")
     python = relay_python()
+    launch_dir = _hidden_launch_dir(os.path.dirname(folder), command, env, python)
     given = [env.get(name) for name in _GIVEN_BACK]
     # The relay interpreter's third-party packages, under an empty
     # read-only tmpfs (PLU-171, I4).
@@ -358,6 +400,13 @@ def web_cage_argv(
         "/dev",
         "/dev",
         *hidden,
+        # The launch directory, empty but for the run's own folder: the
+        # other calls' folders and sockets are out of sight (PLU-162).
+        "--tmpfs",
+        launch_dir,
+        "--bind",
+        folder,
+        folder,
         # The egress socket, over itself: the CLI can neither remove nor
         # replace a mount point (EBUSY).
         "--ro-bind",

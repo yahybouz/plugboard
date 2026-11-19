@@ -857,7 +857,8 @@ async def web_caged(
     The run's folder (``web-run-*``, 0700, in the launch directory) holds
     only the egress socket, served here by the run's own proxy
     (``net_cage.start_web_egress``: port 443 of public addresses, its own
-    connection cap); the cage has no other network, its relay on the cage's
+    connection cap), and is all the cage shows of the launch directory (the
+    other calls' folders and sockets hidden, PLU-162); the cage has no other network, its relay on the cage's
     loopback is what ``HTTPS_PROXY`` names. Socket, proxy and folder are
     removed afterwards. Raises :class:`net_cage.CageUnavailable` before
     anything is launched: no bwrap, no socket, no relay, no web run.
