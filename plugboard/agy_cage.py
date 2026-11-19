@@ -26,7 +26,8 @@ This module builds the gateway's only command line that launches agy
   is bound read-only over itself, so agy can neither remove nor replace it.
   agy speaks HTTP(S) through a proxy, not through a unix socket: the
   command the cage runs is a relay (:data:`_RELAY`, the gateway's own
-  Python, ``-I -S``, standard library only) that listens on
+  Python, ``-I -S``, its code using the standard library only) that
+  listens on
   ``127.0.0.1:``:data:`RELAY_PORT` of the cage, forwards each connection to
   the socket, and becomes agy (``execv``: agy stays pid 1, the relay goes on
   in a child of it and dies with the cage). agy's ``HTTPS_PROXY`` and
@@ -200,7 +201,9 @@ RELAY_PORT = 3128
 # never ran): a cage failure, like bwrap's own "bwrap: " (setup_failure).
 RELAY_ERROR_PREFIX = "plugboard-relay: "
 # The relay, run by the gateway's own Python (-I -S: no site, no variable,
-# no folder of the cage on its path), standard library only. It checks the
+# no folder of the cage on its path), its code using the standard library
+# only (the folder mounted with it also holds site-packages, see
+# _relay_python). It checks the
 # egress is a socket, listens on the cage's loopback, forks the relay
 # itself (its standard streams on /dev/null: agy's output stays agy's), then
 # becomes agy by execv: agy keeps the cage's pid 1 and the environment the
@@ -344,7 +347,13 @@ def _relay_python() -> List[str]:
     """The gateway's Python, by its real path, then what it needs to start
     with ``-I -S`` (its standard library, ``lib-dynload``, ``libpython``
     when shared), all shown read-only to the relay. Missing:
-    :class:`CageUnavailable`."""
+    :class:`CageUnavailable`.
+
+    The standard library's folder is mounted whole: in the image
+    (``/usr/local/lib/python3.12``) it holds ``site-packages``, the
+    gateway's third-party dependencies, which agy can therefore read (never
+    write). They hold no secret (published packages; the gateway's own code
+    is in ``/app``, not mounted); ``-S`` keeps them off the relay's path."""
     executable = os.path.realpath(sys.executable) if sys.executable else ""
     if not executable or not os.path.isfile(executable):
         raise CageUnavailable("the relay's Python interpreter is missing")
@@ -649,7 +658,8 @@ def cage_argv(
         real_binary,
         real_binary,
     ]
-    # The relay's interpreter and its standard library.
+    # The relay's interpreter and its standard library (site-packages
+    # included, read-only: see _relay_python).
     for path in python:
         argv += ["--ro-bind", path, path]
     argv += [
