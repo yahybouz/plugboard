@@ -357,6 +357,40 @@ provider. What the call does and does not do:
   egress guard on the production network); it is checked on the first key
   given `web_access`.
 
+## Switching to 4.15.1
+
+- Image `plugboard:private-full-v4.15.1`. The image recipe does not change
+  since 4.15.0: the [production gate](prod-gate.md) expects the same CLI
+  versions (`0.65.0`, `2.1.325 (Claude Code)`, `codex-cli 0.163.0`, agy
+  `1.4.4`, `gh version 2.104.0 (2026-11-12)`) and still checks the image ID
+  and that no `bwrap` is on the PATH. From an older version, read the
+  sections of the versions in between first.
+- Nothing to set for production to work as before: no variable is added,
+  removed or changed, no default moves, and no store or column changes shape.
+- agy's cage now has no network of its own (BUG-156). `verify-agy-sandbox.py`
+  must print `"result": "pass"` with `"shared_with_container": false` and
+  `"gateway_port_from_cage": "refused"` under `"network"`, then `exit 0`; a
+  cage that shares the container's network, or one from which the gateway's
+  port answers, now fails it. The gateway's own Python must be in the image
+  under `/usr/local` (it runs the cage's relay): the standard `full` image
+  has it. Without the egress socket or the relay, agy is not run
+  (`503 provider_sandbox_unavailable`).
+- After the first real agy calls, read the gateway log for
+  `agy egress refused: host=...`: a host agy needs that is not on the list
+  shows there once per host and minute. It is added in the code, never by a
+  setting, so such a line means a new release, not a change on the server.
+- A web request is now billed on the tokens claude reports for it (BUG-159),
+  so it costs what it used, not an estimate: expect the usage of keys with
+  `web_access` to read higher than under 4.15.0, and their monthly budget to
+  be reached sooner.
+- After the switch, `GET /health` answers `{"ok": true, "version": "4.15.1"}`
+  and a chat request without the web answers as before.
+- Rolling back to 4.15.0 works: nothing written changes shape. agy then runs
+  in the container's network again.
+- Not checked by these steps: a real agy call through its egress, and a real
+  web run billed on the tokens claude reports; both are checked on the first
+  real calls after the switch.
+
 ## PID 1 of the container: tini
 
 From 4.14.4 the image starts `tini` as PID 1 (BUG-113, BUG-123), whatever the

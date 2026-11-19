@@ -6,13 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [4.15.1] — 2026-11-19
+
 ### Security
 
 - **agy's cage has no network but its egress** (BUG-156, D-85): the cage now runs with `--unshare-net`. agy no longer reaches the internet directly, the internal network, the cloud metadata address, nor the gateway's own port on the loopback (where it could exhaust the rate limit and fail the health check). Its only way out is a unix socket per call in its private `TMPDIR`, served by a CONNECT proxy limited to port `443`, public addresses and five Google hosts found in the agy binary; any other host gets `403`, logged with the host only, once per host and minute; at most 64 connections at once per egress, `503` beyond (the web tools' egress too). The list filters host names, not Google's services: a channel to Google remains (`www.googleapis.com` also serves the Cloud Storage API, and the tunnel is opaque). A relay inside the cage (the gateway's Python; the mounted standard library folder also shows the gateway's third-party packages, read-only) gives agy the HTTP proxy it needs; without the socket or the relay, agy is not run (`503`). `verify-agy-sandbox.py` now fails a cage that shares the container's network ([agy's cage](docs/guide/providers-and-subscriptions.md#agys-cage)).
 
+- **The egress guard refuses three more IPv6 ranges** (PLU-161): `ip_is_public` read `::127.0.0.1` (IPv4-compatible, `::/96`), `::ffff:0:7f00:1` (IPv4-translated, SIIT, `::ffff:0:0:0/96`) and `fec0::1` (site-local, `fec0::/10`) as public, although a stack or a translator may still route them inside. These ranges are now refused whole, for the web tools' egress guard, agy's egress and the providers protected by `plugboard/netguard.py` alike. IPv4-mapped addresses (`::ffff:a.b.c.d`) are still judged by their IPv4 address.
+
+- **A web run clears `ALL_PROXY` and `all_proxy`** (PLU-160): the environment of a web run kept an inherited `ALL_PROXY` or `all_proxy` next to the egress guard's `HTTPS_PROXY`. Both are now set empty, like `NO_PROXY`, so no inherited catch-all or SOCKS proxy can take a web run around the guard.
+
 ### Fixed
 
 - **A web request is billed on what it really used** (BUG-159): a web run is now billed on the tokens claude reports for it, every model counted (the page-summary helper included) and cache writes and reads as prompt tokens at the input price, at the price of the route that served the model asked, instead of an estimate of the question and the answer. A run stopped by its turns is billed too, on its own entry, and counts against the key's budget whatever the request's outcome (`502 web_budget_exhausted`, unchanged; another route's error; or another route's answer). Without a usable report (no `result` event, a counter that is not an integer from 0 to 10^12), the estimate as before. Requests without the web are unchanged ([what a web request costs](docs/guide/web-access.md#what-a-web-request-costs)).
+
+**Rolling back to 4.15.0**: it works, nothing written to disk changes shape in this release (no new column, field or store). agy then runs again in the container's network, as before BUG-156, and the web runs are billed on the estimate again (BUG-159 fixes what a web run costs: usage entries and budgets written under 4.15.1 stay as they are).
+
+**API contract**: unchanged, **3.2.0** (`docs/api/openapi.json` and `docs/api/mcp.json` are the ones 4.15.0 published). No route, field or code is added or changed; the billing of a web request changes what it costs, not what it answers.
+
+**Production settings**: no environment variable is added, removed or changed by this release, and no default moves: nothing to set for production to work as before. What the release fixes in code is not a setting: the 64 connections at once per egress, the five Google hosts agy may reach, the port `443` limit and the relay's port `3128` inside agy's cage are constants of the code, with no variable to loosen them. The compose file only changes its image tag ([switching to 4.15.1](docs/runbooks/production-instance.md#switching-to-4151)).
+
+**Not verified**: agy's real run through its egress (the proxy, the five hosts, the relay in the cage) has not been tried with the real agy: the cage and the proxy are tested with fakes, and no run of `verify-agy-sandbox.py` in a real container of the image is recorded for this release; watch the gateway log for `agy egress refused` after the first agy calls, and run the script at the switch. A real web run billed on the tokens claude reports was not made either (no real inference for this release): the billing is tested with a fake CLI reporting its usage.
 
 ## [4.15.0] — 2026-11-19
 

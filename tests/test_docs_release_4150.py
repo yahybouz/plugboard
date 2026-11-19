@@ -1,12 +1,12 @@
 """What the operator and integrators read for 4.15.0 (release 4.15.0).
 
-The version is 4.15.0 in ``VERSION``, ``plugboard.__version__``, the compose
-image tag and the health examples; the dated CHANGELOG entry holds both
-additions merged for this release (tools emulated on CLI routes, ADR-039;
-web access per key, PLU-158, with ADR-040), one API contract paragraph that
-publishes 3.2.0, the production settings and what was not verified; the
-production runbook has a "Switching to 4.15.0" section that says nothing has
-to be set for production to work as before.
+The dated CHANGELOG entry holds both additions merged for this release
+(tools emulated on CLI routes, ADR-039; web access per key, PLU-158, with
+ADR-040), one API contract paragraph that publishes 3.2.0, the production
+settings and what was not verified; the production runbook has a "Switching
+to 4.15.0" section that says nothing has to be set for production to work as
+before. The current version is pinned by the test of the current release
+(4.15.1), not here.
 """
 
 from __future__ import annotations
@@ -14,8 +14,6 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-
-import plugboard
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -42,20 +40,6 @@ def _switching() -> str:
 
 def _flat(text: str) -> str:
     return " ".join(text.split())
-
-
-def test_the_version_is_4_15_0():
-    assert (ROOT / "VERSION").read_text(encoding="utf-8").strip() == "4.15.0"
-    assert plugboard.__version__ == "4.15.0"
-
-
-def test_the_compose_file_and_the_health_examples_name_4_15_0():
-    compose = (ROOT / "deploy" / "ovh" / "compose.yml").read_text(encoding="utf-8")
-    assert "${PLUGBOARD_IMAGE:-plugboard:private-full-v4.15.0}" in compose
-    monitoring = (ROOT / "docs" / "guide" / "monitoring.md").read_text(encoding="utf-8")
-    assert '{"ok": true, "version": "4.15.0"}' in monitoring
-    assert '{"ready": true, "version": "4.15.0"}' in monitoring
-    assert '"version": "4.14.6"' not in monitoring
 
 
 def test_one_entry_under_unreleased():
