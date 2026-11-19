@@ -734,3 +734,145 @@ async def test_spent_run_is_billed_when_the_stream_is_empty(
     assert resp.status_code == 200, resp.text
     assert resp.text == ""
     _billed_once(budget_key)
+
+
+# ── 9. a web request holds what its turns may cost (BUG-161) ─────────────────
+#
+# A web run is billed on every turn's tokens (section 1): far more than the
+# prompt's estimate the hold took. A budgeted web request now holds its
+# prompt plus PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN input tokens (default 20000)
+# for each of the run's --max-turns (web_max_uses + 2), priced as the rest;
+# the billing settles that hold to the real cost. 0 turns it off.
+
+PER_TURN = 20000
+TURNS = 4 + web_access.EXTRA_TURNS  # budget_key: web_max_uses=4
+
+
+@pytest.fixture
+def holds(monkeypatch):
+    """The cost of each budget hold taken, the real hold kept."""
+    taken: list = []
+    real = usage.hold_budget
+
+    def hold_budget(**kwargs):
+        taken.append(kwargs["cost"])
+        return real(**kwargs)
+
+    monkeypatch.setattr(usage, "hold_budget", hold_budget)
+    return taken
+
+
+def _hold_for(extra_prompt: int) -> float:
+    import plugboard.app as app_module
+
+    return _cost(
+        estimate_prompt_tokens(MESSAGES) + extra_prompt,
+        app_module._BUDGET_RESERVE_TOKENS,
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["plain", "stream"])
+async def test_web_hold_covers_the_turns_and_settles_to_the_real_cost(
+    client, budget_key, claude, holds, monkeypatch, stream
+):
+    monkeypatch.delenv("PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN", raising=False)
+    claude.stdout = _answered()
+    resp = await _chat(client, budget_key, stream=stream)
+    assert resp.status_code == 200, resp.text
+    assert holds == [pytest.approx(_hold_for(TURNS * PER_TURN))]
+    real = _cost(PROMPT, COMPLETION)
+    assert holds[0] > real  # the hold was oversized: billing settles it
+    row = _only_row(budget_key)
+    assert row["cost_usd"] == pytest.approx(real)
+    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
+    assert usage.get_committed_cost(
+        MONTH, key_id=budget_key["key_id"]
+    ) == pytest.approx(real)
+
+
+async def test_web_hold_is_settled_to_a_spent_run(client, budget_key, claude, holds):
+    claude.stdout = _exhausted()
+    resp = await _chat(client, budget_key)
+    assert resp.status_code == 502, resp.text
+    assert holds == [pytest.approx(_hold_for(TURNS * PER_TURN))]
+    assert usage.get_held_cost(MONTH, key_id=budget_key["key_id"]) == 0.0
+    assert usage.get_committed_cost(
+        MONTH, key_id=budget_key["key_id"]
+    ) == pytest.approx(_cost(PROMPT, COMPLETION))
+
+
+async def test_web_hold_per_turn_is_a_setting(
+    client, budget_key, claude, holds, monkeypatch
+):
+    monkeypatch.setenv("PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN", "5000")
+    claude.stdout = _answered()
+    resp = await _chat(client, budget_key)
+    assert resp.status_code == 200, resp.text
+    assert holds == [pytest.approx(_hold_for(TURNS * 5000))]
+
+
+async def test_web_hold_off_holds_the_prompt_estimate_as_before(
+    client, budget_key, claude, holds, monkeypatch
+):
+    monkeypatch.setenv("PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN", "0")
+    claude.stdout = _answered()
+    resp = await _chat(client, budget_key)
+    assert resp.status_code == 200, resp.text
+    assert holds == [pytest.approx(_hold_for(0))]
+
+
+async def test_a_request_without_web_holds_as_before(
+    client, budget_key, claude, holds, monkeypatch
+):
+    monkeypatch.delenv("PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN", raising=False)
+    claude.stdout = _answered()
+    resp = await _chat(client, budget_key, web=False)
+    assert resp.status_code == 200, resp.text
+    assert holds == [pytest.approx(_hold_for(0))]
+
+
+@pytest.mark.parametrize("raw", ["abc", "-5", "1.5"])
+async def test_invalid_web_hold_setting_gives_the_default_with_one_warning(
+    client, budget_key, claude, holds, monkeypatch, caplog, raw
+):
+    from plugboard import envcompat
+
+    monkeypatch.setattr(envcompat, "_bad_numbers", set())
+    monkeypatch.setenv("PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN", raw)
+    caplog.set_level(logging.WARNING)
+    claude.stdout = _answered()
+    for _ in range(2):
+        resp = await _chat(client, budget_key)
+        assert resp.status_code == 200, resp.text
+    assert holds == [pytest.approx(_hold_for(TURNS * PER_TURN))] * 2
+    warned = [
+        r.getMessage()
+        for r in caplog.records
+        if "PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN" in r.getMessage()
+    ]
+    assert len(warned) == 1, warned
+
+
+async def test_a_web_request_its_budget_cannot_hold_is_refused_before_any_run(
+    client, keys, claude, holds, monkeypatch
+):
+    """$0.20 fits the prompt's estimate, not the run's turns: 429, nothing
+    run nor billed; the same request without the web is served."""
+    monkeypatch.delenv("PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN", raising=False)
+    rec = apikeys.create_key(
+        "webby-tight",
+        "web, tight budget",
+        monthly_limit_usd=0.20,
+        web_access=True,
+        web_max_uses=4,
+    )
+    apikeys._invalidate_cache()
+    assert _hold_for(0) < 0.20 < _hold_for(TURNS * PER_TURN)
+    claude.stdout = _answered()
+    resp = await _chat(client, rec)
+    assert resp.status_code == 429, resp.text
+    assert claude.runs == 0
+    assert _rows(rec) == []
+    resp = await _chat(client, rec, web=False)
+    assert resp.status_code == 200, resp.text
+    assert claude.runs == 1

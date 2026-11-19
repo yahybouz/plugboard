@@ -3,7 +3,9 @@
 The monthly spending limit, the hold of a budgeted call's estimated cost
 (BUG-52), the refusal of an unpriced model for a budgeted key, the client's
 rpm limit and the key's allowed_models checked as chat routes the model.
-Moved verbatim from ``plugboard/app.py`` (PLU-95), behaviour unchanged.
+Moved verbatim from ``plugboard/app.py`` (PLU-95), behaviour unchanged; since
+BUG-161 a web request's hold also covers its run's turns
+(``PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN``).
 ``core`` is the ``plugboard.app`` module that registers the checks: the patch
 points (``_model_route_guard``, ``resolve_provider_and_model``, ``_usage``,
 ``_BUDGET_RESERVE_TOKENS``) and the exceptions that stayed there
@@ -26,6 +28,8 @@ from fastapi import FastAPI, HTTPException, Request
 from plugboard import billing as _billing
 from plugboard import chat_billing
 from plugboard import cli_tools as _cli_tools
+from plugboard import envcompat
+from plugboard import web_access as _web_access
 from plugboard.apikeys import load_keys
 from plugboard.cli_subprocess import ModelNotServedError
 from plugboard.ratelimit import check_client_rate_limit
@@ -99,6 +103,26 @@ def _prompt_estimate(body: Dict[str, Any]) -> int:
     if extra:
         tokens += count_tokens(json.dumps(extra, default=str))
     return tokens + images * _BUDGET_IMAGE_TOKENS
+
+
+# BUG-161: input tokens a web run may use per turn, held on top of the
+# prompt for each of its --max-turns; 0 turns it off.
+_WEB_HOLD_TOKENS_PER_TURN = 20000
+
+
+def _web_hold_tokens(policy: Optional[_web_access.WebPolicy]) -> int:
+    """Input tokens a web request holds for its run's turns (BUG-161): its
+    max_turns times PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN (default 20000;
+    0 = off; a value that is not a whole number >= 0 gives the default,
+    with one warning). 0 for a request without the web."""
+    if policy is None:
+        return 0
+    per_turn = envcompat.get_int(
+        "PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN",
+        default=_WEB_HOLD_TOKENS_PER_TURN,
+        minimum=0,
+    )
+    return policy.max_turns * per_turn
 
 
 _UNPRICED_DETAIL = "Model price unavailable for this key"
@@ -176,6 +200,10 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
         """What this call should cost at most: its prompt, and its completion cap
         for each answer it asks for, priced on the dearest route it may take.
 
+        A web request (BUG-161) also holds the input tokens its run's turns
+        may use (_web_hold_tokens): a web run is billed on every turn's
+        tokens, pages and helper model included.
+
         An estimate, not a ceiling: a provider that ignores max_tokens (a CLI
         route) or a call without max_tokens that answers longer than
         _BUDGET_RESERVE_TOKENS costs more; the overrun is logged when billed.
@@ -186,7 +214,7 @@ def register(app: FastAPI, core: ModuleType) -> SimpleNamespace:
             routes = _resolve_all_providers(body.get("model", ""))
         except ValueError:
             return 0.0  # forward() stops on the same routing error, before any call
-        prompt = _prompt_estimate(body)
+        prompt = _prompt_estimate(body) + _web_hold_tokens(_web_access.current())
         completion = _completion_cap(body) * _answers_asked(body)
         return max(
             (chat_billing.price(p, m, prompt, completion).cost_usd for p, m in routes),

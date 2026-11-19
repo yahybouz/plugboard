@@ -100,6 +100,14 @@ counted as failing (no circuit, no error metric, no `provider_down` alert).
 A stream that had already sent words when the run stopped is billed once,
 on the tokens reported.
 
+On a key with a monthly budget, a web request holds, before the run, its
+prompt plus `PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN` input tokens (default
+`20000`) for each turn the run may take (`web_max_uses` + 2), priced at the
+dearest route as any hold (BUG-161): with `web_max_uses` 3, 100,000 input
+tokens on top of the prompt. A web request the budget left cannot hold gets
+`429`, nothing run. The billing then settles the hold to what the run really
+cost (the tokens reported), so a hold larger than the cost is never charged.
+
 When claude reports no usable counts (no `result` event, a counter that is
 not a non-negative integer), the call is billed on the estimate, as before,
 and the answer is served; the gateway logs a warning, without any content.
@@ -187,3 +195,4 @@ other. A refused request costs nothing.
 | `PLUGBOARD_MAX_INFLIGHT_WEB` | `2` | Concurrent web requests; `0` turns the web off. |
 | `PLUGBOARD_WEB_TIMEOUT_S` | `900` | Deadline of one web run (at least 30 s). |
 | `PLUGBOARD_WEB_HELPER_MODEL` | `claude-sonnet-5-5` | The CLI's helper model during a web run; never Haiku. |
+| `PLUGBOARD_WEB_HOLD_TOKENS_PER_TURN` | `20000` | Input tokens a budgeted web request holds for each turn of its run, on top of its prompt; `0` holds the prompt's estimate only. A value that is not a whole number from 0 up gives the default, with one warning. |
