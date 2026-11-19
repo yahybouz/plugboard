@@ -32,6 +32,7 @@ import pytest
 
 from plugboard import agy_cage, agy_egress, netguard, web_egress
 from plugboard import cli_subprocess as cs
+from tests.relay_helpers import kill_relays_under, wait_for_no_relay
 from tests.tls_helpers import client_hello as _client_hello
 from tests.test_agy_cage import (  # noqa: F401 - pytest fixtures
     _BODY,
@@ -502,6 +503,38 @@ async def test_real_relay_failure_never_runs_agy(setup, real_bwrap, monkeypatch)
     assert stdout == b""
     failure = agy_cage.setup_failure(code, stdout, stderr)
     assert failure is not None and failure.startswith(agy_cage.RELAY_ERROR_PREFIX)
+
+
+@pytest.fixture
+def no_relay_left(setup):
+    """Whatever relay a test leaves under its folder is ended afterwards."""
+    marker = os.path.realpath(setup["tmp"])
+    yield marker
+    kill_relays_under(marker)
+
+
+async def test_the_relay_dies_with_agy_without_a_pid_namespace(
+    setup, real_bwrap, monkeypatch, no_relay_left
+):
+    """BUG-157: the relay ends with agy even in a cage with no pid namespace
+    of its own (32 relays were left alive by such cages, their socket
+    removed): it must never rely on the namespace alone."""
+    real = agy_cage.cage_argv
+
+    def shared_pids(binary, args, **kw):
+        drop = ("--unshare-pid", "--as-pid-1")
+        return [arg for arg in real(binary, args, **kw) if arg not in drop]
+
+    monkeypatch.setattr(agy_cage, "cage_argv", shared_pids)
+    code, stdout, stderr = await _run_caged(
+        sys.executable,
+        ["-I", "-S", "-c", "import os; print(os.getpid())"],
+        str(setup["spawn"]),
+    )
+    assert code == 0, stderr
+    # Really no pid namespace of its own: agy is not the cage's pid 1.
+    assert int(stdout) != 1
+    assert wait_for_no_relay(no_relay_left) == []
 
 
 # ── A long TMPDIR (an operator's launch directory, a test's tmp path) ──────

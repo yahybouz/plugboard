@@ -27,9 +27,11 @@ with its own connection cap. It is not a file cage: claude still sees and
 changes what the gateway's uid can (it has no shell nor file tool on a web
 run, only WebSearch and WebFetch).
 
-Its relay differs from agy's in two ways. A web cage has no pid namespace:
-the relay's half that serves connections watches the CLI it became and ends
-once it is gone (agy's ends with the cage's pid namespace). And it hands
+In both cages, the relay's half that serves connections watches the CLI it
+became and ends once it is gone: a web cage has no pid namespace, and agy's,
+whose end kills it too, is never its only way to die (BUG-157: a cage built
+without one left a relay alive after each call). The web cage's relay
+differs from agy's in one way: it hands
 the CLI the environment the gateway gave, exactly: Python sets
 ``LC_CTYPE=C.UTF-8`` when it starts without a locale (PEP 538), whatever
 ``-I``, and bwrap sets ``PWD``; the gateway passes the values it set for
@@ -78,8 +80,9 @@ RELAY_ERROR_PREFIX = "plugboard-relay: "
 # forks the relay itself (its standard streams on /dev/null: the CLI's
 # output stays the CLI's), then becomes the CLI by execv: the CLI keeps the
 # relay's pid and the environment the gateway passed to execve. Built from
-# one text: %(args)s reads the command line, %(watch)s and %(restore)s are
-# the web cage's only (see the module's docstring).
+# one text: %(args)s reads the command line, %(watch)s ends the serving half
+# with the CLI (both cages), %(restore)s is the web cage's only (see the
+# module's docstring).
 _RELAY_TEMPLATE = r"""
 import os, signal, socket, stat, sys, threading%(imports)s
 def fail(why):
@@ -150,13 +153,26 @@ except OSError as exc:
 
 
 def _relay(cli: str, *, web: bool) -> str:
+    # Both relays: the serving half ends once the CLI it became (its
+    # parent) is gone. The web cage has no pid namespace; agy's has one,
+    # whose end kills the relay too, but the relay never relies on it alone
+    # (BUG-157: a cage without one left a relay alive per call).
+    watched = {
+        "imports": ", time",
+        "parent": "parent = os.getpid()\n",
+        "watch": (
+            "        def orphaned():\n"
+            "            while os.getppid() == parent:\n"
+            "                time.sleep(0.2)\n"
+            "            os._exit(0)\n"
+            "        threading.Thread(target=orphaned, daemon=True).start()\n"
+        ),
+    }
     if not web:
         # agy's: port, socket, agy, its arguments.
         parts = {
-            "imports": "",
+            **watched,
             "args": "port, path, argv = int(sys.argv[1]), sys.argv[2], sys.argv[3:]",
-            "parent": "",
-            "watch": "",
             "restore": "",
         }
     else:
@@ -164,20 +180,10 @@ def _relay(cli: str, *, web: bool) -> str:
         # gave them ("-" none, else "=" and the value), the CLI, its
         # arguments.
         parts = {
-            "imports": ", time",
+            **watched,
             "args": (
                 "port, path, given, argv = (int(sys.argv[1]), sys.argv[2], "
                 "sys.argv[3:5], sys.argv[5:])"
-            ),
-            # No pid namespace: the serving half ends once the CLI it
-            # became (its parent) is gone.
-            "parent": "parent = os.getpid()\n",
-            "watch": (
-                "        def orphaned():\n"
-                "            while os.getppid() == parent:\n"
-                "                time.sleep(0.2)\n"
-                "            os._exit(0)\n"
-                "        threading.Thread(target=orphaned, daemon=True).start()\n"
             ),
             # The environment the gateway gave: LC_CTYPE (Python's, PEP 538)
             # and PWD (bwrap's) as they were, in the process' own (execv

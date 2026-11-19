@@ -241,8 +241,9 @@ RELAY_ERROR_PREFIX = net_cage.RELAY_ERROR_PREFIX
 # listens on the cage's loopback, forks the relay itself (its standard
 # streams on /dev/null: agy's output stays agy's), then becomes agy by
 # execv: agy keeps the cage's pid 1 and the environment the gateway passed
-# to execve. The relay dies with the cage (agy, pid 1, gone: the kernel ends
-# the namespace). Argument order: port, socket, agy, args.
+# to execve. The relay dies with agy: it watches agy, its parent, and ends
+# once agy is gone (BUG-157), and the kernel ends the cage's pid namespace
+# with its pid 1 anyway. Argument order: port, socket, agy, args.
 _RELAY = net_cage.AGY_RELAY
 
 # bwrap's words when the kernel refuses a new procfs (a Docker container).

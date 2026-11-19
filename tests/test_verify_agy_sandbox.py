@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pytest
 
+from tests.relay_helpers import kill_relays_under, wait_for_no_relay
 from tests.test_agy_cage import (
     _bwrap_unusable_reason,
     _docker_like_unusable_reason,
@@ -675,12 +676,24 @@ _PID1_FAILURE = (
 )
 
 
+@pytest.fixture
+def no_relay_left(tmp_path):
+    """Whatever relay the test's cages leave is ended afterwards (BUG-157):
+    a cage without a pid namespace once left one alive per run."""
+    marker = os.path.realpath(tmp_path)
+    yield marker
+    kill_relays_under(marker)
+
+
 @pytest.mark.parametrize("procfs", ["mounted", "forbidden"])
-def test_a_cage_without_its_own_pid_namespace_fails(world, real_bwrap, procfs):
+def test_a_cage_without_its_own_pid_namespace_fails(
+    world, real_bwrap, procfs, no_relay_left
+):
     """BUG-114: the probe checks that it is pid 1 of the cage (as agy is,
     ``--as-pid-1``) whether or not the cage has a /proc: where the container
     forbids a new procfs (UAT, production), a cage without its own pid
-    namespace must fail the check too."""
+    namespace must fail the check too. Its relays die with the probe even
+    so (BUG-157)."""
     wrap = ()
     if procfs == "forbidden":
         reason = _docker_like_unusable_reason()
@@ -694,6 +707,7 @@ def test_a_cage_without_its_own_pid_namespace_fails(world, real_bwrap, procfs):
     assert report["probe_is_pid1"] is False
     assert _PID1_FAILURE in report["failures"]
     _no_secret_in(proc)
+    assert wait_for_no_relay(no_relay_left) == []
 
 
 def test_the_check_passes_where_the_container_forbids_a_new_procfs(world):
