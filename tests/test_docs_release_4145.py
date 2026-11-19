@@ -133,8 +133,9 @@ def test_the_contracts_are_unchanged():
     assert "3.0.1" in note and "unchanged" in note
     openapi = json.loads((ROOT / "docs" / "api" / "openapi.json").read_text("utf-8"))
     mcp = json.loads((ROOT / "docs" / "api" / "mcp.json").read_text("utf-8"))
-    assert openapi["info"]["version"] == "3.0.1"
-    assert mcp["contract_version"] == "3.0.1"
+    # 3.0.1 or a later contract (PLU-158 made it 3.1.0 after this release).
+    for version in (openapi["info"]["version"], mcp["contract_version"]):
+        assert tuple(map(int, version.split("."))) >= (3, 0, 1)
 
 
 def test_bug_106_is_a_bench_and_stays_open():

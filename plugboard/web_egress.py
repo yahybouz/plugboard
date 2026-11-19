@@ -133,8 +133,8 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
     addrs = await _public_addresses(host, port)
     if not addrs:
         refused_total += 1
-        log.info("web egress refused: destination is not public")
-        log.debug("web egress refused host=%s port=%d", host, port)
+        # The audit trail of a web run: the host asked, never a path.
+        log.info("web egress refused: host=%s port=%d is not public", host[:253], port)
         await _reply(writer, "403 Forbidden")
         return
     up_reader = up_writer = None
@@ -150,6 +150,7 @@ async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) ->
         await _reply(writer, "502 Bad Gateway")
         return
     tunnels_total += 1
+    log.info("web egress tunnel: host=%s port=%d", host[:253], port)
     writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
     await writer.drain()
     await asyncio.gather(_pipe(reader, up_writer), _pipe(up_reader, writer))

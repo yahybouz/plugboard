@@ -112,7 +112,8 @@ of the gateway, bound to `127.0.0.1` (`HTTPS_PROXY` of the run, `NO_PROXY`
 empty). It tunnels only to **public** addresses: each destination is resolved
 by the proxy, every address is checked (`netguard.ip_is_public`) and the
 tunnel connects to the checked address, so a second resolution cannot point
-elsewhere. Loopback, private ranges, the CGNAT range of the tailnet,
+elsewhere. Each tunnel and each refusal is logged with the host and port
+asked (`web egress tunnel: host=...`), never a path or a page. Loopback, private ranges, the CGNAT range of the tailnet,
 link-local and the metadata address are refused (`403`); a name that resolves
 to one non-public address is refused whole. Plain-HTTP proxying is refused too.
 
